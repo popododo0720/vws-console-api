@@ -11,8 +11,9 @@ import (
 	"github.com/popododo0720/vws-console-api/internal/resource"
 )
 
-// idempotencyVersion is part of every key. Changing the derivation requires a
-// new version: retries that cross that deploy will not dedupe.
+// idempotencyVersion is part of the fingerprint only. The key stays the
+// account, the action, and the client token, so a derivation change makes a
+// retry mismatch instead of launching a second resource.
 const idempotencyVersion = "vws-idem-v1"
 
 func mutate[R resource.Request[R], T resource.Owned](
@@ -130,11 +131,11 @@ func guardOwner(account resource.AccountID, item resource.Owned) error {
 
 func mutation[R resource.Request[R]](c resource.Caller, token resource.ClientToken, req R) (backend.Mutation, error) {
 	k := sha256.New()
-	for _, part := range []string{idempotencyVersion, c.Account.String(), req.Action().String(), token.String()} {
+	for _, part := range []string{c.Account.String(), req.Action().String(), token.String()} {
 		_, _ = k.Write([]byte(part))
 		_, _ = k.Write([]byte{0})
 	}
-	canon, err := canonical(req)
+	canon, err := json.Marshal(req)
 	if err != nil {
 		return backend.Mutation{}, err
 	}
@@ -144,66 +145,4 @@ func mutation[R resource.Request[R]](c resource.Caller, token resource.ClientTok
 		Key:         hex.EncodeToString(k.Sum(nil)),
 		Fingerprint: hex.EncodeToString(f[:]),
 	}, nil
-}
-
-func canonical(req any) ([]byte, error) {
-	raw, err := json.Marshal(req)
-	if err != nil {
-		return nil, err
-	}
-	var tree any
-	if err := json.Unmarshal(raw, &tree); err != nil {
-		return nil, err
-	}
-	out, err := json.Marshal(prune(tree))
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func prune(v any) any {
-	switch x := v.(type) {
-	case nil:
-		return nil
-	case bool:
-		if !x {
-			return nil
-		}
-		return x
-	case float64:
-		if x == 0 {
-			return nil
-		}
-		return x
-	case string:
-		if x == "" {
-			return nil
-		}
-		return x
-	case []any:
-		var out []any
-		for _, item := range x {
-			if p := prune(item); p != nil {
-				out = append(out, p)
-			}
-		}
-		if len(out) == 0 {
-			return nil
-		}
-		return out
-	case map[string]any:
-		out := map[string]any{}
-		for key, item := range x {
-			if p := prune(item); p != nil {
-				out[key] = p
-			}
-		}
-		if len(out) == 0 {
-			return nil
-		}
-		return out
-	default:
-		return v
-	}
 }

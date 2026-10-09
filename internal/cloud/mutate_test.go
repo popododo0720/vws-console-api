@@ -23,11 +23,35 @@ func TestIdempotencyGolden(t *testing.T) {
 		t.Fatal(err)
 	}
 	const (
-		wantKey = "94c3209c346d75f3f030451b930a36602285e71618d0cee45f33cbe0f4e708a4"
-		wantFP  = "9f068d595c17c98b5837692cfe502433132f4c334cd8e912d7028620264494d2"
+		wantKey = "3a70cf20504b660b87790b3079f89afbf17466db251477f98e1971b8899ce021"
+		wantFP  = "9bf621dd437968fdf7d1ce073d19d2496bf2abd3355be85e7896641cc4a57ae8"
 	)
 	if m.Key != wantKey || m.Fingerprint != wantFP {
 		t.Fatalf("derivation changed key=%s fingerprint=%s", m.Key, m.Fingerprint)
+	}
+}
+
+func TestEmptyTagChangesFingerprint(t *testing.T) {
+	c, token, req := fixedRequest(t)
+	bare, err := req.Normalize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tagged := bare
+	tagged.Tags = map[string]string{"env": ""}
+	a, err := mutation(c, token, bare)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := mutation(c, token, tagged)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.Key != b.Key {
+		t.Fatal("tag values changed the idempotency key")
+	}
+	if a.Fingerprint == b.Fingerprint {
+		t.Fatal("empty tag value collapsed to no tags")
 	}
 }
 

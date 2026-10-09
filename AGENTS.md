@@ -47,7 +47,7 @@ change.
 | A mutation publishes the resource, the operation, and the idempotency record together. A rejected call leaves the previous state, and a repeated minted id is an internal error. | `backendtest` partial stop; `TestRepeatedEntropyDoesNotOverwrite` |
 | `RunInstances` requires a subnet the caller owns. | `backendtest` creates the subnet, then launches into it |
 | An unknown page token is an invalid argument. A state filter does not turn an existing id into not-found. | `backendtest` |
-| Idempotency key and fingerprint derivation changes only with a new `idempotencyVersion`. | Golden test in `internal/cloud` |
+| The idempotency key is the account, the action, and the client token. The fingerprint is `idempotencyVersion` plus the normalized JSON, including empty tag values. A derivation change mismatches a retry instead of minting a second resource. | Golden test and `TestEmptyTagChangesFingerprint` in `internal/cloud` |
 | A backend result that names another account is rejected. | `guardAccepted` / `guardOwner` in `internal/cloud`, covered by `TestForeignAccountIsInternal` |
 | Fakes and the gRPC client behave the same. | `backendtest.Run` on both |
 | Every `resource.Action` has a console route. | `TestEveryActionHasARoute` |
