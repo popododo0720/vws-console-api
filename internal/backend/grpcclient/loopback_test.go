@@ -28,7 +28,7 @@ func TestContractOverGRPC(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0).UTC()
 	world := fake.New(fake.Options{
 		Now:     func() time.Time { return now },
-		Entropy: bytes.NewReader(bytes.Repeat([]byte{0x44}, 1<<16)),
+		Entropy: &fake.Sequence{},
 	})
 	set := world.Set()
 	computev1.RegisterComputeServer(srv, computeSrv{api: set.Compute})

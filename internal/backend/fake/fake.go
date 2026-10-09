@@ -6,6 +6,7 @@ package fake
 
 import (
 	"crypto/rand"
+	"errors"
 	"io"
 	"sync"
 	"time"
@@ -118,6 +119,9 @@ func (w *World) newOp(svc resource.Service, action resource.Action, targets []re
 	if err != nil {
 		return resource.Operation{}, err
 	}
+	if _, exists := w.ops[id.String()]; exists {
+		return resource.Operation{}, resource.Internal(errors.New("identifier collision"))
+	}
 	now := w.now().UTC()
 	op := resource.Operation{
 		ID:         id,
@@ -189,20 +193,22 @@ func (w *World) opOwned(account resource.AccountID, op resource.Operation) bool 
 	return true
 }
 
-func page[T any](items []T, q resource.PageRequest) resource.Page[T] {
-	if q.Size <= 0 {
-		q.Size = len(items)
-		if q.Size == 0 {
-			q.Size = 1
-		}
+func page[T any](items []T, q resource.PageRequest) (resource.Page[T], error) {
+	if q.Size < 1 {
+		return resource.Page[T]{}, resource.Invalid("pageSize", "must be from 1 to 100")
 	}
 	start := 0
 	if q.Token != "" {
+		found := false
 		for i, item := range items {
 			if identity(item) == q.Token {
 				start = i + 1
+				found = true
 				break
 			}
+		}
+		if !found {
+			return resource.Page[T]{}, resource.Invalid("pageToken", "unknown")
 		}
 	}
 	if start > len(items) {
@@ -216,7 +222,20 @@ func page[T any](items []T, q resource.PageRequest) resource.Page[T] {
 		end = len(items)
 	}
 	out := append([]T(nil), items[start:end]...)
-	return resource.Page[T]{Items: out, NextToken: next}
+	return resource.Page[T]{Items: out, NextToken: next}, nil
+}
+
+// Sequence is a deterministic entropy source for tests. Each byte is one
+// greater than the last, so minted ids do not collide.
+type Sequence struct{ n byte }
+
+// Read fills p with increasing bytes.
+func (s *Sequence) Read(p []byte) (int, error) {
+	for i := range p {
+		s.n++
+		p[i] = s.n
+	}
+	return len(p), nil
 }
 
 func identity(v any) string {

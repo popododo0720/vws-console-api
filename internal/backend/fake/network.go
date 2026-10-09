@@ -2,6 +2,7 @@ package fake
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/popododo0720/vws-console-api/internal/backend"
@@ -28,13 +29,15 @@ func (n network) CreateSubnet(ctx context.Context, m backend.Mutation, req resou
 	if err != nil {
 		return resource.Accepted[resource.Subnet]{}, err
 	}
+	if _, exists := n.w.sub[id]; exists {
+		return resource.Accepted[resource.Subnet]{}, resource.Internal(errors.New("identifier collision"))
+	}
 	sub := resource.Subnet{
 		ID:      id,
 		OwnerID: m.Account,
 		Cidr:    req.Cidr,
 		State:   resource.SubnetPending,
 	}
-	n.w.sub[id] = &sub
 	op, err := n.w.newOp(resource.ServiceNetwork, resource.ActionCreateSubnet, []resource.Ref{id.Ref()}, func(time.Time) {
 		if cur := n.w.sub[id]; cur != nil && cur.State == resource.SubnetPending {
 			cur.State = resource.SubnetAvailable
@@ -43,6 +46,8 @@ func (n network) CreateSubnet(ctx context.Context, m backend.Mutation, req resou
 	if err != nil {
 		return resource.Accepted[resource.Subnet]{}, err
 	}
+	stored := sub
+	n.w.sub[id] = &stored
 	acc := resource.Accepted[resource.Subnet]{Operation: op, Items: []resource.Subnet{sub}}
 	n.w.finish(m.Key, m.Fingerprint, acc)
 	return acc, nil
@@ -75,7 +80,7 @@ func (n network) DescribeSubnets(ctx context.Context, s backend.Scope, q resourc
 	if len(q.IDs) == 1 && len(items) == 0 {
 		return resource.Page[resource.Subnet]{}, resource.NotFound(resource.KindSubnet, q.IDs[0].String())
 	}
-	return page(items, q.Page), nil
+	return page(items, q.Page)
 }
 
 func (n network) GetOperation(ctx context.Context, s backend.Scope, id resource.OperationID) (resource.Operation, error) {

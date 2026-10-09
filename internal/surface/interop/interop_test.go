@@ -34,7 +34,24 @@ func TestConsoleAndQueryLaunchTheSameInstance(t *testing.T) {
 	cred := sigv4.Credential{AccessKey: "AKIDEXAMPLE", Secret: "secret", Account: account}
 	query := ec2query.New(ec2query.Config{Service: svc, Verifier: verifier(cred, sigv4.ServiceEC2, now)})
 
-	body := `{"imageId":"ami-0123456789abcdef0","instanceType":"vws.small","subnetId":"subnet-0123456789abcdef0","count":1}`
+	subnetRes := call(t, ui, http.MethodPost, "/api/v1/subnets", `{"cidrBlock":"10.1.0.0/24"}`, map[string]string{
+		"Authorization":   "Bearer tok-console",
+		"Content-Type":    "application/json",
+		"Idempotency-Key": "subnet-web-1",
+	})
+	if subnetRes.Code != http.StatusAccepted {
+		t.Fatalf("subnet %d %s", subnetRes.Code, subnetRes.Body)
+	}
+	var subnetAccepted struct {
+		Items []struct {
+			ID string `json:"subnetId"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(subnetRes.Body.Bytes(), &subnetAccepted); err != nil {
+		t.Fatal(err)
+	}
+	subnetID := subnetAccepted.Items[0].ID
+	body := `{"imageId":"ami-0123456789abcdef0","instanceType":"vws.small","subnetId":"` + subnetID + `","count":1}`
 	consoleRes := call(t, ui, http.MethodPost, "/api/v1/instances", body, map[string]string{
 		"Authorization":   "Bearer tok-console",
 		"Content-Type":    "application/json",
@@ -64,7 +81,7 @@ func TestConsoleAndQueryLaunchTheSameInstance(t *testing.T) {
 	form.Set("Version", ec2query.Version)
 	form.Set("ImageId", "ami-0123456789abcdef0")
 	form.Set("InstanceType", "vws.small")
-	form.Set("SubnetId", "subnet-0123456789abcdef0")
+	form.Set("SubnetId", subnetID)
 	form.Set("MinCount", "1")
 	form.Set("MaxCount", "1")
 	form.Set("ClientToken", "launch-web-1")

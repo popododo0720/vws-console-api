@@ -44,6 +44,9 @@ change.
 | Every switch over a model enum handles every value. | `exhaustive` |
 | No package-level mutable state. The process is stateless. | `gochecknoglobals` |
 | A long-running mutation takes a client token and returns `resource.Accepted`. It does not wait for the work to finish. | Kernel signatures; `cloud.mutate` is the only mutation path |
+| A mutation publishes the resource, the operation, and the idempotency record together. A rejected call leaves the previous state, and a repeated minted id is an internal error. | `backendtest` partial stop; `TestRepeatedEntropyDoesNotOverwrite` |
+| `RunInstances` requires a subnet the caller owns. | `backendtest` creates the subnet, then launches into it |
+| An unknown page token is an invalid argument. A state filter does not turn an existing id into not-found. | `backendtest` |
 | Idempotency key and fingerprint derivation changes only with a new `idempotencyVersion`. | Golden test in `internal/cloud` |
 | A backend result that names another account is rejected. | `guardAccepted` / `guardOwner` in `internal/cloud`, covered by `TestForeignAccountIsInternal` |
 | Fakes and the gRPC client behave the same. | `backendtest.Run` on both |

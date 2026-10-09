@@ -2,6 +2,7 @@ package fake
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/popododo0720/vws-console-api/internal/backend"
@@ -24,17 +25,32 @@ func (c compute) RunInstances(ctx context.Context, m backend.Mutation, req resou
 		acc, _ := hit.(resource.Accepted[resource.Instance])
 		return acc, nil
 	}
+	sub, ok := c.w.sub[req.SubnetID]
+	if !ok || sub.OwnerID != m.Account {
+		return resource.Accepted[resource.Instance]{}, resource.NotFound(resource.KindSubnet, req.SubnetID.String())
+	}
+	if sub.State != resource.SubnetAvailable {
+		return resource.Accepted[resource.Instance]{}, resource.Conflict(resource.KindSubnet, req.SubnetID.String(), "subnet is not available")
+	}
 	resID, err := resource.Mint[resource.ReservationID](c.w.entropy)
 	if err != nil {
 		return resource.Accepted[resource.Instance]{}, err
 	}
 	items := make([]resource.Instance, 0, req.Count)
 	targets := make([]resource.Ref, 0, req.Count)
+	seen := map[resource.InstanceID]struct{}{}
 	for i := 0; i < req.Count; i++ {
 		id, err := resource.Mint[resource.InstanceID](c.w.entropy)
 		if err != nil {
 			return resource.Accepted[resource.Instance]{}, err
 		}
+		if _, exists := c.w.inst[id]; exists {
+			return resource.Accepted[resource.Instance]{}, resource.Internal(errors.New("identifier collision"))
+		}
+		if _, exists := seen[id]; exists {
+			return resource.Accepted[resource.Instance]{}, resource.Internal(errors.New("identifier collision"))
+		}
+		seen[id] = struct{}{}
 		inst := resource.Instance{
 			ID:            id,
 			ReservationID: resID,
@@ -47,7 +63,6 @@ func (c compute) RunInstances(ctx context.Context, m backend.Mutation, req resou
 			PrivateIP:     c.w.nextIP(),
 			Tags:          copyTags(req.Tags),
 		}
-		c.w.inst[id] = &inst
 		items = append(items, inst)
 		targets = append(targets, id.Ref())
 	}
@@ -60,6 +75,10 @@ func (c compute) RunInstances(ctx context.Context, m backend.Mutation, req resou
 	})
 	if err != nil {
 		return resource.Accepted[resource.Instance]{}, err
+	}
+	for _, item := range items {
+		stored := item
+		c.w.inst[stored.ID] = &stored
 	}
 	acc := resource.Accepted[resource.Instance]{Operation: op, Items: items}
 	c.w.finish(m.Key, m.Fingerprint, acc)
@@ -80,6 +99,12 @@ func (c compute) StopInstances(ctx context.Context, m backend.Mutation, req reso
 		acc, _ := hit.(resource.Accepted[resource.InstanceStateChange])
 		return acc, nil
 	}
+	type stopPlan struct {
+		inst *resource.Instance
+		prev resource.InstanceState
+		mid  resource.InstanceState
+	}
+	plans := make([]stopPlan, 0, len(req.IDs))
 	changes := make([]resource.InstanceStateChange, 0, len(req.IDs))
 	targets := make([]resource.Ref, 0, len(req.IDs))
 	for _, id := range req.IDs {
@@ -91,12 +116,14 @@ func (c compute) StopInstances(ctx context.Context, m backend.Mutation, req reso
 		if err != nil {
 			return resource.Accepted[resource.InstanceStateChange]{}, err
 		}
-		prev := inst.State
-		inst.State = mid
+		plans = append(plans, stopPlan{inst: inst, prev: inst.State, mid: mid})
 		changes = append(changes, resource.InstanceStateChange{
-			ID: id, OwnerID: inst.OwnerID, Previous: prev, Current: mid,
+			ID: id, OwnerID: inst.OwnerID, Previous: inst.State, Current: mid,
 		})
 		targets = append(targets, id.Ref())
+	}
+	for _, plan := range plans {
+		plan.inst.State = plan.mid
 	}
 	op, err := c.w.newOp(resource.ServiceCompute, resource.ActionStopInstances, targets, func(time.Time) {
 		for _, ch := range changes {
@@ -114,6 +141,11 @@ func (c compute) StopInstances(ctx context.Context, m backend.Mutation, req reso
 		}
 	})
 	if err != nil {
+		for _, plan := range plans {
+			if plan.inst.State == plan.mid {
+				plan.inst.State = plan.prev
+			}
+		}
 		return resource.Accepted[resource.InstanceStateChange]{}, err
 	}
 	acc := resource.Accepted[resource.InstanceStateChange]{Operation: op, Items: changes}
@@ -136,6 +168,12 @@ func (c compute) DescribeInstances(ctx context.Context, s backend.Scope, q resou
 	for _, st := range q.States {
 		wantState[st] = struct{}{}
 	}
+	if len(q.IDs) == 1 {
+		inst, ok := c.w.inst[q.IDs[0]]
+		if !ok || inst.OwnerID != s.Account {
+			return resource.Page[resource.Instance]{}, resource.NotFound(resource.KindInstance, q.IDs[0].String())
+		}
+	}
 	var items []resource.Instance
 	for _, inst := range c.w.inst {
 		if inst.OwnerID != s.Account {
@@ -154,10 +192,7 @@ func (c compute) DescribeInstances(ctx context.Context, s backend.Scope, q resou
 		items = append(items, *inst)
 	}
 	sortInstances(items)
-	if len(q.IDs) == 1 && len(items) == 0 {
-		return resource.Page[resource.Instance]{}, resource.NotFound(resource.KindInstance, q.IDs[0].String())
-	}
-	return page(items, q.Page), nil
+	return page(items, q.Page)
 }
 
 func (c compute) GetOperation(ctx context.Context, s backend.Scope, id resource.OperationID) (resource.Operation, error) {

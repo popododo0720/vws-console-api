@@ -34,17 +34,22 @@ func TestIdempotencyGolden(t *testing.T) {
 func TestRestartReplaysOperation(t *testing.T) {
 	w := world(t)
 	req := runReq(t)
-	token := token(t, "launch-web-1")
+	launchToken := token(t, "launch-web-1")
 	caller := caller(t)
 	ctx := context.Background()
 
 	firstSvc := New(Config{Backends: w.Set()})
-	first, err := firstSvc.RunInstances(ctx, caller, token, req)
+	subnet, err := firstSvc.CreateSubnet(ctx, caller, token(t, "subnet-web-1"), resource.CreateSubnetRequest{Cidr: "10.1.0.0/24"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.SubnetID = subnet.Items[0].ID
+	first, err := firstSvc.RunInstances(ctx, caller, launchToken, req)
 	if err != nil {
 		t.Fatal(err)
 	}
 	secondSvc := New(Config{Backends: w.Set()})
-	second, err := secondSvc.RunInstances(ctx, caller, token, req)
+	second, err := secondSvc.RunInstances(ctx, caller, launchToken, req)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -30,11 +30,20 @@ func Run(t *testing.T, newSet Harness) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sub, err := resource.Parse[resource.SubnetID]("subnet-0123456789abcdef0")
+	subReq := resource.CreateSubnetRequest{Cidr: "10.2.0.0/24"}
+	sm := backend.Mutation{Scope: backend.Scope{Account: account}, Key: "k3", Fingerprint: "fp3"}
+	created, err := set.Network.CreateSubnet(ctx, sm, subReq)
 	if err != nil {
 		t.Fatal(err)
 	}
-	req := resource.RunInstancesRequest{ImageID: img, InstanceType: "vws.small", SubnetID: sub, Count: 1}
+	replay, err := set.Network.CreateSubnet(ctx, sm, subReq)
+	if err != nil || replay.Items[0].ID != created.Items[0].ID {
+		t.Fatal("subnet retry")
+	}
+	if _, err := set.Network.GetOperation(ctx, backend.Scope{Account: account}, created.Operation.ID); err != nil {
+		t.Fatal(err)
+	}
+	req := resource.RunInstancesRequest{ImageID: img, InstanceType: "vws.small", SubnetID: created.Items[0].ID, Count: 1}
 	m := backend.Mutation{Scope: backend.Scope{Account: account}, Key: "k1", Fingerprint: "fp1"}
 
 	first, err := set.Compute.RunInstances(ctx, m, req)
@@ -77,6 +86,22 @@ func Run(t *testing.T, newSet Harness) {
 	if page.Items[0].State != resource.InstanceRunning {
 		t.Fatalf("state %s", page.Items[0].State)
 	}
+	filtered, err := set.Compute.DescribeInstances(ctx, backend.Scope{Account: account}, resource.InstanceQuery{
+		IDs:    []resource.InstanceID{first.Items[0].ID},
+		States: []resource.InstanceState{resource.InstancePending},
+		Page:   resource.PageRequest{Size: 50},
+	})
+	if err != nil {
+		t.Fatalf("state filter: %v", err)
+	}
+	if len(filtered.Items) != 0 {
+		t.Fatalf("state filter returned %+v", filtered.Items)
+	}
+	if _, err := set.Compute.DescribeInstances(ctx, backend.Scope{Account: account}, resource.InstanceQuery{
+		Page: resource.PageRequest{Size: 50, Token: "missing-page"},
+	}); resource.CodeOf(err) != resource.CodeInvalidArgument {
+		t.Fatalf("page token: %v", err)
+	}
 	if _, err := set.Compute.DescribeInstances(ctx, backend.Scope{Account: other}, resource.InstanceQuery{
 		IDs:  []resource.InstanceID{first.Items[0].ID},
 		Page: resource.PageRequest{Size: 50},
@@ -104,6 +129,35 @@ func Run(t *testing.T, newSet Harness) {
 	}
 	if stopped.Items[0].State != resource.InstanceStopped {
 		t.Fatalf("stopped %s", stopped.Items[0].State)
+	}
+
+	pairReq := req
+	pairReq.Count = 2
+	pair, err := set.Compute.RunInstances(ctx, backend.Mutation{Scope: backend.Scope{Account: account}, Key: "k-pair", Fingerprint: "fp-pair"}, pairReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := set.Compute.GetOperation(ctx, backend.Scope{Account: account}, pair.Operation.ID); err != nil {
+		t.Fatal(err)
+	}
+	missing, err := resource.Parse[resource.InstanceID]("i-01234567")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := set.Compute.StopInstances(ctx, backend.Mutation{Scope: backend.Scope{Account: account}, Key: "k-partial", Fingerprint: "fp-partial"}, resource.StopInstancesRequest{
+		IDs: []resource.InstanceID{pair.Items[0].ID, missing},
+	}); resource.CodeOf(err) != resource.CodeNotFound {
+		t.Fatalf("partial stop: %v", err)
+	}
+	left, err := set.Compute.DescribeInstances(ctx, backend.Scope{Account: account}, resource.InstanceQuery{
+		IDs:  []resource.InstanceID{pair.Items[0].ID, pair.Items[1].ID},
+		Page: resource.PageRequest{Size: 50},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(left.Items) != 2 || left.Items[0].State != resource.InstanceRunning || left.Items[1].State != resource.InstanceRunning {
+		t.Fatalf("partial stop applied %+v", left.Items)
 	}
 
 	name, err := resource.Parse[resource.BucketName]("build-logs")
@@ -144,17 +198,4 @@ func Run(t *testing.T, newSet Harness) {
 		t.Fatalf("etag %s", meta.ETag)
 	}
 
-	subReq := resource.CreateSubnetRequest{Cidr: "10.2.0.0/24"}
-	sm := backend.Mutation{Scope: backend.Scope{Account: account}, Key: "k3", Fingerprint: "fp3"}
-	created, err := set.Network.CreateSubnet(ctx, sm, subReq)
-	if err != nil {
-		t.Fatal(err)
-	}
-	replay, err := set.Network.CreateSubnet(ctx, sm, subReq)
-	if err != nil || replay.Items[0].ID != created.Items[0].ID {
-		t.Fatal("subnet retry")
-	}
-	if _, err := set.Network.GetOperation(ctx, backend.Scope{Account: account}, created.Operation.ID); err != nil {
-		t.Fatal(err)
-	}
 }

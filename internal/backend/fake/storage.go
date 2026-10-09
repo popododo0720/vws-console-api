@@ -61,7 +61,7 @@ func (s storage) ListBuckets(ctx context.Context, sc backend.Scope, q resource.B
 		}
 	}
 	sortBuckets(items)
-	return page(items, q.Page), nil
+	return page(items, q.Page)
 }
 
 func (s storage) DeleteBucket(ctx context.Context, sc backend.Scope, name resource.BucketName) error {
