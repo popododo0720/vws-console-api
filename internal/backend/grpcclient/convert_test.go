@@ -4,6 +4,9 @@ import (
 	"testing"
 	"time"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
 	"github.com/popododo0720/vws-console-api/internal/resource"
 )
 
@@ -33,5 +36,12 @@ func TestOperationFailureRoundTrip(t *testing.T) {
 	}
 	if got.OwnerID != owner || got.ID != id || got.Error == nil || got.Error.Code != resource.CodeConflict || got.Error.Message != op.Error.Message {
 		t.Fatalf("%+v", got)
+	}
+}
+
+func TestBareResourceExhaustedStaysRetryable(t *testing.T) {
+	err := fromRPC(status.Error(codes.ResourceExhausted, "quota"))
+	if resource.CodeOf(err) != resource.CodeResourceExhausted {
+		t.Fatalf("got %v", err)
 	}
 }

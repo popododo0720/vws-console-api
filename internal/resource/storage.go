@@ -67,7 +67,7 @@ func (r PutObjectRequest) Normalize() (PutObjectRequest, error) {
 		return PutObjectRequest{}, Invalid("key", "required")
 	}
 	if r.Size < -1 || r.Size > MaxObjectBytes {
-		return PutObjectRequest{}, Exhausted("object exceeds 5 MiB")
+		return PutObjectRequest{}, TooLarge("object exceeds 5 MiB")
 	}
 	if len(r.ContentType) > 128 || hasControl(r.ContentType) {
 		return PutObjectRequest{}, Invalid("contentType", "malformed")

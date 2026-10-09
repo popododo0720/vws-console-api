@@ -350,7 +350,8 @@ func statusOf(c resource.Code) int {
 	case resource.CodeInternal, resource.CodeUnspecified:
 		return http.StatusInternalServerError
 	case resource.CodeInvalidArgument, resource.CodeNotFound, resource.CodeAlreadyExists,
-		resource.CodeConflict, resource.CodeIdempotencyMismatch, resource.CodeResourceExhausted:
+		resource.CodeConflict, resource.CodeIdempotencyMismatch, resource.CodeResourceExhausted,
+		resource.CodePayloadTooLarge:
 		return http.StatusBadRequest
 	default:
 		return http.StatusInternalServerError
@@ -375,6 +376,8 @@ func ec2Code(e *resource.Error) string {
 		return "UnauthorizedOperation"
 	case resource.CodeResourceExhausted:
 		return "RequestLimitExceeded"
+	case resource.CodePayloadTooLarge:
+		return "InvalidParameterValue"
 	case resource.CodeUnavailable:
 		return "Unavailable"
 	case resource.CodeUnimplemented:

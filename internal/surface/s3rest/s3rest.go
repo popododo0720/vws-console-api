@@ -222,6 +222,8 @@ func statusOf(e *resource.Error) int {
 	case resource.CodeUnauthenticated, resource.CodePermissionDenied:
 		return http.StatusForbidden
 	case resource.CodeResourceExhausted:
+		return http.StatusServiceUnavailable
+	case resource.CodePayloadTooLarge:
 		return http.StatusRequestEntityTooLarge
 	case resource.CodeUnavailable:
 		return http.StatusServiceUnavailable
@@ -250,6 +252,8 @@ func s3Code(e *resource.Error) string {
 	case resource.CodeUnauthenticated, resource.CodePermissionDenied:
 		return "AccessDenied"
 	case resource.CodeResourceExhausted:
+		return "SlowDown"
+	case resource.CodePayloadTooLarge:
 		return "EntityTooLarge"
 	case resource.CodeUnimplemented:
 		return "NotImplemented"

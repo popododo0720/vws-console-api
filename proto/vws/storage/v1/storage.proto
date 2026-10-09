@@ -64,6 +64,7 @@ message PutObjectRequest {
   string key = 3;
   string content_type = 4;
   bytes body = 5;
+  int64 size = 6;
 }
 
 message GetObjectRequest {

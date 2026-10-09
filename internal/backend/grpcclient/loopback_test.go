@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/test/bufconn"
 
 	"github.com/popododo0720/vws-console-api/internal/backend"
@@ -23,8 +22,11 @@ import (
 )
 
 func TestContractOverGRPC(t *testing.T) {
-	lis := bufconn.Listen(1 << 20)
-	srv := grpc.NewServer()
+	lis := bufconn.Listen(MaxMessageBytes())
+	srv := grpc.NewServer(
+		grpc.MaxRecvMsgSize(MaxMessageBytes()),
+		grpc.MaxSendMsgSize(MaxMessageBytes()),
+	)
 	now := time.Unix(1_700_000_000, 0).UTC()
 	world := fake.New(fake.Options{
 		Now:     func() time.Time { return now },
@@ -38,10 +40,9 @@ func TestContractOverGRPC(t *testing.T) {
 	t.Cleanup(srv.Stop)
 
 	conn, err := grpc.NewClient("passthrough:///bufnet",
-		grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) {
+		append(dialOptions(), grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) {
 			return lis.DialContext(ctx)
-		}),
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		}))...,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -236,7 +237,7 @@ func (s storageSrv) PutObject(ctx context.Context, req *storagev1.PutObjectReque
 		return nil, toStatus(err)
 	}
 	obj, err := s.api.PutObject(ctx, sc, resource.PutObjectRequest{
-		Bucket: bucket, Key: key, ContentType: req.GetContentType(), Size: int64(len(req.GetBody())),
+		Bucket: bucket, Key: key, ContentType: req.GetContentType(), Size: req.GetSize(),
 	}, bytes.NewReader(req.GetBody()))
 	if err != nil {
 		return nil, toStatus(err)

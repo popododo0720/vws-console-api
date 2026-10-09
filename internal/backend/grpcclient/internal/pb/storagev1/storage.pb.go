@@ -469,6 +469,7 @@ type PutObjectRequest struct {
 	Key           string                 `protobuf:"bytes,3,opt,name=key,proto3" json:"key,omitempty"`
 	ContentType   string                 `protobuf:"bytes,4,opt,name=content_type,json=contentType,proto3" json:"content_type,omitempty"`
 	Body          []byte                 `protobuf:"bytes,5,opt,name=body,proto3" json:"body,omitempty"`
+	Size          int64                  `protobuf:"varint,6,opt,name=size,proto3" json:"size,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -536,6 +537,13 @@ func (x *PutObjectRequest) GetBody() []byte {
 		return x.Body
 	}
 	return nil
+}
+
+func (x *PutObjectRequest) GetSize() int64 {
+	if x != nil {
+		return x.Size
+	}
+	return 0
 }
 
 type GetObjectRequest struct {
@@ -741,13 +749,14 @@ const file_vws_storage_v1_storage_proto_rawDesc = "" +
 	"\bowner_id\x18\x03 \x01(\tR\aownerId\x12\x12\n" +
 	"\x04size\x18\x04 \x01(\x03R\x04size\x12\x12\n" +
 	"\x04etag\x18\x05 \x01(\tR\x04etag\x12!\n" +
-	"\fcontent_type\x18\x06 \x01(\tR\vcontentType\"\x9f\x01\n" +
+	"\fcontent_type\x18\x06 \x01(\tR\vcontentType\"\xb3\x01\n" +
 	"\x10PutObjectRequest\x12*\n" +
 	"\x05scope\x18\x01 \x01(\v2\x14.vws.common.v1.ScopeR\x05scope\x12\x16\n" +
 	"\x06bucket\x18\x02 \x01(\tR\x06bucket\x12\x10\n" +
 	"\x03key\x18\x03 \x01(\tR\x03key\x12!\n" +
 	"\fcontent_type\x18\x04 \x01(\tR\vcontentType\x12\x12\n" +
-	"\x04body\x18\x05 \x01(\fR\x04body\"h\n" +
+	"\x04body\x18\x05 \x01(\fR\x04body\x12\x12\n" +
+	"\x04size\x18\x06 \x01(\x03R\x04size\"h\n" +
 	"\x10GetObjectRequest\x12*\n" +
 	"\x05scope\x18\x01 \x01(\v2\x14.vws.common.v1.ScopeR\x05scope\x12\x16\n" +
 	"\x06bucket\x18\x02 \x01(\tR\x06bucket\x12\x10\n" +

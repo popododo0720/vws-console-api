@@ -445,7 +445,7 @@ func decode(w http.ResponseWriter, r *http.Request, dst any) error {
 	if err := dec.Decode(dst); err != nil {
 		var maxErr *http.MaxBytesError
 		if errors.As(err, &maxErr) {
-			return resource.Exhausted("body exceeds the limit")
+			return resource.TooLarge("body exceeds the limit")
 		}
 		return resource.Invalid("body", "malformed json")
 	}
@@ -490,6 +490,8 @@ func statusOf(c resource.Code) int {
 		return http.StatusForbidden
 	case resource.CodeResourceExhausted:
 		return http.StatusTooManyRequests
+	case resource.CodePayloadTooLarge:
+		return http.StatusRequestEntityTooLarge
 	case resource.CodeUnavailable:
 		return http.StatusServiceUnavailable
 	case resource.CodeUnimplemented:

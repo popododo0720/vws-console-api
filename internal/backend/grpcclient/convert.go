@@ -284,7 +284,34 @@ func fromRPC(err error) error {
 		}
 		return failureModel(failure)
 	}
-	return resource.Internal(err)
+	return &resource.Error{Code: codeFromGRPC(st.Code()), Message: "backend request failed"}
+}
+
+func codeFromGRPC(c codes.Code) resource.Code {
+	switch c {
+	case codes.InvalidArgument:
+		return resource.CodeInvalidArgument
+	case codes.NotFound:
+		return resource.CodeNotFound
+	case codes.AlreadyExists:
+		return resource.CodeAlreadyExists
+	case codes.Aborted:
+		return resource.CodeConflict
+	case codes.Unauthenticated:
+		return resource.CodeUnauthenticated
+	case codes.PermissionDenied:
+		return resource.CodePermissionDenied
+	case codes.ResourceExhausted:
+		return resource.CodeResourceExhausted
+	case codes.Unavailable:
+		return resource.CodeUnavailable
+	case codes.Unimplemented:
+		return resource.CodeUnimplemented
+	case codes.Internal, codes.OK, codes.Canceled, codes.DeadlineExceeded, codes.Unknown, codes.FailedPrecondition, codes.OutOfRange, codes.DataLoss:
+		return resource.CodeInternal
+	default:
+		return resource.CodeInternal
+	}
 }
 
 func failureModel(f *commonv1.Failure) *resource.Error {
@@ -309,6 +336,8 @@ func codeByName(s string) resource.Code {
 		return resource.CodePermissionDenied
 	case resource.CodeResourceExhausted.String():
 		return resource.CodeResourceExhausted
+	case resource.CodePayloadTooLarge.String():
+		return resource.CodePayloadTooLarge
 	case resource.CodeUnavailable.String():
 		return resource.CodeUnavailable
 	case resource.CodeUnimplemented.String():
@@ -350,6 +379,8 @@ func grpcCode(c resource.Code) codes.Code {
 		return codes.PermissionDenied
 	case resource.CodeResourceExhausted:
 		return codes.ResourceExhausted
+	case resource.CodePayloadTooLarge:
+		return codes.InvalidArgument
 	case resource.CodeUnavailable:
 		return codes.Unavailable
 	case resource.CodeUnimplemented:

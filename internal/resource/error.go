@@ -20,6 +20,7 @@ const (
 	CodeUnauthenticated
 	CodePermissionDenied
 	CodeResourceExhausted
+	CodePayloadTooLarge
 	CodeUnavailable
 	CodeUnimplemented
 	CodeInternal
@@ -44,6 +45,8 @@ func (c Code) String() string {
 		return "PermissionDenied"
 	case CodeResourceExhausted:
 		return "ResourceExhausted"
+	case CodePayloadTooLarge:
+		return "PayloadTooLarge"
 	case CodeUnavailable:
 		return "Unavailable"
 	case CodeUnimplemented:
@@ -155,9 +158,15 @@ func Unauthenticated(message string) *Error {
 	return &Error{Code: CodeUnauthenticated, Message: message}
 }
 
-// Exhausted reports a limit this process enforces.
+// Exhausted reports a quota the caller can retry later.
 func Exhausted(message string) *Error {
 	return &Error{Code: CodeResourceExhausted, Message: message}
+}
+
+// TooLarge reports a body or object that exceeds the size this process accepts.
+// It is not a quota, so callers must not retry it unchanged.
+func TooLarge(message string) *Error {
+	return &Error{Code: CodePayloadTooLarge, Message: message}
 }
 
 // Unimplemented reports a path the skeleton does not serve.

@@ -303,7 +303,7 @@ func readBody(r io.Reader, max int64) ([]byte, error) {
 		return nil, resource.Internal(err)
 	}
 	if int64(len(buf)) > max {
-		return nil, resource.Exhausted("body exceeds the limit")
+		return nil, resource.TooLarge("body exceeds the limit")
 	}
 	return buf, nil
 }

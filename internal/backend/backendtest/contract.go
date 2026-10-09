@@ -2,6 +2,7 @@
 package backendtest
 
 import (
+	"bytes"
 	"context"
 	"strings"
 	"testing"
@@ -199,6 +200,28 @@ func Run(t *testing.T, newSet Harness) {
 	defer func() { _ = rc.Close() }()
 	if meta.ETag != obj.ETag {
 		t.Fatalf("etag %s", meta.ETag)
+	}
+	if _, err := set.Storage.PutObject(ctx, backend.Scope{Account: account}, resource.PutObjectRequest{
+		Bucket: name, Key: key, Size: 1,
+	}, strings.NewReader("hello")); resource.CodeOf(err) != resource.CodeInvalidArgument {
+		t.Fatalf("size mismatch: %v", err)
+	}
+	bigKey, err := resource.Parse[resource.ObjectKey]("big.bin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	big := bytes.Repeat([]byte{'x'}, resource.MaxObjectBytes)
+	stored, err := set.Storage.PutObject(ctx, backend.Scope{Account: account}, resource.PutObjectRequest{
+		Bucket: name, Key: bigKey, Size: int64(len(big)),
+	}, bytes.NewReader(big))
+	if err != nil || stored.Size != int64(len(big)) {
+		t.Fatalf("cap: %v %+v", err, stored)
+	}
+	_, err = set.Storage.PutObject(ctx, backend.Scope{Account: account}, resource.PutObjectRequest{
+		Bucket: name, Key: bigKey, Size: int64(len(big) + 1),
+	}, bytes.NewReader(append(big, 'y')))
+	if resource.CodeOf(err) != resource.CodePayloadTooLarge {
+		t.Fatalf("over cap: %v", err)
 	}
 
 }

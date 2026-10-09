@@ -49,7 +49,7 @@ change.
 | An unknown page token is an invalid argument. A state filter does not turn an existing id into not-found. | `backendtest` |
 | The idempotency key is the account, the action, and the client token. The fingerprint is `idempotencyVersion` plus the normalized JSON, including empty tag values. A derivation change mismatches a retry instead of minting a second resource. | Golden test and `TestEmptyTagChangesFingerprint` in `internal/cloud` |
 | A backend result that names another account is rejected, including a polled operation. The operation id returned must be the id that was requested. | `guardAccepted`, `guardOwner`, and `guardOperation` in `internal/cloud`, covered by `TestForeignAccountIsInternal` and `TestForeignOperationIsInternal` |
-| Fakes and the gRPC client behave the same. Operation failure fields survive the gRPC mapping. | `backendtest.Run` on both; `TestOperationFailureRoundTrip` |
+| Fakes and the gRPC client behave the same. Operation failure fields survive the gRPC mapping. An object at `MaxObjectBytes` fits in one gRPC message. A larger body is `PayloadTooLarge`, which is not the retryable quota code. | `backendtest.Run` on both; `TestOperationFailureRoundTrip`; `TestBareResourceExhaustedStaysRetryable` |
 | Every `resource.Action` has a console route. | `TestEveryActionHasARoute` |
 | A resource created on one surface is the same resource, with the same id and state names, on the others. | `internal/surface/interop` |
 | Console JSON field names are camelCase. | `tagliatelle` |
