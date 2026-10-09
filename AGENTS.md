@@ -52,6 +52,7 @@ change.
 | Fakes and the gRPC client behave the same. Operation failure fields survive the gRPC mapping. An object at `MaxObjectBytes` fits in one gRPC message. A larger body is `PayloadTooLarge`, which is not the retryable quota code. | `backendtest.Run` on both; `TestOperationFailureRoundTrip`; `TestBareResourceExhaustedStaysRetryable` |
 | Every `resource.Action` has a console route. | `TestEveryActionHasARoute` |
 | A query parameter or object subresource the codec does not apply is rejected. Query mutations require `ClientToken`. The console object read returns the bytes. | `TestUnsupportedFilterIsRejected`, `TestClientTokenIsRequired`, `TestIndexPastTheCapIsRejected`, `TestSubresourceDoesNotOverwrite`, `TestListBucketsContinues`, `TestS3ObjectRoundTrip` |
+| The signature is checked after the access key is known and before the body is trusted. A missing payload hash is the hash of the body. `UNSIGNED-PAYLOAD` is rejected. A query longer than 128 parameters is rejected before it is sorted. | `TestQueryWithoutPayloadHeader`, `TestUnsignedPayloadAndUnreadBody`, `TestTooManyQueryParams` |
 | A resource created on one surface is the same resource, with the same id and state names, on the others. | `internal/surface/interop` |
 | Console JSON field names are camelCase. | `tagliatelle` |
 | Generated code matches `proto/`. | CI job `generated` |

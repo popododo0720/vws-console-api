@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -60,36 +61,19 @@ func NewVerifier(v Verifier) *Verifier {
 	return &v
 }
 
+const maxQueryParams = 128
+
 // Verify checks r, replaces r.Body with the bytes that were signed, and
-// returns the account the access key belongs to.
+// returns the account the access key belongs to. The access key is resolved
+// before the body is read. A missing payload hash means the hash of that body,
+// which is what query clients send. UNSIGNED-PAYLOAD is rejected.
 func (v *Verifier) Verify(r *http.Request) (resource.Caller, error) {
 	if r.URL.Query().Get("X-Amz-Algorithm") != "" {
 		return resource.Caller{}, resource.Unimplemented("presigned urls are not served")
 	}
-	body, err := readBody(r.Body, v.MaxBody)
-	if err != nil {
+	if err := queryWithinCap(r.URL.RawQuery); err != nil {
 		return resource.Caller{}, err
 	}
-	if r.Body != nil {
-		_ = r.Body.Close()
-	}
-	r.Body = io.NopCloser(bytes.NewReader(body))
-	r.ContentLength = int64(len(body))
-
-	sum := sha256.Sum256(body)
-	payloadHash := hex.EncodeToString(sum[:])
-	stated := r.Header.Get("X-Amz-Content-Sha256")
-	switch stated {
-	case "":
-		return resource.Caller{}, resource.Invalid("X-Amz-Content-Sha256", "required")
-	case "UNSIGNED-PAYLOAD":
-		payloadHash = stated
-	default:
-		if !hmac.Equal([]byte(stated), []byte(payloadHash)) {
-			return resource.Caller{}, resource.Unauthenticated("payload hash mismatch")
-		}
-	}
-
 	auth, err := parseAuthorization(r.Header.Get("Authorization"))
 	if err != nil {
 		return resource.Caller{}, err
@@ -113,6 +97,34 @@ func (v *Verifier) Verify(r *http.Request) (resource.Caller, error) {
 	if !ok || cred.Secret == "" || cred.Account.IsZero() {
 		return resource.Caller{}, resource.Unauthenticated("unknown access key")
 	}
+	if r.Header.Get("Content-Type") != "" && !headerSigned(auth.signedHeaders, "content-type") {
+		return resource.Caller{}, resource.Unauthenticated("content-type is not signed")
+	}
+
+	body, err := readBody(r.Body, v.MaxBody)
+	if err != nil {
+		return resource.Caller{}, err
+	}
+	if r.Body != nil {
+		_ = r.Body.Close()
+	}
+	r.Body = io.NopCloser(bytes.NewReader(body))
+	r.ContentLength = int64(len(body))
+
+	sum := sha256.Sum256(body)
+	payloadHash := hex.EncodeToString(sum[:])
+	switch stated := r.Header.Get("X-Amz-Content-Sha256"); stated {
+	case "":
+	case "UNSIGNED-PAYLOAD":
+		return resource.Caller{}, resource.Unauthenticated("unsigned payload is not accepted")
+	default:
+		if !hmac.Equal([]byte(stated), []byte(payloadHash)) {
+			return resource.Caller{}, resource.Unauthenticated("payload hash mismatch")
+		}
+	}
+	if v.Service == ServiceEC2 && len(body) > 0 && !headerSigned(auth.signedHeaders, "content-type") {
+		return resource.Caller{}, resource.Unauthenticated("content-type is not signed")
+	}
 	canon := canonicalRequest(r, auth.signedHeaders, payloadHash)
 	stringToSign := "AWS4-HMAC-SHA256\n" + amzDate + "\n" + strings.Join(parts[1:], "/") + "\n" + hexSHA256([]byte(canon))
 	mac := hmac.New(sha256.New, signingKey(cred.Secret, parts[1], parts[2], parts[3]))
@@ -128,6 +140,10 @@ func (v *Verifier) Verify(r *http.Request) (resource.Caller, error) {
 // Sign sets the date, payload hash, and Authorization header on r.
 // It reads and restores the body. Tests and local clients use it.
 func Sign(r *http.Request, cred Credential, service Service, region string, now time.Time) error {
+	return sign(r, cred, service, region, now, true)
+}
+
+func sign(r *http.Request, cred Credential, service Service, region string, now time.Time, payloadHeader bool) error {
 	body, err := readBody(r.Body, resource.MaxObjectBytes)
 	if err != nil {
 		return err
@@ -141,8 +157,13 @@ func Sign(r *http.Request, cred Credential, service Service, region string, now 
 	payload := hex.EncodeToString(sum[:])
 	amzDate := now.UTC().Format("20060102T150405Z")
 	r.Header.Set("X-Amz-Date", amzDate)
-	r.Header.Set("X-Amz-Content-Sha256", payload)
-	signed := []string{"host", "x-amz-content-sha256", "x-amz-date"}
+	signed := []string{"host", "x-amz-date"}
+	if payloadHeader {
+		r.Header.Set("X-Amz-Content-Sha256", payload)
+		signed = append(signed, "x-amz-content-sha256")
+	} else {
+		r.Header.Del("X-Amz-Content-Sha256")
+	}
 	if r.Header.Get("Content-Type") != "" {
 		signed = append(signed, "content-type")
 	}
@@ -363,18 +384,31 @@ func fromHex(c byte) (byte, bool) {
 	}
 }
 
-func sortStrings(s []string) {
-	for i := 1; i < len(s); i++ {
-		for j := i; j > 0 && s[j] < s[j-1]; j-- {
-			s[j], s[j-1] = s[j-1], s[j]
+func queryWithinCap(raw string) error {
+	n := 0
+	for _, item := range strings.Split(raw, "&") {
+		if item == "" {
+			continue
+		}
+		n++
+		if n > maxQueryParams {
+			return resource.Invalid("query", "too many parameters")
 		}
 	}
+	return nil
 }
 
+func headerSigned(names []string, want string) bool {
+	return slices.Contains(names, want)
+}
+
+func sortStrings(s []string) { slices.Sort(s) }
+
 func sortPairs(p [][2]string) {
-	for i := 1; i < len(p); i++ {
-		for j := i; j > 0 && (p[j][0] < p[j-1][0] || (p[j][0] == p[j-1][0] && p[j][1] < p[j-1][1])); j-- {
-			p[j], p[j-1] = p[j-1], p[j]
+	slices.SortFunc(p, func(a, b [2]string) int {
+		if c := strings.Compare(a[0], b[0]); c != 0 {
+			return c
 		}
-	}
+		return strings.Compare(a[1], b[1])
+	})
 }

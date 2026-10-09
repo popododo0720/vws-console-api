@@ -2,6 +2,8 @@ package sigv4
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -65,6 +67,58 @@ func TestPresignRefused(t *testing.T) {
 		t.Fatalf("got %v", err)
 	}
 }
+
+func TestQueryWithoutPayloadHeader(t *testing.T) {
+	now := time.Date(2026, 10, 9, 10, 0, 0, 0, time.UTC)
+	c := cred(t)
+	req := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:8081/", strings.NewReader("Action=DescribeInstances&Version=2016-11-15"))
+	req.Host = req.URL.Host
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	if err := sign(req, c, ServiceEC2, resource.RegionName, now, false); err != nil {
+		t.Fatal(err)
+	}
+	if req.Header.Get("X-Amz-Content-Sha256") != "" {
+		t.Fatal("payload header was set")
+	}
+	if _, err := verifier(c, ServiceEC2, now).Verify(req); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestUnsignedPayloadAndUnreadBody(t *testing.T) {
+	now := time.Date(2026, 10, 9, 10, 0, 0, 0, time.UTC)
+	c := cred(t)
+	v := verifier(c, ServiceEC2, now)
+	req := signed(t, c, ServiceEC2, now, http.MethodPost, "http://127.0.0.1:8081/", "Action=DescribeInstances&Version=2016-11-15")
+	req.Header.Set("X-Amz-Content-Sha256", "UNSIGNED-PAYLOAD")
+	if _, err := v.Verify(req); resource.CodeOf(err) != resource.CodeUnauthenticated {
+		t.Fatalf("unsigned: %v", err)
+	}
+
+	unread := signed(t, c, ServiceEC2, now, http.MethodGet, "http://127.0.0.1:8081/", "")
+	unread.Body = io.NopCloser(errReader{})
+	auth := unread.Header.Get("Authorization")
+	unread.Header.Set("Authorization", strings.Replace(auth, c.AccessKey, "UNKNOWNKEY", 1))
+	if _, err := v.Verify(unread); resource.CodeOf(err) != resource.CodeUnauthenticated {
+		t.Fatalf("unknown key: %v", err)
+	}
+}
+
+func TestTooManyQueryParams(t *testing.T) {
+	var parts []string
+	for i := 0; i <= maxQueryParams; i++ {
+		parts = append(parts, fmt.Sprintf("p%d=1", i))
+	}
+	req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:8081/?"+strings.Join(parts, "&"), nil)
+	req.Host = req.URL.Host
+	if _, err := verifier(cred(t), ServiceEC2, time.Now()).Verify(req); resource.CodeOf(err) != resource.CodeInvalidArgument {
+		t.Fatalf("got %v", err)
+	}
+}
+
+type errReader struct{}
+
+func (errReader) Read([]byte) (int, error) { return 0, errors.New("body was read") }
 
 func TestPinnedSignature(t *testing.T) {
 	now := time.Date(2026, 10, 9, 10, 0, 0, 0, time.UTC)
