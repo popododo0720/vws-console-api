@@ -1,0 +1,97 @@
+# golangci-lint v2. Each architectural rule in AGENTS.md that a linter can
+# check is checked here. The rule names below are cited in that table.
+version: "2"
+
+run:
+  go: "1.22"
+
+linters:
+  default: standard
+  enable:
+    - bodyclose
+    - depguard
+    - errorlint
+    - exhaustive
+    - gochecknoglobals
+    - gocritic
+    - misspell
+    - noctx
+    - nolintlint
+    - revive
+    - tagliatelle
+    - unconvert
+    - usestdlibvars
+  settings:
+    depguard:
+      rules:
+        surfaces-use-the-kernel:
+          files:
+            - "**/internal/surface/**"
+            - "!$test"
+          deny:
+            - pkg: github.com/popododo0720/vws-console-api/internal/backend
+              desc: surfaces reach backends only through internal/cloud
+        model-is-a-leaf:
+          files:
+            - "**/internal/resource/**"
+          deny:
+            - pkg: github.com/popododo0720/vws-console-api/internal
+              desc: internal/resource imports only the standard library
+        kernel-knows-no-wire:
+          files:
+            - "**/internal/cloud/**"
+          deny:
+            - pkg: net/http
+              desc: the kernel takes and returns resource types, never HTTP
+            - pkg: github.com/popododo0720/vws-console-api/internal/surface
+              desc: the kernel does not know which surface called it
+            - pkg: github.com/popododo0720/vws-console-api/internal/sigv4
+              desc: authentication happens before the kernel
+        grpc-stays-in-grpcclient:
+          files:
+            - "$all"
+            - "!**/internal/backend/grpcclient/**"
+          deny:
+            - pkg: google.golang.org/grpc
+              desc: only internal/backend/grpcclient speaks gRPC
+            - pkg: google.golang.org/protobuf
+              desc: only internal/backend/grpcclient sees protobuf types
+    exhaustive:
+      default-signifies-exhaustive: false
+    tagliatelle:
+      case:
+        rules:
+          json: camel
+    nolintlint:
+      require-explanation: true
+      require-specific: true
+    revive:
+      rules:
+        - name: exported
+        - name: package-comments
+        - name: var-naming
+        - name: receiver-naming
+        - name: error-strings
+        - name: context-as-argument
+        - name: unexported-return
+  exclusions:
+    generated: lax
+    rules:
+      - path: _test\.go
+        linters:
+          - gochecknoglobals
+    paths:
+      - internal/backend/grpcclient/internal/pb
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  exclusions:
+    generated: lax
+    paths:
+      - internal/backend/grpcclient/internal/pb
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/popododo0720/vws-console-api
