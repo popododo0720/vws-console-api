@@ -323,7 +323,7 @@ type encodingText interface {
 }
 
 func rejectUnknown(r *http.Request, action string) error {
-	allow := allowCommon
+	var allow func(string) bool
 	switch action {
 	case resource.ActionRunInstances.String():
 		allow = allowRun

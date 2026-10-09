@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"syscall"
 
 	"github.com/popododo0720/vws-console-api/internal/backend"
 	"github.com/popododo0720/vws-console-api/internal/backend/fake"
@@ -21,6 +22,10 @@ import (
 	"github.com/popododo0720/vws-console-api/internal/surface/ec2query"
 	"github.com/popododo0720/vws-console-api/internal/surface/s3rest"
 )
+
+func stopSignals() []os.Signal {
+	return []os.Signal{os.Interrupt, syscall.SIGTERM}
+}
 
 func main() {
 	if err := run(context.Background(), os.Args[1:]); err != nil {
@@ -83,7 +88,7 @@ func run(ctx context.Context, args []string) error {
 	ec2 := sigv4.NewVerifier(sigv4.Verifier{Service: sigv4.ServiceEC2, Region: resource.RegionName, Lookup: lookup})
 	s3 := sigv4.NewVerifier(sigv4.Verifier{Service: sigv4.ServiceS3, Region: resource.RegionName, Lookup: lookup})
 
-	ctx, stop := signal.NotifyContext(ctx, os.Interrupt)
+	ctx, stop := signal.NotifyContext(ctx, stopSignals()...)
 	defer stop()
 	return server.Run(ctx, logger,
 		server.Surface{Name: "console", Addr: *consoleAddr, Handler: console.New(console.Config{

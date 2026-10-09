@@ -2,6 +2,7 @@ package grpcclient
 
 import (
 	"context"
+	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -67,7 +68,17 @@ func dialOptions() []grpc.DialOption {
 			grpc.MaxCallRecvMsgSize(MaxMessageBytes()),
 			grpc.MaxCallSendMsgSize(MaxMessageBytes()),
 		),
+		grpc.WithUnaryInterceptor(withDeadline),
 	}
+}
+
+func withDeadline(ctx context.Context, method string, req, reply any, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+	}
+	return invoker(ctx, method, req, reply, cc, opts...)
 }
 
 // Set returns the backend contract.

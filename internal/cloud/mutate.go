@@ -24,6 +24,9 @@ func mutate[R resource.Request[R], T resource.Owned](
 	req R,
 	call func(context.Context, backend.Mutation, R) (resource.Accepted[T], error),
 ) (resource.Accepted[T], error) {
+	if err := requireCaller(c); err != nil {
+		return resource.Accepted[T]{}, err
+	}
 	if token.IsZero() {
 		return resource.Accepted[T]{}, resource.Invalid("clientToken", "required")
 	}
@@ -57,6 +60,9 @@ func readOne[Q resource.Query[Q], T resource.Owned](
 	call func(context.Context, backend.Scope, Q) (T, error),
 ) (T, error) {
 	var zero T
+	if err := requireCaller(c); err != nil {
+		return zero, err
+	}
 	q, err := q.Normalize()
 	if err != nil {
 		return zero, err
@@ -77,6 +83,9 @@ func readPage[Q resource.Query[Q], T resource.Owned](
 	q Q,
 	call func(context.Context, backend.Scope, Q) (resource.Page[T], error),
 ) (resource.Page[T], error) {
+	if err := requireCaller(c); err != nil {
+		return resource.Page[T]{}, err
+	}
 	q, err := q.Normalize()
 	if err != nil {
 		return resource.Page[T]{}, err
@@ -94,7 +103,17 @@ func readPage[Q resource.Query[Q], T resource.Owned](
 }
 
 func callScoped(ctx context.Context, c resource.Caller, call func(context.Context, backend.Scope) error) error {
+	if err := requireCaller(c); err != nil {
+		return err
+	}
 	return call(ctx, scope(c))
+}
+
+func requireCaller(c resource.Caller) error {
+	if c.Account.IsZero() {
+		return resource.Unauthenticated("missing account")
+	}
+	return nil
 }
 
 func guardAccepted[T resource.Owned](account resource.AccountID, acc resource.Accepted[T]) error {

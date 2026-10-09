@@ -1,9 +1,11 @@
 package grpcclient
 
 import (
+	"context"
 	"testing"
 	"time"
 
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
@@ -36,6 +38,18 @@ func TestOperationFailureRoundTrip(t *testing.T) {
 	}
 	if got.OwnerID != owner || got.ID != id || got.Error == nil || got.Error.Code != resource.CodeConflict || got.Error.Message != op.Error.Message {
 		t.Fatalf("%+v", got)
+	}
+}
+
+func TestCallGetsADeadline(t *testing.T) {
+	err := withDeadline(context.Background(), "/vws.test", nil, nil, nil, func(ctx context.Context, _ string, _, _ any, _ *grpc.ClientConn, _ ...grpc.CallOption) error {
+		if _, ok := ctx.Deadline(); !ok {
+			t.Fatal("missing deadline")
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 }
 

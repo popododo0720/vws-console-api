@@ -31,11 +31,7 @@ func Run(ctx context.Context, logger *slog.Logger, surfaces ...Surface) error {
 	errc := make(chan error, len(surfaces))
 	var wg sync.WaitGroup
 	for _, sf := range surfaces {
-		srv := &http.Server{
-			Addr:              sf.Addr,
-			Handler:           wrap(logger, sf.Name, sf.Handler),
-			ReadHeaderTimeout: 5 * time.Second,
-		}
+		srv := newHTTPServer(sf.Addr, wrap(logger, sf.Name, sf.Handler))
 		servers = append(servers, srv)
 		wg.Add(1)
 		go func(name string) {
@@ -58,6 +54,17 @@ func Run(ctx context.Context, logger *slog.Logger, surfaces ...Surface) error {
 	}
 	wg.Wait()
 	return runErr
+}
+
+func newHTTPServer(addr string, handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       60 * time.Second,
+		WriteTimeout:      60 * time.Second,
+		IdleTimeout:       120 * time.Second,
+	}
 }
 
 func wrap(logger *slog.Logger, name string, next http.Handler) http.Handler {

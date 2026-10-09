@@ -144,6 +144,18 @@ func (f foreignCompute) GetOperation(context.Context, backend.Scope, resource.Op
 	return f.op, nil
 }
 
+func TestZeroAccountIsUnauthenticated(t *testing.T) {
+	svc := New(Config{Backends: backend.Set{Compute: foreignCompute{}}})
+	_, err := svc.RunInstances(context.Background(), resource.Caller{}, token(t, "launch-web-1"), runReq(t))
+	if resource.CodeOf(err) != resource.CodeUnauthenticated {
+		t.Fatalf("run: %v", err)
+	}
+	opID, _ := resource.NewOperationID(resource.ServiceCompute, "5f0c2a9e1b7d4c3a")
+	if _, err := svc.GetOperation(context.Background(), resource.Caller{}, opID); resource.CodeOf(err) != resource.CodeUnauthenticated {
+		t.Fatalf("poll: %v", err)
+	}
+}
+
 func TestForeignOperationIsInternal(t *testing.T) {
 	id, _ := resource.Parse[resource.InstanceID]("i-0123456789abcdef0")
 	other, _ := resource.Parse[resource.AccountID]("210987654321")

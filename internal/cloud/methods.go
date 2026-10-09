@@ -25,6 +25,9 @@ func (s *Service) DescribeInstances(ctx context.Context, c resource.Caller, q re
 
 // GetComputeOperation reads an operation the compute service owns.
 func (s *Service) GetComputeOperation(ctx context.Context, c resource.Caller, id resource.OperationID) (resource.Operation, error) {
+	if err := requireCaller(c); err != nil {
+		return resource.Operation{}, err
+	}
 	if id.Service() != resource.ServiceCompute {
 		return resource.Operation{}, resource.NotFound(resource.KindOperation, id.String())
 	}
@@ -40,6 +43,9 @@ func (s *Service) GetComputeOperation(ctx context.Context, c resource.Caller, id
 
 // GetNetworkOperation reads an operation the network service owns.
 func (s *Service) GetNetworkOperation(ctx context.Context, c resource.Caller, id resource.OperationID) (resource.Operation, error) {
+	if err := requireCaller(c); err != nil {
+		return resource.Operation{}, err
+	}
 	if id.Service() != resource.ServiceNetwork {
 		return resource.Operation{}, resource.NotFound(resource.KindOperation, id.String())
 	}
@@ -115,6 +121,9 @@ func (s *Service) PutObject(ctx context.Context, c resource.Caller, req resource
 
 // GetObject reads an object and its body. The caller closes the body.
 func (s *Service) GetObject(ctx context.Context, c resource.Caller, req resource.GetObjectRequest) (resource.Object, io.ReadCloser, error) {
+	if err := requireCaller(c); err != nil {
+		return resource.Object{}, nil, err
+	}
 	req, err := req.Normalize()
 	if err != nil {
 		return resource.Object{}, nil, err
