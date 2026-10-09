@@ -66,7 +66,7 @@ func (c compute) RunInstances(ctx context.Context, m backend.Mutation, req resou
 		items = append(items, inst)
 		targets = append(targets, id.Ref())
 	}
-	op, err := c.w.newOp(resource.ServiceCompute, resource.ActionRunInstances, targets, func(time.Time) {
+	op, err := c.w.newOp(m.Account, resource.ServiceCompute, resource.ActionRunInstances, targets, func(time.Time) {
 		for _, item := range items {
 			if cur := c.w.inst[item.ID]; cur != nil && cur.State == resource.InstancePending {
 				cur.State = resource.InstanceRunning
@@ -125,7 +125,7 @@ func (c compute) StopInstances(ctx context.Context, m backend.Mutation, req reso
 	for _, plan := range plans {
 		plan.inst.State = plan.mid
 	}
-	op, err := c.w.newOp(resource.ServiceCompute, resource.ActionStopInstances, targets, func(time.Time) {
+	op, err := c.w.newOp(m.Account, resource.ServiceCompute, resource.ActionStopInstances, targets, func(time.Time) {
 		for _, ch := range changes {
 			inst := c.w.inst[ch.ID]
 			if inst == nil {

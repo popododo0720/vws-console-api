@@ -191,6 +191,7 @@ type Operation struct {
 	ErrorMessage  string                 `protobuf:"bytes,6,opt,name=error_message,json=errorMessage,proto3" json:"error_message,omitempty"`
 	CreateTime    string                 `protobuf:"bytes,7,opt,name=create_time,json=createTime,proto3" json:"create_time,omitempty"`
 	UpdateTime    string                 `protobuf:"bytes,8,opt,name=update_time,json=updateTime,proto3" json:"update_time,omitempty"`
+	OwnerId       string                 `protobuf:"bytes,9,opt,name=owner_id,json=ownerId,proto3" json:"owner_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -277,6 +278,13 @@ func (x *Operation) GetCreateTime() string {
 func (x *Operation) GetUpdateTime() string {
 	if x != nil {
 		return x.UpdateTime
+	}
+	return ""
+}
+
+func (x *Operation) GetOwnerId() string {
+	if x != nil {
+		return x.OwnerId
 	}
 	return ""
 }
@@ -477,7 +485,7 @@ const file_vws_common_v1_common_proto_rawDesc = "" +
 	"\vfingerprint\x18\x03 \x01(\tR\vfingerprint\",\n" +
 	"\x06Target\x12\x12\n" +
 	"\x04kind\x18\x01 \x01(\tR\x04kind\x12\x0e\n" +
-	"\x02id\x18\x02 \x01(\tR\x02id\"\x80\x02\n" +
+	"\x02id\x18\x02 \x01(\tR\x02id\"\x9b\x02\n" +
 	"\tOperation\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x16\n" +
 	"\x06action\x18\x02 \x01(\tR\x06action\x12\x14\n" +
@@ -489,7 +497,8 @@ const file_vws_common_v1_common_proto_rawDesc = "" +
 	"\vcreate_time\x18\a \x01(\tR\n" +
 	"createTime\x12\x1f\n" +
 	"\vupdate_time\x18\b \x01(\tR\n" +
-	"updateTime\"q\n" +
+	"updateTime\x12\x19\n" +
+	"\bowner_id\x18\t \x01(\tR\aownerId\"q\n" +
 	"\aFailure\x12\x12\n" +
 	"\x04code\x18\x01 \x01(\tR\x04code\x12\x12\n" +
 	"\x04kind\x18\x02 \x01(\tR\x04kind\x12\x0e\n" +

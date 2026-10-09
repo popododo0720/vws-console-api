@@ -38,7 +38,7 @@ func (n network) CreateSubnet(ctx context.Context, m backend.Mutation, req resou
 		Cidr:    req.Cidr,
 		State:   resource.SubnetPending,
 	}
-	op, err := n.w.newOp(resource.ServiceNetwork, resource.ActionCreateSubnet, []resource.Ref{id.Ref()}, func(time.Time) {
+	op, err := n.w.newOp(m.Account, resource.ServiceNetwork, resource.ActionCreateSubnet, []resource.Ref{id.Ref()}, func(time.Time) {
 		if cur := n.w.sub[id]; cur != nil && cur.State == resource.SubnetPending {
 			cur.State = resource.SubnetAvailable
 		}

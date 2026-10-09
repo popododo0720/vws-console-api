@@ -28,7 +28,14 @@ func (s *Service) GetComputeOperation(ctx context.Context, c resource.Caller, id
 	if id.Service() != resource.ServiceCompute {
 		return resource.Operation{}, resource.NotFound(resource.KindOperation, id.String())
 	}
-	return s.backends.Compute.GetOperation(ctx, scope(c), id)
+	op, err := s.backends.Compute.GetOperation(ctx, scope(c), id)
+	if err != nil {
+		return resource.Operation{}, err
+	}
+	if err := guardOperation(c.Account, id, op); err != nil {
+		return resource.Operation{}, err
+	}
+	return op, nil
 }
 
 // GetNetworkOperation reads an operation the network service owns.
@@ -36,7 +43,14 @@ func (s *Service) GetNetworkOperation(ctx context.Context, c resource.Caller, id
 	if id.Service() != resource.ServiceNetwork {
 		return resource.Operation{}, resource.NotFound(resource.KindOperation, id.String())
 	}
-	return s.backends.Network.GetOperation(ctx, scope(c), id)
+	op, err := s.backends.Network.GetOperation(ctx, scope(c), id)
+	if err != nil {
+		return resource.Operation{}, err
+	}
+	if err := guardOperation(c.Account, id, op); err != nil {
+		return resource.Operation{}, err
+	}
+	return op, nil
 }
 
 // GetOperation routes by the service named in the operation id.

@@ -32,6 +32,7 @@ message Operation {
   string error_message = 6;
   string create_time = 7;
   string update_time = 8;
+  string owner_id = 9;
 }
 
 // Failure is attached to a gRPC status when the call fails.

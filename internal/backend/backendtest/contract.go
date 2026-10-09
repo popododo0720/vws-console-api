@@ -50,6 +50,9 @@ func Run(t *testing.T, newSet Harness) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if first.Operation.OwnerID != account {
+		t.Fatalf("operation owner %s", first.Operation.OwnerID)
+	}
 	if first.Operation.State != resource.OperationRunning {
 		t.Fatalf("state %s", first.Operation.State)
 	}

@@ -109,7 +109,7 @@ func (w *World) finish(key, fingerprint string, value any) {
 	w.idem[key] = idemRecord{fingerprint: fingerprint, value: value}
 }
 
-func (w *World) newOp(svc resource.Service, action resource.Action, targets []resource.Ref, apply func(time.Time)) (resource.Operation, error) {
+func (w *World) newOp(account resource.AccountID, svc resource.Service, action resource.Action, targets []resource.Ref, apply func(time.Time)) (resource.Operation, error) {
 	var raw [8]byte
 	if _, err := io.ReadFull(w.entropy, raw[:]); err != nil {
 		return resource.Operation{}, resource.Internal(err)
@@ -127,6 +127,7 @@ func (w *World) newOp(svc resource.Service, action resource.Action, targets []re
 		ID:         id,
 		Action:     action,
 		State:      resource.OperationRunning,
+		OwnerID:    account,
 		Targets:    targets,
 		CreateTime: now,
 		UpdateTime: now,
@@ -161,36 +162,7 @@ func (w *World) getOp(s backend.Scope, id resource.OperationID, svc resource.Ser
 }
 
 func (w *World) opOwned(account resource.AccountID, op resource.Operation) bool {
-	if len(op.Targets) == 0 {
-		return false
-	}
-	for _, target := range op.Targets {
-		switch target.Kind() {
-		case resource.KindInstance:
-			id, err := resource.Parse[resource.InstanceID](target.ID())
-			if err != nil {
-				return false
-			}
-			inst, ok := w.inst[id]
-			if !ok || inst.OwnerID != account {
-				return false
-			}
-		case resource.KindSubnet:
-			id, err := resource.Parse[resource.SubnetID](target.ID())
-			if err != nil {
-				return false
-			}
-			sub, ok := w.sub[id]
-			if !ok || sub.OwnerID != account {
-				return false
-			}
-		case resource.KindImage, resource.KindReservation, resource.KindBucket, resource.KindObject, resource.KindOperation, resource.KindUnspecified:
-			return false
-		default:
-			return false
-		}
-	}
-	return true
+	return !account.IsZero() && op.OwnerID == account
 }
 
 func page[T any](items []T, q resource.PageRequest) (resource.Page[T], error) {

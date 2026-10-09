@@ -101,6 +101,9 @@ func guardAccepted[T resource.Owned](account resource.AccountID, acc resource.Ac
 	if acc.Operation.ID.IsZero() || acc.Operation.State.String() == "" {
 		return resource.Internal(errors.New("backend returned no operation"))
 	}
+	if acc.Operation.OwnerID != account {
+		return resource.Internal(errors.New("backend returned another account"))
+	}
 	if len(acc.Items) == 0 {
 		return resource.Internal(errors.New("backend returned no resources"))
 	}
@@ -118,6 +121,16 @@ func guardAccepted[T resource.Owned](account resource.AccountID, acc resource.Ac
 		if _, ok := ids[target.ID()]; !ok {
 			return resource.Internal(errors.New("operation target is not in the result"))
 		}
+	}
+	return nil
+}
+
+func guardOperation(account resource.AccountID, want resource.OperationID, op resource.Operation) error {
+	if op.ID != want || op.ID.Service() != want.Service() {
+		return resource.Internal(errors.New("backend returned a different operation"))
+	}
+	if op.OwnerID != account {
+		return resource.Internal(errors.New("backend returned another account"))
 	}
 	return nil
 }

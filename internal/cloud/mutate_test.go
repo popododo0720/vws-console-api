@@ -122,6 +122,7 @@ func TestForeignAccountIsInternal(t *testing.T) {
 
 type foreignCompute struct {
 	acc resource.Accepted[resource.Instance]
+	op  resource.Operation
 }
 
 func (f foreignCompute) RunInstances(context.Context, backend.Mutation, resource.RunInstancesRequest) (resource.Accepted[resource.Instance], error) {
@@ -136,8 +137,34 @@ func (foreignCompute) DescribeInstances(context.Context, backend.Scope, resource
 	return resource.Page[resource.Instance]{}, errors.New("unused")
 }
 
-func (foreignCompute) GetOperation(context.Context, backend.Scope, resource.OperationID) (resource.Operation, error) {
-	return resource.Operation{}, errors.New("unused")
+func (f foreignCompute) GetOperation(context.Context, backend.Scope, resource.OperationID) (resource.Operation, error) {
+	if f.op.ID.IsZero() {
+		return resource.Operation{}, errors.New("unused")
+	}
+	return f.op, nil
+}
+
+func TestForeignOperationIsInternal(t *testing.T) {
+	id, _ := resource.Parse[resource.InstanceID]("i-0123456789abcdef0")
+	other, _ := resource.Parse[resource.AccountID]("210987654321")
+	opID, _ := resource.NewOperationID(resource.ServiceCompute, "5f0c2a9e1b7d4c3a")
+	stub := foreignCompute{op: resource.Operation{
+		ID: opID, Action: resource.ActionRunInstances, State: resource.OperationSucceeded,
+		OwnerID: other, Targets: []resource.Ref{id.Ref()},
+	}}
+	svc := New(Config{Backends: backend.Set{Compute: stub}})
+	_, err := svc.GetOperation(context.Background(), caller(t), opID)
+	if resource.CodeOf(err) != resource.CodeInternal {
+		t.Fatalf("got %v", err)
+	}
+	wrong := stub
+	wrong.op.OwnerID = caller(t).Account
+	wrong.op.ID, _ = resource.NewOperationID(resource.ServiceCompute, "aaaaaaaaaaaaaaaa")
+	svc = New(Config{Backends: backend.Set{Compute: wrong}})
+	_, err = svc.GetOperation(context.Background(), caller(t), opID)
+	if resource.CodeOf(err) != resource.CodeInternal {
+		t.Fatalf("id mismatch: %v", err)
+	}
 }
 
 func world(t *testing.T) *fake.World {

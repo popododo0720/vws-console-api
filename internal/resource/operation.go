@@ -193,10 +193,13 @@ func (s *OperationState) UnmarshalText(b []byte) error {
 }
 
 // Operation is the record a caller polls for a long-running mutation.
+// OwnerID is the account that accepted the mutation. A poll for another
+// account does not return the record.
 type Operation struct {
 	ID         OperationID    `json:"id"`
 	Action     Action         `json:"action"`
 	State      OperationState `json:"state"`
+	OwnerID    AccountID      `json:"ownerId"`
 	Targets    []Ref          `json:"targets"`
 	Error      *Error         `json:"error,omitempty"`
 	CreateTime time.Time      `json:"createTime"`

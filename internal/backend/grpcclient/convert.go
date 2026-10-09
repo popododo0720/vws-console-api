@@ -67,6 +67,7 @@ func operationProto(op resource.Operation) *commonv1.Operation {
 		Id:         op.ID.String(),
 		Action:     op.Action.String(),
 		State:      op.State.String(),
+		OwnerId:    op.OwnerID.String(),
 		Targets:    targets,
 		CreateTime: op.CreateTime.UTC().Format(time.RFC3339Nano),
 		UpdateTime: op.UpdateTime.UTC().Format(time.RFC3339Nano),
@@ -102,7 +103,17 @@ func operationModel(op *commonv1.Operation) (resource.Operation, error) {
 		}
 		targets = append(targets, ref)
 	}
-	parsed := resource.Operation{ID: id, Action: action, State: state, Targets: targets}
+	var owner resource.AccountID
+	if op.GetOwnerId() != "" {
+		owner, err = resource.Parse[resource.AccountID](op.GetOwnerId())
+		if err != nil {
+			return resource.Operation{}, resource.Internal(err)
+		}
+	}
+	parsed := resource.Operation{ID: id, Action: action, State: state, OwnerID: owner, Targets: targets}
+	if op.GetErrorCode() != "" {
+		parsed.Error = &resource.Error{Code: codeByName(op.GetErrorCode()), Message: op.GetErrorMessage()}
+	}
 	if op.GetCreateTime() != "" {
 		parsed.CreateTime, err = time.Parse(time.RFC3339Nano, op.GetCreateTime())
 		if err != nil {
