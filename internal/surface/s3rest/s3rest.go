@@ -7,6 +7,8 @@ import (
 	"encoding/xml"
 	"io"
 	"net/http"
+	"strconv"
+	"strings"
 
 	"github.com/popododo0720/vws-console-api/internal/cloud"
 	"github.com/popododo0720/vws-console-api/internal/resource"
@@ -49,13 +51,27 @@ func (h *handler) wrap(next http.Handler) http.Handler {
 			writeErr(w, r, err, "")
 			return
 		}
+		if err := unsupportedObjectQuery(r); err != nil {
+			writeErr(w, r, err, r.URL.Path)
+			return
+		}
 		next.ServeHTTP(w, r.WithContext(withCaller(r.Context(), caller)))
 	})
 }
 
 func (h *handler) listBuckets(w http.ResponseWriter, r *http.Request) {
 	c := callerFrom(r)
-	page, err := h.svc.ListBuckets(r.Context(), c, resource.BucketQuery{})
+	q := resource.BucketQuery{}
+	if raw := r.URL.Query().Get("max-buckets"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil {
+			writeErr(w, r, resource.Invalid("max-buckets", "malformed"), "")
+			return
+		}
+		q.Page.Size = n
+	}
+	q.Page.Token = r.URL.Query().Get("continuation-token")
+	page, err := h.svc.ListBuckets(r.Context(), c, q)
 	if err != nil {
 		writeErr(w, r, err, "")
 		return
@@ -65,8 +81,10 @@ func (h *handler) listBuckets(w http.ResponseWriter, r *http.Request) {
 		buckets = append(buckets, bucketXML{Name: b.Name.String(), CreationDate: b.CreationDate})
 	}
 	writeXML(w, http.StatusOK, listBucketsXML{
-		Owner:   ownerXML{ID: c.Account.String()},
-		Buckets: bucketList{Items: buckets},
+		Owner:                 ownerXML{ID: c.Account.String()},
+		Buckets:               bucketList{Items: buckets},
+		IsTruncated:           page.NextToken != "",
+		NextContinuationToken: page.NextToken,
 	})
 }
 
@@ -171,9 +189,24 @@ func objectPath(r *http.Request) (resource.BucketName, resource.ObjectKey, error
 }
 
 type listBucketsXML struct {
-	XMLName struct{}   `xml:"ListAllMyBucketsResult"`
-	Owner   ownerXML   `xml:"Owner"`
-	Buckets bucketList `xml:"Buckets"`
+	XMLName               struct{}   `xml:"ListAllMyBucketsResult"`
+	Owner                 ownerXML   `xml:"Owner"`
+	Buckets               bucketList `xml:"Buckets"`
+	IsTruncated           bool       `xml:"IsTruncated"`
+	NextContinuationToken string     `xml:"NextContinuationToken,omitempty"`
+}
+
+func unsupportedObjectQuery(r *http.Request) error {
+	if r.Header.Get("X-Amz-Copy-Source") != "" {
+		return resource.Unimplemented("copy is not served")
+	}
+	for key := range r.URL.Query() {
+		switch strings.ToLower(key) {
+		case "tagging", "acl", "policy", "uploadid", "uploads", "versioning", "location", "cors", "lifecycle", "website", "delete", "versions":
+			return resource.Unimplemented(key + " is not served")
+		}
+	}
+	return nil
 }
 
 type ownerXML struct {

@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"strconv"
 
@@ -337,8 +338,20 @@ func (h *handler) getObject(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, r, err)
 		return
 	}
-	_ = rc.Close()
-	writeJSON(w, http.StatusOK, meta)
+	defer func() { _ = rc.Close() }()
+	buf, err := io.ReadAll(io.LimitReader(rc, resource.MaxObjectBytes+1))
+	if err != nil {
+		writeErr(w, r, resource.Internal(err))
+		return
+	}
+	if len(buf) > resource.MaxObjectBytes {
+		writeErr(w, r, resource.TooLarge("object exceeds 5 MiB"))
+		return
+	}
+	writeJSON(w, http.StatusOK, struct {
+		resource.Object
+		Body []byte `json:"body"`
+	}{Object: meta, Body: buf})
 }
 
 func (h *handler) deleteObject(w http.ResponseWriter, r *http.Request) {

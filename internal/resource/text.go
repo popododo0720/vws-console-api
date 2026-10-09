@@ -107,8 +107,9 @@ func (t *Text[R]) UnmarshalText(b []byte) error {
 	return nil
 }
 
-// NewClientToken draws a token from entropy. The EC2 surface uses it when
-// the request omits ClientToken. crypto/rand is used when entropy is nil.
+// NewClientToken draws a token from entropy. crypto/rand is used when
+// entropy is nil. Surfaces do not call it: a missing client token is invalid,
+// because a generated token would make a retry launch a second resource.
 func NewClientToken(entropy interface{ Read([]byte) (int, error) }) (ClientToken, error) {
 	if entropy == nil {
 		entropy = rand.Reader

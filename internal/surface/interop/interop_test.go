@@ -136,6 +136,10 @@ func TestS3ObjectRoundTrip(t *testing.T) {
 	if listed.Code != http.StatusOK || !strings.Contains(listed.Body.String(), "build-logs") {
 		t.Fatalf("console list %d %s", listed.Code, listed.Body)
 	}
+	object := call(t, ui, http.MethodGet, "/api/v1/buckets/build-logs/objects/a.txt", "", map[string]string{"Authorization": "Bearer tok-console"})
+	if object.Code != http.StatusOK || !strings.Contains(object.Body.String(), "aGVsbG8=") {
+		t.Fatalf("console object %d %s", object.Code, object.Body)
+	}
 }
 
 func verifier(cred sigv4.Credential, service sigv4.Service, now time.Time) *sigv4.Verifier {

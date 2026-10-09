@@ -7,6 +7,7 @@ import (
 	"encoding/xml"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/popododo0720/vws-console-api/internal/cloud"
 	"github.com/popododo0720/vws-console-api/internal/resource"
@@ -52,6 +53,10 @@ func (h *handler) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	action := r.Form.Get("Action")
+	if err := rejectUnknown(r, action); err != nil {
+		writeErr(w, r, err)
+		return
+	}
 	switch action {
 	case resource.ActionRunInstances.String():
 		h.runInstances(w, r, caller)
@@ -208,7 +213,7 @@ func (h *handler) describeSubnets(w http.ResponseWriter, r *http.Request, c reso
 func clientToken(r *http.Request) (resource.ClientToken, error) {
 	raw := r.Form.Get("ClientToken")
 	if raw == "" {
-		return resource.NewClientToken(nil)
+		return resource.ClientToken{}, resource.Invalid("ClientToken", "ClientToken is required")
 	}
 	return resource.Parse[resource.ClientToken](raw)
 }
@@ -220,7 +225,7 @@ func exactCount(r *http.Request) (int, error) {
 	}
 	minC, err1 := strconv.Atoi(minRaw)
 	maxC, err2 := strconv.Atoi(maxRaw)
-	if err1 != nil || err2 != nil || minC != maxC {
+	if err1 != nil || err2 != nil || minC != maxC || minC < 1 {
 		return 0, resource.Invalid("MinCount", "MinCount and MaxCount must be equal")
 	}
 	return minC, nil
@@ -271,7 +276,7 @@ func instanceQuery(r *http.Request) (resource.InstanceQuery, error) {
 			}
 			states = append(states, st)
 		default:
-			// Filters this skeleton does not understand are ignored.
+			return resource.InstanceQuery{}, resource.Invalid("Filter", "unsupported")
 		}
 	}
 	page, err := pageForm(r)
@@ -315,6 +320,96 @@ func indexedIDs[T any, PT interface {
 
 type encodingText interface {
 	UnmarshalText([]byte) error
+}
+
+func rejectUnknown(r *http.Request, action string) error {
+	allow := allowCommon
+	switch action {
+	case resource.ActionRunInstances.String():
+		allow = allowRun
+	case resource.ActionStopInstances.String():
+		allow = allowStop
+	case resource.ActionCreateSubnet.String():
+		allow = allowSubnet
+	case "DescribeInstances":
+		allow = allowDescribeInstances
+	case "DescribeSubnets":
+		allow = allowDescribeSubnets
+	default:
+		allow = allowCommon
+	}
+	for key := range r.Form {
+		if !allow(key) {
+			return resource.Invalid(key, "unsupported")
+		}
+	}
+	return nil
+}
+
+func allowCommon(key string) bool {
+	return key == "Action" || key == "Version"
+}
+
+func allowRun(key string) bool {
+	switch key {
+	case "Action", "Version", "ImageId", "InstanceType", "SubnetId", "MinCount", "MaxCount", "ClientToken":
+		return true
+	default:
+		return tagField(key)
+	}
+}
+
+func allowStop(key string) bool {
+	return key == "Action" || key == "Version" || key == "ClientToken" || indexed(key, "InstanceId", 100)
+}
+
+func allowSubnet(key string) bool {
+	return key == "Action" || key == "Version" || key == "ClientToken" || key == "CidrBlock"
+}
+
+func allowDescribeInstances(key string) bool {
+	return key == "Action" || key == "Version" || key == "MaxResults" || key == "NextToken" || indexed(key, "InstanceId", 100) || filterField(key)
+}
+
+func allowDescribeSubnets(key string) bool {
+	return key == "Action" || key == "Version" || key == "MaxResults" || key == "NextToken" || indexed(key, "SubnetId", 100)
+}
+
+func tagField(key string) bool {
+	rest, ok := strings.CutPrefix(key, "Tag.")
+	if !ok {
+		return false
+	}
+	n, field, ok := strings.Cut(rest, ".")
+	if !ok || (field != "Key" && field != "Value") {
+		return false
+	}
+	return inRange(n, 20)
+}
+
+func filterField(key string) bool {
+	rest, ok := strings.CutPrefix(key, "Filter.")
+	if !ok {
+		return false
+	}
+	n, field, ok := strings.Cut(rest, ".")
+	if !ok || !inRange(n, 20) {
+		return false
+	}
+	return field == "Name" || field == "Value.1"
+}
+
+func indexed(key, prefix string, max int) bool {
+	rest, ok := strings.CutPrefix(key, prefix+".")
+	if !ok || strings.Contains(rest, ".") {
+		return false
+	}
+	return inRange(rest, max)
+}
+
+func inRange(raw string, max int) bool {
+	n, err := strconv.Atoi(raw)
+	return err == nil && n >= 1 && n <= max
 }
 
 func requestID(r *http.Request) string { return r.Header.Get("X-Request-Id") }

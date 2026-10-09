@@ -51,6 +51,7 @@ change.
 | A backend result that names another account is rejected, including a polled operation. The operation id returned must be the id that was requested. | `guardAccepted`, `guardOwner`, and `guardOperation` in `internal/cloud`, covered by `TestForeignAccountIsInternal` and `TestForeignOperationIsInternal` |
 | Fakes and the gRPC client behave the same. Operation failure fields survive the gRPC mapping. An object at `MaxObjectBytes` fits in one gRPC message. A larger body is `PayloadTooLarge`, which is not the retryable quota code. | `backendtest.Run` on both; `TestOperationFailureRoundTrip`; `TestBareResourceExhaustedStaysRetryable` |
 | Every `resource.Action` has a console route. | `TestEveryActionHasARoute` |
+| A query parameter or object subresource the codec does not apply is rejected. Query mutations require `ClientToken`. The console object read returns the bytes. | `TestUnsupportedFilterIsRejected`, `TestClientTokenIsRequired`, `TestIndexPastTheCapIsRejected`, `TestSubresourceDoesNotOverwrite`, `TestListBucketsContinues`, `TestS3ObjectRoundTrip` |
 | A resource created on one surface is the same resource, with the same id and state names, on the others. | `internal/surface/interop` |
 | Console JSON field names are camelCase. | `tagliatelle` |
 | Generated code matches `proto/`. | CI job `generated` |
