@@ -210,6 +210,21 @@ func (w *loopWorld) bootsFor(projectID string) []*storagev1.Volume {
 	return out
 }
 
+// reuse is the storage idempotency rule for a put. The same request id with
+// a different body is a conflict. A new body must use a new request id.
+func (w *loopWorld) reuse(requestID, fp string) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if requestID == "" {
+		return nil
+	}
+	if prev, ok := w.idem[requestID]; ok && prev != fp {
+		return resource.IdempotencyMismatch()
+	}
+	w.idem[requestID] = fp
+	return nil
+}
+
 func (w *loopWorld) admit(requestID, fp, name string) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -984,6 +999,10 @@ func (s *objectSrv) GetObject(ctx context.Context, req *storagev1.GetObjectReque
 func (s *objectSrv) UpdateObject(ctx context.Context, req *storagev1.UpdateObjectRequest) (*longrunningpb.Operation, error) {
 	if !objectMaskMatches(req.GetUpdateMask()) {
 		return nil, toStatus(resource.Unimplemented("object field mask"))
+	}
+	sum := sha256.Sum256(req.GetContents())
+	if err := s.w.reuse(req.GetRequestId(), hex.EncodeToString(sum[:])); err != nil {
+		return nil, toStatus(err)
 	}
 	projectID, account, bucket, key, err := objectRef(req.GetObject().GetName())
 	if err != nil {

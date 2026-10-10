@@ -3,6 +3,8 @@ package grpcclient
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"io"
 	"strconv"
 
@@ -405,7 +407,7 @@ func (c storageClient) PutObject(ctx context.Context, s backend.Scope, req resou
 	op, err := c.objects.UpdateObject(ctx, &storagev1.UpdateObjectRequest{
 		AllowMissing: true,
 		Contents:     buf,
-		RequestId:    requestUUID(projectID, req.Bucket.String(), req.Key.String(), "put"),
+		RequestId:    putRequestID(projectID, req.Bucket.String(), req.Key.String(), buf),
 		UpdateMask:   objectUpdateMask(),
 		Object: &storagev1.Object{
 			Name:   name,
@@ -427,6 +429,14 @@ func (c storageClient) PutObject(ctx context.Context, s backend.Scope, req resou
 		return resource.Object{}, fromRPC(err)
 	}
 	return objectModel(out)
+}
+
+// putRequestID includes the payload hash. The storage service treats request
+// id as the idempotency key, so a key of only project, bucket, and object
+// rejects an overwrite as a reused client token.
+func putRequestID(projectID, bucket, key string, body []byte) string {
+	sum := sha256.Sum256(body)
+	return requestUUID(projectID, bucket, key, "put", hex.EncodeToString(sum[:]))
 }
 
 // objectUpdateMask is the mask vws-storage's objectMaskOK accepts for a write

@@ -210,6 +210,16 @@ func mustSubnet(t *testing.T) resource.SubnetID {
 	return id
 }
 
+func TestPutRequestIDTracksContents(t *testing.T) {
+	same := putRequestID("a123456789012", "logs", "a.txt", []byte("hello"))
+	if again := putRequestID("a123456789012", "logs", "a.txt", []byte("hello")); again != same {
+		t.Fatalf("retry %s %s", same, again)
+	}
+	if other := putRequestID("a123456789012", "logs", "a.txt", []byte("hello!")); other == same {
+		t.Fatal("overwrite reused the request id")
+	}
+}
+
 func TestObjectMaskMatches(t *testing.T) {
 	if !objectMaskMatches(objectUpdateMask()) {
 		t.Fatal("client mask")
