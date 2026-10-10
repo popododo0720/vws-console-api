@@ -206,6 +206,72 @@ func TestCatalogActionsAreImplemented(t *testing.T) {
 	}
 }
 
+func TestDescribeStandardParameters(t *testing.T) {
+	h, cred, now := harness(t)
+	created := signed(t, h, cred, now, url.Values{
+		"Action": {"CreateVolume"}, "Version": {Version}, "Size": {"8"}, "AvailabilityZone": {resource.ZoneName},
+	}.Encode())
+	if created.Code != http.StatusOK {
+		t.Fatalf("volume %d %s", created.Code, created.Body)
+	}
+	volumeID := xmlText(t, created.Body.String(), "volumeId")
+	snap := signed(t, h, cred, now, url.Values{
+		"Action": {"CreateSnapshot"}, "Version": {Version}, "VolumeId": {volumeID},
+	}.Encode())
+	if snap.Code != http.StatusOK {
+		t.Fatalf("snapshot %d %s", snap.Code, snap.Body)
+	}
+	snapshotID := xmlText(t, snap.Body.String(), "snapshotId")
+	self := signed(t, h, cred, now, url.Values{
+		"Action": {"DescribeSnapshots"}, "Version": {Version}, "Owner.1": {"self"},
+	}.Encode())
+	if self.Code != http.StatusOK || !strings.Contains(self.Body.String(), snapshotID) {
+		t.Fatalf("owner self %d %s", self.Code, self.Body)
+	}
+	ownerID := signed(t, h, cred, now, url.Values{
+		"Action": {"DescribeSnapshots"}, "Version": {Version}, "OwnerId.1": {"self"},
+	}.Encode())
+	if ownerID.Code != http.StatusOK || !strings.Contains(ownerID.Body.String(), snapshotID) {
+		t.Fatalf("ownerId self %d %s", ownerID.Code, ownerID.Body)
+	}
+	other := signed(t, h, cred, now, url.Values{
+		"Action": {"DescribeSnapshots"}, "Version": {Version}, "Owner.1": {"000000000000"},
+	}.Encode())
+	if other.Code != http.StatusOK || strings.Contains(other.Body.String(), snapshotID) {
+		t.Fatalf("other owner %d %s", other.Code, other.Body)
+	}
+	images := signed(t, h, cred, now, url.Values{
+		"Action": {"DescribeImages"}, "Version": {Version}, "Owner.1": {"self"}, "IncludeDeprecated": {"false"},
+	}.Encode())
+	if images.Code != http.StatusOK || !strings.Contains(images.Body.String(), "ami-0123456789abcdef0") {
+		t.Fatalf("images %d %s", images.Code, images.Body)
+	}
+	foreign := signed(t, h, cred, now, url.Values{
+		"Action": {"DescribeImages"}, "Version": {Version}, "ExecutableBy.1": {"000000000000"},
+	}.Encode())
+	if foreign.Code != http.StatusOK || strings.Contains(foreign.Body.String(), "ami-0123456789abcdef0") {
+		t.Fatalf("executable %d %s", foreign.Code, foreign.Body)
+	}
+	paged := signed(t, h, cred, now, url.Values{
+		"Action": {"DescribeVolumes"}, "Version": {Version}, "maxResults": {"5"},
+	}.Encode())
+	if paged.Code != http.StatusOK || !strings.Contains(paged.Body.String(), volumeID) {
+		t.Fatalf("volumes %d %s", paged.Code, paged.Body)
+	}
+	dry := signed(t, h, cred, now, url.Values{
+		"Action": {"DescribeSnapshots"}, "Version": {Version}, "dryRun": {"true"},
+	}.Encode())
+	if dry.Code != http.StatusBadRequest {
+		t.Fatalf("dry run %d %s", dry.Code, dry.Body)
+	}
+	keys := signed(t, h, cred, now, url.Values{
+		"Action": {"DescribeKeyPairs"}, "Version": {Version}, "IncludePublicKey": {"true"},
+	}.Encode())
+	if keys.Code != http.StatusOK {
+		t.Fatalf("keys %d %s", keys.Code, keys.Body)
+	}
+}
+
 func TestIndexPastTheCapIsRejected(t *testing.T) {
 	h, cred, now := harness(t)
 	form := url.Values{}
