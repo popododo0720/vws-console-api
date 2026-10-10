@@ -32,9 +32,22 @@ func (n network) CreateSubnet(ctx context.Context, m backend.Mutation, req resou
 	if _, exists := n.w.sub[id]; exists {
 		return resource.Accepted[resource.Subnet]{}, resource.Internal(errors.New("identifier collision"))
 	}
+	if !req.VpcID.IsZero() {
+		vpc, ok := n.w.vpc[req.VpcID]
+		if !ok || vpc.OwnerID != m.Account {
+			return resource.Accepted[resource.Subnet]{}, resource.NotFound(resource.KindVpc, req.VpcID.String())
+		}
+		if vpc.State != resource.VpcAvailable {
+			return resource.Accepted[resource.Subnet]{}, resource.Conflict(resource.KindVpc, req.VpcID.String(), "vpc is not available")
+		}
+		if !cidrInside(req.Cidr, vpc.Cidr) {
+			return resource.Accepted[resource.Subnet]{}, resource.Invalid("cidrBlock", "must be inside the vpc")
+		}
+	}
 	sub := resource.Subnet{
 		ID:      id,
 		OwnerID: m.Account,
+		VpcID:   req.VpcID,
 		Cidr:    req.Cidr,
 		State:   resource.SubnetPending,
 	}

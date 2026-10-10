@@ -64,10 +64,36 @@ func (h *handler) serve(w http.ResponseWriter, r *http.Request) {
 		h.stopInstances(w, r, caller)
 	case resource.ActionCreateSubnet.String():
 		h.createSubnet(w, r, caller)
+	case resource.ActionCreateVpc.String():
+		h.createVpc(w, r, caller)
+	case resource.ActionDeleteVpc.String():
+		h.deleteVpc(w, r, caller)
+	case resource.ActionCreateVolume.String():
+		h.createVolume(w, r, caller)
+	case resource.ActionAttachVolume.String():
+		h.attachVolume(w, r, caller)
+	case resource.ActionDeleteVolume.String():
+		h.deleteVolume(w, r, caller)
+	case resource.ActionCreateSecurityGroup.String():
+		h.createSecurityGroup(w, r, caller)
+	case resource.ActionAuthorizeSecurityGroupIngress.String():
+		h.authorizeIngress(w, r, caller)
+	case resource.ActionStartInstances.String():
+		h.startInstances(w, r, caller)
+	case resource.ActionTerminateInstances.String():
+		h.terminateInstances(w, r, caller)
+	case resource.ActionCreateKeyPair.String():
+		h.createKeyPair(w, r, caller)
 	case "DescribeInstances":
 		h.describeInstances(w, r, caller)
 	case "DescribeSubnets":
 		h.describeSubnets(w, r, caller)
+	case "DescribeVpcs":
+		h.describeVpcs(w, r, caller)
+	case "DescribeVolumes":
+		h.describeVolumes(w, r, caller)
+	case "DescribeImages":
+		h.describeImages(w, r, caller)
 	default:
 		writeErr(w, r, resource.Unimplemented(action))
 	}
@@ -94,7 +120,7 @@ func (h *handler) runInstances(w http.ResponseWriter, r *http.Request, c resourc
 		writeErr(w, r, err)
 		return
 	}
-	tags, err := tags(r)
+	tags, err := mergeTags(r)
 	if err != nil {
 		writeErr(w, r, err)
 		return
@@ -113,7 +139,7 @@ func (h *handler) runInstances(w http.ResponseWriter, r *http.Request, c resourc
 }
 
 func (h *handler) stopInstances(w http.ResponseWriter, r *http.Request, c resource.Caller) {
-	token, err := clientToken(r)
+	token, err := optionalClientToken(r)
 	if err != nil {
 		writeErr(w, r, err)
 		return
@@ -147,7 +173,15 @@ func (h *handler) createSubnet(w http.ResponseWriter, r *http.Request, c resourc
 		writeErr(w, r, err)
 		return
 	}
-	acc, err := h.svc.CreateSubnet(r.Context(), c, token, resource.CreateSubnetRequest{Cidr: r.Form.Get("CidrBlock")})
+	var vpc resource.VpcID
+	if raw := r.Form.Get("VpcId"); raw != "" {
+		vpc, err = resource.Parse[resource.VpcID](raw)
+		if err != nil {
+			writeErr(w, r, err)
+			return
+		}
+	}
+	acc, err := h.svc.CreateSubnet(r.Context(), c, token, resource.CreateSubnetRequest{Cidr: r.Form.Get("CidrBlock"), VpcID: vpc})
 	if err != nil {
 		writeErr(w, r, err)
 		return
@@ -218,6 +252,14 @@ func clientToken(r *http.Request) (resource.ClientToken, error) {
 	return resource.Parse[resource.ClientToken](raw)
 }
 
+func optionalClientToken(r *http.Request) (resource.ClientToken, error) {
+	raw := r.Form.Get("ClientToken")
+	if raw == "" {
+		return resource.ClientToken{}, nil
+	}
+	return resource.Parse[resource.ClientToken](raw)
+}
+
 func exactCount(r *http.Request) (int, error) {
 	minRaw, maxRaw := r.Form.Get("MinCount"), r.Form.Get("MaxCount")
 	if minRaw == "" && maxRaw == "" {
@@ -243,6 +285,48 @@ func tags(r *http.Request) (map[string]string, error) {
 			return nil, resource.Invalid("Tag."+n+".Key", "required")
 		}
 		out[k] = v
+	}
+	if len(out) == 0 {
+		return nil, nil
+	}
+	return out, nil
+}
+
+func mergeTags(r *http.Request) (map[string]string, error) {
+	base, err := tags(r)
+	if err != nil {
+		return nil, err
+	}
+	extra, err := tagSpecifications(r)
+	if err != nil {
+		return nil, err
+	}
+	if len(extra) == 0 {
+		return base, nil
+	}
+	if base == nil {
+		base = map[string]string{}
+	}
+	for k, v := range extra {
+		base[k] = v
+	}
+	return base, nil
+}
+
+func tagSpecifications(r *http.Request) (map[string]string, error) {
+	out := map[string]string{}
+	for i := 1; i <= 5; i++ {
+		for j := 1; j <= 20; j++ {
+			prefix := "TagSpecification." + strconv.Itoa(i) + ".Tag." + strconv.Itoa(j) + "."
+			k, v := r.Form.Get(prefix+"Key"), r.Form.Get(prefix+"Value")
+			if k == "" && v == "" {
+				continue
+			}
+			if k == "" {
+				return nil, resource.Invalid(prefix+"Key", "required")
+			}
+			out[k] = v
+		}
 	}
 	if len(out) == 0 {
 		return nil, nil
@@ -331,10 +415,36 @@ func rejectUnknown(r *http.Request, action string) error {
 		allow = allowStop
 	case resource.ActionCreateSubnet.String():
 		allow = allowSubnet
+	case resource.ActionCreateVpc.String():
+		allow = allowCreateVpc
+	case resource.ActionDeleteVpc.String():
+		allow = allowDeleteVpc
+	case resource.ActionCreateVolume.String():
+		allow = allowCreateVolume
+	case resource.ActionAttachVolume.String():
+		allow = allowAttachVolume
+	case resource.ActionDeleteVolume.String():
+		allow = allowDeleteVolume
+	case resource.ActionCreateSecurityGroup.String():
+		allow = allowCreateGroup
+	case resource.ActionAuthorizeSecurityGroupIngress.String():
+		allow = allowAuthorize
+	case resource.ActionStartInstances.String():
+		allow = allowStop
+	case resource.ActionTerminateInstances.String():
+		allow = allowStop
+	case resource.ActionCreateKeyPair.String():
+		allow = allowCreateKey
 	case "DescribeInstances":
 		allow = allowDescribeInstances
 	case "DescribeSubnets":
 		allow = allowDescribeSubnets
+	case "DescribeVpcs":
+		allow = allowDescribeVpcs
+	case "DescribeVolumes":
+		allow = allowDescribeVolumes
+	case "DescribeImages":
+		allow = allowDescribeImages
 	default:
 		allow = allowCommon
 	}
@@ -355,7 +465,7 @@ func allowRun(key string) bool {
 	case "Action", "Version", "ImageId", "InstanceType", "SubnetId", "MinCount", "MaxCount", "ClientToken":
 		return true
 	default:
-		return tagField(key)
+		return tagField(key) || tagSpecField(key)
 	}
 }
 
@@ -364,7 +474,54 @@ func allowStop(key string) bool {
 }
 
 func allowSubnet(key string) bool {
-	return key == "Action" || key == "Version" || key == "ClientToken" || key == "CidrBlock"
+	return key == "Action" || key == "Version" || key == "ClientToken" || key == "CidrBlock" || key == "VpcId"
+}
+
+func allowCreateVpc(key string) bool {
+	return key == "Action" || key == "Version" || key == "ClientToken" || key == "CidrBlock" || key == "InstanceTenancy"
+}
+
+func allowDeleteVpc(key string) bool {
+	return key == "Action" || key == "Version" || key == "ClientToken" || key == "VpcId"
+}
+
+func allowCreateVolume(key string) bool {
+	return key == "Action" || key == "Version" || key == "ClientToken" || key == "Size" || key == "AvailabilityZone" || key == "VolumeType" || key == "SnapshotId"
+}
+
+func allowAttachVolume(key string) bool {
+	return key == "Action" || key == "Version" || key == "ClientToken" || key == "VolumeId" || key == "InstanceId" || key == "Device"
+}
+
+func allowDeleteVolume(key string) bool {
+	return key == "Action" || key == "Version" || key == "ClientToken" || key == "VolumeId"
+}
+
+func allowCreateGroup(key string) bool {
+	return key == "Action" || key == "Version" || key == "ClientToken" || key == "GroupName" || key == "GroupDescription" || key == "VpcId"
+}
+
+func allowAuthorize(key string) bool {
+	if key == "Action" || key == "Version" || key == "ClientToken" || key == "GroupId" || key == "IpProtocol" || key == "FromPort" || key == "ToPort" || key == "CidrIp" {
+		return true
+	}
+	return permissionField(key)
+}
+
+func allowCreateKey(key string) bool {
+	return key == "Action" || key == "Version" || key == "ClientToken" || key == "KeyName"
+}
+
+func allowDescribeVpcs(key string) bool {
+	return key == "Action" || key == "Version" || key == "MaxResults" || key == "NextToken" || indexed(key, "VpcId", 100)
+}
+
+func allowDescribeVolumes(key string) bool {
+	return key == "Action" || key == "Version" || key == "MaxResults" || key == "NextToken" || indexed(key, "VolumeId", 100)
+}
+
+func allowDescribeImages(key string) bool {
+	return key == "Action" || key == "Version" || key == "MaxResults" || key == "NextToken" || indexed(key, "ImageId", 100)
 }
 
 func allowDescribeInstances(key string) bool {
@@ -373,6 +530,51 @@ func allowDescribeInstances(key string) bool {
 
 func allowDescribeSubnets(key string) bool {
 	return key == "Action" || key == "Version" || key == "MaxResults" || key == "NextToken" || indexed(key, "SubnetId", 100)
+}
+
+func tagSpecField(key string) bool {
+	rest, ok := strings.CutPrefix(key, "TagSpecification.")
+	if !ok {
+		return false
+	}
+	n, field, ok := strings.Cut(rest, ".")
+	if !ok || !inRange(n, 5) {
+		return false
+	}
+	if field == "ResourceType" {
+		return true
+	}
+	tagRest, ok := strings.CutPrefix(field, "Tag.")
+	if !ok {
+		return false
+	}
+	m, leaf, ok := strings.Cut(tagRest, ".")
+	if !ok || !inRange(m, 20) {
+		return false
+	}
+	return leaf == "Key" || leaf == "Value"
+}
+
+func permissionField(key string) bool {
+	rest, ok := strings.CutPrefix(key, "IpPermissions.")
+	if !ok {
+		return false
+	}
+	n, field, ok := strings.Cut(rest, ".")
+	if !ok || n != "1" {
+		return false
+	}
+	switch field {
+	case "IpProtocol", "FromPort", "ToPort", "CidrIp":
+		return true
+	default:
+	}
+	rangeRest, ok := strings.CutPrefix(field, "IpRanges.")
+	if !ok {
+		return false
+	}
+	m, leaf, ok := strings.Cut(rangeRest, ".")
+	return ok && m == "1" && leaf == "CidrIp"
 }
 
 func tagField(key string) bool {
@@ -460,9 +662,9 @@ func ec2Code(e *resource.Error) string {
 	case resource.CodeInvalidArgument:
 		return "InvalidParameterValue"
 	case resource.CodeAlreadyExists:
-		return "InvalidParameterValue"
+		return alreadyExistsCode(e.Kind)
 	case resource.CodeConflict:
-		return "IncorrectInstanceState"
+		return conflictCode(e.Kind)
 	case resource.CodeIdempotencyMismatch:
 		return "IdempotentParameterMismatch"
 	case resource.CodeUnauthenticated:
@@ -492,7 +694,45 @@ func notFoundCode(k resource.Kind) string {
 		return "InvalidSubnetID.NotFound"
 	case resource.KindImage:
 		return "InvalidAMIID.NotFound"
+	case resource.KindVpc:
+		return "InvalidVpcID.NotFound"
+	case resource.KindVolume:
+		return "InvalidVolume.NotFound"
+	case resource.KindSecurityGroup:
+		return "InvalidGroup.NotFound"
+	case resource.KindKeyPair:
+		return "InvalidKeyPair.NotFound"
 	case resource.KindReservation, resource.KindBucket, resource.KindObject, resource.KindOperation, resource.KindUnspecified:
+		return "InvalidParameterValue"
+	default:
+		return "InvalidParameterValue"
+	}
+}
+
+func conflictCode(k resource.Kind) string {
+	switch k {
+	case resource.KindVolume:
+		return "IncorrectState"
+	case resource.KindVpc:
+		return "DependencyViolation"
+	case resource.KindInstance, resource.KindImage, resource.KindReservation, resource.KindSubnet,
+		resource.KindBucket, resource.KindObject, resource.KindOperation, resource.KindSecurityGroup,
+		resource.KindKeyPair, resource.KindUnspecified:
+		return "IncorrectInstanceState"
+	default:
+		return "IncorrectInstanceState"
+	}
+}
+
+func alreadyExistsCode(k resource.Kind) string {
+	switch k {
+	case resource.KindSecurityGroup:
+		return "InvalidGroup.Duplicate"
+	case resource.KindKeyPair:
+		return "InvalidKeyPair.Duplicate"
+	case resource.KindInstance, resource.KindImage, resource.KindReservation, resource.KindSubnet,
+		resource.KindBucket, resource.KindObject, resource.KindOperation, resource.KindVpc,
+		resource.KindVolume, resource.KindUnspecified:
 		return "InvalidParameterValue"
 	default:
 		return "InvalidParameterValue"

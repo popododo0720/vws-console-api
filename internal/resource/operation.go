@@ -15,6 +15,16 @@ const (
 	ActionRunInstances
 	ActionStopInstances
 	ActionCreateSubnet
+	ActionCreateVpc
+	ActionDeleteVpc
+	ActionCreateVolume
+	ActionAttachVolume
+	ActionDeleteVolume
+	ActionCreateSecurityGroup
+	ActionAuthorizeSecurityGroupIngress
+	ActionStartInstances
+	ActionTerminateInstances
+	ActionCreateKeyPair
 )
 
 // String returns the wire name. An unknown action returns "".
@@ -26,6 +36,26 @@ func (a Action) String() string {
 		return "StopInstances"
 	case ActionCreateSubnet:
 		return "CreateSubnet"
+	case ActionCreateVpc:
+		return "CreateVpc"
+	case ActionDeleteVpc:
+		return "DeleteVpc"
+	case ActionCreateVolume:
+		return "CreateVolume"
+	case ActionAttachVolume:
+		return "AttachVolume"
+	case ActionDeleteVolume:
+		return "DeleteVolume"
+	case ActionCreateSecurityGroup:
+		return "CreateSecurityGroup"
+	case ActionAuthorizeSecurityGroupIngress:
+		return "AuthorizeSecurityGroupIngress"
+	case ActionStartInstances:
+		return "StartInstances"
+	case ActionTerminateInstances:
+		return "TerminateInstances"
+	case ActionCreateKeyPair:
+		return "CreateKeyPair"
 	case actionNone:
 		return ""
 	default:

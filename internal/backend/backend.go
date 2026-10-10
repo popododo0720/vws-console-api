@@ -40,7 +40,15 @@ type Compute interface {
 	Operations
 	RunInstances(ctx context.Context, m Mutation, req resource.RunInstancesRequest) (resource.Accepted[resource.Instance], error)
 	StopInstances(ctx context.Context, m Mutation, req resource.StopInstancesRequest) (resource.Accepted[resource.InstanceStateChange], error)
+	StartInstances(ctx context.Context, m Mutation, req resource.StartInstancesRequest) (resource.Accepted[resource.InstanceStateChange], error)
+	TerminateInstances(ctx context.Context, m Mutation, req resource.TerminateInstancesRequest) (resource.Accepted[resource.InstanceStateChange], error)
 	DescribeInstances(ctx context.Context, s Scope, q resource.InstanceQuery) (resource.Page[resource.Instance], error)
+	CreateVolume(ctx context.Context, m Mutation, req resource.CreateVolumeRequest) (resource.Accepted[resource.Volume], error)
+	AttachVolume(ctx context.Context, m Mutation, req resource.AttachVolumeRequest) (resource.Accepted[resource.Volume], error)
+	DeleteVolume(ctx context.Context, m Mutation, req resource.DeleteVolumeRequest) (resource.Accepted[resource.Volume], error)
+	DescribeVolumes(ctx context.Context, s Scope, q resource.VolumeQuery) (resource.Page[resource.Volume], error)
+	DescribeImages(ctx context.Context, s Scope, q resource.ImageQuery) (resource.Page[resource.Image], error)
+	CreateKeyPair(ctx context.Context, m Mutation, req resource.CreateKeyPairRequest) (resource.Accepted[resource.KeyPair], error)
 }
 
 // Storage is the internal storage service. Bucket and object calls finish
@@ -60,6 +68,11 @@ type Network interface {
 	Operations
 	CreateSubnet(ctx context.Context, m Mutation, req resource.CreateSubnetRequest) (resource.Accepted[resource.Subnet], error)
 	DescribeSubnets(ctx context.Context, s Scope, q resource.SubnetQuery) (resource.Page[resource.Subnet], error)
+	CreateVpc(ctx context.Context, m Mutation, req resource.CreateVpcRequest) (resource.Accepted[resource.Vpc], error)
+	DeleteVpc(ctx context.Context, m Mutation, req resource.DeleteVpcRequest) (resource.Accepted[resource.Vpc], error)
+	DescribeVpcs(ctx context.Context, s Scope, q resource.VpcQuery) (resource.Page[resource.Vpc], error)
+	CreateSecurityGroup(ctx context.Context, m Mutation, req resource.CreateSecurityGroupRequest) (resource.Accepted[resource.SecurityGroup], error)
+	AuthorizeSecurityGroupIngress(ctx context.Context, m Mutation, req resource.AuthorizeSecurityGroupIngressRequest) (resource.Accepted[resource.SecurityGroup], error)
 }
 
 // Set is the three services one process talks to.

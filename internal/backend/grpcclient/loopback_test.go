@@ -31,8 +31,13 @@ import (
 )
 
 func TestContractOverGRPC(t *testing.T) {
-	lis := bufconn.Listen(MaxMessageBytes())
-	srv := grpc.NewServer(
+	computeLis := bufconn.Listen(MaxMessageBytes())
+	storageLis := bufconn.Listen(MaxMessageBytes())
+	computeSrv := grpc.NewServer(
+		grpc.MaxRecvMsgSize(MaxMessageBytes()),
+		grpc.MaxSendMsgSize(MaxMessageBytes()),
+	)
+	storageSrv := grpc.NewServer(
 		grpc.MaxRecvMsgSize(MaxMessageBytes()),
 		grpc.MaxSendMsgSize(MaxMessageBytes()),
 	)
@@ -42,35 +47,53 @@ func TestContractOverGRPC(t *testing.T) {
 		Entropy: &fake.Sequence{},
 	})
 	loop := newLoopWorld(world.Set(), now)
-	computev1.RegisterInstanceServiceServer(srv, &instanceSrv{w: loop})
-	storagev1.RegisterVolumeServiceServer(srv, &volumeSrv{w: loop})
-	storagev1.RegisterBucketServiceServer(srv, &bucketSrv{w: loop})
-	storagev1.RegisterObjectServiceServer(srv, &objectSrv{w: loop})
-	networkv1.RegisterVpcServiceServer(srv, &vpcSrv{w: loop})
-	networkv1.RegisterSubnetServiceServer(srv, &subnetSrv{w: loop})
-	longrunningpb.RegisterOperationsServer(srv, &opsSrv{w: loop})
-	go func() { _ = srv.Serve(lis) }()
-	t.Cleanup(srv.Stop)
+	computev1.RegisterInstanceServiceServer(computeSrv, &instanceSrv{w: loop})
+	computev1.RegisterKeyPairServiceServer(computeSrv, &keySrv{w: loop})
+	networkv1.RegisterVpcServiceServer(computeSrv, &vpcSrv{w: loop})
+	networkv1.RegisterSubnetServiceServer(computeSrv, &subnetSrv{w: loop})
+	networkv1.RegisterSecurityGroupServiceServer(computeSrv, &groupSrv{w: loop})
+	longrunningpb.RegisterOperationsServer(computeSrv, opsGate{opsSrv: opsSrv{w: loop}, volumes: false})
+	storagev1.RegisterVolumeServiceServer(storageSrv, &volumeSrv{w: loop})
+	storagev1.RegisterBucketServiceServer(storageSrv, &bucketSrv{w: loop})
+	storagev1.RegisterObjectServiceServer(storageSrv, &objectSrv{w: loop})
+	longrunningpb.RegisterOperationsServer(storageSrv, opsGate{opsSrv: opsSrv{w: loop}, volumes: true})
+	go func() { _ = computeSrv.Serve(computeLis) }()
+	go func() { _ = storageSrv.Serve(storageLis) }()
+	t.Cleanup(computeSrv.Stop)
+	t.Cleanup(storageSrv.Stop)
 
-	conn, err := grpc.NewClient("passthrough:///bufnet",
-		append(dialOptions(), grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) {
-			return lis.DialContext(ctx)
-		}))...,
+	dial := func(ctx context.Context, addr string) (net.Conn, error) {
+		if strings.Contains(addr, "storage") {
+			return storageLis.DialContext(ctx)
+		}
+		return computeLis.DialContext(ctx)
+	}
+	computeConn, err := grpc.NewClient("passthrough:///compute",
+		append(dialOptions(), grpc.WithContextDialer(dial))...,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = conn.Close() })
+	storageConn, err := grpc.NewClient("passthrough:///storage",
+		append(dialOptions(), grpc.WithContextDialer(dial))...,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = computeConn.Close() })
+	t.Cleanup(func() { _ = storageConn.Close() })
 	shared := &api{
-		instances:  computev1.NewInstanceServiceClient(conn),
-		volumes:    storagev1.NewVolumeServiceClient(conn),
-		buckets:    storagev1.NewBucketServiceClient(conn),
-		objects:    storagev1.NewObjectServiceClient(conn),
-		subnets:    networkv1.NewSubnetServiceClient(conn),
-		vpcs:       networkv1.NewVpcServiceClient(conn),
-		computeOps: longrunningpb.NewOperationsClient(conn),
-		storageOps: longrunningpb.NewOperationsClient(conn),
-		networkOps: longrunningpb.NewOperationsClient(conn),
+		instances:  computev1.NewInstanceServiceClient(computeConn),
+		volumes:    storagev1.NewVolumeServiceClient(storageConn),
+		buckets:    storagev1.NewBucketServiceClient(storageConn),
+		objects:    storagev1.NewObjectServiceClient(storageConn),
+		subnets:    networkv1.NewSubnetServiceClient(computeConn),
+		vpcs:       networkv1.NewVpcServiceClient(computeConn),
+		groups:     networkv1.NewSecurityGroupServiceClient(computeConn),
+		keys:       computev1.NewKeyPairServiceClient(computeConn),
+		computeOps: longrunningpb.NewOperationsClient(computeConn),
+		storageOps: longrunningpb.NewOperationsClient(storageConn),
+		networkOps: longrunningpb.NewOperationsClient(computeConn),
 	}
 	backendtest.Run(t, func() backend.Set {
 		return backend.Set{
@@ -79,6 +102,26 @@ func TestContractOverGRPC(t *testing.T) {
 			Network: networkClient{shared},
 		}
 	})
+}
+
+// opsGate hides volume operations from the compute listener and every other
+// operation from the storage listener. A client that polls the wrong service
+// gets NotFound.
+type opsGate struct {
+	opsSrv
+	volumes bool
+}
+
+func (s opsGate) GetOperation(ctx context.Context, req *longrunningpb.GetOperationRequest) (*longrunningpb.Operation, error) {
+	op, err := s.w.lookup(ctx, req.GetName())
+	if err != nil {
+		return nil, toStatus(err)
+	}
+	volume := op.Action == resource.ActionCreateVolume || op.Action == resource.ActionDeleteVolume
+	if volume != s.volumes {
+		return nil, toStatus(resource.NotFound(resource.KindOperation, lastSegment(req.GetName())))
+	}
+	return s.opsSrv.GetOperation(ctx, req)
 }
 
 // loopWorld is the resource API in front of the fake. CreateVolume and
@@ -96,7 +139,10 @@ type loopWorld struct {
 	subnetVPC map[string]string
 	inst      map[string]instSnap
 	sub       map[string]subSnap
+	groups    map[string]resource.SecurityGroup
 	opLaunch  map[string]string
+	actions   map[string]string
+	boots     map[string]*storagev1.Volume
 }
 
 type instSnap struct {
@@ -119,8 +165,42 @@ func newLoopWorld(set backend.Set, now time.Time) *loopWorld {
 		idem: map[string]string{}, exists: map[string]struct{}{},
 		vpcCIDR: map[string]string{}, subnetVPC: map[string]string{},
 		inst: map[string]instSnap{}, sub: map[string]subSnap{},
+		groups:   map[string]resource.SecurityGroup{},
 		opLaunch: map[string]string{},
+		actions:  map[string]string{},
+		boots:    map[string]*storagev1.Volume{},
 	}
+}
+
+func (w *loopWorld) rememberAction(id, action string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.actions[id] = action
+}
+
+func (w *loopWorld) actionOf(id string) string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.actions[id]
+}
+
+func (w *loopWorld) putBoot(vol *storagev1.Volume) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.boots[vol.GetName()] = vol
+}
+
+func (w *loopWorld) bootsFor(projectID string) []*storagev1.Volume {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	prefix := "projects/" + projectID + "/"
+	var out []*storagev1.Volume
+	for name, vol := range w.boots {
+		if strings.HasPrefix(name, prefix) {
+			out = append(out, vol)
+		}
+	}
+	return out
 }
 
 func (w *loopWorld) admit(requestID, fp, name string) error {
@@ -142,6 +222,12 @@ func (w *loopWorld) admit(requestID, fp, name string) error {
 		w.idem[requestID] = fp
 	}
 	return nil
+}
+
+func (w *loopWorld) mark(name string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.exists[name] = struct{}{}
 }
 
 func (w *loopWorld) has(name string) bool {
@@ -362,9 +448,28 @@ func (s *instanceSrv) CreateInstance(ctx context.Context, req *computev1.CreateI
 }
 
 func (s *instanceSrv) UpdateInstance(ctx context.Context, req *computev1.UpdateInstanceRequest) (*longrunningpb.Operation, error) {
-	if req.GetInstance().GetSpec().GetPower() != computev1.InstancePower_INSTANCE_POWER_STOPPED {
+	spec := req.GetInstance().GetSpec()
+	if _, _, ok := dataVolume(spec); ok {
+		if bootCount(spec) != 1 {
+			return nil, toStatus(resource.Invalid("volumes", "boot required"))
+		}
+		volName, device, _ := dataVolume(spec)
+		return s.attachVolume(ctx, req, volName, device)
+	}
+	power := req.GetInstance().GetSpec().GetPower()
+	switch power {
+	case computev1.InstancePower_INSTANCE_POWER_STOPPED:
+		return s.changePower(ctx, req, resource.ActionStopInstances)
+	case computev1.InstancePower_INSTANCE_POWER_RUNNING:
+		return s.changePower(ctx, req, resource.ActionStartInstances)
+	case computev1.InstancePower_INSTANCE_POWER_UNSPECIFIED:
+		return nil, toStatus(resource.Invalid("power", "unsupported"))
+	default:
 		return nil, toStatus(resource.Invalid("power", "unsupported"))
 	}
+}
+
+func (s *instanceSrv) changePower(ctx context.Context, req *computev1.UpdateInstanceRequest, action resource.Action) (*longrunningpb.Operation, error) {
 	projectID, err := projectOfName(req.GetInstance().GetName())
 	if err != nil {
 		return nil, toStatus(err)
@@ -381,13 +486,110 @@ func (s *instanceSrv) UpdateInstance(ctx context.Context, req *computev1.UpdateI
 	if err != nil {
 		return nil, toStatus(err)
 	}
-	acc, err := s.w.set.Compute.StopInstances(ctx, backend.Mutation{
-		Scope: backend.Scope{Account: account}, Key: req.GetRequestId(), Fingerprint: fp,
-	}, resource.StopInstancesRequest{IDs: []resource.InstanceID{id}})
+	var acc resource.Accepted[resource.InstanceStateChange]
+	mut := backend.Mutation{Scope: backend.Scope{Account: account}, Key: req.GetRequestId(), Fingerprint: fp}
+	switch action {
+	case resource.ActionStopInstances:
+		acc, err = s.w.set.Compute.StopInstances(ctx, mut, resource.StopInstancesRequest{IDs: []resource.InstanceID{id}})
+	case resource.ActionStartInstances:
+		acc, err = s.w.set.Compute.StartInstances(ctx, mut, resource.StartInstancesRequest{IDs: []resource.InstanceID{id}})
+	case resource.ActionRunInstances, resource.ActionCreateSubnet, resource.ActionCreateVpc, resource.ActionDeleteVpc,
+		resource.ActionCreateVolume, resource.ActionAttachVolume, resource.ActionDeleteVolume,
+		resource.ActionCreateSecurityGroup, resource.ActionAuthorizeSecurityGroupIngress,
+		resource.ActionTerminateInstances, resource.ActionCreateKeyPair:
+		return nil, toStatus(resource.Invalid("power", "unsupported"))
+	default:
+		return nil, toStatus(resource.Invalid("power", "unsupported"))
+	}
 	if err != nil {
 		return nil, toStatus(err)
 	}
+	if actionName := req.GetInstance().GetLabels()[labelAction]; actionName != "" {
+		s.w.rememberAction(id.String(), actionName)
+	}
 	return runningOp(projectID, acc.Operation, instanceName(projectID, id.String()), commonv1.OperationVerb_OPERATION_VERB_UPDATE, s.w.now)
+}
+
+func (s *instanceSrv) attachVolume(ctx context.Context, req *computev1.UpdateInstanceRequest, volName, device string) (*longrunningpb.Operation, error) {
+	projectID, err := projectOfName(req.GetInstance().GetName())
+	if err != nil {
+		return nil, toStatus(err)
+	}
+	account, err := accountOf(projectID)
+	if err != nil {
+		return nil, toStatus(err)
+	}
+	volID, err := resource.Parse[resource.VolumeID](lastSegment(volName))
+	if err != nil {
+		return nil, toStatus(err)
+	}
+	instID, err := resource.Parse[resource.InstanceID](lastSegment(req.GetInstance().GetName()))
+	if err != nil {
+		return nil, toStatus(err)
+	}
+	fp, err := protoFingerprint(req)
+	if err != nil {
+		return nil, toStatus(err)
+	}
+	acc, err := s.w.set.Compute.AttachVolume(ctx, backend.Mutation{
+		Scope: backend.Scope{Account: account}, Key: req.GetRequestId(), Fingerprint: fp,
+	}, resource.AttachVolumeRequest{VolumeID: volID, InstanceID: instID, Device: device})
+	if err != nil {
+		return nil, toStatus(err)
+	}
+	return runningOp(projectID, acc.Operation, volumeName(projectID, acc.Items[0].ID.String()), commonv1.OperationVerb_OPERATION_VERB_UPDATE, s.w.now)
+}
+
+func (s *instanceSrv) DeleteInstance(ctx context.Context, req *computev1.DeleteInstanceRequest) (*longrunningpb.Operation, error) {
+	projectID, err := projectOfName(req.GetName())
+	if err != nil {
+		return nil, toStatus(err)
+	}
+	account, err := accountOf(projectID)
+	if err != nil {
+		return nil, toStatus(err)
+	}
+	id, err := resource.Parse[resource.InstanceID](lastSegment(req.GetName()))
+	if err != nil {
+		return nil, toStatus(err)
+	}
+	fp, err := protoFingerprint(req)
+	if err != nil {
+		return nil, toStatus(err)
+	}
+	acc, err := s.w.set.Compute.TerminateInstances(ctx, backend.Mutation{
+		Scope: backend.Scope{Account: account}, Key: req.GetRequestId(), Fingerprint: fp,
+	}, resource.TerminateInstancesRequest{IDs: []resource.InstanceID{id}})
+	if err != nil {
+		return nil, toStatus(err)
+	}
+	return runningOp(projectID, acc.Operation, instanceName(projectID, id.String()), commonv1.OperationVerb_OPERATION_VERB_DELETE, s.w.now)
+}
+
+func bootCount(spec *computev1.InstanceSpec) int {
+	n := 0
+	for _, vol := range spec.GetVolumes() {
+		if vol.GetBoot() || vol.GetDeviceName() == "boot" {
+			n++
+		}
+	}
+	return n
+}
+
+func dataVolume(spec *computev1.InstanceSpec) (string, string, bool) {
+	if spec == nil {
+		return "", "", false
+	}
+	var name, device string
+	found := false
+	for _, vol := range spec.GetVolumes() {
+		if vol.GetBoot() || vol.GetDeviceName() == "" || vol.GetDeviceName() == "boot" {
+			continue
+		}
+		name, device = vol.GetVolume(), vol.GetDeviceName()
+		found = true
+	}
+	return name, device, found
 }
 
 func (s *instanceSrv) GetInstance(ctx context.Context, req *computev1.GetInstanceRequest) (*computev1.Instance, error) {
@@ -401,7 +603,7 @@ func (s *instanceSrv) GetInstance(ctx context.Context, req *computev1.GetInstanc
 	}
 	idText := lastSegment(req.GetName())
 	if snap, ok := s.w.liveInst(idText, account); ok {
-		return instanceProto(snap.inst, projectID, snap.vpc), nil
+		return s.stampAction(instanceProto(snap.inst, projectID, snap.vpc), snap.inst.ID.String()), nil
 	}
 	id, err := resource.Parse[resource.InstanceID](idText)
 	if err != nil {
@@ -417,7 +619,19 @@ func (s *instanceSrv) GetInstance(ctx context.Context, req *computev1.GetInstanc
 		return nil, toStatus(resource.NotFound(resource.KindInstance, idText))
 	}
 	inst := page.Items[0]
-	return instanceProto(inst, projectID, s.w.vpcOf(inst.SubnetID.String())), nil
+	return s.stampAction(instanceProto(inst, projectID, s.w.vpcOf(inst.SubnetID.String())), inst.ID.String()), nil
+}
+
+func (s *instanceSrv) stampAction(msg *computev1.Instance, id string) *computev1.Instance {
+	action := s.w.actionOf(id)
+	if action == "" {
+		return msg
+	}
+	if msg.Labels == nil {
+		msg.Labels = map[string]string{}
+	}
+	msg.Labels[labelAction] = action
+	return msg
 }
 
 func (s *instanceSrv) ListInstances(ctx context.Context, req *computev1.ListInstancesRequest) (*computev1.ListInstancesResponse, error) {
@@ -447,20 +661,46 @@ type volumeSrv struct {
 	w *loopWorld
 }
 
-func (s *volumeSrv) CreateVolume(_ context.Context, req *storagev1.CreateVolumeRequest) (*longrunningpb.Operation, error) {
+func (s *volumeSrv) CreateVolume(ctx context.Context, req *storagev1.CreateVolumeRequest) (*longrunningpb.Operation, error) {
 	projectID, err := projectOfName(req.GetParent())
 	if err != nil {
 		return nil, toStatus(err)
 	}
-	name := volumeName(projectID, req.GetVolumeId())
+	spec := req.GetVolume().GetSpec()
+	if spec.GetImage() != "" || spec.GetSnapshot() != "" {
+		name := volumeName(projectID, req.GetVolumeId())
+		fp, err := protoFingerprint(req)
+		if err != nil {
+			return nil, toStatus(err)
+		}
+		if err := s.w.admit(req.GetRequestId(), fp, name); err != nil {
+			return nil, toStatus(err)
+		}
+		s.w.putBoot(&storagev1.Volume{
+			Name: name,
+			Spec: proto.Clone(spec).(*storagev1.VolumeSpec),
+			Status: &storagev1.VolumeStatus{Observed: &commonv1.ObservedState{
+				State: commonv1.ReconciliationState_RECONCILIATION_STATE_READY,
+			}},
+		})
+		return runningNamed(projectID, req.GetRequestId(), name, commonv1.OperationVerb_OPERATION_VERB_CREATE, s.w.now)
+	}
+	account, err := accountOf(projectID)
+	if err != nil {
+		return nil, toStatus(err)
+	}
 	fp, err := protoFingerprint(req)
 	if err != nil {
 		return nil, toStatus(err)
 	}
-	if err := s.w.admit(req.GetRequestId(), fp, name); err != nil {
+	acc, err := s.w.set.Compute.CreateVolume(ctx, backend.Mutation{
+		Scope: backend.Scope{Account: account}, Key: req.GetRequestId(), Fingerprint: fp,
+	}, resource.CreateVolumeRequest{SizeGiB: spec.GetSizeGib(), Zone: resource.ZoneName})
+	if err != nil {
 		return nil, toStatus(err)
 	}
-	return runningNamed(projectID, req.GetRequestId(), name, commonv1.OperationVerb_OPERATION_VERB_CREATE, s.w.now)
+	s.w.mark(volumeName(projectID, acc.Items[0].ID.String()))
+	return runningOp(projectID, acc.Operation, volumeName(projectID, acc.Items[0].ID.String()), commonv1.OperationVerb_OPERATION_VERB_CREATE, s.w.now)
 }
 
 type vpcSrv struct {
@@ -468,10 +708,30 @@ type vpcSrv struct {
 	w *loopWorld
 }
 
-func (s *vpcSrv) CreateVpc(_ context.Context, req *networkv1.CreateVpcRequest) (*longrunningpb.Operation, error) {
+func (s *vpcSrv) CreateVpc(ctx context.Context, req *networkv1.CreateVpcRequest) (*longrunningpb.Operation, error) {
 	projectID, err := projectOfName(req.GetParent())
 	if err != nil {
 		return nil, toStatus(err)
+	}
+	if _, parseErr := resource.Parse[resource.VpcID](req.GetVpcId()); parseErr == nil {
+		account, err := accountOf(projectID)
+		if err != nil {
+			return nil, toStatus(err)
+		}
+		fp, err := protoFingerprint(req)
+		if err != nil {
+			return nil, toStatus(err)
+		}
+		acc, err := s.w.set.Network.CreateVpc(ctx, backend.Mutation{
+			Scope: backend.Scope{Account: account}, Key: req.GetRequestId(), Fingerprint: fp,
+		}, resource.CreateVpcRequest{Cidr: req.GetVpc().GetSpec().GetIpv4Cidr()})
+		if err != nil {
+			return nil, toStatus(err)
+		}
+		name := vpcName(projectID, acc.Items[0].ID.String())
+		s.w.mark(name)
+		s.w.putVPC(name, acc.Items[0].Cidr)
+		return runningOp(projectID, acc.Operation, name, commonv1.OperationVerb_OPERATION_VERB_CREATE, s.w.now)
 	}
 	name := vpcName(projectID, req.GetVpcId())
 	fp, err := protoFingerprint(req)
@@ -514,13 +774,17 @@ func (s *subnetSrv) CreateSubnet(ctx context.Context, req *networkv1.CreateSubne
 	if err != nil {
 		return nil, toStatus(err)
 	}
+	vpcID := lastSegment(req.GetParent())
+	var vpcRef resource.VpcID
+	if parsed, parseErr := resource.Parse[resource.VpcID](vpcID); parseErr == nil {
+		vpcRef = parsed
+	}
 	acc, err := s.w.set.Network.CreateSubnet(ctx, backend.Mutation{
 		Scope: backend.Scope{Account: account}, Key: req.GetRequestId(), Fingerprint: fp,
-	}, resource.CreateSubnetRequest{Cidr: req.GetSubnet().GetSpec().GetIpv4Cidr()})
+	}, resource.CreateSubnetRequest{Cidr: req.GetSubnet().GetSpec().GetIpv4Cidr(), VpcID: vpcRef})
 	if err != nil {
 		return nil, toStatus(err)
 	}
-	vpcID := lastSegment(req.GetParent())
 	s.w.rememberSubnet(acc.Items[0].ID.String(), vpcID)
 	s.w.saveSub(subSnap{sub: acc.Items[0], vpc: vpcID, op: acc.Operation.ID.String(), live: true})
 	return runningOp(projectID, acc.Operation, subnetName(projectID, vpcID, acc.Items[0].ID.String()), commonv1.OperationVerb_OPERATION_VERB_CREATE, s.w.now)
@@ -712,10 +976,7 @@ func (s *opsSrv) GetOperation(ctx context.Context, req *longrunningpb.GetOperati
 		return nil, toStatus(err)
 	}
 	resourceName := ""
-	verb := commonv1.OperationVerb_OPERATION_VERB_CREATE
-	if op.Action == resource.ActionStopInstances {
-		verb = commonv1.OperationVerb_OPERATION_VERB_UPDATE
-	}
+	verb := operationVerb(op.Action)
 	if len(op.Targets) > 0 {
 		resourceName = targetName(projectID, op.Targets[0], s.w.vpcOf(op.Targets[0].ID()))
 	}
@@ -738,8 +999,21 @@ func (s *opsSrv) GetOperation(ctx context.Context, req *longrunningpb.GetOperati
 	return msg, nil
 }
 
+func operationVerb(action resource.Action) commonv1.OperationVerb {
+	switch action {
+	case resource.ActionStopInstances, resource.ActionStartInstances, resource.ActionAttachVolume, resource.ActionAuthorizeSecurityGroupIngress:
+		return commonv1.OperationVerb_OPERATION_VERB_UPDATE
+	case resource.ActionTerminateInstances, resource.ActionDeleteVpc, resource.ActionDeleteVolume:
+		return commonv1.OperationVerb_OPERATION_VERB_DELETE
+	case resource.ActionRunInstances, resource.ActionCreateSubnet, resource.ActionCreateVpc, resource.ActionCreateVolume, resource.ActionCreateSecurityGroup, resource.ActionCreateKeyPair:
+		return commonv1.OperationVerb_OPERATION_VERB_CREATE
+	default:
+		return commonv1.OperationVerb_OPERATION_VERB_UNSPECIFIED
+	}
+}
+
 func runningOp(projectID string, op resource.Operation, resourceName string, verb commonv1.OperationVerb, now time.Time) (*longrunningpb.Operation, error) {
-	msg, err := longOp(projectID, op.ID.Local(), resourceName, "", verb, now)
+	msg, err := longOp(projectID, op.ID.Local(), resourceName, op.ID.Local(), verb, now)
 	if err != nil {
 		return nil, toStatus(err)
 	}
@@ -774,6 +1048,14 @@ func targetName(projectID string, ref resource.Ref, vpcID string) string {
 		return instanceName(projectID, ref.ID())
 	case resource.KindSubnet:
 		return subnetName(projectID, vpcID, ref.ID())
+	case resource.KindVpc:
+		return vpcName(projectID, ref.ID())
+	case resource.KindVolume:
+		return volumeName(projectID, ref.ID())
+	case resource.KindSecurityGroup:
+		return securityGroupName(projectID, vpcID, ref.ID())
+	case resource.KindKeyPair:
+		return keyPairName(projectID, ref.ID())
 	case resource.KindImage, resource.KindReservation, resource.KindBucket, resource.KindObject, resource.KindOperation, resource.KindUnspecified:
 		return ""
 	default:

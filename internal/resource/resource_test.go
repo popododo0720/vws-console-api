@@ -15,6 +15,15 @@ func TestParseRejectsRawShapes(t *testing.T) {
 	if _, err := Parse[InstanceID]("i-01234567"); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := Parse[InstanceID]("i-012345678"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Parse[InstanceID]("i-0123456"); err == nil {
+		t.Fatal("7 hex digits must fail")
+	}
+	if _, err := Parse[InstanceID]("i-0123456789abcdef01"); err == nil {
+		t.Fatal("18 hex digits must fail")
+	}
 	if _, err := Parse[InstanceID]("i-0123456789ABCDEF0"); err == nil {
 		t.Fatal("uppercase hex must fail")
 	}
@@ -96,7 +105,7 @@ func TestOperationIDRoundTrip(t *testing.T) {
 
 func TestActionsAreDerived(t *testing.T) {
 	got := Actions()
-	if len(got) != 3 {
+	if len(got) != 13 {
 		t.Fatalf("actions: %v", got)
 	}
 	for _, a := range got {
@@ -199,5 +208,36 @@ func TestCIDRNormalize(t *testing.T) {
 	}
 	if _, err := (CreateSubnetRequest{Cidr: "nope"}).Normalize(); err == nil {
 		t.Fatal("expected bad cidr")
+	}
+}
+
+func TestIngressProtocolIsCanonical(t *testing.T) {
+	id, err := Parse[SecurityGroupID]("sg-01234567")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := (AuthorizeSecurityGroupIngressRequest{
+		ID:   id,
+		Rule: IngressRule{Protocol: "17", FromPort: 53, ToPort: 53, Cidr: "10.0.0.0/16"},
+	}).Normalize()
+	if err != nil || got.Rule.Protocol != "udp" {
+		t.Fatalf("%v %+v", err, got.Rule)
+	}
+	_, err = (AuthorizeSecurityGroupIngressRequest{
+		ID:   id,
+		Rule: IngressRule{Protocol: "sctp", FromPort: 1, ToPort: 1, Cidr: "10.0.0.0/16"},
+	}).Normalize()
+	if CodeOf(err) != CodeInvalidArgument {
+		t.Fatalf("sctp: %v", err)
+	}
+}
+
+func TestZeroVpcIDOmitsFromSubnetJSON(t *testing.T) {
+	b, err := json.Marshal(CreateSubnetRequest{Cidr: "10.1.0.0/24"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(b, []byte("vpcId")) {
+		t.Fatalf("zero vpc id leaked: %s", b)
 	}
 }

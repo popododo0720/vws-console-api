@@ -15,6 +15,7 @@ import (
 const (
 	labelFingerprint = "vws-fingerprint"
 	labelImage       = "vws-image"
+	labelAction      = "vws-action"
 	labelReservation = "vws-reservation"
 	labelLaunch      = "vws-launch"
 )
@@ -44,6 +45,14 @@ func projectOfName(name string) (string, error) {
 		return "", resource.Internal(strErr("bad resource name"))
 	}
 	return parts[1], nil
+}
+
+func accountIn(name string) (resource.AccountID, error) {
+	projectID, err := projectOfName(name)
+	if err != nil {
+		return resource.AccountID{}, err
+	}
+	return accountOf(projectID)
 }
 
 func instanceParent(projectID string) string {
@@ -78,6 +87,14 @@ func subnetParent(projectID, vpcID string) string {
 
 func subnetName(projectID, vpcID, id string) string {
 	return subnetParent(projectID, vpcID) + "/" + id
+}
+
+func securityGroupName(projectID, vpcID, id string) string {
+	return vpcName(projectID, vpcID) + "/securityGroups/" + id
+}
+
+func keyPairName(projectID, id string) string {
+	return regionParent(projectID) + "/keyPairs/" + id
 }
 
 func bucketParent(projectID string) string { return "projects/" + projectID }

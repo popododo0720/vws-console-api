@@ -137,6 +137,38 @@ func (foreignCompute) DescribeInstances(context.Context, backend.Scope, resource
 	return resource.Page[resource.Instance]{}, errors.New("unused")
 }
 
+func (foreignCompute) StartInstances(context.Context, backend.Mutation, resource.StartInstancesRequest) (resource.Accepted[resource.InstanceStateChange], error) {
+	return resource.Accepted[resource.InstanceStateChange]{}, errors.New("unused")
+}
+
+func (foreignCompute) TerminateInstances(context.Context, backend.Mutation, resource.TerminateInstancesRequest) (resource.Accepted[resource.InstanceStateChange], error) {
+	return resource.Accepted[resource.InstanceStateChange]{}, errors.New("unused")
+}
+
+func (foreignCompute) CreateVolume(context.Context, backend.Mutation, resource.CreateVolumeRequest) (resource.Accepted[resource.Volume], error) {
+	return resource.Accepted[resource.Volume]{}, errors.New("unused")
+}
+
+func (foreignCompute) AttachVolume(context.Context, backend.Mutation, resource.AttachVolumeRequest) (resource.Accepted[resource.Volume], error) {
+	return resource.Accepted[resource.Volume]{}, errors.New("unused")
+}
+
+func (foreignCompute) DeleteVolume(context.Context, backend.Mutation, resource.DeleteVolumeRequest) (resource.Accepted[resource.Volume], error) {
+	return resource.Accepted[resource.Volume]{}, errors.New("unused")
+}
+
+func (foreignCompute) DescribeVolumes(context.Context, backend.Scope, resource.VolumeQuery) (resource.Page[resource.Volume], error) {
+	return resource.Page[resource.Volume]{}, errors.New("unused")
+}
+
+func (foreignCompute) DescribeImages(context.Context, backend.Scope, resource.ImageQuery) (resource.Page[resource.Image], error) {
+	return resource.Page[resource.Image]{}, errors.New("unused")
+}
+
+func (foreignCompute) CreateKeyPair(context.Context, backend.Mutation, resource.CreateKeyPairRequest) (resource.Accepted[resource.KeyPair], error) {
+	return resource.Accepted[resource.KeyPair]{}, errors.New("unused")
+}
+
 func (f foreignCompute) GetOperation(context.Context, backend.Scope, resource.OperationID) (resource.Operation, error) {
 	if f.op.ID.IsZero() {
 		return resource.Operation{}, errors.New("unused")

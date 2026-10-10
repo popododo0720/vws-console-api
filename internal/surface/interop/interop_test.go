@@ -107,6 +107,51 @@ func TestConsoleAndQueryLaunchTheSameInstance(t *testing.T) {
 	}
 }
 
+func TestConsoleAndQueryShareAVpc(t *testing.T) {
+	now := time.Date(2026, 10, 9, 10, 0, 0, 0, time.UTC)
+	account := mustParse[resource.AccountID](t, "123456789012")
+	caller := resource.Caller{Account: account, Subject: "console"}
+	world := fake.New(fake.Options{Now: func() time.Time { return now }})
+	svc := cloud.New(cloud.Config{Backends: world.Set()})
+	ui := console.New(console.Config{Service: svc, Auth: console.BearerTokens{"tok-console": caller}})
+	cred := sigv4.Credential{AccessKey: "AKIDEXAMPLE", Secret: "secret", Account: account}
+	query := ec2query.New(ec2query.Config{Service: svc, Verifier: verifier(cred, sigv4.ServiceEC2, now)})
+
+	created := call(t, ui, http.MethodPost, "/api/v1/vpcs", `{"cidrBlock":"10.9.0.0/16"}`, map[string]string{
+		"Authorization":   "Bearer tok-console",
+		"Content-Type":    "application/json",
+		"Idempotency-Key": "vpc-web-1",
+	})
+	if created.Code != http.StatusAccepted || !strings.Contains(created.Body.String(), `"state":"pending"`) {
+		t.Fatalf("create %d %s", created.Code, created.Body)
+	}
+	var acc struct {
+		Items []struct {
+			ID string `json:"vpcId"`
+		} `json:"items"`
+		Operation struct {
+			ID string `json:"id"`
+		} `json:"operation"`
+	}
+	if err := json.Unmarshal(created.Body.Bytes(), &acc); err != nil {
+		t.Fatal(err)
+	}
+	polled := call(t, ui, http.MethodGet, "/api/v1/operations/"+acc.Operation.ID, "", map[string]string{
+		"Authorization": "Bearer tok-console",
+	})
+	if polled.Code != http.StatusOK || !strings.Contains(polled.Body.String(), `"state":"succeeded"`) {
+		t.Fatalf("poll %d %s", polled.Code, polled.Body)
+	}
+	form := url.Values{}
+	form.Set("Action", "DescribeVpcs")
+	form.Set("Version", ec2query.Version)
+	form.Set("VpcId.1", acc.Items[0].ID)
+	described := serveSigned(t, query, cred, sigv4.ServiceEC2, now, http.MethodPost, "http://127.0.0.1:8081/", form.Encode())
+	if described.Code != http.StatusOK || !strings.Contains(described.Body.String(), acc.Items[0].ID) || !strings.Contains(described.Body.String(), "available") {
+		t.Fatalf("query %d %s", described.Code, described.Body)
+	}
+}
+
 func TestS3ObjectRoundTrip(t *testing.T) {
 	now := time.Date(2026, 10, 9, 10, 0, 0, 0, time.UTC)
 	account := mustParse[resource.AccountID](t, "123456789012")

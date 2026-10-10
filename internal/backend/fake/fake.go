@@ -34,6 +34,10 @@ type World struct {
 	ops   map[string]*opRecord
 	inst  map[resource.InstanceID]*resource.Instance
 	sub   map[resource.SubnetID]*resource.Subnet
+	vpc   map[resource.VpcID]*resource.Vpc
+	vol   map[resource.VolumeID]*resource.Volume
+	sg    map[resource.SecurityGroupID]*resource.SecurityGroup
+	key   map[resource.KeyPairID]*resource.KeyPair
 	buck  map[resource.BucketName]*resource.Bucket
 	obj   map[string]*storedObject
 	seqIP uint32
@@ -72,6 +76,10 @@ func New(opt Options) *World {
 		ops:     map[string]*opRecord{},
 		inst:    map[resource.InstanceID]*resource.Instance{},
 		sub:     map[resource.SubnetID]*resource.Subnet{},
+		vpc:     map[resource.VpcID]*resource.Vpc{},
+		vol:     map[resource.VolumeID]*resource.Volume{},
+		sg:      map[resource.SecurityGroupID]*resource.SecurityGroup{},
+		key:     map[resource.KeyPairID]*resource.KeyPair{},
 		buck:    map[resource.BucketName]*resource.Bucket{},
 		obj:     map[string]*storedObject{},
 	}

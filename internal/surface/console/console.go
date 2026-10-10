@@ -50,6 +50,9 @@ func New(cfg Config) http.Handler {
 	mux.HandleFunc("GET /api/v1/operations/{id}", h.getOperation)
 	mux.HandleFunc("GET /api/v1/subnets", h.listSubnets)
 	mux.HandleFunc("GET /api/v1/subnets/{id}", h.getSubnet)
+	mux.HandleFunc("GET /api/v1/vpcs", h.listVpcs)
+	mux.HandleFunc("GET /api/v1/volumes", h.listVolumes)
+	mux.HandleFunc("GET /api/v1/images", h.listImages)
 	mux.HandleFunc("GET /api/v1/buckets", h.listBuckets)
 	mux.HandleFunc("PUT /api/v1/buckets/{name}", h.createBucket)
 	mux.HandleFunc("GET /api/v1/buckets/{name}", h.getBucket)
@@ -73,6 +76,26 @@ func (h *handler) mutation(action resource.Action) (string, string, http.Handler
 		return http.MethodPost, "/api/v1/instances/{id}/stop", h.stopInstance
 	case resource.ActionCreateSubnet:
 		return http.MethodPost, "/api/v1/subnets", h.createSubnet
+	case resource.ActionCreateVpc:
+		return http.MethodPost, "/api/v1/vpcs", h.createVpc
+	case resource.ActionDeleteVpc:
+		return http.MethodPost, "/api/v1/vpcs/{id}/delete", h.deleteVpc
+	case resource.ActionCreateVolume:
+		return http.MethodPost, "/api/v1/volumes", h.createVolume
+	case resource.ActionAttachVolume:
+		return http.MethodPost, "/api/v1/volumes/{id}/attach", h.attachVolume
+	case resource.ActionDeleteVolume:
+		return http.MethodPost, "/api/v1/volumes/{id}/delete", h.deleteVolume
+	case resource.ActionCreateSecurityGroup:
+		return http.MethodPost, "/api/v1/security-groups", h.createSecurityGroup
+	case resource.ActionAuthorizeSecurityGroupIngress:
+		return http.MethodPost, "/api/v1/security-groups/{id}/authorize-ingress", h.authorizeIngress
+	case resource.ActionStartInstances:
+		return http.MethodPost, "/api/v1/instances/{id}/start", h.startInstance
+	case resource.ActionTerminateInstances:
+		return http.MethodPost, "/api/v1/instances/{id}/terminate", h.terminateInstance
+	case resource.ActionCreateKeyPair:
+		return http.MethodPost, "/api/v1/key-pairs", h.createKeyPair
 	default:
 		return http.MethodGet, "/api/v1/unsupported", func(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, r, resource.Unimplemented(action.String()))
