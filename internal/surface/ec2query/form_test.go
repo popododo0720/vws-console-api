@@ -84,6 +84,41 @@ func TestUnreadQueryFieldsAreRejected(t *testing.T) {
 	}
 }
 
+func TestCreateSubnetOmitsClientToken(t *testing.T) {
+	h, cred, now := harness(t)
+	first := signed(t, h, cred, now, url.Values{
+		"Action": {"CreateSubnet"}, "Version": {Version}, "CidrBlock": {"10.7.1.0/24"},
+	}.Encode())
+	if first.Code != http.StatusOK || strings.Contains(first.Body.String(), "ClientToken") {
+		t.Fatalf("%d %s", first.Code, first.Body)
+	}
+	id := subnetIDOf(t, first.Body.String())
+	again := signed(t, h, cred, now, url.Values{
+		"Action": {"CreateSubnet"}, "Version": {Version}, "CidrBlock": {"10.7.1.0/24"},
+	}.Encode())
+	if again.Code != http.StatusOK || subnetIDOf(t, again.Body.String()) != id {
+		t.Fatalf("retry %d %s", again.Code, again.Body)
+	}
+	other := signed(t, h, cred, now, url.Values{
+		"Action": {"CreateSubnet"}, "Version": {Version}, "CidrBlock": {"10.7.2.0/24"},
+	}.Encode())
+	if other.Code != http.StatusOK || subnetIDOf(t, other.Body.String()) == id {
+		t.Fatalf("distinct %d %s", other.Code, other.Body)
+	}
+}
+
+func subnetIDOf(t *testing.T, body string) string {
+	t.Helper()
+	const open = "<subnetId>"
+	const closeTag = "</subnetId>"
+	start := strings.Index(body, open)
+	end := strings.Index(body, closeTag)
+	if start < 0 || end < 0 {
+		t.Fatalf("no subnet id in %s", body)
+	}
+	return body[start+len(open) : end]
+}
+
 func TestStopOmitsClientToken(t *testing.T) {
 	h, cred, now := harness(t)
 	form := url.Values{}

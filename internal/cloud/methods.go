@@ -14,8 +14,8 @@ func (s *Service) RunInstances(ctx context.Context, c resource.Caller, token res
 }
 
 // StopInstances accepts a stop and returns the operation.
-// A zero token is filled here. RunInstances and CreateSubnet still require one,
-// because a token minted inside mutate would make every retry a new launch.
+// A zero token is filled here. RunInstances still requires one, because a
+// token minted inside mutate would make every retry a new launch.
 func (s *Service) StopInstances(ctx context.Context, c resource.Caller, token resource.ClientToken, req resource.StopInstancesRequest) (resource.Accepted[resource.InstanceStateChange], error) {
 	token, err := fillToken(token)
 	if err != nil {
@@ -145,7 +145,14 @@ func (s *Service) GetOperation(ctx context.Context, c resource.Caller, id resour
 }
 
 // CreateSubnet accepts a subnet and returns the operation.
+// EC2 has no ClientToken on this action. An empty token is derived from the
+// normalized request, the same place other actions call fillToken, so a retry
+// is the original subnet instead of a second one.
 func (s *Service) CreateSubnet(ctx context.Context, c resource.Caller, token resource.ClientToken, req resource.CreateSubnetRequest) (resource.Accepted[resource.Subnet], error) {
+	token, req, err := fillTokenFromRequest(c, token, req)
+	if err != nil {
+		return resource.Accepted[resource.Subnet]{}, err
+	}
 	return mutate(ctx, s, c, token, req, s.backends.Network.CreateSubnet)
 }
 

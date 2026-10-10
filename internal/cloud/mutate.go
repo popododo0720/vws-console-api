@@ -16,6 +16,30 @@ import (
 // retry mismatch instead of launching a second resource.
 const idempotencyVersion = "vws-idem-v1"
 
+// fillTokenFromRequest keeps a caller token. An empty token is sha256 of the
+// account, the action, and the normalized JSON, formatted as a client token.
+// The same request retries the original operation. A different request is a
+// different key.
+func fillTokenFromRequest[R resource.Request[R]](c resource.Caller, token resource.ClientToken, req R) (resource.ClientToken, R, error) {
+	if !token.IsZero() {
+		return token, req, nil
+	}
+	normalized, err := req.Normalize()
+	if err != nil {
+		return resource.ClientToken{}, req, err
+	}
+	canon, err := json.Marshal(normalized)
+	if err != nil {
+		return resource.ClientToken{}, req, resource.Internal(err)
+	}
+	sum := sha256.Sum256(append([]byte(c.Account.String()+"\x00"+normalized.Action().String()+"\x00"), canon...))
+	derived, err := resource.Parse[resource.ClientToken]("t-" + hex.EncodeToString(sum[:16]))
+	if err != nil {
+		return resource.ClientToken{}, req, resource.Internal(err)
+	}
+	return derived, normalized, nil
+}
+
 func mutate[R resource.Request[R], T resource.Owned](
 	ctx context.Context,
 	s *Service,

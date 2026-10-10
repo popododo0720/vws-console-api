@@ -169,7 +169,7 @@ func (h *handler) stopInstances(w http.ResponseWriter, r *http.Request, c resour
 }
 
 func (h *handler) createSubnet(w http.ResponseWriter, r *http.Request, c resource.Caller) {
-	token, err := clientToken(r)
+	token, err := optionalClientToken(r)
 	if err != nil {
 		writeErr(w, r, err)
 		return
