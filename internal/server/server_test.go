@@ -21,7 +21,7 @@ func TestInternalErrorIsLogged(t *testing.T) {
 		RecordFailure(w, err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 	}))
-	req := httptest.NewRequest(http.MethodPost, "http://127.0.0.1/", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "http://127.0.0.1/", nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusInternalServerError {

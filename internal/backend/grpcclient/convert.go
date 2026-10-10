@@ -90,6 +90,10 @@ func actionOf(resourceName string, verb commonv1.OperationVerb) (resource.Action
 			return resource.ActionCreateVolume, nil
 		case containsSegment(resourceName, "keyPairs"):
 			return resource.ActionCreateKeyPair, nil
+		case containsSegment(resourceName, "addresses"):
+			return resource.ActionAllocateAddress, nil
+		case containsSegment(resourceName, "snapshots"):
+			return resource.ActionCreateSnapshot, nil
 		default:
 			return 0, resource.Internal(strErr("unsupported operation"))
 		}
@@ -108,10 +112,20 @@ func actionOf(resourceName string, verb commonv1.OperationVerb) (resource.Action
 		switch {
 		case containsSegment(resourceName, "instances"):
 			return resource.ActionTerminateInstances, nil
+		case containsSegment(resourceName, "subnets"):
+			return resource.ActionDeleteSubnet, nil
+		case containsSegment(resourceName, "securityGroups"):
+			return resource.ActionDeleteSecurityGroup, nil
 		case containsSegment(resourceName, "vpcs"):
 			return resource.ActionDeleteVpc, nil
 		case containsSegment(resourceName, "volumes"):
 			return resource.ActionDeleteVolume, nil
+		case containsSegment(resourceName, "keyPairs"):
+			return resource.ActionDeleteKeyPair, nil
+		case containsSegment(resourceName, "addresses"):
+			return resource.ActionReleaseAddress, nil
+		case containsSegment(resourceName, "snapshots"):
+			return resource.ActionDeleteSnapshot, nil
 		default:
 			return 0, resource.Internal(strErr("unsupported operation"))
 		}
@@ -190,6 +204,18 @@ func refFromResource(name string) (resource.Ref, bool) {
 		return parsed.Ref(), true
 	case "keyPairs":
 		parsed, err := resource.Parse[resource.KeyPairID](id)
+		if err != nil {
+			return resource.Ref{}, false
+		}
+		return parsed.Ref(), true
+	case "addresses":
+		parsed, err := resource.Parse[resource.AddressID](id)
+		if err != nil {
+			return resource.Ref{}, false
+		}
+		return parsed.Ref(), true
+	case "snapshots":
+		parsed, err := resource.Parse[resource.SnapshotID](id)
 		if err != nil {
 			return resource.Ref{}, false
 		}
@@ -357,8 +383,13 @@ func instanceStateOf(obs commonv1.ReconciliationState, power computev1.InstanceP
 
 func subnetProto(sub resource.Subnet, projectID, vpcID string) *networkv1.Subnet {
 	obs := commonv1.ReconciliationState_RECONCILIATION_STATE_PENDING
-	if sub.State == resource.SubnetAvailable {
+	switch sub.State {
+	case resource.SubnetAvailable:
 		obs = commonv1.ReconciliationState_RECONCILIATION_STATE_READY
+	case resource.SubnetDeleting:
+		obs = commonv1.ReconciliationState_RECONCILIATION_STATE_DELETING
+	case resource.SubnetPending:
+	default:
 	}
 	return &networkv1.Subnet{
 		Name: subnetName(projectID, vpcID, sub.ID.String()),
@@ -402,7 +433,9 @@ func subnetStateOf(obs commonv1.ReconciliationState) (resource.SubnetState, erro
 		return resource.SubnetPending, nil
 	case commonv1.ReconciliationState_RECONCILIATION_STATE_READY:
 		return resource.SubnetAvailable, nil
-	case commonv1.ReconciliationState_RECONCILIATION_STATE_DELETING, commonv1.ReconciliationState_RECONCILIATION_STATE_ERROR, commonv1.ReconciliationState_RECONCILIATION_STATE_UNSPECIFIED:
+	case commonv1.ReconciliationState_RECONCILIATION_STATE_DELETING:
+		return resource.SubnetDeleting, nil
+	case commonv1.ReconciliationState_RECONCILIATION_STATE_ERROR, commonv1.ReconciliationState_RECONCILIATION_STATE_UNSPECIFIED:
 		return 0, resource.Internal(strErr("bad subnet state"))
 	default:
 		return 0, resource.Internal(strErr("bad subnet state"))

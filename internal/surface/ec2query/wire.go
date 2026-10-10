@@ -213,6 +213,129 @@ type createKeyXML struct {
 	KeyPairID      string   `xml:"keyPairId"`
 }
 
+type deleteKeyXML struct {
+	XMLName   struct{} `xml:"DeleteKeyPairResponse"`
+	RequestID string   `xml:"requestId"`
+	Return    bool     `xml:"return"`
+}
+
+type describeKeysXML struct {
+	XMLName   struct{} `xml:"DescribeKeyPairsResponse"`
+	RequestID string   `xml:"requestId"`
+	NextToken string   `xml:"nextToken,omitempty"`
+	Keys      struct {
+		Items []keyItem `xml:"item"`
+	} `xml:"keySet"`
+}
+
+type keyItem struct {
+	KeyPairID   string `xml:"keyPairId"`
+	KeyName     string `xml:"keyName"`
+	Fingerprint string `xml:"keyFingerprint"`
+}
+
+type deleteGroupXML struct {
+	XMLName   struct{} `xml:"DeleteSecurityGroupResponse"`
+	RequestID string   `xml:"requestId"`
+	Return    bool     `xml:"return"`
+}
+
+type describeGroupsXML struct {
+	XMLName   struct{} `xml:"DescribeSecurityGroupsResponse"`
+	RequestID string   `xml:"requestId"`
+	NextToken string   `xml:"nextToken,omitempty"`
+	Groups    struct {
+		Items []groupItem `xml:"item"`
+	} `xml:"securityGroupInfo"`
+}
+
+type groupItem struct {
+	GroupID       string           `xml:"groupId"`
+	GroupName     string           `xml:"groupName"`
+	VpcID         string           `xml:"vpcId,omitempty"`
+	IPPermissions []permissionItem `xml:"ipPermissions>item,omitempty"`
+}
+
+type permissionItem struct {
+	Protocol string     `xml:"ipProtocol"`
+	FromPort int        `xml:"fromPort"`
+	ToPort   int        `xml:"toPort"`
+	IPRanges []cidrItem `xml:"ipRanges>item"`
+}
+
+type cidrItem struct {
+	CidrIP string `xml:"cidrIp"`
+}
+
+type deleteSubnetXML struct {
+	XMLName   struct{} `xml:"DeleteSubnetResponse"`
+	RequestID string   `xml:"requestId"`
+	Return    bool     `xml:"return"`
+}
+
+type allocateAddressXML struct {
+	XMLName      struct{} `xml:"AllocateAddressResponse"`
+	RequestID    string   `xml:"requestId"`
+	PublicIP     string   `xml:"publicIp"`
+	Domain       string   `xml:"domain,omitempty"`
+	AllocationID string   `xml:"allocationId"`
+}
+
+type releaseAddressXML struct {
+	XMLName   struct{} `xml:"ReleaseAddressResponse"`
+	RequestID string   `xml:"requestId"`
+	Return    bool     `xml:"return"`
+}
+
+type describeAddressesXML struct {
+	XMLName   struct{} `xml:"DescribeAddressesResponse"`
+	RequestID string   `xml:"requestId"`
+	NextToken string   `xml:"nextToken,omitempty"`
+	Addresses struct {
+		Items []addressItem `xml:"item"`
+	} `xml:"addressesSet"`
+}
+
+type addressItem struct {
+	PublicIP     string `xml:"publicIp,omitempty"`
+	Domain       string `xml:"domain,omitempty"`
+	AllocationID string `xml:"allocationId"`
+	InstanceID   string `xml:"instanceId,omitempty"`
+}
+
+type createSnapshotXML struct {
+	XMLName     struct{} `xml:"CreateSnapshotResponse"`
+	RequestID   string   `xml:"requestId"`
+	SnapshotID  string   `xml:"snapshotId"`
+	VolumeID    string   `xml:"volumeId"`
+	Status      string   `xml:"status"`
+	VolumeSize  int64    `xml:"volumeSize"`
+	Description string   `xml:"description,omitempty"`
+}
+
+type deleteSnapshotXML struct {
+	XMLName   struct{} `xml:"DeleteSnapshotResponse"`
+	RequestID string   `xml:"requestId"`
+	Return    bool     `xml:"return"`
+}
+
+type describeSnapshotsXML struct {
+	XMLName   struct{} `xml:"DescribeSnapshotsResponse"`
+	RequestID string   `xml:"requestId"`
+	NextToken string   `xml:"nextToken,omitempty"`
+	Snapshots struct {
+		Items []snapshotItem `xml:"item"`
+	} `xml:"snapshotSet"`
+}
+
+type snapshotItem struct {
+	SnapshotID  string `xml:"snapshotId"`
+	VolumeID    string `xml:"volumeId"`
+	Status      string `xml:"status"`
+	VolumeSize  int64  `xml:"volumeSize"`
+	Description string `xml:"description,omitempty"`
+}
+
 type errorXML struct {
 	XMLName   struct{} `xml:"Response"`
 	Code      string   `xml:"Errors>Error>Code"`
@@ -265,6 +388,42 @@ func volumeXML(v resource.Volume) volumeItem {
 		}}
 	}
 	return item
+}
+
+func keyXML(key resource.KeyPair) keyItem {
+	return keyItem{KeyPairID: key.ID.String(), KeyName: key.Name, Fingerprint: key.Fingerprint}
+}
+
+func groupXML(group resource.SecurityGroup) groupItem {
+	item := groupItem{GroupID: group.ID.String(), GroupName: group.Name, VpcID: group.VpcID.String()}
+	for _, rule := range group.Rules {
+		item.IPPermissions = append(item.IPPermissions, permissionItem{
+			Protocol: rule.Protocol, FromPort: rule.FromPort, ToPort: rule.ToPort,
+			IPRanges: []cidrItem{{CidrIP: rule.Cidr}},
+		})
+	}
+	return item
+}
+
+func addressXML(addr resource.Address) addressItem {
+	return addressItem{
+		PublicIP: addr.PublicIP, Domain: addr.Domain, AllocationID: addr.ID.String(), InstanceID: addr.InstanceID.String(),
+	}
+}
+
+func snapshotXML(snap resource.Snapshot) snapshotItem {
+	return snapshotItem{
+		SnapshotID: snap.ID.String(), VolumeID: snap.VolumeID.String(), Status: snap.State,
+		VolumeSize: snap.VolumeSize, Description: snap.Description,
+	}
+}
+
+func snapshotCreatedXML(requestID string, snap resource.Snapshot) createSnapshotXML {
+	item := snapshotXML(snap)
+	return createSnapshotXML{
+		RequestID: requestID, SnapshotID: item.SnapshotID, VolumeID: item.VolumeID,
+		Status: item.Status, VolumeSize: item.VolumeSize, Description: item.Description,
+	}
 }
 
 func imageXML(img resource.Image) imageItem {

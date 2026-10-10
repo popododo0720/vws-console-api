@@ -26,6 +26,8 @@ type (
 	volumeKind        struct{}
 	securityGroupKind struct{}
 	keyPairKind       struct{}
+	addressKind       struct{}
+	snapshotKind      struct{}
 )
 
 func (instanceKind) kind() Kind      { return KindInstance }
@@ -37,6 +39,8 @@ func (vpcKind) kind() Kind           { return KindVpc }
 func (volumeKind) kind() Kind        { return KindVolume }
 func (securityGroupKind) kind() Kind { return KindSecurityGroup }
 func (keyPairKind) kind() Kind       { return KindKeyPair }
+func (addressKind) kind() Kind       { return KindAddress }
+func (snapshotKind) kind() Kind      { return KindSnapshot }
 
 func (instanceKind) valid(s string) bool      { return validMinted(KindInstance, s) }
 func (imageKind) valid(s string) bool         { return validMinted(KindImage, s) }
@@ -47,6 +51,8 @@ func (vpcKind) valid(s string) bool           { return validMinted(KindVpc, s) }
 func (volumeKind) valid(s string) bool        { return validMinted(KindVolume, s) }
 func (securityGroupKind) valid(s string) bool { return validMinted(KindSecurityGroup, s) }
 func (keyPairKind) valid(s string) bool       { return validMinted(KindKeyPair, s) }
+func (addressKind) valid(s string) bool       { return validMinted(KindAddress, s) }
+func (snapshotKind) valid(s string) bool      { return validMinted(KindSnapshot, s) }
 
 // ID identifies one resource of kind K. The same value is the console path
 // segment, the EC2 identifier, and the operation target.
@@ -67,6 +73,10 @@ type (
 	SecurityGroupID = ID[securityGroupKind]
 	// KeyPairID identifies a key pair ("key-" and 8 to 17 hex digits).
 	KeyPairID = ID[keyPairKind]
+	// AddressID identifies an allocated address ("eipalloc-" and 8 to 17 hex digits).
+	AddressID = ID[addressKind]
+	// SnapshotID identifies a volume snapshot ("snap-" and 8 to 17 hex digits).
+	SnapshotID = ID[snapshotKind]
 	// ReservationID groups the instances one RunInstances call launched.
 	ReservationID = ID[reservationKind]
 	// SubnetID identifies a subnet.
@@ -266,6 +276,10 @@ func validateRefID(k Kind, id string) error {
 		_, err = Parse[SecurityGroupID](id)
 	case KindKeyPair:
 		_, err = Parse[KeyPairID](id)
+	case KindAddress:
+		_, err = Parse[AddressID](id)
+	case KindSnapshot:
+		_, err = Parse[SnapshotID](id)
 	case KindUnspecified:
 		err = Malformed(k, id)
 	default:

@@ -29,6 +29,8 @@ type api struct {
 	vpcs       networkv1.VpcServiceClient
 	groups     networkv1.SecurityGroupServiceClient
 	keys       computev1.KeyPairServiceClient
+	addresses  networkv1.AddressServiceClient
+	snapshots  storagev1.SnapshotServiceClient
 	computeOps longrunningpb.OperationsClient
 	storageOps longrunningpb.OperationsClient
 	networkOps longrunningpb.OperationsClient
@@ -404,7 +406,7 @@ func (c storageClient) PutObject(ctx context.Context, s backend.Scope, req resou
 		AllowMissing: true,
 		Contents:     buf,
 		RequestId:    requestUUID(projectID, req.Bucket.String(), req.Key.String(), "put"),
-		UpdateMask: objectUpdateMask(),
+		UpdateMask:   objectUpdateMask(),
 		Object: &storagev1.Object{
 			Name:   name,
 			Labels: map[string]string{},

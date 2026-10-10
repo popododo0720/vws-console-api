@@ -105,16 +105,65 @@ func TestCreateSubnetOmitsClientToken(t *testing.T) {
 	if other.Code != http.StatusOK || subnetIDOf(t, other.Body.String()) == id {
 		t.Fatalf("distinct %d %s", other.Code, other.Body)
 	}
+	deleted := signed(t, h, cred, now, url.Values{
+		"Action": {"DeleteSubnet"}, "Version": {Version}, "SubnetId": {id},
+	}.Encode())
+	if deleted.Code != http.StatusOK {
+		t.Fatalf("delete %d %s", deleted.Code, deleted.Body)
+	}
+	recreated := signed(t, h, cred, now, url.Values{
+		"Action": {"CreateSubnet"}, "Version": {Version}, "CidrBlock": {"10.7.1.0/24"},
+	}.Encode())
+	if recreated.Code != http.StatusOK || subnetIDOf(t, recreated.Body.String()) == id {
+		t.Fatalf("recreate %d %s", recreated.Code, recreated.Body)
+	}
+}
+
+func TestDescribeSecurityGroupReturnsRules(t *testing.T) {
+	h, cred, now := harness(t)
+	vpc := signed(t, h, cred, now, url.Values{
+		"Action": {"CreateVpc"}, "Version": {Version}, "CidrBlock": {"10.7.0.0/16"},
+	}.Encode())
+	if vpc.Code != http.StatusOK {
+		t.Fatalf("vpc %d %s", vpc.Code, vpc.Body)
+	}
+	group := signed(t, h, cred, now, url.Values{
+		"Action": {"CreateSecurityGroup"}, "Version": {Version},
+		"GroupName": {"web"}, "GroupDescription": {"web"}, "VpcId": {xmlText(t, vpc.Body.String(), "vpcId")},
+	}.Encode())
+	if group.Code != http.StatusOK {
+		t.Fatalf("group %d %s", group.Code, group.Body)
+	}
+	opened := signed(t, h, cred, now, url.Values{
+		"Action": {"AuthorizeSecurityGroupIngress"}, "Version": {Version},
+		"GroupId":    {xmlText(t, group.Body.String(), "groupId")},
+		"IpProtocol": {"tcp"}, "FromPort": {"22"}, "ToPort": {"22"}, "CidrIp": {"10.0.0.0/16"},
+	}.Encode())
+	if opened.Code != http.StatusOK {
+		t.Fatalf("authorize %d %s", opened.Code, opened.Body)
+	}
+	described := signed(t, h, cred, now, url.Values{
+		"Action": {"DescribeSecurityGroups"}, "Version": {Version},
+		"GroupId.1": {xmlText(t, group.Body.String(), "groupId")},
+	}.Encode())
+	if described.Code != http.StatusOK || !strings.Contains(described.Body.String(), "<cidrIp>10.0.0.0/16</cidrIp>") {
+		t.Fatalf("describe %d %s", described.Code, described.Body)
+	}
 }
 
 func subnetIDOf(t *testing.T, body string) string {
 	t.Helper()
-	const open = "<subnetId>"
-	const closeTag = "</subnetId>"
+	return xmlText(t, body, "subnetId")
+}
+
+func xmlText(t *testing.T, body, tag string) string {
+	t.Helper()
+	open := "<" + tag + ">"
+	closeTag := "</" + tag + ">"
 	start := strings.Index(body, open)
 	end := strings.Index(body, closeTag)
-	if start < 0 || end < 0 {
-		t.Fatalf("no subnet id in %s", body)
+	if start < 0 || end < start {
+		t.Fatalf("no %s in %s", tag, body)
 	}
 	return body[start+len(open) : end]
 }
@@ -131,6 +180,29 @@ func TestStopOmitsClientToken(t *testing.T) {
 	}
 	if !strings.Contains(res.Body.String(), "InvalidInstanceID.NotFound") {
 		t.Fatalf("%d %s", res.Code, res.Body)
+	}
+}
+
+func TestCatalogActionsAreImplemented(t *testing.T) {
+	h, cred, now := harness(t)
+	for _, action := range []string{"DescribeKeyPairs", "DescribeSecurityGroups", "DescribeAddresses", "DescribeSnapshots"} {
+		res := signed(t, h, cred, now, url.Values{"Action": {action}, "Version": {Version}}.Encode())
+		if res.Code != http.StatusOK || strings.Contains(res.Body.String(), "InvalidAction") {
+			t.Fatalf("%s %d %s", action, res.Code, res.Body)
+		}
+	}
+	for _, action := range []string{"DeleteKeyPair", "DeleteSecurityGroup", "DeleteSubnet", "ReleaseAddress", "CreateSnapshot", "DeleteSnapshot"} {
+		res := signed(t, h, cred, now, url.Values{"Action": {action}, "Version": {Version}}.Encode())
+		if res.Code == http.StatusNotImplemented || strings.Contains(res.Body.String(), "InvalidAction") {
+			t.Fatalf("%s %d %s", action, res.Code, res.Body)
+		}
+		if res.Code != http.StatusBadRequest {
+			t.Fatalf("%s %d %s", action, res.Code, res.Body)
+		}
+	}
+	allocated := signed(t, h, cred, now, url.Values{"Action": {"AllocateAddress"}, "Version": {Version}}.Encode())
+	if allocated.Code != http.StatusOK || !strings.Contains(allocated.Body.String(), "<allocationId>") || strings.Contains(allocated.Body.String(), "InvalidAction") {
+		t.Fatalf("allocate %d %s", allocated.Code, allocated.Body)
 	}
 }
 

@@ -97,6 +97,14 @@ func keyPairName(projectID, id string) string {
 	return regionParent(projectID) + "/keyPairs/" + id
 }
 
+func addressName(projectID, id string) string {
+	return regionParent(projectID) + "/addresses/" + id
+}
+
+func snapshotName(projectID, id string) string {
+	return regionParent(projectID) + "/snapshots/" + id
+}
+
 func bucketParent(projectID string) string { return "projects/" + projectID }
 
 func bucketName(projectID, name string) string {
@@ -266,6 +274,19 @@ func labelOK(key, value string) bool {
 		}
 	}
 	return true
+}
+
+func labelName(labels map[string]string) string {
+	keys := []string{"keyname", "keyname2", "keyname3", "keyname4", "keyname5"}
+	var b strings.Builder
+	for _, key := range keys {
+		part := labels[key]
+		if part == "" {
+			break
+		}
+		b.WriteString(part)
+	}
+	return b.String()
 }
 
 func userTags(labels map[string]string) map[string]string {

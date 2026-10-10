@@ -341,6 +341,40 @@ func (r CreateKeyPairRequest) Normalize() (CreateKeyPairRequest, error) {
 	return r, nil
 }
 
+// DeleteKeyPairRequest deletes one key pair by id or by name.
+type DeleteKeyPairRequest struct {
+	ID   KeyPairID `json:"keyPairId,omitzero"`
+	Name string    `json:"keyName,omitempty"`
+}
+
+// Action returns DeleteKeyPair.
+func (DeleteKeyPairRequest) Action() Action { return ActionDeleteKeyPair }
+
+// Normalize requires an id or a name.
+func (r DeleteKeyPairRequest) Normalize() (DeleteKeyPairRequest, error) {
+	if r.ID.IsZero() && r.Name == "" {
+		return DeleteKeyPairRequest{}, Invalid("keyName", "required")
+	}
+	return r, nil
+}
+
+// KeyPairQuery selects key pairs.
+type KeyPairQuery struct {
+	IDs   []KeyPairID `json:"keyPairIds,omitempty"`
+	Names []string    `json:"keyNames,omitempty"`
+	Page  PageRequest `json:"page,omitempty"`
+}
+
+// Normalize canonicalizes the page.
+func (q KeyPairQuery) Normalize() (KeyPairQuery, error) {
+	page, err := q.Page.Normalize()
+	if err != nil {
+		return KeyPairQuery{}, err
+	}
+	q.Page = page
+	return q, nil
+}
+
 // StartInstancesRequest starts stopped instances.
 type StartInstancesRequest struct {
 	IDs []InstanceID `json:"instanceIds"`

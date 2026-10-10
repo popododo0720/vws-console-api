@@ -49,6 +49,7 @@ func TestContractOverGRPC(t *testing.T) {
 	loop := newLoopWorld(world.Set(), now)
 	computev1.RegisterInstanceServiceServer(computeSrv, &instanceSrv{w: loop})
 	computev1.RegisterKeyPairServiceServer(computeSrv, &keySrv{w: loop})
+	networkv1.RegisterAddressServiceServer(computeSrv, &addressSrv{w: loop})
 	networkv1.RegisterVpcServiceServer(computeSrv, &vpcSrv{w: loop})
 	networkv1.RegisterSubnetServiceServer(computeSrv, &subnetSrv{w: loop})
 	networkv1.RegisterSecurityGroupServiceServer(computeSrv, &groupSrv{w: loop})
@@ -56,6 +57,7 @@ func TestContractOverGRPC(t *testing.T) {
 	storagev1.RegisterVolumeServiceServer(storageSrv, &volumeSrv{w: loop})
 	storagev1.RegisterBucketServiceServer(storageSrv, &bucketSrv{w: loop})
 	storagev1.RegisterObjectServiceServer(storageSrv, &objectSrv{w: loop})
+	storagev1.RegisterSnapshotServiceServer(storageSrv, &snapshotSrv{w: loop})
 	longrunningpb.RegisterOperationsServer(storageSrv, opsGate{opsSrv: opsSrv{w: loop}, volumes: true})
 	go func() { _ = computeSrv.Serve(computeLis) }()
 	go func() { _ = storageSrv.Serve(storageLis) }()
@@ -91,6 +93,8 @@ func TestContractOverGRPC(t *testing.T) {
 		vpcs:       networkv1.NewVpcServiceClient(computeConn),
 		groups:     networkv1.NewSecurityGroupServiceClient(computeConn),
 		keys:       computev1.NewKeyPairServiceClient(computeConn),
+		addresses:  networkv1.NewAddressServiceClient(computeConn),
+		snapshots:  storagev1.NewSnapshotServiceClient(storageConn),
 		computeOps: longrunningpb.NewOperationsClient(computeConn),
 		storageOps: longrunningpb.NewOperationsClient(storageConn),
 		networkOps: longrunningpb.NewOperationsClient(computeConn),
@@ -117,7 +121,8 @@ func (s opsGate) GetOperation(ctx context.Context, req *longrunningpb.GetOperati
 	if err != nil {
 		return nil, toStatus(err)
 	}
-	volume := op.Action == resource.ActionCreateVolume || op.Action == resource.ActionDeleteVolume
+	volume := op.Action == resource.ActionCreateVolume || op.Action == resource.ActionDeleteVolume ||
+		op.Action == resource.ActionCreateSnapshot || op.Action == resource.ActionDeleteSnapshot
 	if volume != s.volumes {
 		return nil, toStatus(resource.NotFound(resource.KindOperation, lastSegment(req.GetName())))
 	}
@@ -140,6 +145,7 @@ type loopWorld struct {
 	inst      map[string]instSnap
 	sub       map[string]subSnap
 	groups    map[string]resource.SecurityGroup
+	keyFP     map[string]string
 	opLaunch  map[string]string
 	actions   map[string]string
 	boots     map[string]*storagev1.Volume
@@ -166,6 +172,7 @@ func newLoopWorld(set backend.Set, now time.Time) *loopWorld {
 		vpcCIDR: map[string]string{}, subnetVPC: map[string]string{},
 		inst: map[string]instSnap{}, sub: map[string]subSnap{},
 		groups:   map[string]resource.SecurityGroup{},
+		keyFP:    map[string]string{},
 		opLaunch: map[string]string{},
 		actions:  map[string]string{},
 		boots:    map[string]*storagev1.Volume{},
@@ -307,6 +314,11 @@ func (w *loopWorld) clearSnaps(op resource.Operation) {
 		if snap.op == op.ID.String() {
 			snap.live = false
 			w.sub[id] = snap
+		}
+	}
+	if op.State == resource.OperationSucceeded && op.Action == resource.ActionDeleteSecurityGroup {
+		for _, target := range op.Targets {
+			delete(w.groups, target.ID())
 		}
 	}
 }
@@ -496,7 +508,9 @@ func (s *instanceSrv) changePower(ctx context.Context, req *computev1.UpdateInst
 	case resource.ActionRunInstances, resource.ActionCreateSubnet, resource.ActionCreateVpc, resource.ActionDeleteVpc,
 		resource.ActionCreateVolume, resource.ActionAttachVolume, resource.ActionDeleteVolume,
 		resource.ActionCreateSecurityGroup, resource.ActionAuthorizeSecurityGroupIngress,
-		resource.ActionTerminateInstances, resource.ActionCreateKeyPair:
+		resource.ActionTerminateInstances, resource.ActionCreateKeyPair,
+		resource.ActionDeleteKeyPair, resource.ActionDeleteSecurityGroup, resource.ActionDeleteSubnet,
+		resource.ActionAllocateAddress, resource.ActionReleaseAddress, resource.ActionCreateSnapshot, resource.ActionDeleteSnapshot:
 		return nil, toStatus(resource.Invalid("power", "unsupported"))
 	default:
 		return nil, toStatus(resource.Invalid("power", "unsupported"))
@@ -1037,9 +1051,9 @@ func operationVerb(action resource.Action) commonv1.OperationVerb {
 	switch action {
 	case resource.ActionStopInstances, resource.ActionStartInstances, resource.ActionAttachVolume, resource.ActionAuthorizeSecurityGroupIngress:
 		return commonv1.OperationVerb_OPERATION_VERB_UPDATE
-	case resource.ActionTerminateInstances, resource.ActionDeleteVpc, resource.ActionDeleteVolume:
+	case resource.ActionTerminateInstances, resource.ActionDeleteVpc, resource.ActionDeleteVolume, resource.ActionDeleteKeyPair, resource.ActionDeleteSecurityGroup, resource.ActionDeleteSubnet, resource.ActionReleaseAddress, resource.ActionDeleteSnapshot:
 		return commonv1.OperationVerb_OPERATION_VERB_DELETE
-	case resource.ActionRunInstances, resource.ActionCreateSubnet, resource.ActionCreateVpc, resource.ActionCreateVolume, resource.ActionCreateSecurityGroup, resource.ActionCreateKeyPair:
+	case resource.ActionRunInstances, resource.ActionCreateSubnet, resource.ActionCreateVpc, resource.ActionCreateVolume, resource.ActionCreateSecurityGroup, resource.ActionCreateKeyPair, resource.ActionAllocateAddress, resource.ActionCreateSnapshot:
 		return commonv1.OperationVerb_OPERATION_VERB_CREATE
 	default:
 		return commonv1.OperationVerb_OPERATION_VERB_UNSPECIFIED
@@ -1090,6 +1104,10 @@ func targetName(projectID string, ref resource.Ref, vpcID string) string {
 		return securityGroupName(projectID, vpcID, ref.ID())
 	case resource.KindKeyPair:
 		return keyPairName(projectID, ref.ID())
+	case resource.KindAddress:
+		return addressName(projectID, ref.ID())
+	case resource.KindSnapshot:
+		return snapshotName(projectID, ref.ID())
 	case resource.KindImage, resource.KindReservation, resource.KindBucket, resource.KindObject, resource.KindOperation, resource.KindUnspecified:
 		return ""
 	default:

@@ -49,6 +49,11 @@ type Compute interface {
 	DescribeVolumes(ctx context.Context, s Scope, q resource.VolumeQuery) (resource.Page[resource.Volume], error)
 	DescribeImages(ctx context.Context, s Scope, q resource.ImageQuery) (resource.Page[resource.Image], error)
 	CreateKeyPair(ctx context.Context, m Mutation, req resource.CreateKeyPairRequest) (resource.Accepted[resource.KeyPair], error)
+	DeleteKeyPair(ctx context.Context, m Mutation, req resource.DeleteKeyPairRequest) (resource.Accepted[resource.KeyPair], error)
+	DescribeKeyPairs(ctx context.Context, s Scope, q resource.KeyPairQuery) (resource.Page[resource.KeyPair], error)
+	CreateSnapshot(ctx context.Context, m Mutation, req resource.CreateSnapshotRequest) (resource.Accepted[resource.Snapshot], error)
+	DeleteSnapshot(ctx context.Context, m Mutation, req resource.DeleteSnapshotRequest) (resource.Accepted[resource.Snapshot], error)
+	DescribeSnapshots(ctx context.Context, s Scope, q resource.SnapshotQuery) (resource.Page[resource.Snapshot], error)
 }
 
 // Storage is the internal storage service. Bucket and object calls finish
@@ -75,7 +80,13 @@ type Network interface {
 	DeleteVpc(ctx context.Context, m Mutation, req resource.DeleteVpcRequest) (resource.Accepted[resource.Vpc], error)
 	DescribeVpcs(ctx context.Context, s Scope, q resource.VpcQuery) (resource.Page[resource.Vpc], error)
 	CreateSecurityGroup(ctx context.Context, m Mutation, req resource.CreateSecurityGroupRequest) (resource.Accepted[resource.SecurityGroup], error)
+	DeleteSecurityGroup(ctx context.Context, m Mutation, req resource.DeleteSecurityGroupRequest) (resource.Accepted[resource.SecurityGroup], error)
+	DescribeSecurityGroups(ctx context.Context, s Scope, q resource.SecurityGroupQuery) (resource.Page[resource.SecurityGroup], error)
 	AuthorizeSecurityGroupIngress(ctx context.Context, m Mutation, req resource.AuthorizeSecurityGroupIngressRequest) (resource.Accepted[resource.SecurityGroup], error)
+	DeleteSubnet(ctx context.Context, m Mutation, req resource.DeleteSubnetRequest) (resource.Accepted[resource.Subnet], error)
+	AllocateAddress(ctx context.Context, m Mutation, req resource.AllocateAddressRequest) (resource.Accepted[resource.Address], error)
+	ReleaseAddress(ctx context.Context, m Mutation, req resource.ReleaseAddressRequest) (resource.Accepted[resource.Address], error)
+	DescribeAddresses(ctx context.Context, s Scope, q resource.AddressQuery) (resource.Page[resource.Address], error)
 }
 
 // Set is the three services one process talks to.

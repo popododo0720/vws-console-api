@@ -85,6 +85,20 @@ func (h *handler) serve(w http.ResponseWriter, r *http.Request) {
 		h.terminateInstances(w, r, caller)
 	case resource.ActionCreateKeyPair.String():
 		h.createKeyPair(w, r, caller)
+	case resource.ActionDeleteKeyPair.String():
+		h.deleteKeyPair(w, r, caller)
+	case resource.ActionDeleteSecurityGroup.String():
+		h.deleteSecurityGroup(w, r, caller)
+	case resource.ActionDeleteSubnet.String():
+		h.deleteSubnet(w, r, caller)
+	case resource.ActionAllocateAddress.String():
+		h.allocateAddress(w, r, caller)
+	case resource.ActionReleaseAddress.String():
+		h.releaseAddress(w, r, caller)
+	case resource.ActionCreateSnapshot.String():
+		h.createSnapshot(w, r, caller)
+	case resource.ActionDeleteSnapshot.String():
+		h.deleteSnapshot(w, r, caller)
 	case "DescribeInstances":
 		h.describeInstances(w, r, caller)
 	case "DescribeSubnets":
@@ -95,6 +109,14 @@ func (h *handler) serve(w http.ResponseWriter, r *http.Request) {
 		h.describeVolumes(w, r, caller)
 	case "DescribeImages":
 		h.describeImages(w, r, caller)
+	case "DescribeKeyPairs":
+		h.describeKeyPairs(w, r, caller)
+	case "DescribeSecurityGroups":
+		h.describeSecurityGroups(w, r, caller)
+	case "DescribeAddresses":
+		h.describeAddresses(w, r, caller)
+	case "DescribeSnapshots":
+		h.describeSnapshots(w, r, caller)
 	default:
 		writeErr(w, r, resource.Unimplemented(action))
 	}
@@ -436,6 +458,20 @@ func rejectUnknown(r *http.Request, action string) error {
 		allow = allowStop
 	case resource.ActionCreateKeyPair.String():
 		allow = allowCreateKey
+	case resource.ActionDeleteKeyPair.String():
+		allow = allowDeleteKey
+	case resource.ActionDeleteSecurityGroup.String():
+		allow = allowDeleteGroup
+	case resource.ActionDeleteSubnet.String():
+		allow = allowDeleteSubnet
+	case resource.ActionAllocateAddress.String():
+		allow = allowAllocateAddress
+	case resource.ActionReleaseAddress.String():
+		allow = allowReleaseAddress
+	case resource.ActionCreateSnapshot.String():
+		allow = allowCreateSnapshot
+	case resource.ActionDeleteSnapshot.String():
+		allow = allowDeleteSnapshot
 	case "DescribeInstances":
 		allow = allowDescribeInstances
 	case "DescribeSubnets":
@@ -446,6 +482,14 @@ func rejectUnknown(r *http.Request, action string) error {
 		allow = allowDescribeVolumes
 	case "DescribeImages":
 		allow = allowDescribeImages
+	case "DescribeKeyPairs":
+		allow = allowDescribeKeyPairs
+	case "DescribeSecurityGroups":
+		allow = allowDescribeGroups
+	case "DescribeAddresses":
+		allow = allowDescribeAddresses
+	case "DescribeSnapshots":
+		allow = allowDescribeSnapshots
 	default:
 		allow = allowCommon
 	}
@@ -511,6 +555,50 @@ func allowAuthorize(key string) bool {
 
 func allowCreateKey(key string) bool {
 	return key == "Action" || key == "Version" || key == "ClientToken" || key == "KeyName"
+}
+
+func allowDeleteKey(key string) bool {
+	return key == "Action" || key == "Version" || key == "ClientToken" || key == "KeyName" || key == "KeyPairId"
+}
+
+func allowDeleteGroup(key string) bool {
+	return key == "Action" || key == "Version" || key == "ClientToken" || key == "GroupId" || key == "GroupName"
+}
+
+func allowDeleteSubnet(key string) bool {
+	return key == "Action" || key == "Version" || key == "ClientToken" || key == "SubnetId"
+}
+
+func allowAllocateAddress(key string) bool {
+	return key == "Action" || key == "Version" || key == "ClientToken" || key == "Domain"
+}
+
+func allowReleaseAddress(key string) bool {
+	return key == "Action" || key == "Version" || key == "ClientToken" || key == "AllocationId"
+}
+
+func allowCreateSnapshot(key string) bool {
+	return key == "Action" || key == "Version" || key == "ClientToken" || key == "VolumeId" || key == "Description"
+}
+
+func allowDeleteSnapshot(key string) bool {
+	return key == "Action" || key == "Version" || key == "ClientToken" || key == "SnapshotId"
+}
+
+func allowDescribeKeyPairs(key string) bool {
+	return key == "Action" || key == "Version" || key == "MaxResults" || key == "NextToken" || indexed(key, "KeyName", 100) || indexed(key, "KeyPairId", 100)
+}
+
+func allowDescribeGroups(key string) bool {
+	return key == "Action" || key == "Version" || key == "MaxResults" || key == "NextToken" || indexed(key, "GroupId", 100) || indexed(key, "GroupName", 100)
+}
+
+func allowDescribeAddresses(key string) bool {
+	return key == "Action" || key == "Version" || key == "MaxResults" || key == "NextToken" || indexed(key, "AllocationId", 100) || indexed(key, "PublicIp", 100)
+}
+
+func allowDescribeSnapshots(key string) bool {
+	return key == "Action" || key == "Version" || key == "MaxResults" || key == "NextToken" || indexed(key, "SnapshotId", 100)
 }
 
 func allowDescribeVpcs(key string) bool {
@@ -706,6 +794,10 @@ func notFoundCode(k resource.Kind) string {
 		return "InvalidGroup.NotFound"
 	case resource.KindKeyPair:
 		return "InvalidKeyPair.NotFound"
+	case resource.KindAddress:
+		return "InvalidAllocationID.NotFound"
+	case resource.KindSnapshot:
+		return "InvalidSnapshot.NotFound"
 	case resource.KindReservation, resource.KindBucket, resource.KindObject, resource.KindOperation, resource.KindUnspecified:
 		return "InvalidParameterValue"
 	default:
@@ -717,11 +809,11 @@ func conflictCode(k resource.Kind) string {
 	switch k {
 	case resource.KindVolume:
 		return "IncorrectState"
-	case resource.KindVpc:
+	case resource.KindVpc, resource.KindSubnet:
 		return "DependencyViolation"
-	case resource.KindInstance, resource.KindImage, resource.KindReservation, resource.KindSubnet,
+	case resource.KindInstance, resource.KindImage, resource.KindReservation,
 		resource.KindBucket, resource.KindObject, resource.KindOperation, resource.KindSecurityGroup,
-		resource.KindKeyPair, resource.KindUnspecified:
+		resource.KindKeyPair, resource.KindAddress, resource.KindSnapshot, resource.KindUnspecified:
 		return "IncorrectInstanceState"
 	default:
 		return "IncorrectInstanceState"
@@ -736,7 +828,7 @@ func alreadyExistsCode(k resource.Kind) string {
 		return "InvalidKeyPair.Duplicate"
 	case resource.KindInstance, resource.KindImage, resource.KindReservation, resource.KindSubnet,
 		resource.KindBucket, resource.KindObject, resource.KindOperation, resource.KindVpc,
-		resource.KindVolume, resource.KindUnspecified:
+		resource.KindVolume, resource.KindAddress, resource.KindSnapshot, resource.KindUnspecified:
 		return "InvalidParameterValue"
 	default:
 		return "InvalidParameterValue"

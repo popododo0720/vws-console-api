@@ -152,6 +152,52 @@ func TestConsoleAndQueryShareAVpc(t *testing.T) {
 	}
 }
 
+func TestConsoleAndQueryShareAnAddress(t *testing.T) {
+	now := time.Date(2026, 10, 9, 10, 0, 0, 0, time.UTC)
+	account := mustParse[resource.AccountID](t, "123456789012")
+	caller := resource.Caller{Account: account, Subject: "console"}
+	world := fake.New(fake.Options{Now: func() time.Time { return now }})
+	svc := cloud.New(cloud.Config{Backends: world.Set()})
+	ui := console.New(console.Config{Service: svc, Auth: console.BearerTokens{"tok-console": caller}})
+	cred := sigv4.Credential{AccessKey: "AKIDEXAMPLE", Secret: "secret", Account: account}
+	query := ec2query.New(ec2query.Config{Service: svc, Verifier: verifier(cred, sigv4.ServiceEC2, now)})
+
+	created := call(t, ui, http.MethodPost, "/api/v1/addresses", `{}`, map[string]string{
+		"Authorization":   "Bearer tok-console",
+		"Content-Type":    "application/json",
+		"Idempotency-Key": "addr-web-1",
+	})
+	if created.Code != http.StatusAccepted || !strings.Contains(created.Body.String(), `"domain":"vpc"`) {
+		t.Fatalf("allocate %d %s", created.Code, created.Body)
+	}
+	var acc struct {
+		Items []struct {
+			ID       string `json:"allocationId"`
+			PublicIP string `json:"publicIp"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(created.Body.Bytes(), &acc); err != nil {
+		t.Fatal(err)
+	}
+	if acc.Items[0].ID == "" || acc.Items[0].PublicIP == "" {
+		t.Fatalf("%s", created.Body)
+	}
+	form := url.Values{}
+	form.Set("Action", "DescribeAddresses")
+	form.Set("Version", ec2query.Version)
+	form.Set("AllocationId.1", acc.Items[0].ID)
+	described := serveSigned(t, query, cred, sigv4.ServiceEC2, now, http.MethodPost, "http://127.0.0.1:8081/", form.Encode())
+	if described.Code != http.StatusOK || !strings.Contains(described.Body.String(), acc.Items[0].ID) || !strings.Contains(described.Body.String(), acc.Items[0].PublicIP) {
+		t.Fatalf("query %d %s", described.Code, described.Body)
+	}
+	again := serveSigned(t, query, cred, sigv4.ServiceEC2, now, http.MethodPost, "http://127.0.0.1:8081/", url.Values{
+		"Action": {"AllocateAddress"}, "Version": {ec2query.Version}, "ClientToken": {"addr-web-1"},
+	}.Encode())
+	if again.Code != http.StatusOK || !strings.Contains(again.Body.String(), acc.Items[0].ID) {
+		t.Fatalf("retry %d %s", again.Code, again.Body)
+	}
+}
+
 func TestS3ObjectRoundTrip(t *testing.T) {
 	now := time.Date(2026, 10, 9, 10, 0, 0, 0, time.UTC)
 	account := mustParse[resource.AccountID](t, "123456789012")

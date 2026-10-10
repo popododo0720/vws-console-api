@@ -23,7 +23,9 @@ func (n network) CreateSubnet(ctx context.Context, m backend.Mutation, req resou
 			return resource.Accepted[resource.Subnet]{}, err
 		}
 		acc, _ := hit.(resource.Accepted[resource.Subnet])
-		return acc, nil
+		if len(acc.Items) == 0 || n.w.sub[acc.Items[0].ID] != nil {
+			return acc, nil
+		}
 	}
 	id, err := resource.Mint[resource.SubnetID](n.w.entropy)
 	if err != nil {

@@ -164,6 +164,39 @@ func TestOperationLocalServiceNames(t *testing.T) {
 	}
 }
 
+func TestDeleteUnderVpcKeepsItsAction(t *testing.T) {
+	subnet := "projects/p/regions/" + resource.RegionName + "/vpcs/vpc-01234567/subnets/subnet-01234567"
+	action, err := actionOf(subnet, commonv1.OperationVerb_OPERATION_VERB_DELETE)
+	if err != nil || action != resource.ActionDeleteSubnet {
+		t.Fatalf("subnet %v %s", err, action)
+	}
+	group := "projects/p/regions/" + resource.RegionName + "/vpcs/vpc-01234567/securityGroups/sg-01234567"
+	action, err = actionOf(group, commonv1.OperationVerb_OPERATION_VERB_DELETE)
+	if err != nil || action != resource.ActionDeleteSecurityGroup {
+		t.Fatalf("group %v %s", err, action)
+	}
+}
+
+func TestSubnetDeletingRoundTrip(t *testing.T) {
+	state, err := subnetStateOf(commonv1.ReconciliationState_RECONCILIATION_STATE_DELETING)
+	if err != nil || state != resource.SubnetDeleting {
+		t.Fatalf("%v %s", err, state)
+	}
+	wire := subnetProto(resource.Subnet{ID: mustSubnet(t), State: resource.SubnetDeleting}, "p", "vpc-01234567")
+	if wire.GetStatus().GetObserved().GetState() != commonv1.ReconciliationState_RECONCILIATION_STATE_DELETING {
+		t.Fatalf("proto %s", wire.GetStatus().GetObserved().GetState())
+	}
+}
+
+func mustSubnet(t *testing.T) resource.SubnetID {
+	t.Helper()
+	id, err := resource.Parse[resource.SubnetID]("subnet-01234567")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
 func TestObjectMaskMatches(t *testing.T) {
 	if !objectMaskMatches(objectUpdateMask()) {
 		t.Fatal("client mask")

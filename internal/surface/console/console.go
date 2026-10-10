@@ -54,6 +54,10 @@ func New(cfg Config) http.Handler {
 	mux.HandleFunc("GET /api/v1/vpcs", h.listVpcs)
 	mux.HandleFunc("GET /api/v1/volumes", h.listVolumes)
 	mux.HandleFunc("GET /api/v1/images", h.listImages)
+	mux.HandleFunc("GET /api/v1/key-pairs", h.listKeyPairs)
+	mux.HandleFunc("GET /api/v1/security-groups", h.listSecurityGroups)
+	mux.HandleFunc("GET /api/v1/addresses", h.listAddresses)
+	mux.HandleFunc("GET /api/v1/snapshots", h.listSnapshots)
 	mux.HandleFunc("GET /api/v1/buckets", h.listBuckets)
 	mux.HandleFunc("PUT /api/v1/buckets/{name}", h.createBucket)
 	mux.HandleFunc("GET /api/v1/buckets/{name}", h.getBucket)
@@ -97,6 +101,20 @@ func (h *handler) mutation(action resource.Action) (string, string, http.Handler
 		return http.MethodPost, "/api/v1/instances/{id}/terminate", h.terminateInstance
 	case resource.ActionCreateKeyPair:
 		return http.MethodPost, "/api/v1/key-pairs", h.createKeyPair
+	case resource.ActionDeleteKeyPair:
+		return http.MethodPost, "/api/v1/key-pairs/{id}/delete", h.deleteKeyPair
+	case resource.ActionDeleteSecurityGroup:
+		return http.MethodPost, "/api/v1/security-groups/{id}/delete", h.deleteSecurityGroup
+	case resource.ActionDeleteSubnet:
+		return http.MethodPost, "/api/v1/subnets/{id}/delete", h.deleteSubnet
+	case resource.ActionAllocateAddress:
+		return http.MethodPost, "/api/v1/addresses", h.allocateAddress
+	case resource.ActionReleaseAddress:
+		return http.MethodPost, "/api/v1/addresses/{id}/release", h.releaseAddress
+	case resource.ActionCreateSnapshot:
+		return http.MethodPost, "/api/v1/snapshots", h.createSnapshot
+	case resource.ActionDeleteSnapshot:
+		return http.MethodPost, "/api/v1/snapshots/{id}/delete", h.deleteSnapshot
 	default:
 		return http.MethodGet, "/api/v1/unsupported", func(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, r, resource.Unimplemented(action.String()))
