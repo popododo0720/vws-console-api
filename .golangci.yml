@@ -3,7 +3,7 @@
 version: "2"
 
 run:
-  go: "1.22"
+  go: "1.26"
 
 linters:
   default: standard
@@ -56,6 +56,12 @@ linters:
               desc: only internal/backend/grpcclient speaks gRPC
             - pkg: google.golang.org/protobuf
               desc: only internal/backend/grpcclient sees protobuf types
+            - pkg: github.com/popododo0720/vws-proto
+              desc: the resource API stays inside the gRPC client
+            - pkg: cloud.google.com/go/longrunning
+              desc: long-running types stay inside the gRPC client
+            - pkg: google.golang.org/genproto
+              desc: generated API types stay inside the gRPC client
     exhaustive:
       default-signifies-exhaustive: false
     tagliatelle:
@@ -81,7 +87,7 @@ linters:
         linters:
           - gochecknoglobals
     paths:
-      - internal/backend/grpcclient/internal/pb
+      - third_party
 
 formatters:
   enable:
@@ -90,7 +96,7 @@ formatters:
   exclusions:
     generated: lax
     paths:
-      - internal/backend/grpcclient/internal/pb
+      - third_party
   settings:
     goimports:
       local-prefixes:

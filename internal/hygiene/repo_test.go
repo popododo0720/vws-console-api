@@ -26,7 +26,14 @@ func TestRepositoryRules(t *testing.T) {
 				}
 				return filepath.SkipDir
 			}
+			if rel == "proto" {
+				failures = append(failures, "local proto tree "+rel)
+				return filepath.SkipDir
+			}
 			return nil
+		}
+		if strings.Contains(filepath.ToSlash(rel), "grpcclient/internal/pb") {
+			failures = append(failures, "generated protobuf in "+rel)
 		}
 		base := d.Name()
 		switch base {
@@ -57,6 +64,14 @@ func TestRepositoryRules(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+	mod, err := os.ReadFile(filepath.Join(root, "go.mod"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const replaceLine = "replace github.com/popododo0720/vws-proto => ./third_party/vws-proto"
+	if !strings.Contains(string(mod), replaceLine) {
+		failures = append(failures, "go.mod is missing "+replaceLine)
 	}
 	if len(failures) > 0 {
 		t.Fatalf("repository rules:\n%s", strings.Join(failures, "\n"))

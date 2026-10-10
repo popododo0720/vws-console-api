@@ -25,7 +25,7 @@ that claims this project is someone else's cloud.
 | `internal/surface/s3rest` | Path-style object codec. |
 | `internal/surface/interop` | Tests that drive more than one surface against one world. |
 | `internal/server` | One listener per surface, request IDs, shutdown. |
-| `proto/` | The internal service contracts. Generated Go is committed. |
+| `third_party/vws-proto` | Vendored `github.com/popododo0720/vws-proto` (main `a1c6084`). Imported through a `replace` directive. |
 
 ## Rules
 
@@ -38,7 +38,7 @@ change.
 | Surfaces call `internal/cloud`, never `internal/backend`. | depguard `surfaces-use-the-kernel` |
 | `internal/resource` imports only the standard library. | depguard `model-is-a-leaf` |
 | The kernel never sees HTTP, signatures, or a surface. | depguard `kernel-knows-no-wire` |
-| Protobuf and gRPC types stay inside `internal/backend/grpcclient`. | `grpcclient/internal` visibility; depguard `grpc-stays-in-grpcclient` |
+| Protobuf and gRPC types stay inside `internal/backend/grpcclient`. | depguard `grpc-stays-in-grpcclient` |
 | Untrusted strings become IDs only through `resource.Parse` or JSON decoding. | The compiler: ID types are structs with unexported fields |
 | Surfaces and the kernel do not mint IDs or operation IDs. | `internal/hygiene` rejects `resource.Mint` and `resource.NewOperationID` outside `internal/backend` |
 | Every switch over a model enum handles every value. | `exhaustive` |
@@ -56,7 +56,7 @@ change.
 | The signature is checked after the access key is known and before the body is trusted. A missing payload hash is the hash of the body. `UNSIGNED-PAYLOAD` is rejected. A query longer than 128 parameters is rejected before it is sorted. | `TestQueryWithoutPayloadHeader`, `TestUnsignedPayloadAndUnreadBody`, `TestTooManyQueryParams` |
 | A resource created on one surface is the same resource, with the same id and state names, on the others. | `internal/surface/interop` |
 | Console JSON field names are camelCase. | `tagliatelle` |
-| Generated code matches `proto/`. | CI job `generated` |
+| The resource API is the vendored module. This repo does not generate it and does not keep a local proto tree. | `internal/hygiene` checks the `replace` directive and rejects `proto/` |
 | Google Go style and formatting. | golangci-lint in CI job `lint` |
 | Tests pass under the race detector. | CI job `test` |
 | `//nolint` names one linter and gives a reason. | `nolintlint` |
@@ -107,7 +107,6 @@ other packages use, a surface, or a backend method.
 ```sh
 go test -race ./...
 golangci-lint run
-buf generate
 git config core.hooksPath .githooks
 go run ./cmd/vws-console-api -backend=fake
 ```

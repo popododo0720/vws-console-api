@@ -4,84 +4,212 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"strconv"
+
+	longrunningpb "cloud.google.com/go/longrunning/autogen/longrunningpb"
+	computev1 "github.com/popododo0720/vws-proto/gen/go/vws/compute/v1"
+	networkv1 "github.com/popododo0720/vws-proto/gen/go/vws/network/v1"
+	storagev1 "github.com/popododo0720/vws-proto/gen/go/vws/storage/v1"
+	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	"github.com/popododo0720/vws-console-api/internal/backend"
-	commonv1 "github.com/popododo0720/vws-console-api/internal/backend/grpcclient/internal/pb/commonv1"
-	computev1 "github.com/popododo0720/vws-console-api/internal/backend/grpcclient/internal/pb/computev1"
-	networkv1 "github.com/popododo0720/vws-console-api/internal/backend/grpcclient/internal/pb/networkv1"
-	storagev1 "github.com/popododo0720/vws-console-api/internal/backend/grpcclient/internal/pb/storagev1"
 	"github.com/popododo0720/vws-console-api/internal/resource"
 )
 
-type computeClient struct{ api computev1.ComputeClient }
+// api is one process's view of the resource API. RunInstances talks to
+// volumes and subnets as well as instances, so the three backend views share it.
+type api struct {
+	instances  computev1.InstanceServiceClient
+	volumes    storagev1.VolumeServiceClient
+	buckets    storagev1.BucketServiceClient
+	objects    storagev1.ObjectServiceClient
+	subnets    networkv1.SubnetServiceClient
+	vpcs       networkv1.VpcServiceClient
+	computeOps longrunningpb.OperationsClient
+	storageOps longrunningpb.OperationsClient
+	networkOps longrunningpb.OperationsClient
+}
+
+type computeClient struct{ *api }
 
 func (c computeClient) RunInstances(ctx context.Context, m backend.Mutation, req resource.RunInstancesRequest) (resource.Accepted[resource.Instance], error) {
-	out, err := c.api.RunInstances(ctx, &computev1.RunInstancesRequest{
-		Mutation: mutationProto(m), ImageId: req.ImageID.String(), InstanceType: req.InstanceType,
-		SubnetId: req.SubnetID.String(), Count: int32(req.Count), Tags: req.Tags,
-	})
-	if err != nil {
-		return resource.Accepted[resource.Instance]{}, fromRPC(err)
+	if req.Count < 1 {
+		return resource.Accepted[resource.Instance]{}, resource.Invalid("count", "must be from 1 to 10")
 	}
-	op, err := operationModel(out.GetOperation())
+	projectID := project(m.Account)
+	subnet, err := c.findSubnet(ctx, projectID, req.SubnetID.String())
 	if err != nil {
 		return resource.Accepted[resource.Instance]{}, err
 	}
-	items := make([]resource.Instance, 0, len(out.GetInstances()))
-	for _, item := range out.GetInstances() {
-		inst, err := instanceModel(item)
+	items := make([]resource.Instance, 0, req.Count)
+	var op resource.Operation
+	for i := 0; i < req.Count; i++ {
+		volID := derivedID("vol-", m.Key, "vol", strconv.Itoa(i))
+		volOp, err := c.volumes.CreateVolume(ctx, &storagev1.CreateVolumeRequest{
+			Parent:    volumeParent(projectID),
+			VolumeId:  volID,
+			RequestId: requestUUID(m.Key, "vol", strconv.Itoa(i)),
+			Volume: &storagev1.Volume{
+				Labels: map[string]string{labelFingerprint: clip(m.Fingerprint, 63)},
+				Spec: &storagev1.VolumeSpec{
+					SizeGib: 8,
+					Type:    storagev1.VolumeType_VOLUME_TYPE_SSD,
+					Source:  &storagev1.VolumeSpec_Image{Image: imageName(projectID, req.ImageID.String())},
+				},
+			},
+		})
+		if err := rpcErr(volOp, err); err != nil {
+			return resource.Accepted[resource.Instance]{}, err
+		}
+		instID := derivedID("i-", m.Key, "inst", strconv.Itoa(i))
+		labels := withInternalLabels(req.Tags, map[string]string{
+			labelFingerprint: clip(m.Fingerprint, 63),
+			labelImage:       req.ImageID.String(),
+			labelLaunch:      clip(m.Key, 32),
+		})
+		created, err := c.instances.CreateInstance(ctx, &computev1.CreateInstanceRequest{
+			Parent:     instanceParent(projectID),
+			InstanceId: instID,
+			RequestId:  requestUUID(m.Key, "inst", strconv.Itoa(i)),
+			Instance: &computev1.Instance{
+				Labels: labels,
+				Spec: &computev1.InstanceSpec{
+					MachineType: req.InstanceType,
+					Power:       computev1.InstancePower_INSTANCE_POWER_RUNNING,
+					NetworkInterfaces: []*computev1.NetworkInterface{{
+						DeviceName: "nic0",
+						Subnet:     subnet,
+					}},
+					Volumes: []*computev1.VolumeAttachment{{
+						Volume:     volumeName(projectID, volID),
+						DeviceName: "boot",
+						Boot:       true,
+					}},
+				},
+			},
+		})
+		if err := rpcErr(created, err); err != nil {
+			return resource.Accepted[resource.Instance]{}, err
+		}
+		metaName, err := metadataResource(created)
+		if err != nil {
+			return resource.Accepted[resource.Instance]{}, err
+		}
+		got, err := c.instances.GetInstance(ctx, &computev1.GetInstanceRequest{Name: metaName})
+		if err != nil {
+			return resource.Accepted[resource.Instance]{}, fromRPC(err)
+		}
+		inst, err := instanceModel(got)
 		if err != nil {
 			return resource.Accepted[resource.Instance]{}, err
 		}
 		items = append(items, inst)
+		if i == 0 {
+			op, err = operationFrom(created, resource.ServiceCompute)
+			if err != nil {
+				return resource.Accepted[resource.Instance]{}, err
+			}
+		}
 	}
+	op.Action = resource.ActionRunInstances
+	op.Targets = instanceRefs(items)
 	return resource.Accepted[resource.Instance]{Operation: op, Items: items}, nil
 }
 
 func (c computeClient) StopInstances(ctx context.Context, m backend.Mutation, req resource.StopInstancesRequest) (resource.Accepted[resource.InstanceStateChange], error) {
-	ids := make([]string, 0, len(req.IDs))
+	projectID := project(m.Account)
+	prev := make([]resource.Instance, 0, len(req.IDs))
 	for _, id := range req.IDs {
-		ids = append(ids, id.String())
-	}
-	out, err := c.api.StopInstances(ctx, &computev1.StopInstancesRequest{Mutation: mutationProto(m), InstanceIds: ids})
-	if err != nil {
-		return resource.Accepted[resource.InstanceStateChange]{}, fromRPC(err)
-	}
-	op, err := operationModel(out.GetOperation())
-	if err != nil {
-		return resource.Accepted[resource.InstanceStateChange]{}, err
-	}
-	items := make([]resource.InstanceStateChange, 0, len(out.GetChanges()))
-	for _, ch := range out.GetChanges() {
-		id, err := resource.Parse[resource.InstanceID](ch.GetInstanceId())
+		inst, err := c.getInstance(ctx, projectID, id.String())
 		if err != nil {
-			return resource.Accepted[resource.InstanceStateChange]{}, resource.Internal(err)
+			return resource.Accepted[resource.InstanceStateChange]{}, err
 		}
-		owner, err := resource.Parse[resource.AccountID](ch.GetOwnerId())
+		if _, _, err := resource.NextInstanceState(resource.ActionStopInstances, inst.State); err != nil {
+			return resource.Accepted[resource.InstanceStateChange]{}, err
+		}
+		prev = append(prev, inst)
+	}
+	var op resource.Operation
+	items := make([]resource.InstanceStateChange, 0, len(prev))
+	for i, inst := range prev {
+		mid, _, err := resource.NextInstanceState(resource.ActionStopInstances, inst.State)
 		if err != nil {
-			return resource.Accepted[resource.InstanceStateChange]{}, resource.Internal(err)
+			return resource.Accepted[resource.InstanceStateChange]{}, err
 		}
-		prev, ok := resource.ParseInstanceState(ch.GetPreviousState())
-		cur, ok2 := resource.ParseInstanceState(ch.GetCurrentState())
-		if !ok || !ok2 {
-			return resource.Accepted[resource.InstanceStateChange]{}, resource.Internal(errString("bad instance state"))
+		updated, err := c.instances.UpdateInstance(ctx, &computev1.UpdateInstanceRequest{
+			RequestId:  requestUUID(m.Key, "stop", strconv.Itoa(i)),
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.power", "labels"}},
+			Instance: &computev1.Instance{
+				Name: instanceName(projectID, inst.ID.String()),
+				Labels: withInternalLabels(inst.Tags, map[string]string{
+					labelFingerprint: clip(m.Fingerprint, 63),
+					labelImage:       inst.ImageID.String(),
+					labelReservation: inst.ReservationID.String(),
+				}),
+				Spec: &computev1.InstanceSpec{
+					MachineType: inst.InstanceType,
+					Power:       computev1.InstancePower_INSTANCE_POWER_STOPPED,
+					NetworkInterfaces: []*computev1.NetworkInterface{{
+						DeviceName: "nic0",
+						Subnet:     subnetName(projectID, "", inst.SubnetID.String()),
+					}},
+				},
+			},
+		})
+		if err := rpcErr(updated, err); err != nil {
+			return resource.Accepted[resource.InstanceStateChange]{}, err
 		}
-		items = append(items, resource.InstanceStateChange{ID: id, OwnerID: owner, Previous: prev, Current: cur})
+		if i == 0 {
+			op, err = operationFrom(updated, resource.ServiceCompute)
+			if err != nil {
+				return resource.Accepted[resource.InstanceStateChange]{}, err
+			}
+		}
+		items = append(items, resource.InstanceStateChange{
+			ID: inst.ID, OwnerID: inst.OwnerID, Previous: inst.State, Current: mid,
+		})
+	}
+	op.Action = resource.ActionStopInstances
+	op.Targets = make([]resource.Ref, 0, len(items))
+	for _, item := range items {
+		op.Targets = append(op.Targets, item.ID.Ref())
 	}
 	return resource.Accepted[resource.InstanceStateChange]{Operation: op, Items: items}, nil
 }
 
 func (c computeClient) DescribeInstances(ctx context.Context, s backend.Scope, q resource.InstanceQuery) (resource.Page[resource.Instance], error) {
-	ids := make([]string, 0, len(q.IDs))
-	for _, id := range q.IDs {
-		ids = append(ids, id.String())
+	projectID := project(s.Account)
+	if len(q.IDs) == 1 {
+		inst, err := c.getInstance(ctx, projectID, q.IDs[0].String())
+		if err != nil {
+			return resource.Page[resource.Instance]{}, err
+		}
+		if !stateWanted(inst.State, q.States) {
+			return resource.Page[resource.Instance]{}, nil
+		}
+		return pageInstances([]resource.Instance{inst}, q.Page)
 	}
-	states := make([]string, 0, len(q.States))
-	for _, st := range q.States {
-		states = append(states, st.String())
+	if len(q.IDs) > 1 {
+		items := make([]resource.Instance, 0, len(q.IDs))
+		for _, id := range q.IDs {
+			inst, err := c.getInstance(ctx, projectID, id.String())
+			if resource.CodeOf(err) == resource.CodeNotFound {
+				continue
+			}
+			if err != nil {
+				return resource.Page[resource.Instance]{}, err
+			}
+			if stateWanted(inst.State, q.States) {
+				items = append(items, inst)
+			}
+		}
+		return pageInstances(items, q.Page)
 	}
-	out, err := c.api.DescribeInstances(ctx, &computev1.DescribeInstancesRequest{
-		Scope: scopeProto(s), InstanceIds: ids, States: states, Page: pageProto(q.Page),
+	out, err := c.instances.ListInstances(ctx, &computev1.ListInstancesRequest{
+		Parent:    instanceParent(projectID),
+		PageSize:  pageSize(q.Page.Size),
+		PageToken: q.Page.Token,
 	})
 	if err != nil {
 		return resource.Page[resource.Instance]{}, fromRPC(err)
@@ -92,31 +220,112 @@ func (c computeClient) DescribeInstances(ctx context.Context, s backend.Scope, q
 		if err != nil {
 			return resource.Page[resource.Instance]{}, err
 		}
-		items = append(items, inst)
+		if stateWanted(inst.State, q.States) {
+			items = append(items, inst)
+		}
 	}
 	return resource.Page[resource.Instance]{Items: items, NextToken: out.GetNextPageToken()}, nil
 }
 
 func (c computeClient) GetOperation(ctx context.Context, s backend.Scope, id resource.OperationID) (resource.Operation, error) {
-	out, err := c.api.GetOperation(ctx, &commonv1.GetOperationRequest{Scope: scopeProto(s), OperationId: id.String()})
+	out, err := c.computeOps.GetOperation(ctx, &longrunningpb.GetOperationRequest{
+		Name: operationName(project(s.Account), id.Local()),
+	})
 	if err != nil {
 		return resource.Operation{}, fromRPC(err)
 	}
-	return operationModel(out)
+	op, err := operationFrom(out, resource.ServiceCompute)
+	if err != nil {
+		return resource.Operation{}, err
+	}
+	if op.ID != id {
+		return resource.Operation{}, resource.Internal(strErr("backend returned a different operation"))
+	}
+	return op, nil
 }
 
-type storageClient struct{ api storagev1.StorageClient }
+func (c computeClient) getInstance(ctx context.Context, projectID, id string) (resource.Instance, error) {
+	out, err := c.instances.GetInstance(ctx, &computev1.GetInstanceRequest{Name: instanceName(projectID, id)})
+	if err != nil {
+		return resource.Instance{}, fromRPC(err)
+	}
+	return instanceModel(out)
+}
+
+func (c computeClient) findSubnet(ctx context.Context, projectID, id string) (string, error) {
+	token := ""
+	for page := 0; page < 20; page++ {
+		out, err := c.vpcs.ListVpcs(ctx, &networkv1.ListVpcsRequest{
+			Parent: regionParent(projectID), PageSize: 100, PageToken: token,
+		})
+		if err != nil {
+			return "", fromRPC(err)
+		}
+		for _, vpc := range out.GetVpcs() {
+			found, err := c.findSubnetIn(ctx, vpc.GetName(), id)
+			if err != nil {
+				return "", err
+			}
+			if found != "" {
+				return found, nil
+			}
+		}
+		token = out.GetNextPageToken()
+		if token == "" {
+			break
+		}
+	}
+	return "", resource.NotFound(resource.KindSubnet, id)
+}
+
+func (c computeClient) findSubnetIn(ctx context.Context, parent, id string) (string, error) {
+	token := ""
+	for page := 0; page < 20; page++ {
+		out, err := c.subnets.ListSubnets(ctx, &networkv1.ListSubnetsRequest{
+			Parent: parent, PageSize: 100, PageToken: token,
+		})
+		if err != nil {
+			return "", fromRPC(err)
+		}
+		for _, sub := range out.GetSubnets() {
+			if lastSegment(sub.GetName()) == id {
+				return sub.GetName(), nil
+			}
+		}
+		token = out.GetNextPageToken()
+		if token == "" {
+			break
+		}
+	}
+	return "", nil
+}
+
+type storageClient struct{ *api }
 
 func (c storageClient) CreateBucket(ctx context.Context, s backend.Scope, name resource.BucketName) (resource.Bucket, error) {
-	out, err := c.api.CreateBucket(ctx, &storagev1.CreateBucketRequest{Scope: scopeProto(s), Name: name.String()})
-	if err != nil {
-		return resource.Bucket{}, fromRPC(err)
+	projectID := project(s.Account)
+	op, err := c.buckets.CreateBucket(ctx, &storagev1.CreateBucketRequest{
+		Parent:    bucketParent(projectID),
+		BucketId:  name.String(),
+		RequestId: requestUUID(projectID, name.String(), "bucket"),
+		Bucket: &storagev1.Bucket{
+			Spec: &storagev1.BucketSpec{Region: resource.RegionName},
+		},
+	})
+	if err := rpcErr(op, err); err != nil {
+		return resource.Bucket{}, err
 	}
-	return bucketModel(out)
+	if bucket, ok, err := unpackBucket(op); err != nil || ok {
+		if err != nil {
+			return resource.Bucket{}, err
+		}
+		return bucket, nil
+	}
+	return c.GetBucket(ctx, s, name)
 }
 
 func (c storageClient) GetBucket(ctx context.Context, s backend.Scope, name resource.BucketName) (resource.Bucket, error) {
-	out, err := c.api.GetBucket(ctx, &storagev1.GetBucketRequest{Scope: scopeProto(s), Name: name.String()})
+	out, err := c.buckets.GetBucket(ctx, &storagev1.GetBucketRequest{Name: bucketName(project(s.Account), name.String())})
 	if err != nil {
 		return resource.Bucket{}, fromRPC(err)
 	}
@@ -124,7 +333,11 @@ func (c storageClient) GetBucket(ctx context.Context, s backend.Scope, name reso
 }
 
 func (c storageClient) ListBuckets(ctx context.Context, s backend.Scope, q resource.BucketQuery) (resource.Page[resource.Bucket], error) {
-	out, err := c.api.ListBuckets(ctx, &storagev1.ListBucketsRequest{Scope: scopeProto(s), Page: pageProto(q.Page)})
+	out, err := c.buckets.ListBuckets(ctx, &storagev1.ListBucketsRequest{
+		Parent:    bucketParent(project(s.Account)),
+		PageSize:  pageSize(q.Page.Size),
+		PageToken: q.Page.Token,
+	})
 	if err != nil {
 		return resource.Page[resource.Bucket]{}, fromRPC(err)
 	}
@@ -140,8 +353,11 @@ func (c storageClient) ListBuckets(ctx context.Context, s backend.Scope, q resou
 }
 
 func (c storageClient) DeleteBucket(ctx context.Context, s backend.Scope, name resource.BucketName) error {
-	_, err := c.api.DeleteBucket(ctx, &storagev1.DeleteBucketRequest{Scope: scopeProto(s), Name: name.String()})
-	return fromRPC(err)
+	op, err := c.buckets.DeleteBucket(ctx, &storagev1.DeleteBucketRequest{
+		Name:      bucketName(project(s.Account), name.String()),
+		RequestId: requestUUID(project(s.Account), name.String(), "delete-bucket"),
+	})
+	return rpcErr(op, err)
 }
 
 func (c storageClient) PutObject(ctx context.Context, s backend.Scope, req resource.PutObjectRequest, body io.Reader) (resource.Object, error) {
@@ -158,10 +374,28 @@ func (c storageClient) PutObject(ctx context.Context, s backend.Scope, req resou
 	if req.Size >= 0 && int64(len(buf)) != req.Size {
 		return resource.Object{}, resource.Invalid("size", "body length does not match")
 	}
-	out, err := c.api.PutObject(ctx, &storagev1.PutObjectRequest{
-		Scope: scopeProto(s), Bucket: req.Bucket.String(), Key: req.Key.String(),
-		ContentType: req.ContentType, Size: int64(len(buf)), Body: buf,
+	projectID := project(s.Account)
+	name := objectName(projectID, req.Bucket.String(), req.Key.String())
+	op, err := c.objects.UpdateObject(ctx, &storagev1.UpdateObjectRequest{
+		AllowMissing: true,
+		Contents:     buf,
+		RequestId:    requestUUID(projectID, req.Bucket.String(), req.Key.String(), "put"),
+		UpdateMask:   &fieldmaskpb.FieldMask{Paths: []string{"spec"}},
+		Object: &storagev1.Object{
+			Name: name,
+			Spec: &storagev1.ObjectSpec{ContentType: req.ContentType},
+		},
 	})
+	if err := rpcErr(op, err); err != nil {
+		return resource.Object{}, err
+	}
+	if obj, ok, err := unpackObject(op); err != nil || ok {
+		if err != nil {
+			return resource.Object{}, err
+		}
+		return obj, nil
+	}
+	out, err := c.objects.GetObject(ctx, &storagev1.GetObjectRequest{Name: name})
 	if err != nil {
 		return resource.Object{}, fromRPC(err)
 	}
@@ -169,68 +403,280 @@ func (c storageClient) PutObject(ctx context.Context, s backend.Scope, req resou
 }
 
 func (c storageClient) GetObject(ctx context.Context, s backend.Scope, req resource.GetObjectRequest) (resource.Object, io.ReadCloser, error) {
-	out, err := c.api.GetObject(ctx, &storagev1.GetObjectRequest{Scope: scopeProto(s), Bucket: req.Bucket.String(), Key: req.Key.String()})
+	// GetObject on the resource API returns metadata only. The bytes stay in
+	// the storage service, so this read has an empty body and the stored etag.
+	out, err := c.objects.GetObject(ctx, &storagev1.GetObjectRequest{
+		Name: objectName(project(s.Account), req.Bucket.String(), req.Key.String()),
+	})
 	if err != nil {
 		return resource.Object{}, nil, fromRPC(err)
 	}
-	meta, err := objectModel(out.GetObject())
+	meta, err := objectModel(out)
 	if err != nil {
 		return resource.Object{}, nil, err
 	}
-	return meta, io.NopCloser(bytes.NewReader(out.GetBody())), nil
+	return meta, io.NopCloser(bytes.NewReader(nil)), nil
 }
 
 func (c storageClient) DeleteObject(ctx context.Context, s backend.Scope, bucket resource.BucketName, key resource.ObjectKey) error {
-	_, err := c.api.DeleteObject(ctx, &storagev1.DeleteObjectRequest{Scope: scopeProto(s), Bucket: bucket.String(), Key: key.String()})
-	return fromRPC(err)
+	projectID := project(s.Account)
+	op, err := c.objects.DeleteObject(ctx, &storagev1.DeleteObjectRequest{
+		Name:         objectName(projectID, bucket.String(), key.String()),
+		AllowMissing: true,
+		RequestId:    requestUUID(projectID, bucket.String(), key.String(), "delete-object"),
+	})
+	return rpcErr(op, err)
 }
 
-type networkClient struct{ api networkv1.NetworkClient }
+type networkClient struct{ *api }
 
 func (c networkClient) CreateSubnet(ctx context.Context, m backend.Mutation, req resource.CreateSubnetRequest) (resource.Accepted[resource.Subnet], error) {
-	out, err := c.api.CreateSubnet(ctx, &networkv1.CreateSubnetRequest{Mutation: mutationProto(m), CidrBlock: req.Cidr})
-	if err != nil {
-		return resource.Accepted[resource.Subnet]{}, fromRPC(err)
-	}
-	op, err := operationModel(out.GetOperation())
+	projectID := project(m.Account)
+	vpcID, vpcCIDR, err := vpcForCIDR(req.Cidr)
 	if err != nil {
 		return resource.Accepted[resource.Subnet]{}, err
 	}
-	items := make([]resource.Subnet, 0, len(out.GetSubnets()))
-	for _, item := range out.GetSubnets() {
-		sub, err := subnetModel(item)
-		if err != nil {
-			return resource.Accepted[resource.Subnet]{}, err
-		}
-		items = append(items, sub)
+	vpcOp, err := c.vpcs.CreateVpc(ctx, &networkv1.CreateVpcRequest{
+		Parent:    regionParent(projectID),
+		VpcId:     vpcID,
+		RequestId: requestUUID(m.Key, "vpc"),
+		Vpc: &networkv1.Vpc{
+			Labels: map[string]string{labelFingerprint: clip(m.Fingerprint, 63)},
+			Spec:   &networkv1.VpcSpec{Ipv4Cidr: vpcCIDR},
+		},
+	})
+	if err := rpcErr(vpcOp, err); err != nil && resource.CodeOf(err) != resource.CodeAlreadyExists {
+		return resource.Accepted[resource.Subnet]{}, err
 	}
-	return resource.Accepted[resource.Subnet]{Operation: op, Items: items}, nil
+	subnetID := derivedID("subnet-", m.Key, "subnet")
+	created, err := c.subnets.CreateSubnet(ctx, &networkv1.CreateSubnetRequest{
+		Parent:    vpcName(projectID, vpcID),
+		SubnetId:  subnetID,
+		RequestId: requestUUID(m.Key, "subnet"),
+		Subnet: &networkv1.Subnet{
+			Labels: map[string]string{labelFingerprint: clip(m.Fingerprint, 63)},
+			Spec:   &networkv1.SubnetSpec{Zone: resource.ZoneName, Ipv4Cidr: req.Cidr},
+		},
+	})
+	if err := rpcErr(created, err); err != nil {
+		return resource.Accepted[resource.Subnet]{}, err
+	}
+	metaName, err := metadataResource(created)
+	if err != nil {
+		return resource.Accepted[resource.Subnet]{}, err
+	}
+	got, err := c.subnets.GetSubnet(ctx, &networkv1.GetSubnetRequest{Name: metaName})
+	if err != nil {
+		return resource.Accepted[resource.Subnet]{}, fromRPC(err)
+	}
+	sub, err := subnetModel(got)
+	if err != nil {
+		return resource.Accepted[resource.Subnet]{}, err
+	}
+	op, err := operationFrom(created, resource.ServiceNetwork)
+	if err != nil {
+		return resource.Accepted[resource.Subnet]{}, err
+	}
+	op.Action = resource.ActionCreateSubnet
+	op.Targets = []resource.Ref{sub.ID.Ref()}
+	return resource.Accepted[resource.Subnet]{Operation: op, Items: []resource.Subnet{sub}}, nil
 }
 
 func (c networkClient) DescribeSubnets(ctx context.Context, s backend.Scope, q resource.SubnetQuery) (resource.Page[resource.Subnet], error) {
-	ids := make([]string, 0, len(q.IDs))
+	projectID := project(s.Account)
+	want := map[string]struct{}{}
 	for _, id := range q.IDs {
-		ids = append(ids, id.String())
+		want[id.String()] = struct{}{}
 	}
-	out, err := c.api.DescribeSubnets(ctx, &networkv1.DescribeSubnetsRequest{Scope: scopeProto(s), SubnetIds: ids, Page: pageProto(q.Page)})
-	if err != nil {
-		return resource.Page[resource.Subnet]{}, fromRPC(err)
-	}
-	items := make([]resource.Subnet, 0, len(out.GetSubnets()))
-	for _, item := range out.GetSubnets() {
-		sub, err := subnetModel(item)
+	var items []resource.Subnet
+	token := ""
+	for page := 0; page < 20; page++ {
+		out, err := c.vpcs.ListVpcs(ctx, &networkv1.ListVpcsRequest{
+			Parent: regionParent(projectID), PageSize: 100, PageToken: token,
+		})
 		if err != nil {
-			return resource.Page[resource.Subnet]{}, err
+			return resource.Page[resource.Subnet]{}, fromRPC(err)
 		}
-		items = append(items, sub)
+		for _, vpc := range out.GetVpcs() {
+			found, err := c.listSubnetParent(ctx, vpc.GetName(), want)
+			if err != nil {
+				return resource.Page[resource.Subnet]{}, err
+			}
+			items = append(items, found...)
+		}
+		token = out.GetNextPageToken()
+		if token == "" {
+			break
+		}
 	}
-	return resource.Page[resource.Subnet]{Items: items, NextToken: out.GetNextPageToken()}, nil
+	if len(q.IDs) == 1 && len(items) == 0 {
+		return resource.Page[resource.Subnet]{}, resource.NotFound(resource.KindSubnet, q.IDs[0].String())
+	}
+	sortSubnets(items)
+	return pageSubnets(items, q.Page)
+}
+
+func (c networkClient) listSubnetParent(ctx context.Context, parent string, want map[string]struct{}) ([]resource.Subnet, error) {
+	var items []resource.Subnet
+	token := ""
+	for page := 0; page < 20; page++ {
+		out, err := c.subnets.ListSubnets(ctx, &networkv1.ListSubnetsRequest{
+			Parent: parent, PageSize: 100, PageToken: token,
+		})
+		if err != nil {
+			return nil, fromRPC(err)
+		}
+		for _, item := range out.GetSubnets() {
+			sub, err := subnetModel(item)
+			if err != nil {
+				return nil, err
+			}
+			if len(want) > 0 {
+				if _, ok := want[sub.ID.String()]; !ok {
+					continue
+				}
+			}
+			items = append(items, sub)
+		}
+		token = out.GetNextPageToken()
+		if token == "" {
+			break
+		}
+	}
+	return items, nil
 }
 
 func (c networkClient) GetOperation(ctx context.Context, s backend.Scope, id resource.OperationID) (resource.Operation, error) {
-	out, err := c.api.GetOperation(ctx, &commonv1.GetOperationRequest{Scope: scopeProto(s), OperationId: id.String()})
+	out, err := c.networkOps.GetOperation(ctx, &longrunningpb.GetOperationRequest{
+		Name: operationName(project(s.Account), id.Local()),
+	})
 	if err != nil {
 		return resource.Operation{}, fromRPC(err)
 	}
-	return operationModel(out)
+	op, err := operationFrom(out, resource.ServiceNetwork)
+	if err != nil {
+		return resource.Operation{}, err
+	}
+	if op.ID != id {
+		return resource.Operation{}, resource.Internal(strErr("backend returned a different operation"))
+	}
+	return op, nil
+}
+
+func rpcErr(op *longrunningpb.Operation, err error) error {
+	if err != nil {
+		return fromRPC(err)
+	}
+	if op.GetDone() && op.GetError() != nil {
+		return fromRPC(status.ErrorProto(op.GetError()))
+	}
+	return nil
+}
+
+func unpackBucket(op *longrunningpb.Operation) (resource.Bucket, bool, error) {
+	if op.GetResponse() == nil {
+		return resource.Bucket{}, false, nil
+	}
+	var msg storagev1.Bucket
+	if err := op.GetResponse().UnmarshalTo(&msg); err != nil {
+		return resource.Bucket{}, false, resource.Internal(err)
+	}
+	if msg.GetName() == "" {
+		return resource.Bucket{}, false, nil
+	}
+	b, err := bucketModel(&msg)
+	return b, true, err
+}
+
+func unpackObject(op *longrunningpb.Operation) (resource.Object, bool, error) {
+	if op.GetResponse() == nil {
+		return resource.Object{}, false, nil
+	}
+	var msg storagev1.Object
+	if err := op.GetResponse().UnmarshalTo(&msg); err != nil {
+		return resource.Object{}, false, resource.Internal(err)
+	}
+	if msg.GetName() == "" {
+		return resource.Object{}, false, nil
+	}
+	o, err := objectModel(&msg)
+	return o, true, err
+}
+
+func instanceRefs(items []resource.Instance) []resource.Ref {
+	out := make([]resource.Ref, 0, len(items))
+	for _, item := range items {
+		out = append(out, item.ID.Ref())
+	}
+	return out
+}
+
+func stateWanted(st resource.InstanceState, want []resource.InstanceState) bool {
+	if len(want) == 0 {
+		return true
+	}
+	for _, item := range want {
+		if item == st {
+			return true
+		}
+	}
+	return false
+}
+
+func pageSize(n int) int32 {
+	if n <= 0 {
+		return 50
+	}
+	if n > 1000 {
+		return 1000
+	}
+	return int32(n)
+}
+
+func pageInstances(items []resource.Instance, q resource.PageRequest) (resource.Page[resource.Instance], error) {
+	return pageByID(items, q, func(item resource.Instance) string { return item.ID.String() })
+}
+
+func pageSubnets(items []resource.Subnet, q resource.PageRequest) (resource.Page[resource.Subnet], error) {
+	return pageByID(items, q, func(item resource.Subnet) string { return item.ID.String() })
+}
+
+func pageByID[T any](items []T, q resource.PageRequest, id func(T) string) (resource.Page[T], error) {
+	size := q.Size
+	if size < 1 {
+		size = 50
+	}
+	start := 0
+	if q.Token != "" {
+		found := false
+		for i, item := range items {
+			if id(item) == q.Token {
+				start = i + 1
+				found = true
+				break
+			}
+		}
+		if !found {
+			return resource.Page[T]{}, resource.Invalid("pageToken", "unknown")
+		}
+	}
+	end := start + size
+	next := ""
+	if end < len(items) {
+		next = id(items[end-1])
+	} else {
+		end = len(items)
+	}
+	if start > len(items) {
+		start = len(items)
+	}
+	return resource.Page[T]{Items: append([]T(nil), items[start:end]...), NextToken: next}, nil
+}
+
+func sortSubnets(items []resource.Subnet) {
+	for i := 1; i < len(items); i++ {
+		for j := i; j > 0 && items[j].ID.String() < items[j-1].ID.String(); j-- {
+			items[j], items[j-1] = items[j-1], items[j]
+		}
+	}
 }
