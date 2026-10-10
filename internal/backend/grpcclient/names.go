@@ -80,6 +80,14 @@ func subnetName(projectID, vpcID, id string) string {
 	return subnetParent(projectID, vpcID) + "/" + id
 }
 
+func securityGroupName(projectID, vpcID, id string) string {
+	return vpcName(projectID, vpcID) + "/securityGroups/" + id
+}
+
+func keyPairName(projectID, id string) string {
+	return regionParent(projectID) + "/keyPairs/" + id
+}
+
 func bucketParent(projectID string) string { return "projects/" + projectID }
 
 func bucketName(projectID, name string) string {

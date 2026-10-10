@@ -45,6 +45,10 @@ func operationFrom(op *longrunningpb.Operation, svc resource.Service) (resource.
 		}
 	}
 	action, err := actionOf(meta.GetResource(), meta.GetVerb())
+	if parsed, ok := resource.ParseAction(meta.GetRequestId()); ok {
+		action = parsed
+		err = nil
+	}
 	if err != nil {
 		return resource.Operation{}, err
 	}
@@ -82,15 +86,40 @@ func actionOf(resourceName string, verb commonv1.OperationVerb) (resource.Action
 			return resource.ActionRunInstances, nil
 		case containsSegment(resourceName, "subnets"):
 			return resource.ActionCreateSubnet, nil
+		case containsSegment(resourceName, "securityGroups"):
+			return resource.ActionCreateSecurityGroup, nil
+		case containsSegment(resourceName, "vpcs"):
+			return resource.ActionCreateVpc, nil
+		case containsSegment(resourceName, "volumes"):
+			return resource.ActionCreateVolume, nil
+		case containsSegment(resourceName, "keyPairs"):
+			return resource.ActionCreateKeyPair, nil
 		default:
 			return 0, resource.Internal(strErr("unsupported operation"))
 		}
 	case commonv1.OperationVerb_OPERATION_VERB_UPDATE:
-		if containsSegment(resourceName, "instances") {
+		switch {
+		case containsSegment(resourceName, "instances"):
 			return resource.ActionStopInstances, nil
+		case containsSegment(resourceName, "securityGroups"):
+			return resource.ActionAuthorizeSecurityGroupIngress, nil
+		case containsSegment(resourceName, "volumes"):
+			return resource.ActionAttachVolume, nil
+		default:
+			return 0, resource.Internal(strErr("unsupported operation"))
 		}
-		return 0, resource.Internal(strErr("unsupported operation"))
-	case commonv1.OperationVerb_OPERATION_VERB_DELETE, commonv1.OperationVerb_OPERATION_VERB_UNSPECIFIED:
+	case commonv1.OperationVerb_OPERATION_VERB_DELETE:
+		switch {
+		case containsSegment(resourceName, "instances"):
+			return resource.ActionTerminateInstances, nil
+		case containsSegment(resourceName, "vpcs"):
+			return resource.ActionDeleteVpc, nil
+		case containsSegment(resourceName, "volumes"):
+			return resource.ActionDeleteVolume, nil
+		default:
+			return 0, resource.Internal(strErr("unsupported operation"))
+		}
+	case commonv1.OperationVerb_OPERATION_VERB_UNSPECIFIED:
 		return 0, resource.Internal(strErr("unsupported operation"))
 	default:
 		return 0, resource.Internal(strErr("unsupported operation"))
@@ -145,6 +174,30 @@ func refFromResource(name string) (resource.Ref, bool) {
 			return resource.Ref{}, false
 		}
 		return parsed.Ref(), true
+	case "vpcs":
+		parsed, err := resource.Parse[resource.VpcID](id)
+		if err != nil {
+			return resource.Ref{}, false
+		}
+		return parsed.Ref(), true
+	case "volumes":
+		parsed, err := resource.Parse[resource.VolumeID](id)
+		if err != nil {
+			return resource.Ref{}, false
+		}
+		return parsed.Ref(), true
+	case "securityGroups":
+		parsed, err := resource.Parse[resource.SecurityGroupID](id)
+		if err != nil {
+			return resource.Ref{}, false
+		}
+		return parsed.Ref(), true
+	case "keyPairs":
+		parsed, err := resource.Parse[resource.KeyPairID](id)
+		if err != nil {
+			return resource.Ref{}, false
+		}
+		return parsed.Ref(), true
 	default:
 		return resource.Ref{}, false
 	}
@@ -182,7 +235,7 @@ func longOp(projectID, local, resourceName, requestID string, verb commonv1.Oper
 
 func instanceProto(inst resource.Instance, projectID, vpcID string) *computev1.Instance {
 	obs, power := instanceObserved(inst.State)
-	return &computev1.Instance{
+	out := &computev1.Instance{
 		Name: instanceName(projectID, inst.ID.String()),
 		Labels: withInternalLabels(inst.Tags, map[string]string{
 			labelImage:       inst.ImageID.String(),
@@ -210,6 +263,10 @@ func instanceProto(inst resource.Instance, projectID, vpcID string) *computev1.I
 			}},
 		},
 	}
+	if inst.State == resource.InstanceTerminated {
+		out.DeleteTime = timestamppb.New(time.Unix(1, 0).UTC())
+	}
+	return out
 }
 
 func instanceObserved(st resource.InstanceState) (commonv1.ReconciliationState, computev1.InstancePower) {
@@ -264,6 +321,9 @@ func instanceModel(in *computev1.Instance) (resource.Instance, error) {
 	state, err := instanceStateOf(in.GetStatus().GetObserved().GetState(), in.GetStatus().GetPower())
 	if err != nil {
 		return resource.Instance{}, err
+	}
+	if in.GetDeleteTime() != nil && state == resource.InstanceShuttingDown {
+		state = resource.InstanceTerminated
 	}
 	private := ""
 	if nics := in.GetStatus().GetNetworkInterfaces(); len(nics) > 0 {
@@ -333,7 +393,11 @@ func subnetModel(in *networkv1.Subnet) (resource.Subnet, error) {
 	if err != nil {
 		return resource.Subnet{}, err
 	}
-	return resource.Subnet{ID: id, OwnerID: owner, Cidr: in.GetSpec().GetIpv4Cidr(), State: state}, nil
+	var vpcID resource.VpcID
+	if parsed, parseErr := resource.Parse[resource.VpcID](parts[5]); parseErr == nil {
+		vpcID = parsed
+	}
+	return resource.Subnet{ID: id, OwnerID: owner, VpcID: vpcID, Cidr: in.GetSpec().GetIpv4Cidr(), State: state}, nil
 }
 
 func subnetStateOf(obs commonv1.ReconciliationState) (resource.SubnetState, error) {

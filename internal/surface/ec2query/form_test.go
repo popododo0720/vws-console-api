@@ -44,6 +44,21 @@ func TestClientTokenIsRequired(t *testing.T) {
 	}
 }
 
+func TestStopOmitsClientToken(t *testing.T) {
+	h, cred, now := harness(t)
+	form := url.Values{}
+	form.Set("Action", "StopInstances")
+	form.Set("Version", Version)
+	form.Set("InstanceId.1", "i-01234567")
+	res := signed(t, h, cred, now, form.Encode())
+	if res.Code != http.StatusBadRequest || strings.Contains(res.Body.String(), "ClientToken") {
+		t.Fatalf("%d %s", res.Code, res.Body)
+	}
+	if !strings.Contains(res.Body.String(), "InvalidInstanceID.NotFound") {
+		t.Fatalf("%d %s", res.Code, res.Body)
+	}
+}
+
 func TestIndexPastTheCapIsRejected(t *testing.T) {
 	h, cred, now := harness(t)
 	form := url.Values{}

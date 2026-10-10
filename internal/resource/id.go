@@ -17,24 +17,36 @@ type kindTag interface {
 }
 
 type (
-	instanceKind    struct{}
-	imageKind       struct{}
-	reservationKind struct{}
-	subnetKind      struct{}
-	bucketKind      struct{}
+	instanceKind      struct{}
+	imageKind         struct{}
+	reservationKind   struct{}
+	subnetKind        struct{}
+	bucketKind        struct{}
+	vpcKind           struct{}
+	volumeKind        struct{}
+	securityGroupKind struct{}
+	keyPairKind       struct{}
 )
 
-func (instanceKind) kind() Kind    { return KindInstance }
-func (imageKind) kind() Kind       { return KindImage }
-func (reservationKind) kind() Kind { return KindReservation }
-func (subnetKind) kind() Kind      { return KindSubnet }
-func (bucketKind) kind() Kind      { return KindBucket }
+func (instanceKind) kind() Kind      { return KindInstance }
+func (imageKind) kind() Kind         { return KindImage }
+func (reservationKind) kind() Kind   { return KindReservation }
+func (subnetKind) kind() Kind        { return KindSubnet }
+func (bucketKind) kind() Kind        { return KindBucket }
+func (vpcKind) kind() Kind           { return KindVpc }
+func (volumeKind) kind() Kind        { return KindVolume }
+func (securityGroupKind) kind() Kind { return KindSecurityGroup }
+func (keyPairKind) kind() Kind       { return KindKeyPair }
 
-func (instanceKind) valid(s string) bool    { return validMinted(KindInstance, s) }
-func (imageKind) valid(s string) bool       { return validMinted(KindImage, s) }
-func (reservationKind) valid(s string) bool { return validMinted(KindReservation, s) }
-func (subnetKind) valid(s string) bool      { return validMinted(KindSubnet, s) }
-func (bucketKind) valid(s string) bool      { return validBucketName(s) }
+func (instanceKind) valid(s string) bool      { return validMinted(KindInstance, s) }
+func (imageKind) valid(s string) bool         { return validMinted(KindImage, s) }
+func (reservationKind) valid(s string) bool   { return validMinted(KindReservation, s) }
+func (subnetKind) valid(s string) bool        { return validMinted(KindSubnet, s) }
+func (bucketKind) valid(s string) bool        { return validBucketName(s) }
+func (vpcKind) valid(s string) bool           { return validMinted(KindVpc, s) }
+func (volumeKind) valid(s string) bool        { return validMinted(KindVolume, s) }
+func (securityGroupKind) valid(s string) bool { return validMinted(KindSecurityGroup, s) }
+func (keyPairKind) valid(s string) bool       { return validMinted(KindKeyPair, s) }
 
 // ID identifies one resource of kind K. The same value is the console path
 // segment, the EC2 identifier, and the operation target.
@@ -43,10 +55,18 @@ func (bucketKind) valid(s string) bool      { return validBucketName(s) }
 type ID[K kindTag] struct{ v string }
 
 type (
-	// InstanceID identifies an instance ("i-" and 8 or 17 hex digits).
+	// InstanceID identifies an instance ("i-" and 8 to 17 hex digits).
 	InstanceID = ID[instanceKind]
-	// ImageID identifies a machine image ("ami-" and 8 or 17 hex digits).
+	// ImageID identifies a machine image ("ami-" and 8 to 17 hex digits).
 	ImageID = ID[imageKind]
+	// VpcID identifies a VPC ("vpc-" and 8 to 17 hex digits).
+	VpcID = ID[vpcKind]
+	// VolumeID identifies a block volume ("vol-" and 8 to 17 hex digits).
+	VolumeID = ID[volumeKind]
+	// SecurityGroupID identifies a security group ("sg-" and 8 to 17 hex digits).
+	SecurityGroupID = ID[securityGroupKind]
+	// KeyPairID identifies a key pair ("key-" and 8 to 17 hex digits).
+	KeyPairID = ID[keyPairKind]
 	// ReservationID groups the instances one RunInstances call launched.
 	ReservationID = ID[reservationKind]
 	// SubnetID identifies a subnet.
@@ -101,7 +121,7 @@ func (id *ID[K]) mint(entropy io.Reader) error {
 func validMinted(k Kind, s string) bool {
 	prefix := k.info().prefix
 	rest, ok := strings.CutPrefix(s, prefix)
-	if !ok || (len(rest) != 8 && len(rest) != 17) {
+	if !ok || len(rest) < 8 || len(rest) > 17 {
 		return false
 	}
 	for _, r := range rest {
@@ -238,6 +258,14 @@ func validateRefID(k Kind, id string) error {
 		_, err = Parse[ObjectKey](id)
 	case KindOperation:
 		_, err = Parse[OperationID](id)
+	case KindVpc:
+		_, err = Parse[VpcID](id)
+	case KindVolume:
+		_, err = Parse[VolumeID](id)
+	case KindSecurityGroup:
+		_, err = Parse[SecurityGroupID](id)
+	case KindKeyPair:
+		_, err = Parse[KeyPairID](id)
 	case KindUnspecified:
 		err = Malformed(k, id)
 	default:

@@ -26,6 +26,8 @@ type api struct {
 	objects    storagev1.ObjectServiceClient
 	subnets    networkv1.SubnetServiceClient
 	vpcs       networkv1.VpcServiceClient
+	groups     networkv1.SecurityGroupServiceClient
+	keys       computev1.KeyPairServiceClient
 	computeOps longrunningpb.OperationsClient
 	storageOps longrunningpb.OperationsClient
 	networkOps longrunningpb.OperationsClient
@@ -432,21 +434,29 @@ type networkClient struct{ *api }
 
 func (c networkClient) CreateSubnet(ctx context.Context, m backend.Mutation, req resource.CreateSubnetRequest) (resource.Accepted[resource.Subnet], error) {
 	projectID := project(m.Account)
-	vpcID, vpcCIDR, err := vpcForCIDR(req.Cidr)
-	if err != nil {
-		return resource.Accepted[resource.Subnet]{}, err
+	var vpcID, vpcCIDR string
+	if req.VpcID.IsZero() {
+		var err error
+		vpcID, vpcCIDR, err = vpcForCIDR(req.Cidr)
+		if err != nil {
+			return resource.Accepted[resource.Subnet]{}, err
+		}
+	} else {
+		vpcID = req.VpcID.String()
 	}
-	vpcOp, err := c.vpcs.CreateVpc(ctx, &networkv1.CreateVpcRequest{
-		Parent:    regionParent(projectID),
-		VpcId:     vpcID,
-		RequestId: requestUUID(m.Key, "vpc"),
-		Vpc: &networkv1.Vpc{
-			Labels: map[string]string{labelFingerprint: clip(m.Fingerprint, 63)},
-			Spec:   &networkv1.VpcSpec{Ipv4Cidr: vpcCIDR},
-		},
-	})
-	if err := rpcErr(vpcOp, err); err != nil && resource.CodeOf(err) != resource.CodeAlreadyExists {
-		return resource.Accepted[resource.Subnet]{}, err
+	if req.VpcID.IsZero() {
+		vpcOp, err := c.vpcs.CreateVpc(ctx, &networkv1.CreateVpcRequest{
+			Parent:    regionParent(projectID),
+			VpcId:     vpcID,
+			RequestId: requestUUID(m.Key, "vpc"),
+			Vpc: &networkv1.Vpc{
+				Labels: map[string]string{labelFingerprint: clip(m.Fingerprint, 63)},
+				Spec:   &networkv1.VpcSpec{Ipv4Cidr: vpcCIDR},
+			},
+		})
+		if err := rpcErr(vpcOp, err); err != nil && resource.CodeOf(err) != resource.CodeAlreadyExists {
+			return resource.Accepted[resource.Subnet]{}, err
+		}
 	}
 	subnetID := derivedID("subnet-", m.Key, "subnet")
 	created, err := c.subnets.CreateSubnet(ctx, &networkv1.CreateSubnetRequest{

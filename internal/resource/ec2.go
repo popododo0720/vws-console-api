@@ -1,0 +1,382 @@
+package resource
+
+import "net"
+
+// Vpc is a regional IPv4 network.
+type Vpc struct {
+	ID      VpcID     `json:"vpcId"`
+	OwnerID AccountID `json:"ownerId"`
+	Cidr    string    `json:"cidrBlock"`
+	State   string    `json:"state"`
+}
+
+// Owner returns the account that owns the VPC.
+func (v Vpc) Owner() AccountID { return v.OwnerID }
+
+// Identity returns the VPC id.
+func (v Vpc) Identity() string { return v.ID.String() }
+
+// CreateVpcRequest allocates a VPC.
+type CreateVpcRequest struct {
+	Cidr string `json:"cidrBlock"`
+}
+
+// Action returns CreateVpc.
+func (CreateVpcRequest) Action() Action { return ActionCreateVpc }
+
+// Normalize checks that cidr is an IPv4 network.
+func (r CreateVpcRequest) Normalize() (CreateVpcRequest, error) {
+	cidr, err := normalizeCIDR(r.Cidr)
+	if err != nil {
+		return CreateVpcRequest{}, err
+	}
+	r.Cidr = cidr
+	return r, nil
+}
+
+// DeleteVpcRequest deletes one VPC.
+type DeleteVpcRequest struct {
+	ID VpcID `json:"vpcId"`
+}
+
+// Action returns DeleteVpc.
+func (DeleteVpcRequest) Action() Action { return ActionDeleteVpc }
+
+// Normalize checks the id.
+func (r DeleteVpcRequest) Normalize() (DeleteVpcRequest, error) {
+	if r.ID.IsZero() {
+		return DeleteVpcRequest{}, Invalid("vpcId", "required")
+	}
+	return r, nil
+}
+
+// VpcQuery selects VPCs.
+type VpcQuery struct {
+	IDs  []VpcID     `json:"vpcIds,omitempty"`
+	Page PageRequest `json:"page,omitempty"`
+}
+
+// Normalize canonicalizes the page.
+func (q VpcQuery) Normalize() (VpcQuery, error) {
+	page, err := q.Page.Normalize()
+	if err != nil {
+		return VpcQuery{}, err
+	}
+	q.Page = page
+	return q, nil
+}
+
+// VPC states. A create is pending until the next read, then available.
+const (
+	VpcPending   = "pending"
+	VpcAvailable = "available"
+	VpcDeleting  = "deleting"
+)
+
+// VolumeState is the life of a volume.
+type VolumeState string
+
+// The volume states.
+const (
+	VolumeCreating  VolumeState = "creating"
+	VolumeAvailable VolumeState = "available"
+	VolumeInUse     VolumeState = "in-use"
+	VolumeDeleting  VolumeState = "deleting"
+)
+
+// Volume is a block device.
+type Volume struct {
+	ID         VolumeID    `json:"volumeId"`
+	OwnerID    AccountID   `json:"ownerId"`
+	SizeGiB    int64       `json:"size"`
+	Zone       string      `json:"availabilityZone"`
+	State      VolumeState `json:"state"`
+	InstanceID InstanceID  `json:"instanceId,omitempty"`
+	Device     string      `json:"device,omitempty"`
+}
+
+// Owner returns the account that owns the volume.
+func (v Volume) Owner() AccountID { return v.OwnerID }
+
+// Identity returns the volume id.
+func (v Volume) Identity() string { return v.ID.String() }
+
+// CreateVolumeRequest allocates a volume.
+type CreateVolumeRequest struct {
+	SizeGiB int64  `json:"size"`
+	Zone    string `json:"availabilityZone"`
+}
+
+// Action returns CreateVolume.
+func (CreateVolumeRequest) Action() Action { return ActionCreateVolume }
+
+// Normalize checks the size and zone.
+func (r CreateVolumeRequest) Normalize() (CreateVolumeRequest, error) {
+	if r.SizeGiB < 1 || r.SizeGiB > 16384 {
+		return CreateVolumeRequest{}, Invalid("size", "must be from 1 to 16384")
+	}
+	if r.Zone == "" {
+		r.Zone = ZoneName
+	}
+	if r.Zone != ZoneName {
+		return CreateVolumeRequest{}, Invalid("availabilityZone", "unsupported")
+	}
+	return r, nil
+}
+
+// AttachVolumeRequest attaches a volume to an instance.
+type AttachVolumeRequest struct {
+	VolumeID   VolumeID   `json:"volumeId"`
+	InstanceID InstanceID `json:"instanceId"`
+	Device     string     `json:"device"`
+}
+
+// Action returns AttachVolume.
+func (AttachVolumeRequest) Action() Action { return ActionAttachVolume }
+
+// Normalize checks the ids and device name.
+func (r AttachVolumeRequest) Normalize() (AttachVolumeRequest, error) {
+	if r.VolumeID.IsZero() {
+		return AttachVolumeRequest{}, Invalid("volumeId", "required")
+	}
+	if r.InstanceID.IsZero() {
+		return AttachVolumeRequest{}, Invalid("instanceId", "required")
+	}
+	if r.Device == "" {
+		return AttachVolumeRequest{}, Invalid("device", "required")
+	}
+	return r, nil
+}
+
+// DeleteVolumeRequest deletes one volume.
+type DeleteVolumeRequest struct {
+	ID VolumeID `json:"volumeId"`
+}
+
+// Action returns DeleteVolume.
+func (DeleteVolumeRequest) Action() Action { return ActionDeleteVolume }
+
+// Normalize checks the id.
+func (r DeleteVolumeRequest) Normalize() (DeleteVolumeRequest, error) {
+	if r.ID.IsZero() {
+		return DeleteVolumeRequest{}, Invalid("volumeId", "required")
+	}
+	return r, nil
+}
+
+// VolumeQuery selects volumes.
+type VolumeQuery struct {
+	IDs  []VolumeID  `json:"volumeIds,omitempty"`
+	Page PageRequest `json:"page,omitempty"`
+}
+
+// Normalize canonicalizes the page.
+func (q VolumeQuery) Normalize() (VolumeQuery, error) {
+	page, err := q.Page.Normalize()
+	if err != nil {
+		return VolumeQuery{}, err
+	}
+	q.Page = page
+	return q, nil
+}
+
+// SecurityGroup is a set of ingress rules.
+type SecurityGroup struct {
+	ID      SecurityGroupID `json:"groupId"`
+	OwnerID AccountID       `json:"ownerId"`
+	Name    string          `json:"groupName"`
+	VpcID   VpcID           `json:"vpcId"`
+	Rules   []IngressRule   `json:"ipPermissions,omitempty"`
+}
+
+// Owner returns the account that owns the group.
+func (g SecurityGroup) Owner() AccountID { return g.OwnerID }
+
+// Identity returns the group id.
+func (g SecurityGroup) Identity() string { return g.ID.String() }
+
+// IngressRule is one inbound permission.
+type IngressRule struct {
+	Protocol string `json:"ipProtocol"`
+	FromPort int    `json:"fromPort"`
+	ToPort   int    `json:"toPort"`
+	Cidr     string `json:"cidrIp"`
+}
+
+// CreateSecurityGroupRequest allocates a group in a VPC.
+type CreateSecurityGroupRequest struct {
+	Name  string `json:"groupName"`
+	VpcID VpcID  `json:"vpcId"`
+}
+
+// Action returns CreateSecurityGroup.
+func (CreateSecurityGroupRequest) Action() Action { return ActionCreateSecurityGroup }
+
+// Normalize checks the name and VPC.
+func (r CreateSecurityGroupRequest) Normalize() (CreateSecurityGroupRequest, error) {
+	if r.Name == "" || len(r.Name) > 255 {
+		return CreateSecurityGroupRequest{}, Invalid("groupName", "malformed")
+	}
+	if r.VpcID.IsZero() {
+		return CreateSecurityGroupRequest{}, Invalid("vpcId", "required")
+	}
+	return r, nil
+}
+
+// AuthorizeSecurityGroupIngressRequest adds one inbound rule.
+type AuthorizeSecurityGroupIngressRequest struct {
+	ID   SecurityGroupID `json:"groupId"`
+	Rule IngressRule     `json:"ipPermissions"`
+}
+
+// Action returns AuthorizeSecurityGroupIngress.
+func (AuthorizeSecurityGroupIngressRequest) Action() Action {
+	return ActionAuthorizeSecurityGroupIngress
+}
+
+// Normalize checks the group and the rule.
+func (r AuthorizeSecurityGroupIngressRequest) Normalize() (AuthorizeSecurityGroupIngressRequest, error) {
+	if r.ID.IsZero() {
+		return AuthorizeSecurityGroupIngressRequest{}, Invalid("groupId", "required")
+	}
+	if r.Rule.Protocol == "" {
+		return AuthorizeSecurityGroupIngressRequest{}, Invalid("ipProtocol", "required")
+	}
+	cidr, err := normalizeCIDR(r.Rule.Cidr)
+	if err != nil {
+		return AuthorizeSecurityGroupIngressRequest{}, err
+	}
+	r.Rule.Cidr = cidr
+	return r, nil
+}
+
+// Image is a machine image the caller can launch.
+type Image struct {
+	ID      ImageID   `json:"imageId"`
+	OwnerID AccountID `json:"ownerId"`
+	Name    string    `json:"name"`
+	State   string    `json:"state"`
+}
+
+// Owner returns the account that owns the image.
+func (i Image) Owner() AccountID { return i.OwnerID }
+
+// Identity returns the image id.
+func (i Image) Identity() string { return i.ID.String() }
+
+// ImageQuery selects images.
+type ImageQuery struct {
+	IDs  []ImageID   `json:"imageIds,omitempty"`
+	Page PageRequest `json:"page,omitempty"`
+}
+
+// Normalize canonicalizes the page.
+func (q ImageQuery) Normalize() (ImageQuery, error) {
+	page, err := q.Page.Normalize()
+	if err != nil {
+		return ImageQuery{}, err
+	}
+	q.Page = page
+	return q, nil
+}
+
+// KeyPair is an SSH key. Material is set only on the create that minted it.
+type KeyPair struct {
+	ID          KeyPairID `json:"keyPairId"`
+	OwnerID     AccountID `json:"ownerId"`
+	Name        string    `json:"keyName"`
+	Fingerprint string    `json:"keyFingerprint"`
+	Material    string    `json:"keyMaterial,omitempty"`
+}
+
+// Owner returns the account that owns the key pair.
+func (k KeyPair) Owner() AccountID { return k.OwnerID }
+
+// Identity returns the key pair id.
+func (k KeyPair) Identity() string { return k.ID.String() }
+
+// CreateKeyPairRequest mints a key pair.
+type CreateKeyPairRequest struct {
+	Name string `json:"keyName"`
+}
+
+// Action returns CreateKeyPair.
+func (CreateKeyPairRequest) Action() Action { return ActionCreateKeyPair }
+
+// Normalize checks the name.
+func (r CreateKeyPairRequest) Normalize() (CreateKeyPairRequest, error) {
+	if r.Name == "" || len(r.Name) > 255 {
+		return CreateKeyPairRequest{}, Invalid("keyName", "malformed")
+	}
+	return r, nil
+}
+
+// StartInstancesRequest starts stopped instances.
+type StartInstancesRequest struct {
+	IDs []InstanceID `json:"instanceIds"`
+}
+
+// Action returns StartInstances.
+func (StartInstancesRequest) Action() Action { return ActionStartInstances }
+
+// Normalize checks that at least one id is present.
+func (r StartInstancesRequest) Normalize() (StartInstancesRequest, error) {
+	if err := instanceIDs(r.IDs); err != nil {
+		return StartInstancesRequest{}, err
+	}
+	return r, nil
+}
+
+// TerminateInstancesRequest terminates instances.
+type TerminateInstancesRequest struct {
+	IDs []InstanceID `json:"instanceIds"`
+}
+
+// Action returns TerminateInstances.
+func (TerminateInstancesRequest) Action() Action { return ActionTerminateInstances }
+
+// Normalize checks that at least one id is present.
+func (r TerminateInstancesRequest) Normalize() (TerminateInstancesRequest, error) {
+	if err := instanceIDs(r.IDs); err != nil {
+		return TerminateInstancesRequest{}, err
+	}
+	return r, nil
+}
+
+func instanceIDs(ids []InstanceID) error {
+	if len(ids) < 1 || len(ids) > 20 {
+		return Invalid("instanceIds", "must list from 1 to 20 ids")
+	}
+	seen := map[InstanceID]struct{}{}
+	for _, id := range ids {
+		if id.IsZero() {
+			return Invalid("instanceIds", "malformed")
+		}
+		if _, ok := seen[id]; ok {
+			return Invalid("instanceIds", "duplicate")
+		}
+		seen[id] = struct{}{}
+	}
+	return nil
+}
+
+func normalizeCIDR(cidr string) (string, error) {
+	ip, ipNet, err := net.ParseCIDR(cidr)
+	if err != nil || ip == nil || ip.To4() == nil || ipNet == nil {
+		return "", Invalid("cidrBlock", "must be an ipv4 network")
+	}
+	return ipNet.String(), nil
+}
+
+// KnownImages is the machine image this process can launch. The owner is the
+// caller, so a describe result passes the tenancy check. It is a function so
+// the catalog is not package state.
+func KnownImages(owner AccountID) []Image {
+	id, err := Parse[ImageID]("ami-0123456789abcdef0")
+	if err != nil {
+		return nil
+	}
+	return []Image{{
+		ID: id, OwnerID: owner, Name: "vws-1", State: "available",
+	}}
+}

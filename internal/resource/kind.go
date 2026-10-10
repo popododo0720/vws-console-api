@@ -14,6 +14,10 @@ const (
 	KindBucket
 	KindObject
 	KindOperation
+	KindVpc
+	KindVolume
+	KindSecurityGroup
+	KindKeyPair
 )
 
 // String returns the wire name. An unknown kind returns "".
@@ -33,6 +37,14 @@ func (k Kind) String() string {
 		return "object"
 	case KindOperation:
 		return "operation"
+	case KindVpc:
+		return "vpc"
+	case KindVolume:
+		return "volume"
+	case KindSecurityGroup:
+		return "securityGroup"
+	case KindKeyPair:
+		return "keyPair"
 	case KindUnspecified:
 		return ""
 	default:
@@ -61,6 +73,14 @@ func (k Kind) info() kindInfo {
 		return kindInfo{service: ServiceStorage}
 	case KindOperation:
 		return kindInfo{prefix: "op-", service: ServiceUnspecified}
+	case KindVpc:
+		return kindInfo{prefix: "vpc-", service: ServiceNetwork}
+	case KindVolume:
+		return kindInfo{prefix: "vol-", service: ServiceCompute}
+	case KindSecurityGroup:
+		return kindInfo{prefix: "sg-", service: ServiceNetwork}
+	case KindKeyPair:
+		return kindInfo{prefix: "key-", service: ServiceCompute}
 	case KindUnspecified:
 		return kindInfo{}
 	default:

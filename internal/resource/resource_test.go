@@ -15,6 +15,15 @@ func TestParseRejectsRawShapes(t *testing.T) {
 	if _, err := Parse[InstanceID]("i-01234567"); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := Parse[InstanceID]("i-012345678"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Parse[InstanceID]("i-0123456"); err == nil {
+		t.Fatal("7 hex digits must fail")
+	}
+	if _, err := Parse[InstanceID]("i-0123456789abcdef01"); err == nil {
+		t.Fatal("18 hex digits must fail")
+	}
 	if _, err := Parse[InstanceID]("i-0123456789ABCDEF0"); err == nil {
 		t.Fatal("uppercase hex must fail")
 	}
@@ -96,7 +105,7 @@ func TestOperationIDRoundTrip(t *testing.T) {
 
 func TestActionsAreDerived(t *testing.T) {
 	got := Actions()
-	if len(got) != 3 {
+	if len(got) != 13 {
 		t.Fatalf("actions: %v", got)
 	}
 	for _, a := range got {

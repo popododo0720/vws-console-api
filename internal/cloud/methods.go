@@ -14,8 +14,79 @@ func (s *Service) RunInstances(ctx context.Context, c resource.Caller, token res
 }
 
 // StopInstances accepts a stop and returns the operation.
+// A zero token is filled here. RunInstances and CreateSubnet still require one,
+// because a token minted inside mutate would make every retry a new launch.
 func (s *Service) StopInstances(ctx context.Context, c resource.Caller, token resource.ClientToken, req resource.StopInstancesRequest) (resource.Accepted[resource.InstanceStateChange], error) {
+	token, err := fillToken(token)
+	if err != nil {
+		return resource.Accepted[resource.InstanceStateChange]{}, err
+	}
 	return mutate(ctx, s, c, token, req, s.backends.Compute.StopInstances)
+}
+
+// StartInstances accepts a start and returns the operation.
+func (s *Service) StartInstances(ctx context.Context, c resource.Caller, token resource.ClientToken, req resource.StartInstancesRequest) (resource.Accepted[resource.InstanceStateChange], error) {
+	token, err := fillToken(token)
+	if err != nil {
+		return resource.Accepted[resource.InstanceStateChange]{}, err
+	}
+	return mutate(ctx, s, c, token, req, s.backends.Compute.StartInstances)
+}
+
+// TerminateInstances accepts a terminate and returns the operation.
+func (s *Service) TerminateInstances(ctx context.Context, c resource.Caller, token resource.ClientToken, req resource.TerminateInstancesRequest) (resource.Accepted[resource.InstanceStateChange], error) {
+	token, err := fillToken(token)
+	if err != nil {
+		return resource.Accepted[resource.InstanceStateChange]{}, err
+	}
+	return mutate(ctx, s, c, token, req, s.backends.Compute.TerminateInstances)
+}
+
+// CreateVolume accepts a blank volume and returns the operation.
+func (s *Service) CreateVolume(ctx context.Context, c resource.Caller, token resource.ClientToken, req resource.CreateVolumeRequest) (resource.Accepted[resource.Volume], error) {
+	token, err := fillToken(token)
+	if err != nil {
+		return resource.Accepted[resource.Volume]{}, err
+	}
+	return mutate(ctx, s, c, token, req, s.backends.Compute.CreateVolume)
+}
+
+// AttachVolume accepts an attachment and returns the operation.
+func (s *Service) AttachVolume(ctx context.Context, c resource.Caller, token resource.ClientToken, req resource.AttachVolumeRequest) (resource.Accepted[resource.Volume], error) {
+	token, err := fillToken(token)
+	if err != nil {
+		return resource.Accepted[resource.Volume]{}, err
+	}
+	return mutate(ctx, s, c, token, req, s.backends.Compute.AttachVolume)
+}
+
+// DeleteVolume accepts a delete and returns the operation.
+func (s *Service) DeleteVolume(ctx context.Context, c resource.Caller, token resource.ClientToken, req resource.DeleteVolumeRequest) (resource.Accepted[resource.Volume], error) {
+	token, err := fillToken(token)
+	if err != nil {
+		return resource.Accepted[resource.Volume]{}, err
+	}
+	return mutate(ctx, s, c, token, req, s.backends.Compute.DeleteVolume)
+}
+
+// DescribeVolumes lists volumes the caller owns.
+func (s *Service) DescribeVolumes(ctx context.Context, c resource.Caller, q resource.VolumeQuery) (resource.Page[resource.Volume], error) {
+	return readPage(ctx, c, q, s.backends.Compute.DescribeVolumes)
+}
+
+// DescribeImages lists images the caller can launch.
+func (s *Service) DescribeImages(ctx context.Context, c resource.Caller, q resource.ImageQuery) (resource.Page[resource.Image], error) {
+	return readPage(ctx, c, q, s.backends.Compute.DescribeImages)
+}
+
+// CreateKeyPair accepts a key pair and returns the operation. The private key
+// is only on this result.
+func (s *Service) CreateKeyPair(ctx context.Context, c resource.Caller, token resource.ClientToken, req resource.CreateKeyPairRequest) (resource.Accepted[resource.KeyPair], error) {
+	token, err := fillToken(token)
+	if err != nil {
+		return resource.Accepted[resource.KeyPair]{}, err
+	}
+	return mutate(ctx, s, c, token, req, s.backends.Compute.CreateKeyPair)
 }
 
 // DescribeInstances lists instances the caller owns.
@@ -81,6 +152,59 @@ func (s *Service) CreateSubnet(ctx context.Context, c resource.Caller, token res
 // DescribeSubnets lists subnets the caller owns.
 func (s *Service) DescribeSubnets(ctx context.Context, c resource.Caller, q resource.SubnetQuery) (resource.Page[resource.Subnet], error) {
 	return readPage(ctx, c, q, s.backends.Network.DescribeSubnets)
+}
+
+// CreateVpc accepts a VPC and returns the operation.
+func (s *Service) CreateVpc(ctx context.Context, c resource.Caller, token resource.ClientToken, req resource.CreateVpcRequest) (resource.Accepted[resource.Vpc], error) {
+	token, err := fillToken(token)
+	if err != nil {
+		return resource.Accepted[resource.Vpc]{}, err
+	}
+	return mutate(ctx, s, c, token, req, s.backends.Network.CreateVpc)
+}
+
+// DeleteVpc accepts a delete and returns the operation.
+func (s *Service) DeleteVpc(ctx context.Context, c resource.Caller, token resource.ClientToken, req resource.DeleteVpcRequest) (resource.Accepted[resource.Vpc], error) {
+	token, err := fillToken(token)
+	if err != nil {
+		return resource.Accepted[resource.Vpc]{}, err
+	}
+	return mutate(ctx, s, c, token, req, s.backends.Network.DeleteVpc)
+}
+
+// DescribeVpcs lists VPCs the caller owns.
+func (s *Service) DescribeVpcs(ctx context.Context, c resource.Caller, q resource.VpcQuery) (resource.Page[resource.Vpc], error) {
+	return readPage(ctx, c, q, s.backends.Network.DescribeVpcs)
+}
+
+// CreateSecurityGroup accepts a group and returns the operation.
+func (s *Service) CreateSecurityGroup(ctx context.Context, c resource.Caller, token resource.ClientToken, req resource.CreateSecurityGroupRequest) (resource.Accepted[resource.SecurityGroup], error) {
+	token, err := fillToken(token)
+	if err != nil {
+		return resource.Accepted[resource.SecurityGroup]{}, err
+	}
+	return mutate(ctx, s, c, token, req, s.backends.Network.CreateSecurityGroup)
+}
+
+// AuthorizeSecurityGroupIngress accepts one inbound rule and returns the operation.
+func (s *Service) AuthorizeSecurityGroupIngress(ctx context.Context, c resource.Caller, token resource.ClientToken, req resource.AuthorizeSecurityGroupIngressRequest) (resource.Accepted[resource.SecurityGroup], error) {
+	token, err := fillToken(token)
+	if err != nil {
+		return resource.Accepted[resource.SecurityGroup]{}, err
+	}
+	return mutate(ctx, s, c, token, req, s.backends.Network.AuthorizeSecurityGroupIngress)
+}
+
+// fillToken mints a token only for actions whose AWS shape omits ClientToken.
+func fillToken(token resource.ClientToken) (resource.ClientToken, error) {
+	if !token.IsZero() {
+		return token, nil
+	}
+	minted, err := resource.NewClientToken(nil)
+	if err != nil {
+		return resource.ClientToken{}, err
+	}
+	return minted, nil
 }
 
 // CreateBucket creates a bucket, or returns it when the caller already owns the name.

@@ -251,7 +251,27 @@ func NextInstanceState(action Action, from InstanceState) (transitional, settled
 		default:
 			return 0, 0, Conflict(KindInstance, "", "instance cannot be stopped from "+from.String())
 		}
-	case ActionRunInstances, ActionCreateSubnet, actionNone:
+	case ActionStartInstances:
+		switch from {
+		case InstanceStopped:
+			return InstancePending, InstanceRunning, nil
+		case InstancePending, InstanceRunning, InstanceStopping, InstanceShuttingDown, InstanceTerminated, instanceStateNone:
+			return 0, 0, Conflict(KindInstance, "", "instance cannot be started from "+from.String())
+		default:
+			return 0, 0, Conflict(KindInstance, "", "instance cannot be started from "+from.String())
+		}
+	case ActionTerminateInstances:
+		switch from {
+		case InstanceTerminated:
+			return InstanceTerminated, InstanceTerminated, nil
+		case InstancePending, InstanceRunning, InstanceStopping, InstanceStopped, InstanceShuttingDown:
+			return InstanceShuttingDown, InstanceTerminated, nil
+		case instanceStateNone:
+			return 0, 0, Conflict(KindInstance, "", "instance cannot be terminated from "+from.String())
+		default:
+			return 0, 0, Conflict(KindInstance, "", "instance cannot be terminated from "+from.String())
+		}
+	case ActionRunInstances, ActionCreateSubnet, ActionCreateVpc, ActionDeleteVpc, ActionCreateVolume, ActionAttachVolume, ActionDeleteVolume, ActionCreateSecurityGroup, ActionAuthorizeSecurityGroupIngress, ActionCreateKeyPair, actionNone:
 		return 0, 0, Invalid("action", "not an instance transition")
 	default:
 		return 0, 0, Invalid("action", "not an instance transition")

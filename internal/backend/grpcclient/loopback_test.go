@@ -43,11 +43,13 @@ func TestContractOverGRPC(t *testing.T) {
 	})
 	loop := newLoopWorld(world.Set(), now)
 	computev1.RegisterInstanceServiceServer(srv, &instanceSrv{w: loop})
+	computev1.RegisterKeyPairServiceServer(srv, &keySrv{w: loop})
 	storagev1.RegisterVolumeServiceServer(srv, &volumeSrv{w: loop})
 	storagev1.RegisterBucketServiceServer(srv, &bucketSrv{w: loop})
 	storagev1.RegisterObjectServiceServer(srv, &objectSrv{w: loop})
 	networkv1.RegisterVpcServiceServer(srv, &vpcSrv{w: loop})
 	networkv1.RegisterSubnetServiceServer(srv, &subnetSrv{w: loop})
+	networkv1.RegisterSecurityGroupServiceServer(srv, &groupSrv{w: loop})
 	longrunningpb.RegisterOperationsServer(srv, &opsSrv{w: loop})
 	go func() { _ = srv.Serve(lis) }()
 	t.Cleanup(srv.Stop)
@@ -68,6 +70,8 @@ func TestContractOverGRPC(t *testing.T) {
 		objects:    storagev1.NewObjectServiceClient(conn),
 		subnets:    networkv1.NewSubnetServiceClient(conn),
 		vpcs:       networkv1.NewVpcServiceClient(conn),
+		groups:     networkv1.NewSecurityGroupServiceClient(conn),
+		keys:       computev1.NewKeyPairServiceClient(conn),
 		computeOps: longrunningpb.NewOperationsClient(conn),
 		storageOps: longrunningpb.NewOperationsClient(conn),
 		networkOps: longrunningpb.NewOperationsClient(conn),
@@ -96,6 +100,7 @@ type loopWorld struct {
 	subnetVPC map[string]string
 	inst      map[string]instSnap
 	sub       map[string]subSnap
+	groups    map[string]resource.SecurityGroup
 	opLaunch  map[string]string
 }
 
@@ -119,6 +124,7 @@ func newLoopWorld(set backend.Set, now time.Time) *loopWorld {
 		idem: map[string]string{}, exists: map[string]struct{}{},
 		vpcCIDR: map[string]string{}, subnetVPC: map[string]string{},
 		inst: map[string]instSnap{}, sub: map[string]subSnap{},
+		groups:   map[string]resource.SecurityGroup{},
 		opLaunch: map[string]string{},
 	}
 }
@@ -142,6 +148,12 @@ func (w *loopWorld) admit(requestID, fp, name string) error {
 		w.idem[requestID] = fp
 	}
 	return nil
+}
+
+func (w *loopWorld) mark(name string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.exists[name] = struct{}{}
 }
 
 func (w *loopWorld) has(name string) bool {
@@ -362,9 +374,23 @@ func (s *instanceSrv) CreateInstance(ctx context.Context, req *computev1.CreateI
 }
 
 func (s *instanceSrv) UpdateInstance(ctx context.Context, req *computev1.UpdateInstanceRequest) (*longrunningpb.Operation, error) {
-	if req.GetInstance().GetSpec().GetPower() != computev1.InstancePower_INSTANCE_POWER_STOPPED {
+	if volName, device, ok := dataVolume(req.GetInstance().GetSpec()); ok {
+		return s.attachVolume(ctx, req, volName, device)
+	}
+	power := req.GetInstance().GetSpec().GetPower()
+	switch power {
+	case computev1.InstancePower_INSTANCE_POWER_STOPPED:
+		return s.changePower(ctx, req, resource.ActionStopInstances)
+	case computev1.InstancePower_INSTANCE_POWER_RUNNING:
+		return s.changePower(ctx, req, resource.ActionStartInstances)
+	case computev1.InstancePower_INSTANCE_POWER_UNSPECIFIED:
+		return nil, toStatus(resource.Invalid("power", "unsupported"))
+	default:
 		return nil, toStatus(resource.Invalid("power", "unsupported"))
 	}
+}
+
+func (s *instanceSrv) changePower(ctx context.Context, req *computev1.UpdateInstanceRequest, action resource.Action) (*longrunningpb.Operation, error) {
 	projectID, err := projectOfName(req.GetInstance().GetName())
 	if err != nil {
 		return nil, toStatus(err)
@@ -381,13 +407,93 @@ func (s *instanceSrv) UpdateInstance(ctx context.Context, req *computev1.UpdateI
 	if err != nil {
 		return nil, toStatus(err)
 	}
-	acc, err := s.w.set.Compute.StopInstances(ctx, backend.Mutation{
-		Scope: backend.Scope{Account: account}, Key: req.GetRequestId(), Fingerprint: fp,
-	}, resource.StopInstancesRequest{IDs: []resource.InstanceID{id}})
+	var acc resource.Accepted[resource.InstanceStateChange]
+	mut := backend.Mutation{Scope: backend.Scope{Account: account}, Key: req.GetRequestId(), Fingerprint: fp}
+	switch action {
+	case resource.ActionStopInstances:
+		acc, err = s.w.set.Compute.StopInstances(ctx, mut, resource.StopInstancesRequest{IDs: []resource.InstanceID{id}})
+	case resource.ActionStartInstances:
+		acc, err = s.w.set.Compute.StartInstances(ctx, mut, resource.StartInstancesRequest{IDs: []resource.InstanceID{id}})
+	case resource.ActionRunInstances, resource.ActionCreateSubnet, resource.ActionCreateVpc, resource.ActionDeleteVpc,
+		resource.ActionCreateVolume, resource.ActionAttachVolume, resource.ActionDeleteVolume,
+		resource.ActionCreateSecurityGroup, resource.ActionAuthorizeSecurityGroupIngress,
+		resource.ActionTerminateInstances, resource.ActionCreateKeyPair:
+		return nil, toStatus(resource.Invalid("power", "unsupported"))
+	default:
+		return nil, toStatus(resource.Invalid("power", "unsupported"))
+	}
 	if err != nil {
 		return nil, toStatus(err)
 	}
 	return runningOp(projectID, acc.Operation, instanceName(projectID, id.String()), commonv1.OperationVerb_OPERATION_VERB_UPDATE, s.w.now)
+}
+
+func (s *instanceSrv) attachVolume(ctx context.Context, req *computev1.UpdateInstanceRequest, volName, device string) (*longrunningpb.Operation, error) {
+	projectID, err := projectOfName(req.GetInstance().GetName())
+	if err != nil {
+		return nil, toStatus(err)
+	}
+	account, err := accountOf(projectID)
+	if err != nil {
+		return nil, toStatus(err)
+	}
+	volID, err := resource.Parse[resource.VolumeID](lastSegment(volName))
+	if err != nil {
+		return nil, toStatus(err)
+	}
+	instID, err := resource.Parse[resource.InstanceID](lastSegment(req.GetInstance().GetName()))
+	if err != nil {
+		return nil, toStatus(err)
+	}
+	fp, err := protoFingerprint(req)
+	if err != nil {
+		return nil, toStatus(err)
+	}
+	acc, err := s.w.set.Compute.AttachVolume(ctx, backend.Mutation{
+		Scope: backend.Scope{Account: account}, Key: req.GetRequestId(), Fingerprint: fp,
+	}, resource.AttachVolumeRequest{VolumeID: volID, InstanceID: instID, Device: device})
+	if err != nil {
+		return nil, toStatus(err)
+	}
+	return runningOp(projectID, acc.Operation, volumeName(projectID, acc.Items[0].ID.String()), commonv1.OperationVerb_OPERATION_VERB_UPDATE, s.w.now)
+}
+
+func (s *instanceSrv) DeleteInstance(ctx context.Context, req *computev1.DeleteInstanceRequest) (*longrunningpb.Operation, error) {
+	projectID, err := projectOfName(req.GetName())
+	if err != nil {
+		return nil, toStatus(err)
+	}
+	account, err := accountOf(projectID)
+	if err != nil {
+		return nil, toStatus(err)
+	}
+	id, err := resource.Parse[resource.InstanceID](lastSegment(req.GetName()))
+	if err != nil {
+		return nil, toStatus(err)
+	}
+	fp, err := protoFingerprint(req)
+	if err != nil {
+		return nil, toStatus(err)
+	}
+	acc, err := s.w.set.Compute.TerminateInstances(ctx, backend.Mutation{
+		Scope: backend.Scope{Account: account}, Key: req.GetRequestId(), Fingerprint: fp,
+	}, resource.TerminateInstancesRequest{IDs: []resource.InstanceID{id}})
+	if err != nil {
+		return nil, toStatus(err)
+	}
+	return runningOp(projectID, acc.Operation, instanceName(projectID, id.String()), commonv1.OperationVerb_OPERATION_VERB_DELETE, s.w.now)
+}
+
+func dataVolume(spec *computev1.InstanceSpec) (string, string, bool) {
+	if spec == nil {
+		return "", "", false
+	}
+	for _, vol := range spec.GetVolumes() {
+		if vol.GetDeviceName() != "" && vol.GetDeviceName() != "boot" {
+			return vol.GetVolume(), vol.GetDeviceName(), true
+		}
+	}
+	return "", "", false
 }
 
 func (s *instanceSrv) GetInstance(ctx context.Context, req *computev1.GetInstanceRequest) (*computev1.Instance, error) {
@@ -447,20 +553,39 @@ type volumeSrv struct {
 	w *loopWorld
 }
 
-func (s *volumeSrv) CreateVolume(_ context.Context, req *storagev1.CreateVolumeRequest) (*longrunningpb.Operation, error) {
+func (s *volumeSrv) CreateVolume(ctx context.Context, req *storagev1.CreateVolumeRequest) (*longrunningpb.Operation, error) {
 	projectID, err := projectOfName(req.GetParent())
 	if err != nil {
 		return nil, toStatus(err)
 	}
-	name := volumeName(projectID, req.GetVolumeId())
+	spec := req.GetVolume().GetSpec()
+	if spec.GetImage() != "" || spec.GetSnapshot() != "" {
+		name := volumeName(projectID, req.GetVolumeId())
+		fp, err := protoFingerprint(req)
+		if err != nil {
+			return nil, toStatus(err)
+		}
+		if err := s.w.admit(req.GetRequestId(), fp, name); err != nil {
+			return nil, toStatus(err)
+		}
+		return runningNamed(projectID, req.GetRequestId(), name, commonv1.OperationVerb_OPERATION_VERB_CREATE, s.w.now)
+	}
+	account, err := accountOf(projectID)
+	if err != nil {
+		return nil, toStatus(err)
+	}
 	fp, err := protoFingerprint(req)
 	if err != nil {
 		return nil, toStatus(err)
 	}
-	if err := s.w.admit(req.GetRequestId(), fp, name); err != nil {
+	acc, err := s.w.set.Compute.CreateVolume(ctx, backend.Mutation{
+		Scope: backend.Scope{Account: account}, Key: req.GetRequestId(), Fingerprint: fp,
+	}, resource.CreateVolumeRequest{SizeGiB: spec.GetSizeGib(), Zone: resource.ZoneName})
+	if err != nil {
 		return nil, toStatus(err)
 	}
-	return runningNamed(projectID, req.GetRequestId(), name, commonv1.OperationVerb_OPERATION_VERB_CREATE, s.w.now)
+	s.w.mark(volumeName(projectID, acc.Items[0].ID.String()))
+	return runningOp(projectID, acc.Operation, volumeName(projectID, acc.Items[0].ID.String()), commonv1.OperationVerb_OPERATION_VERB_CREATE, s.w.now)
 }
 
 type vpcSrv struct {
@@ -468,10 +593,30 @@ type vpcSrv struct {
 	w *loopWorld
 }
 
-func (s *vpcSrv) CreateVpc(_ context.Context, req *networkv1.CreateVpcRequest) (*longrunningpb.Operation, error) {
+func (s *vpcSrv) CreateVpc(ctx context.Context, req *networkv1.CreateVpcRequest) (*longrunningpb.Operation, error) {
 	projectID, err := projectOfName(req.GetParent())
 	if err != nil {
 		return nil, toStatus(err)
+	}
+	if _, parseErr := resource.Parse[resource.VpcID](req.GetVpcId()); parseErr == nil {
+		account, err := accountOf(projectID)
+		if err != nil {
+			return nil, toStatus(err)
+		}
+		fp, err := protoFingerprint(req)
+		if err != nil {
+			return nil, toStatus(err)
+		}
+		acc, err := s.w.set.Network.CreateVpc(ctx, backend.Mutation{
+			Scope: backend.Scope{Account: account}, Key: req.GetRequestId(), Fingerprint: fp,
+		}, resource.CreateVpcRequest{Cidr: req.GetVpc().GetSpec().GetIpv4Cidr()})
+		if err != nil {
+			return nil, toStatus(err)
+		}
+		name := vpcName(projectID, acc.Items[0].ID.String())
+		s.w.mark(name)
+		s.w.putVPC(name, acc.Items[0].Cidr)
+		return runningOp(projectID, acc.Operation, name, commonv1.OperationVerb_OPERATION_VERB_CREATE, s.w.now)
 	}
 	name := vpcName(projectID, req.GetVpcId())
 	fp, err := protoFingerprint(req)
@@ -514,13 +659,17 @@ func (s *subnetSrv) CreateSubnet(ctx context.Context, req *networkv1.CreateSubne
 	if err != nil {
 		return nil, toStatus(err)
 	}
+	vpcID := lastSegment(req.GetParent())
+	var vpcRef resource.VpcID
+	if parsed, parseErr := resource.Parse[resource.VpcID](vpcID); parseErr == nil {
+		vpcRef = parsed
+	}
 	acc, err := s.w.set.Network.CreateSubnet(ctx, backend.Mutation{
 		Scope: backend.Scope{Account: account}, Key: req.GetRequestId(), Fingerprint: fp,
-	}, resource.CreateSubnetRequest{Cidr: req.GetSubnet().GetSpec().GetIpv4Cidr()})
+	}, resource.CreateSubnetRequest{Cidr: req.GetSubnet().GetSpec().GetIpv4Cidr(), VpcID: vpcRef})
 	if err != nil {
 		return nil, toStatus(err)
 	}
-	vpcID := lastSegment(req.GetParent())
 	s.w.rememberSubnet(acc.Items[0].ID.String(), vpcID)
 	s.w.saveSub(subSnap{sub: acc.Items[0], vpc: vpcID, op: acc.Operation.ID.String(), live: true})
 	return runningOp(projectID, acc.Operation, subnetName(projectID, vpcID, acc.Items[0].ID.String()), commonv1.OperationVerb_OPERATION_VERB_CREATE, s.w.now)
@@ -739,7 +888,7 @@ func (s *opsSrv) GetOperation(ctx context.Context, req *longrunningpb.GetOperati
 }
 
 func runningOp(projectID string, op resource.Operation, resourceName string, verb commonv1.OperationVerb, now time.Time) (*longrunningpb.Operation, error) {
-	msg, err := longOp(projectID, op.ID.Local(), resourceName, "", verb, now)
+	msg, err := longOp(projectID, op.ID.Local(), resourceName, op.Action.String(), verb, now)
 	if err != nil {
 		return nil, toStatus(err)
 	}
@@ -774,6 +923,14 @@ func targetName(projectID string, ref resource.Ref, vpcID string) string {
 		return instanceName(projectID, ref.ID())
 	case resource.KindSubnet:
 		return subnetName(projectID, vpcID, ref.ID())
+	case resource.KindVpc:
+		return vpcName(projectID, ref.ID())
+	case resource.KindVolume:
+		return volumeName(projectID, ref.ID())
+	case resource.KindSecurityGroup:
+		return securityGroupName(projectID, vpcID, ref.ID())
+	case resource.KindKeyPair:
+		return keyPairName(projectID, ref.ID())
 	case resource.KindImage, resource.KindReservation, resource.KindBucket, resource.KindObject, resource.KindOperation, resource.KindUnspecified:
 		return ""
 	default:

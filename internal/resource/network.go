@@ -51,6 +51,7 @@ func (s *SubnetState) UnmarshalText(b []byte) error {
 type Subnet struct {
 	ID      SubnetID    `json:"subnetId"`
 	OwnerID AccountID   `json:"ownerId"`
+	VpcID   VpcID       `json:"vpcId,omitempty"`
 	Cidr    string      `json:"cidrBlock"`
 	State   SubnetState `json:"state"`
 }
@@ -63,7 +64,8 @@ func (s Subnet) Identity() string { return s.ID.String() }
 
 // CreateSubnetRequest allocates a subnet.
 type CreateSubnetRequest struct {
-	Cidr string `json:"cidrBlock"`
+	Cidr  string `json:"cidrBlock"`
+	VpcID VpcID  `json:"vpcId,omitempty"`
 }
 
 // Action returns CreateSubnet.

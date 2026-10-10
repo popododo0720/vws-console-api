@@ -56,6 +56,8 @@ func Dial(ctx context.Context, addrs Addrs) (*Client, error) {
 		objects:    storagev1.NewObjectServiceClient(storageConn),
 		subnets:    networkv1.NewSubnetServiceClient(networkConn),
 		vpcs:       networkv1.NewVpcServiceClient(networkConn),
+		groups:     networkv1.NewSecurityGroupServiceClient(networkConn),
+		keys:       computev1.NewKeyPairServiceClient(computeConn),
 		computeOps: longrunningpb.NewOperationsClient(computeConn),
 		storageOps: longrunningpb.NewOperationsClient(storageConn),
 		networkOps: longrunningpb.NewOperationsClient(networkConn),
