@@ -29,6 +29,10 @@ func (h *handler) deleteKeyPair(w http.ResponseWriter, r *http.Request, c resour
 }
 
 func (h *handler) describeKeyPairs(w http.ResponseWriter, r *http.Request, c resource.Caller) {
+	if err := optionalBool(r, "IncludePublicKey"); err != nil {
+		writeErr(w, r, err)
+		return
+	}
 	ids, err := indexedIDs[resource.KeyPairID](r, "KeyPairId")
 	if err != nil {
 		writeErr(w, r, err)
@@ -224,6 +228,10 @@ func (h *handler) deleteSnapshot(w http.ResponseWriter, r *http.Request, c resou
 }
 
 func (h *handler) describeSnapshots(w http.ResponseWriter, r *http.Request, c resource.Caller) {
+	if !ownerSelectsCaller(r, c.Account) || !selectsCaller(indexedStrings(r, "RestorableBy"), c.Account) {
+		writeXML(w, describeSnapshotsXML{RequestID: requestID(r)})
+		return
+	}
 	ids, err := indexedIDs[resource.SnapshotID](r, "SnapshotId")
 	if err != nil {
 		writeErr(w, r, err)

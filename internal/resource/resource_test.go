@@ -95,6 +95,19 @@ func TestOperationIDRoundTrip(t *testing.T) {
 	if _, err := Parse[OperationID](long.String()); err != nil {
 		t.Fatal(err)
 	}
+	wide, err := NewOperationID(ServiceStorage, "0123456789abcdef0123")
+	if err != nil || wide.String() != "op-storage-0123456789abcdef0123" {
+		t.Fatalf("%v %s", err, wide)
+	}
+	if _, err := Parse[OperationID](wide.String()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewOperationID(ServiceStorage, "0123456789abcde"); err == nil {
+		t.Fatal("15 hex digits")
+	}
+	if _, err := NewOperationID(ServiceStorage, "0123456789abcdef0123456789abcdef0123456789"); err == nil {
+		t.Fatal("42 hex digits")
+	}
 	if parsed != id {
 		t.Fatalf("got %#v", parsed)
 	}

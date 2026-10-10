@@ -3,8 +3,11 @@ package grpcclient
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"io"
 	"strconv"
+	"time"
 
 	longrunningpb "cloud.google.com/go/longrunning/autogen/longrunningpb"
 	computev1 "github.com/popododo0720/vws-proto/gen/go/vws/compute/v1"
@@ -55,14 +58,7 @@ func (c computeClient) RunInstances(ctx context.Context, m backend.Mutation, req
 			Parent:    volumeParent(projectID),
 			VolumeId:  volID,
 			RequestId: requestUUID(m.Key, "vol", strconv.Itoa(i)),
-			Volume: &storagev1.Volume{
-				Labels: map[string]string{labelFingerprint: clip(m.Fingerprint, 63)},
-				Spec: &storagev1.VolumeSpec{
-					SizeGib: 8,
-					Type:    storagev1.VolumeType_VOLUME_TYPE_SSD,
-					Source:  &storagev1.VolumeSpec_Image{Image: imageName(projectID, req.ImageID.String())},
-				},
-			},
+			Volume:    bootVolume(projectID, m.Fingerprint, req.ImageID),
 		})
 		if err := rpcErr(volOp, err); err != nil {
 			return resource.Accepted[resource.Instance]{}, err
@@ -120,6 +116,20 @@ func (c computeClient) RunInstances(ctx context.Context, m backend.Mutation, req
 	op.Action = resource.ActionRunInstances
 	op.Targets = instanceRefs(items)
 	return resource.Accepted[resource.Instance]{Operation: op, Items: items}, nil
+}
+
+// bootVolume is the disk RunInstances creates from the machine image.
+// volume.proto sources a volume from a compute image. InstanceSpec has no
+// image field; the instance attaches this volume and marks it boot.
+func bootVolume(projectID, fingerprint string, image resource.ImageID) *storagev1.Volume {
+	return &storagev1.Volume{
+		Labels: map[string]string{labelFingerprint: clip(fingerprint, 63)},
+		Spec: &storagev1.VolumeSpec{
+			SizeGib: 8,
+			Type:    storagev1.VolumeType_VOLUME_TYPE_SSD,
+			Source:  &storagev1.VolumeSpec_Image{Image: imageName(projectID, image.String())},
+		},
+	}
 }
 
 func (c computeClient) StopInstances(ctx context.Context, m backend.Mutation, req resource.StopInstancesRequest) (resource.Accepted[resource.InstanceStateChange], error) {
@@ -405,7 +415,7 @@ func (c storageClient) PutObject(ctx context.Context, s backend.Scope, req resou
 	op, err := c.objects.UpdateObject(ctx, &storagev1.UpdateObjectRequest{
 		AllowMissing: true,
 		Contents:     buf,
-		RequestId:    requestUUID(projectID, req.Bucket.String(), req.Key.String(), "put"),
+		RequestId:    putRequestID(projectID, req.Bucket.String(), req.Key.String(), buf),
 		UpdateMask:   objectUpdateMask(),
 		Object: &storagev1.Object{
 			Name:   name,
@@ -414,6 +424,10 @@ func (c storageClient) PutObject(ctx context.Context, s backend.Scope, req resou
 		},
 	})
 	if err := rpcErr(op, err); err != nil {
+		return resource.Object{}, err
+	}
+	op, err = c.awaitStorage(ctx, op)
+	if err != nil {
 		return resource.Object{}, err
 	}
 	if obj, ok, err := unpackObject(op); err != nil || ok {
@@ -427,6 +441,45 @@ func (c storageClient) PutObject(ctx context.Context, s backend.Scope, req resou
 		return resource.Object{}, fromRPC(err)
 	}
 	return objectModel(out)
+}
+
+// awaitStorage polls a put until the storage service marks it done. The
+// object is not readable until then, so GetObject before that is NotFound.
+func (c storageClient) awaitStorage(ctx context.Context, op *longrunningpb.Operation) (*longrunningpb.Operation, error) {
+	if op.GetDone() {
+		return op, nil
+	}
+	name := op.GetName()
+	if name == "" {
+		return nil, resource.Internal(strErr("missing operation"))
+	}
+	ticker := time.NewTicker(5 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		got, err := c.storageOps.GetOperation(ctx, &longrunningpb.GetOperationRequest{Name: name})
+		if err != nil {
+			return nil, fromRPC(err)
+		}
+		if got.GetDone() {
+			if got.GetError() != nil {
+				return nil, fromRPC(status.ErrorProto(got.GetError()))
+			}
+			return got, nil
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
+// putRequestID includes the payload hash. The storage service treats request
+// id as the idempotency key, so a key of only project, bucket, and object
+// rejects an overwrite as a reused client token.
+func putRequestID(projectID, bucket, key string, body []byte) string {
+	sum := sha256.Sum256(body)
+	return requestUUID(projectID, bucket, key, "put", hex.EncodeToString(sum[:]))
 }
 
 // objectUpdateMask is the mask vws-storage's objectMaskOK accepts for a write

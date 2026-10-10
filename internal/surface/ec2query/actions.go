@@ -261,6 +261,18 @@ func (h *handler) changeInstances(w http.ResponseWriter, r *http.Request, root s
 }
 
 func (h *handler) describeImages(w http.ResponseWriter, r *http.Request, c resource.Caller) {
+	if err := optionalBool(r, "IncludeDeprecated"); err != nil {
+		writeErr(w, r, err)
+		return
+	}
+	if err := optionalBool(r, "IncludeDisabled"); err != nil {
+		writeErr(w, r, err)
+		return
+	}
+	if !ownerSelectsCaller(r, c.Account) || !selectsCaller(indexedStrings(r, "ExecutableBy"), c.Account) {
+		writeXML(w, describeImagesXML{RequestID: requestID(r)})
+		return
+	}
 	ids, err := indexedIDs[resource.ImageID](r, "ImageId")
 	if err != nil {
 		writeErr(w, r, err)

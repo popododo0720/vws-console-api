@@ -58,6 +58,18 @@ func (h *handler) serve(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, r, err)
 		return
 	}
+	if strings.HasPrefix(action, "Describe") {
+		if err := rejectDryRun(r); err != nil {
+			writeErr(w, r, err)
+			return
+		}
+		if action != "DescribeInstances" {
+			if err := rejectPlainFilters(r); err != nil {
+				writeErr(w, r, err)
+				return
+			}
+		}
+	}
 	switch action {
 	case resource.ActionRunInstances.String():
 		h.runInstances(w, r, caller)
@@ -395,14 +407,23 @@ func instanceQuery(r *http.Request) (resource.InstanceQuery, error) {
 
 func pageForm(r *http.Request) (resource.PageRequest, error) {
 	var p resource.PageRequest
-	if raw := r.Form.Get("MaxResults"); raw != "" {
+	raw := r.Form.Get("MaxResults")
+	field := "MaxResults"
+	if raw == "" {
+		raw = r.Form.Get("maxResults")
+		field = "maxResults"
+	}
+	if raw != "" {
 		n, err := strconv.Atoi(raw)
 		if err != nil {
-			return p, resource.Invalid("MaxResults", "malformed")
+			return p, resource.Invalid(field, "malformed")
 		}
 		p.Size = n
 	}
 	p.Token = r.Form.Get("NextToken")
+	if p.Token == "" {
+		p.Token = r.Form.Get("nextToken")
+	}
 	return p, nil
 }
 
@@ -585,40 +606,102 @@ func allowDeleteSnapshot(key string) bool {
 	return key == "Action" || key == "Version" || key == "ClientToken" || key == "SnapshotId"
 }
 
+func allowDescribeBase(key string) bool {
+	switch key {
+	case "Action", "Version", "MaxResults", "maxResults", "NextToken", "nextToken", "DryRun", "dryRun":
+		return true
+	default:
+		return filterField(key)
+	}
+}
+
 func allowDescribeKeyPairs(key string) bool {
-	return key == "Action" || key == "Version" || key == "MaxResults" || key == "NextToken" || indexed(key, "KeyName", 100) || indexed(key, "KeyPairId", 100)
+	return allowDescribeBase(key) || indexed(key, "KeyName", 100) || indexed(key, "KeyPairId", 100) || key == "IncludePublicKey"
 }
 
 func allowDescribeGroups(key string) bool {
-	return key == "Action" || key == "Version" || key == "MaxResults" || key == "NextToken" || indexed(key, "GroupId", 100) || indexed(key, "GroupName", 100)
+	return allowDescribeBase(key) || indexed(key, "GroupId", 100) || indexed(key, "GroupName", 100)
 }
 
 func allowDescribeAddresses(key string) bool {
-	return key == "Action" || key == "Version" || key == "MaxResults" || key == "NextToken" || indexed(key, "AllocationId", 100) || indexed(key, "PublicIp", 100)
+	return allowDescribeBase(key) || indexed(key, "AllocationId", 100) || indexed(key, "PublicIp", 100)
 }
 
 func allowDescribeSnapshots(key string) bool {
-	return key == "Action" || key == "Version" || key == "MaxResults" || key == "NextToken" || indexed(key, "SnapshotId", 100)
+	return allowDescribeBase(key) || indexed(key, "SnapshotId", 100) || indexed(key, "Owner", 100) || indexed(key, "OwnerId", 100) || indexed(key, "RestorableBy", 100)
 }
 
 func allowDescribeVpcs(key string) bool {
-	return key == "Action" || key == "Version" || key == "MaxResults" || key == "NextToken" || indexed(key, "VpcId", 100)
+	return allowDescribeBase(key) || indexed(key, "VpcId", 100)
 }
 
 func allowDescribeVolumes(key string) bool {
-	return key == "Action" || key == "Version" || key == "MaxResults" || key == "NextToken" || indexed(key, "VolumeId", 100)
+	return allowDescribeBase(key) || indexed(key, "VolumeId", 100)
 }
 
 func allowDescribeImages(key string) bool {
-	return key == "Action" || key == "Version" || key == "MaxResults" || key == "NextToken" || indexed(key, "ImageId", 100)
+	return allowDescribeBase(key) || indexed(key, "ImageId", 100) || indexed(key, "Owner", 100) || indexed(key, "OwnerId", 100) || indexed(key, "ExecutableBy", 100) || key == "IncludeDeprecated" || key == "IncludeDisabled"
 }
 
 func allowDescribeInstances(key string) bool {
-	return key == "Action" || key == "Version" || key == "MaxResults" || key == "NextToken" || indexed(key, "InstanceId", 100) || filterField(key)
+	return allowDescribeBase(key) || indexed(key, "InstanceId", 100)
 }
 
 func allowDescribeSubnets(key string) bool {
-	return key == "Action" || key == "Version" || key == "MaxResults" || key == "NextToken" || indexed(key, "SubnetId", 100)
+	return allowDescribeBase(key) || indexed(key, "SubnetId", 100)
+}
+
+func rejectDryRun(r *http.Request) error {
+	raw := r.Form.Get("DryRun")
+	if raw == "" {
+		raw = r.Form.Get("dryRun")
+	}
+	switch raw {
+	case "", "false":
+		return nil
+	case "true":
+		return resource.Invalid("DryRun", "unsupported")
+	default:
+		return resource.Invalid("DryRun", "malformed")
+	}
+}
+
+func rejectPlainFilters(r *http.Request) error {
+	for i := 1; i <= 20; i++ {
+		if r.Form.Get("Filter."+strconv.Itoa(i)+".Name") != "" {
+			return resource.Invalid("Filter", "unsupported")
+		}
+	}
+	return nil
+}
+
+func optionalBool(r *http.Request, key string) error {
+	switch r.Form.Get(key) {
+	case "", "true", "false":
+		return nil
+	default:
+		return resource.Invalid(key, "malformed")
+	}
+}
+
+// ownerSelectsCaller reports whether Owner or OwnerId keeps this account.
+// boto3 sends OwnerIds as Owner.N. An empty list keeps the caller's rows.
+func ownerSelectsCaller(r *http.Request, account resource.AccountID) bool {
+	owners := append(indexedStrings(r, "Owner"), indexedStrings(r, "OwnerId")...)
+	return selectsCaller(owners, account)
+}
+
+func selectsCaller(values []string, account resource.AccountID) bool {
+	if len(values) == 0 {
+		return true
+	}
+	self := account.String()
+	for _, value := range values {
+		if value == "self" || value == self {
+			return true
+		}
+	}
+	return false
 }
 
 func tagSpecField(key string) bool {

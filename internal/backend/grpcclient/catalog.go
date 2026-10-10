@@ -282,8 +282,17 @@ func (c networkClient) DescribeSecurityGroups(ctx context.Context, s backend.Sco
 	return pageByID(filtered, q.Page, func(item resource.SecurityGroup) string { return item.ID.String() })
 }
 
+// defaultVPCCIDR is the account network created for AllocateAddress when the
+// project has none. The address proto has no VPC field. EC2 AllocateAddress
+// defaults to Domain=vpc and does not take a VPC id, and the network service
+// rejects an address in a project that has no VPC.
+const defaultVPCCIDR = "172.31.0.0/16"
+
 func (c networkClient) AllocateAddress(ctx context.Context, m backend.Mutation, req resource.AllocateAddressRequest) (resource.Accepted[resource.Address], error) {
 	projectID := project(m.Account)
+	if err := c.ensureDefaultVPC(ctx, projectID); err != nil {
+		return resource.Accepted[resource.Address]{}, err
+	}
 	created, err := c.addresses.CreateAddress(ctx, &networkv1.CreateAddressRequest{
 		Parent:    regionParent(projectID),
 		AddressId: derivedID("eipalloc-", m.Key, "addr"),
@@ -320,6 +329,35 @@ func (c networkClient) AllocateAddress(ctx context.Context, m backend.Mutation, 
 	op.Action = resource.ActionAllocateAddress
 	op.Targets = []resource.Ref{id.Ref()}
 	return resource.Accepted[resource.Address]{Operation: op, Items: []resource.Address{addr}}, nil
+}
+
+func (c networkClient) ensureDefaultVPC(ctx context.Context, projectID string) error {
+	token := ""
+	for page := 0; page < 20; page++ {
+		out, err := c.vpcs.ListVpcs(ctx, &networkv1.ListVpcsRequest{
+			Parent: regionParent(projectID), PageSize: 100, PageToken: token,
+		})
+		if err != nil {
+			return fromRPC(err)
+		}
+		if len(out.GetVpcs()) > 0 {
+			return nil
+		}
+		token = out.GetNextPageToken()
+		if token == "" {
+			break
+		}
+	}
+	created, err := c.vpcs.CreateVpc(ctx, &networkv1.CreateVpcRequest{
+		Parent:    regionParent(projectID),
+		VpcId:     derivedID("vpc-", projectID, "default"),
+		RequestId: requestUUID(projectID, "default-vpc"),
+		Vpc:       &networkv1.Vpc{Spec: &networkv1.VpcSpec{Ipv4Cidr: defaultVPCCIDR}},
+	})
+	if err := rpcErr(created, err); err != nil && resource.CodeOf(err) != resource.CodeAlreadyExists {
+		return err
+	}
+	return nil
 }
 
 func (c networkClient) ReleaseAddress(ctx context.Context, m backend.Mutation, req resource.ReleaseAddressRequest) (resource.Accepted[resource.Address], error) {
