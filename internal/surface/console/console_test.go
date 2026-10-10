@@ -22,7 +22,7 @@ func TestEveryActionHasARoute(t *testing.T) {
 }
 
 func TestMissingBearerIsUnauthorized(t *testing.T) {
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/instances", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/instances", nil)
 	rec := httptest.NewRecorder()
 	New(Config{}).ServeHTTP(rec, req)
 	if rec.Code != http.StatusUnauthorized {

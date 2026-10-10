@@ -155,7 +155,7 @@ func verifier(cred sigv4.Credential, service sigv4.Service, now time.Time) *sigv
 
 func serveSigned(t *testing.T, h http.Handler, cred sigv4.Credential, service sigv4.Service, now time.Time, method, rawURL, body string) *httptest.ResponseRecorder {
 	t.Helper()
-	req := httptest.NewRequest(method, rawURL, strings.NewReader(body))
+	req := httptest.NewRequestWithContext(t.Context(), method, rawURL, strings.NewReader(body))
 	req.Host = req.URL.Host
 	if body != "" {
 		if service == sigv4.ServiceS3 {
@@ -174,7 +174,7 @@ func serveSigned(t *testing.T, h http.Handler, cred sigv4.Credential, service si
 
 func call(t *testing.T, h http.Handler, method, path, body string, headers map[string]string) *httptest.ResponseRecorder {
 	t.Helper()
-	req := httptest.NewRequest(method, path, strings.NewReader(body))
+	req := httptest.NewRequestWithContext(t.Context(), method, path, strings.NewReader(body))
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
