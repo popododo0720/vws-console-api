@@ -45,10 +45,6 @@ func operationFrom(op *longrunningpb.Operation, svc resource.Service) (resource.
 		}
 	}
 	action, err := actionOf(meta.GetResource(), meta.GetVerb())
-	if parsed, ok := resource.ParseAction(meta.GetRequestId()); ok {
-		action = parsed
-		err = nil
-	}
 	if err != nil {
 		return resource.Operation{}, err
 	}

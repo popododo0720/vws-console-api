@@ -94,6 +94,7 @@ func (c computeClient) changeInstances(ctx context.Context, m backend.Mutation, 
 			Instance: &computev1.Instance{
 				Name: instanceName(projectID, inst.ID.String()),
 				Labels: withInternalLabels(inst.Tags, map[string]string{
+					labelAction:      action.String(),
 					labelFingerprint: clip(m.Fingerprint, 63),
 					labelImage:       inst.ImageID.String(),
 					labelReservation: inst.ReservationID.String(),
@@ -143,7 +144,7 @@ func (c computeClient) CreateVolume(ctx context.Context, m backend.Mutation, req
 	if err := rpcErr(created, err); err != nil {
 		return resource.Accepted[resource.Volume]{}, err
 	}
-	return acceptedVolume(created, m.Account, req, resource.VolumeCreating)
+	return acceptedVolume(created, req, resource.VolumeCreating)
 }
 
 func (c computeClient) AttachVolume(ctx context.Context, m backend.Mutation, req resource.AttachVolumeRequest) (resource.Accepted[resource.Volume], error) {
@@ -152,21 +153,27 @@ func (c computeClient) AttachVolume(ctx context.Context, m backend.Mutation, req
 	if err != nil {
 		return resource.Accepted[resource.Volume]{}, err
 	}
-	if _, err := c.getInstance(ctx, projectID, req.InstanceID.String()); err != nil {
-		return resource.Accepted[resource.Volume]{}, err
+	inst, err := c.instances.GetInstance(ctx, &computev1.GetInstanceRequest{
+		Name: instanceName(projectID, req.InstanceID.String()),
+	})
+	if err != nil {
+		return resource.Accepted[resource.Volume]{}, fromRPC(err)
 	}
+	volumes := append([]*computev1.VolumeAttachment{}, inst.GetSpec().GetVolumes()...)
+	volumes = append(volumes, &computev1.VolumeAttachment{
+		Volume:     volumeName(projectID, req.VolumeID.String()),
+		DeviceName: req.Device,
+	})
 	updated, err := c.instances.UpdateInstance(ctx, &computev1.UpdateInstanceRequest{
 		RequestId:  requestUUID(m.Key, "attach"),
-		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.volumes"}},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.volumes", "labels"}},
 		Instance: &computev1.Instance{
 			Name: instanceName(projectID, req.InstanceID.String()),
-			Spec: &computev1.InstanceSpec{
-				Power: computev1.InstancePower_INSTANCE_POWER_RUNNING,
-				Volumes: []*computev1.VolumeAttachment{{
-					Volume:     volumeName(projectID, req.VolumeID.String()),
-					DeviceName: req.Device,
-				}},
+			Labels: map[string]string{
+				labelAction:      resource.ActionAttachVolume.String(),
+				labelFingerprint: clip(m.Fingerprint, 63),
 			},
+			Spec: &computev1.InstanceSpec{Volumes: volumes},
 		},
 	})
 	if err := rpcErr(updated, err); err != nil {
@@ -209,34 +216,39 @@ func (c computeClient) DeleteVolume(ctx context.Context, m backend.Mutation, req
 
 func (c computeClient) DescribeVolumes(ctx context.Context, s backend.Scope, q resource.VolumeQuery) (resource.Page[resource.Volume], error) {
 	projectID := project(s.Account)
+	if len(q.IDs) > 0 {
+		items := make([]resource.Volume, 0, len(q.IDs))
+		for _, id := range q.IDs {
+			vol, err := c.getVolume(ctx, projectID, id.String())
+			if resource.CodeOf(err) == resource.CodeNotFound {
+				if len(q.IDs) == 1 {
+					return resource.Page[resource.Volume]{}, err
+				}
+				continue
+			}
+			if err != nil {
+				return resource.Page[resource.Volume]{}, err
+			}
+			items = append(items, vol)
+		}
+		return pageByID(items, q.Page, func(item resource.Volume) string { return item.ID.String() })
+	}
 	out, err := c.volumes.ListVolumes(ctx, &storagev1.ListVolumesRequest{
 		Parent: volumeParent(projectID), PageSize: pageSize(q.Page.Size), PageToken: q.Page.Token,
 	})
 	if err != nil {
 		return resource.Page[resource.Volume]{}, fromRPC(err)
 	}
-	want := map[string]struct{}{}
-	for _, id := range q.IDs {
-		want[id.String()] = struct{}{}
-	}
 	items := make([]resource.Volume, 0, len(out.GetVolumes()))
 	for _, item := range out.GetVolumes() {
+		if sourcedVolume(item) {
+			continue
+		}
 		vol, err := volumeModel(item)
 		if err != nil {
 			return resource.Page[resource.Volume]{}, err
 		}
-		if len(want) > 0 {
-			if _, ok := want[vol.ID.String()]; !ok {
-				continue
-			}
-		}
 		items = append(items, vol)
-	}
-	if len(q.IDs) == 1 && len(items) == 0 {
-		return resource.Page[resource.Volume]{}, resource.NotFound(resource.KindVolume, q.IDs[0].String())
-	}
-	if q.Page.Token != "" || len(q.IDs) > 0 {
-		return pageByID(items, q.Page, func(item resource.Volume) string { return item.ID.String() })
 	}
 	return resource.Page[resource.Volume]{Items: items, NextToken: out.GetNextPageToken()}, nil
 }
@@ -265,7 +277,7 @@ func (c computeClient) DescribeImages(ctx context.Context, s backend.Scope, q re
 }
 
 func (c computeClient) CreateKeyPair(ctx context.Context, m backend.Mutation, req resource.CreateKeyPairRequest) (resource.Accepted[resource.KeyPair], error) {
-	privateKey, fingerprint, publicLine, err := derivedKey(m.Key, "key")
+	privateKey, fingerprint, publicLine, err := derivedKey(m.Key, "key-seed")
 	if err != nil {
 		return resource.Accepted[resource.KeyPair]{}, err
 	}
@@ -296,8 +308,12 @@ func (c computeClient) CreateKeyPair(ctx context.Context, m backend.Mutation, re
 	if err != nil {
 		return resource.Accepted[resource.KeyPair]{}, resource.Internal(err)
 	}
+	owner, err := accountIn(metaName)
+	if err != nil {
+		return resource.Accepted[resource.KeyPair]{}, err
+	}
 	key := resource.KeyPair{
-		ID: id, OwnerID: m.Account, Name: req.Name, Fingerprint: fingerprint, Material: privateKey,
+		ID: id, OwnerID: owner, Name: req.Name, Fingerprint: fingerprint, Material: privateKey,
 	}
 	op.Action = resource.ActionCreateKeyPair
 	op.Targets = []resource.Ref{id.Ref()}
@@ -330,7 +346,11 @@ func (c networkClient) CreateVpc(ctx context.Context, m backend.Mutation, req re
 	if err != nil {
 		return resource.Accepted[resource.Vpc]{}, resource.Internal(err)
 	}
-	vpc := resource.Vpc{ID: id, OwnerID: m.Account, Cidr: req.Cidr, State: resource.VpcPending}
+	owner, err := accountIn(metaName)
+	if err != nil {
+		return resource.Accepted[resource.Vpc]{}, err
+	}
+	vpc := resource.Vpc{ID: id, OwnerID: owner, Cidr: req.Cidr, State: resource.VpcPending}
 	op.Action = resource.ActionCreateVpc
 	op.Targets = []resource.Ref{id.Ref()}
 	return resource.Accepted[resource.Vpc]{Operation: op, Items: []resource.Vpc{vpc}}, nil
@@ -368,35 +388,42 @@ func (c networkClient) DescribeVpcs(ctx context.Context, s backend.Scope, q reso
 		}
 		return pageByID([]resource.Vpc{vpc}, q.Page, func(item resource.Vpc) string { return item.ID.String() })
 	}
-	out, err := c.vpcs.ListVpcs(ctx, &networkv1.ListVpcsRequest{
-		Parent: regionParent(projectID), PageSize: 100,
-	})
-	if err != nil {
-		return resource.Page[resource.Vpc]{}, fromRPC(err)
-	}
 	want := map[string]struct{}{}
 	for _, id := range q.IDs {
 		want[id.String()] = struct{}{}
 	}
 	var items []resource.Vpc
-	for _, item := range out.GetVpcs() {
-		idText := lastSegment(item.GetName())
-		if _, err := resource.Parse[resource.VpcID](idText); err != nil {
-			continue
+	token := ""
+	for page := 0; page < 50; page++ {
+		out, err := c.vpcs.ListVpcs(ctx, &networkv1.ListVpcsRequest{
+			Parent: regionParent(projectID), PageSize: 100, PageToken: token,
+		})
+		if err != nil {
+			return resource.Page[resource.Vpc]{}, fromRPC(err)
 		}
-		if len(want) > 0 {
-			if _, ok := want[idText]; !ok {
+		for _, item := range out.GetVpcs() {
+			idText := lastSegment(item.GetName())
+			if _, err := resource.Parse[resource.VpcID](idText); err != nil {
 				continue
 			}
+			if len(want) > 0 {
+				if _, ok := want[idText]; !ok {
+					continue
+				}
+			}
+			vpc, err := c.getVpc(ctx, projectID, idText)
+			if resource.CodeOf(err) == resource.CodeNotFound {
+				continue
+			}
+			if err != nil {
+				return resource.Page[resource.Vpc]{}, err
+			}
+			items = append(items, vpc)
 		}
-		vpc, err := c.getVpc(ctx, projectID, idText)
-		if resource.CodeOf(err) == resource.CodeNotFound {
-			continue
+		token = out.GetNextPageToken()
+		if token == "" {
+			break
 		}
-		if err != nil {
-			return resource.Page[resource.Vpc]{}, err
-		}
-		items = append(items, vpc)
 	}
 	if len(q.IDs) == 1 && len(items) == 0 {
 		return resource.Page[resource.Vpc]{}, resource.NotFound(resource.KindVpc, q.IDs[0].String())
@@ -430,7 +457,11 @@ func (c networkClient) CreateSecurityGroup(ctx context.Context, m backend.Mutati
 	if err != nil {
 		return resource.Accepted[resource.SecurityGroup]{}, resource.Internal(err)
 	}
-	group := resource.SecurityGroup{ID: id, OwnerID: m.Account, Name: req.Name, VpcID: req.VpcID}
+	owner, err := accountIn(metaName)
+	if err != nil {
+		return resource.Accepted[resource.SecurityGroup]{}, err
+	}
+	group := resource.SecurityGroup{ID: id, OwnerID: owner, Name: req.Name, VpcID: req.VpcID}
 	op.Action = resource.ActionCreateSecurityGroup
 	op.Targets = []resource.Ref{id.Ref()}
 	return resource.Accepted[resource.SecurityGroup]{Operation: op, Items: []resource.SecurityGroup{group}}, nil
@@ -442,19 +473,26 @@ func (c networkClient) AuthorizeSecurityGroupIngress(ctx context.Context, m back
 	if err != nil {
 		return resource.Accepted[resource.SecurityGroup]{}, err
 	}
+	for _, have := range current.Rules {
+		if have == req.Rule {
+			return resource.Accepted[resource.SecurityGroup]{}, resource.AlreadyExists(resource.KindSecurityGroup, current.ID.String())
+		}
+	}
+	rules := append(append([]resource.IngressRule{}, current.Rules...), req.Rule)
+	protoRules := make([]*networkv1.SecurityGroupRule, 0, len(rules))
+	for i, rule := range rules {
+		protoRule, err := ruleProto(rule, derivedID("r", m.Key, "rule", hex.EncodeToString([]byte{byte(i)})))
+		if err != nil {
+			return resource.Accepted[resource.SecurityGroup]{}, err
+		}
+		protoRules = append(protoRules, protoRule)
+	}
 	updated, err := c.groups.UpdateSecurityGroup(ctx, &networkv1.UpdateSecurityGroupRequest{
 		RequestId:  requestUUID(m.Key, "ingress"),
 		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.rules"}},
 		SecurityGroup: &networkv1.SecurityGroup{
 			Name: securityGroupName(projectID, current.VpcID.String(), current.ID.String()),
-			Spec: &networkv1.SecurityGroupSpec{Rules: []*networkv1.SecurityGroupRule{{
-				Id:        derivedID("r", m.Key, "rule"),
-				Direction: networkv1.Direction_DIRECTION_INGRESS,
-				Protocol:  protocolOf(req.Rule.Protocol),
-				FromPort:  int32(req.Rule.FromPort),
-				ToPort:    int32(req.Rule.ToPort),
-				Target:    &networkv1.SecurityGroupRule_Cidr{Cidr: req.Rule.Cidr},
-			}}},
+			Spec: &networkv1.SecurityGroupSpec{Rules: protoRules},
 		},
 	})
 	if err := rpcErr(updated, err); err != nil {
@@ -477,6 +515,9 @@ func (c computeClient) getVolume(ctx context.Context, projectID, id string) (res
 	out, err := c.volumes.GetVolume(ctx, &storagev1.GetVolumeRequest{Name: volumeName(projectID, id)})
 	if err != nil {
 		return resource.Volume{}, fromRPC(err)
+	}
+	if sourcedVolume(out) {
+		return resource.Volume{}, resource.NotFound(resource.KindVolume, id)
 	}
 	return volumeModel(out)
 }
@@ -518,7 +559,7 @@ func (c networkClient) findGroup(ctx context.Context, projectID, id string) (res
 	return resource.SecurityGroup{}, resource.NotFound(resource.KindSecurityGroup, id)
 }
 
-func acceptedVolume(op *longrunningpb.Operation, owner resource.AccountID, req resource.CreateVolumeRequest, state resource.VolumeState) (resource.Accepted[resource.Volume], error) {
+func acceptedVolume(op *longrunningpb.Operation, req resource.CreateVolumeRequest, state resource.VolumeState) (resource.Accepted[resource.Volume], error) {
 	parsed, err := operationFrom(op, resource.ServiceCompute)
 	if err != nil {
 		return resource.Accepted[resource.Volume]{}, err
@@ -531,7 +572,11 @@ func acceptedVolume(op *longrunningpb.Operation, owner resource.AccountID, req r
 	if err != nil {
 		return resource.Accepted[resource.Volume]{}, resource.Internal(err)
 	}
-	vol := resource.Volume{ID: id, OwnerID: owner, SizeGiB: req.SizeGiB, Zone: req.Zone, State: state}
+	named, err := accountIn(metaName)
+	if err != nil {
+		return resource.Accepted[resource.Volume]{}, err
+	}
+	vol := resource.Volume{ID: id, OwnerID: named, SizeGiB: req.SizeGiB, Zone: req.Zone, State: state}
 	parsed.Action = resource.ActionCreateVolume
 	parsed.Targets = []resource.Ref{id.Ref()}
 	return resource.Accepted[resource.Volume]{Operation: parsed, Items: []resource.Volume{vol}}, nil
@@ -732,19 +777,39 @@ func groupModel(in *networkv1.SecurityGroup) (resource.SecurityGroup, error) {
 	}, nil
 }
 
-func protocolOf(name string) networkv1.Protocol {
+func protocolOf(name string) (networkv1.Protocol, error) {
 	switch name {
 	case "tcp":
-		return networkv1.Protocol_PROTOCOL_TCP
+		return networkv1.Protocol_PROTOCOL_TCP, nil
 	case "udp":
-		return networkv1.Protocol_PROTOCOL_UDP
+		return networkv1.Protocol_PROTOCOL_UDP, nil
 	case "icmp":
-		return networkv1.Protocol_PROTOCOL_ICMP
+		return networkv1.Protocol_PROTOCOL_ICMP, nil
 	case "-1", "all":
-		return networkv1.Protocol_PROTOCOL_ALL
+		return networkv1.Protocol_PROTOCOL_ALL, nil
 	default:
-		return networkv1.Protocol_PROTOCOL_TCP
+		return networkv1.Protocol_PROTOCOL_UNSPECIFIED, resource.Invalid("ipProtocol", "unsupported")
 	}
+}
+
+func ruleProto(rule resource.IngressRule, id string) (*networkv1.SecurityGroupRule, error) {
+	protocol, err := protocolOf(rule.Protocol)
+	if err != nil {
+		return nil, err
+	}
+	return &networkv1.SecurityGroupRule{
+		Id:        id,
+		Direction: networkv1.Direction_DIRECTION_INGRESS,
+		Protocol:  protocol,
+		FromPort:  int32(rule.FromPort),
+		ToPort:    int32(rule.ToPort),
+		Target:    &networkv1.SecurityGroupRule_Cidr{Cidr: rule.Cidr},
+	}, nil
+}
+
+func sourcedVolume(in *storagev1.Volume) bool {
+	spec := in.GetSpec()
+	return spec.GetImage() != "" || spec.GetSnapshot() != ""
 }
 
 func protocolName(p networkv1.Protocol) string {
@@ -764,6 +829,8 @@ func protocolName(p networkv1.Protocol) string {
 	}
 }
 
+// derivedKey's domain is "key-seed". The key id and the request id use a
+// different domain, so neither published value is the private key.
 func derivedKey(parts ...string) (string, string, string, error) {
 	sum := hashParts(parts...)
 	priv := ed25519.NewKeyFromSeed(sum[:ed25519.SeedSize])

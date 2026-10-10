@@ -10,6 +10,7 @@ import (
 	computev1 "github.com/popododo0720/vws-proto/gen/go/vws/compute/v1"
 	networkv1 "github.com/popododo0720/vws-proto/gen/go/vws/network/v1"
 	storagev1 "github.com/popododo0720/vws-proto/gen/go/vws/storage/v1"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
@@ -145,6 +146,7 @@ func (c computeClient) StopInstances(ctx context.Context, m backend.Mutation, re
 			Instance: &computev1.Instance{
 				Name: instanceName(projectID, inst.ID.String()),
 				Labels: withInternalLabels(inst.Tags, map[string]string{
+					labelAction:      resource.ActionStopInstances.String(),
 					labelFingerprint: clip(m.Fingerprint, 63),
 					labelImage:       inst.ImageID.String(),
 					labelReservation: inst.ReservationID.String(),
@@ -230,9 +232,11 @@ func (c computeClient) DescribeInstances(ctx context.Context, s backend.Scope, q
 }
 
 func (c computeClient) GetOperation(ctx context.Context, s backend.Scope, id resource.OperationID) (resource.Operation, error) {
-	out, err := c.computeOps.GetOperation(ctx, &longrunningpb.GetOperationRequest{
-		Name: operationName(project(s.Account), id.Local()),
-	})
+	name := operationName(project(s.Account), id.Local())
+	out, err := c.computeOps.GetOperation(ctx, &longrunningpb.GetOperationRequest{Name: name})
+	if status.Code(err) == codes.NotFound {
+		out, err = c.storageOps.GetOperation(ctx, &longrunningpb.GetOperationRequest{Name: name})
+	}
 	if err != nil {
 		return resource.Operation{}, fromRPC(err)
 	}
@@ -242,6 +246,24 @@ func (c computeClient) GetOperation(ctx context.Context, s backend.Scope, id res
 	}
 	if op.ID != id {
 		return resource.Operation{}, resource.Internal(strErr("backend returned a different operation"))
+	}
+	return c.actionFromInstance(ctx, s, op)
+}
+
+// actionFromInstance reads the vws-action label. Verb plus resource cannot
+// tell a start from a stop, and a real request id is a UUID.
+func (c computeClient) actionFromInstance(ctx context.Context, s backend.Scope, op resource.Operation) (resource.Operation, error) {
+	if op.Action != resource.ActionStopInstances || len(op.Targets) != 1 || op.Targets[0].Kind() != resource.KindInstance {
+		return op, nil
+	}
+	got, err := c.instances.GetInstance(ctx, &computev1.GetInstanceRequest{
+		Name: instanceName(project(s.Account), op.Targets[0].ID()),
+	})
+	if err != nil {
+		return op, nil
+	}
+	if parsed, ok := resource.ParseAction(got.GetLabels()[labelAction]); ok {
+		op.Action = parsed
 	}
 	return op, nil
 }

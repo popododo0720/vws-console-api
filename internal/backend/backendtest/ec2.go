@@ -11,6 +11,10 @@ import (
 func exerciseEC2(ctx context.Context, t *testing.T, set backend.Set, account resource.AccountID, stopped resource.InstanceID) {
 	t.Helper()
 	scope := backend.Scope{Account: account}
+	blank, err := set.Compute.DescribeVolumes(ctx, scope, resource.VolumeQuery{Page: resource.PageRequest{Size: 50}})
+	if err != nil || len(blank.Items) != 0 {
+		t.Fatalf("boot volume leaked: %v %+v", err, blank.Items)
+	}
 	vpcReq := resource.CreateVpcRequest{Cidr: "10.8.0.0/16"}
 	vm := backend.Mutation{Scope: scope, Key: "k-vpc", Fingerprint: "fp-vpc"}
 	created, err := set.Network.CreateVpc(ctx, vm, vpcReq)
@@ -123,8 +127,9 @@ func exerciseEC2(ctx context.Context, t *testing.T, set backend.Set, account res
 	if err != nil || started.Items[0].Current != resource.InstancePending || started.Items[0].Previous != resource.InstanceStopped {
 		t.Fatalf("start: %v %+v", err, started.Items)
 	}
-	if _, err := set.Compute.GetOperation(ctx, scope, started.Operation.ID); err != nil {
-		t.Fatal(err)
+	startedOp, err := set.Compute.GetOperation(ctx, scope, started.Operation.ID)
+	if err != nil || startedOp.Action != resource.ActionStartInstances {
+		t.Fatalf("start operation: %v %s", err, startedOp.Action)
 	}
 	running, err := set.Compute.DescribeInstances(ctx, scope, resource.InstanceQuery{
 		IDs: []resource.InstanceID{stopped}, Page: resource.PageRequest{Size: 50},
@@ -169,6 +174,12 @@ func exerciseEC2(ctx context.Context, t *testing.T, set backend.Set, account res
 		ID: group.Items[0].ID, Rule: resource.IngressRule{Protocol: "tcp", FromPort: 22, ToPort: 22, Cidr: "10.0.0.0/16"},
 	}); resource.CodeOf(err) != resource.CodeAlreadyExists {
 		t.Fatalf("duplicate rule: %v", err)
+	}
+	openedMore, err := set.Network.AuthorizeSecurityGroupIngress(ctx, backend.Mutation{Scope: scope, Key: "k-auth-3", Fingerprint: "fp-auth-3"}, resource.AuthorizeSecurityGroupIngressRequest{
+		ID: group.Items[0].ID, Rule: resource.IngressRule{Protocol: "udp", FromPort: 53, ToPort: 53, Cidr: "10.0.0.0/16"},
+	})
+	if err != nil || len(openedMore.Items[0].Rules) != 2 {
+		t.Fatalf("second rule: %v %+v", err, openedMore.Items)
 	}
 
 	keyM := backend.Mutation{Scope: scope, Key: "k-key", Fingerprint: "fp-key"}

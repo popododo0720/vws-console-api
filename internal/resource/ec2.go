@@ -1,6 +1,9 @@
 package resource
 
-import "net"
+import (
+	"net"
+	"strings"
+)
 
 // Vpc is a regional IPv4 network.
 type Vpc struct {
@@ -239,15 +242,42 @@ func (r AuthorizeSecurityGroupIngressRequest) Normalize() (AuthorizeSecurityGrou
 	if r.ID.IsZero() {
 		return AuthorizeSecurityGroupIngressRequest{}, Invalid("groupId", "required")
 	}
-	if r.Rule.Protocol == "" {
-		return AuthorizeSecurityGroupIngressRequest{}, Invalid("ipProtocol", "required")
+	protocol, err := canonicalProtocol(r.Rule.Protocol)
+	if err != nil {
+		return AuthorizeSecurityGroupIngressRequest{}, err
 	}
+	r.Rule.Protocol = protocol
 	cidr, err := normalizeCIDR(r.Rule.Cidr)
 	if err != nil {
 		return AuthorizeSecurityGroupIngressRequest{}, err
 	}
 	r.Rule.Cidr = cidr
+	if protocol == "-1" {
+		r.Rule.FromPort = 0
+		r.Rule.ToPort = 0
+		return r, nil
+	}
+	if r.Rule.FromPort < 0 || r.Rule.ToPort > 65535 || r.Rule.ToPort < 0 || r.Rule.FromPort > r.Rule.ToPort {
+		return AuthorizeSecurityGroupIngressRequest{}, Invalid("fromPort", "malformed")
+	}
 	return r, nil
+}
+
+// canonicalProtocol accepts the names and protocol numbers a query client sends.
+// Anything else is rejected. Mapping it to tcp would open a different port.
+func canonicalProtocol(raw string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "tcp", "6":
+		return "tcp", nil
+	case "udp", "17":
+		return "udp", nil
+	case "icmp", "1":
+		return "icmp", nil
+	case "-1", "all":
+		return "-1", nil
+	default:
+		return "", Invalid("ipProtocol", "unsupported")
+	}
 }
 
 // Image is a machine image the caller can launch.

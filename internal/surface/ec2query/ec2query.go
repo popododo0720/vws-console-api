@@ -474,11 +474,11 @@ func allowStop(key string) bool {
 }
 
 func allowSubnet(key string) bool {
-	return key == "Action" || key == "Version" || key == "ClientToken" || key == "CidrBlock" || key == "VpcId" || tagSpecField(key)
+	return key == "Action" || key == "Version" || key == "ClientToken" || key == "CidrBlock" || key == "VpcId"
 }
 
 func allowCreateVpc(key string) bool {
-	return key == "Action" || key == "Version" || key == "ClientToken" || key == "CidrBlock" || key == "InstanceTenancy" || tagSpecField(key)
+	return key == "Action" || key == "Version" || key == "ClientToken" || key == "CidrBlock" || key == "InstanceTenancy"
 }
 
 func allowDeleteVpc(key string) bool {
@@ -486,7 +486,7 @@ func allowDeleteVpc(key string) bool {
 }
 
 func allowCreateVolume(key string) bool {
-	return key == "Action" || key == "Version" || key == "ClientToken" || key == "Size" || key == "AvailabilityZone" || key == "VolumeType" || key == "SnapshotId" || tagSpecField(key)
+	return key == "Action" || key == "Version" || key == "ClientToken" || key == "Size" || key == "AvailabilityZone" || key == "VolumeType" || key == "SnapshotId"
 }
 
 func allowAttachVolume(key string) bool {
@@ -498,7 +498,7 @@ func allowDeleteVolume(key string) bool {
 }
 
 func allowCreateGroup(key string) bool {
-	return key == "Action" || key == "Version" || key == "ClientToken" || key == "GroupName" || key == "GroupDescription" || key == "VpcId" || tagSpecField(key)
+	return key == "Action" || key == "Version" || key == "ClientToken" || key == "GroupName" || key == "GroupDescription" || key == "VpcId"
 }
 
 func allowAuthorize(key string) bool {
@@ -509,7 +509,7 @@ func allowAuthorize(key string) bool {
 }
 
 func allowCreateKey(key string) bool {
-	return key == "Action" || key == "Version" || key == "ClientToken" || key == "KeyName" || tagSpecField(key)
+	return key == "Action" || key == "Version" || key == "ClientToken" || key == "KeyName"
 }
 
 func allowDescribeVpcs(key string) bool {
@@ -561,7 +561,7 @@ func permissionField(key string) bool {
 		return false
 	}
 	n, field, ok := strings.Cut(rest, ".")
-	if !ok || !inRange(n, 5) {
+	if !ok || n != "1" {
 		return false
 	}
 	switch field {
@@ -574,7 +574,7 @@ func permissionField(key string) bool {
 		return false
 	}
 	m, leaf, ok := strings.Cut(rangeRest, ".")
-	return ok && inRange(m, 5) && leaf == "CidrIp"
+	return ok && m == "1" && leaf == "CidrIp"
 }
 
 func tagField(key string) bool {

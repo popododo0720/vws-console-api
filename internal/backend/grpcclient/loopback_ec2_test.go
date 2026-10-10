@@ -54,6 +54,7 @@ func (s *volumeSrv) ListVolumes(ctx context.Context, req *storagev1.ListVolumesR
 	for _, vol := range page.Items {
 		items = append(items, volumeProto(vol, projectID))
 	}
+	items = append(items, s.w.bootsFor(projectID)...)
 	return &storagev1.ListVolumesResponse{Volumes: items, NextPageToken: page.NextToken}, nil
 }
 
@@ -204,27 +205,25 @@ func (s *groupSrv) UpdateSecurityGroup(ctx context.Context, req *networkv1.Updat
 	if len(rules) == 0 {
 		return nil, toStatus(resource.Invalid("ipProtocol", "required"))
 	}
-	rule := rules[len(rules)-1]
-	fp, err := protoFingerprint(req)
-	if err != nil {
+	if err := ctx.Err(); err != nil {
 		return nil, toStatus(err)
 	}
-	acc, err := s.w.set.Network.AuthorizeSecurityGroupIngress(ctx, backend.Mutation{
-		Scope: backend.Scope{Account: account}, Key: req.GetRequestId(), Fingerprint: fp,
-	}, resource.AuthorizeSecurityGroupIngressRequest{
-		ID: id,
-		Rule: resource.IngressRule{
+	group, ok := s.w.group(id.String(), account)
+	if !ok {
+		return nil, toStatus(resource.NotFound(resource.KindSecurityGroup, id.String()))
+	}
+	decoded := make([]resource.IngressRule, 0, len(rules))
+	for _, rule := range rules {
+		decoded = append(decoded, resource.IngressRule{
 			Protocol: protocolName(rule.GetProtocol()),
 			FromPort: int(rule.GetFromPort()),
 			ToPort:   int(rule.GetToPort()),
 			Cidr:     rule.GetCidr(),
-		},
-	})
-	if err != nil {
-		return nil, toStatus(err)
+		})
 	}
-	s.w.saveGroup(acc.Items[0])
-	return runningOp(projectID, acc.Operation, req.GetSecurityGroup().GetName(), commonv1.OperationVerb_OPERATION_VERB_UPDATE, s.w.now)
+	group.Rules = decoded
+	s.w.saveGroup(group)
+	return runningNamed(projectID, req.GetRequestId(), req.GetSecurityGroup().GetName(), commonv1.OperationVerb_OPERATION_VERB_UPDATE, s.w.now)
 }
 
 type keySrv struct {
@@ -284,10 +283,11 @@ func (w *loopWorld) group(id string, owner resource.AccountID) (resource.Securit
 func groupProto(group resource.SecurityGroup, projectID string) *networkv1.SecurityGroup {
 	rules := make([]*networkv1.SecurityGroupRule, 0, len(group.Rules))
 	for i, rule := range group.Rules {
+		protocol, _ := protocolOf(rule.Protocol)
 		rules = append(rules, &networkv1.SecurityGroupRule{
 			Id:        "r" + hexByte(i),
 			Direction: networkv1.Direction_DIRECTION_INGRESS,
-			Protocol:  protocolOf(rule.Protocol),
+			Protocol:  protocol,
 			FromPort:  int32(rule.FromPort),
 			ToPort:    int32(rule.ToPort),
 			Target:    &networkv1.SecurityGroupRule_Cidr{Cidr: rule.Cidr},

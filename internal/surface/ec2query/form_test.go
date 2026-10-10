@@ -44,6 +44,46 @@ func TestClientTokenIsRequired(t *testing.T) {
 	}
 }
 
+func TestUnreadQueryFieldsAreRejected(t *testing.T) {
+	h, cred, now := harness(t)
+	vpc := url.Values{}
+	vpc.Set("Action", "CreateVpc")
+	vpc.Set("Version", Version)
+	vpc.Set("CidrBlock", "10.1.0.0/16")
+	vpc.Set("TagSpecification.1.ResourceType", "vpc")
+	vpc.Set("TagSpecification.1.Tag.1.Key", "Name")
+	vpc.Set("TagSpecification.1.Tag.1.Value", "web")
+	res := signed(t, h, cred, now, vpc.Encode())
+	if res.Code != http.StatusBadRequest || !strings.Contains(res.Body.String(), "InvalidParameterValue") {
+		t.Fatalf("tag spec %d %s", res.Code, res.Body)
+	}
+	vpc.Del("TagSpecification.1.ResourceType")
+	vpc.Del("TagSpecification.1.Tag.1.Key")
+	vpc.Del("TagSpecification.1.Tag.1.Value")
+	res = signed(t, h, cred, now, vpc.Encode())
+	if res.Code != http.StatusOK {
+		t.Fatalf("vpc without tags %d %s", res.Code, res.Body)
+	}
+	auth := url.Values{}
+	auth.Set("Action", "AuthorizeSecurityGroupIngress")
+	auth.Set("Version", Version)
+	auth.Set("GroupId", "sg-01234567")
+	auth.Set("IpPermissions.1.IpProtocol", "tcp")
+	auth.Set("IpPermissions.1.FromPort", "22")
+	auth.Set("IpPermissions.1.ToPort", "22")
+	auth.Set("IpPermissions.1.IpRanges.1.CidrIp", "10.0.0.0/16")
+	auth.Set("IpPermissions.2.IpProtocol", "udp")
+	res = signed(t, h, cred, now, auth.Encode())
+	if res.Code != http.StatusBadRequest || !strings.Contains(res.Body.String(), "InvalidParameterValue") {
+		t.Fatalf("second permission %d %s", res.Code, res.Body)
+	}
+	auth.Del("IpPermissions.2.IpProtocol")
+	res = signed(t, h, cred, now, auth.Encode())
+	if res.Code != http.StatusBadRequest || !strings.Contains(res.Body.String(), "InvalidGroup.NotFound") {
+		t.Fatalf("one permission %d %s", res.Code, res.Body)
+	}
+}
+
 func TestStopOmitsClientToken(t *testing.T) {
 	h, cred, now := harness(t)
 	form := url.Values{}

@@ -470,10 +470,13 @@ func (w *World) vpcInUse(id resource.VpcID) bool {
 	return false
 }
 
-func pageOwned[I comparable, T resource.Owned](rows map[I]*T, account resource.AccountID, ids []I, q resource.PageRequest, kind resource.Kind) (resource.Page[T], error) {
-	want := map[I]struct{}{}
+func pageOwned[I interface {
+	comparable
+	String() string
+}, T resource.Owned](rows map[I]*T, account resource.AccountID, ids []I, q resource.PageRequest, kind resource.Kind) (resource.Page[T], error) {
+	want := map[string]struct{}{}
 	for _, id := range ids {
-		want[id] = struct{}{}
+		want[id.String()] = struct{}{}
 	}
 	var items []T
 	for _, row := range rows {
@@ -482,16 +485,7 @@ func pageOwned[I comparable, T resource.Owned](rows map[I]*T, account resource.A
 			continue
 		}
 		if len(want) > 0 {
-			var id I
-			switch typed := any(item).(type) {
-			case resource.Vpc:
-				id, _ = any(typed.ID).(I)
-			case resource.Volume:
-				id, _ = any(typed.ID).(I)
-			default:
-				continue
-			}
-			if _, ok := want[id]; !ok {
+			if _, ok := want[item.Identity()]; !ok {
 				continue
 			}
 		}
@@ -499,7 +493,7 @@ func pageOwned[I comparable, T resource.Owned](rows map[I]*T, account resource.A
 	}
 	sortOwned(items)
 	if len(ids) == 1 && len(items) == 0 {
-		return resource.Page[T]{}, resource.NotFound(kind, any(ids[0]).(interface{ String() string }).String())
+		return resource.Page[T]{}, resource.NotFound(kind, ids[0].String())
 	}
 	return page(items, q)
 }
