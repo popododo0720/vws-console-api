@@ -223,5 +223,6 @@ func Run(t *testing.T, newSet Harness) {
 	if resource.CodeOf(err) != resource.CodePayloadTooLarge {
 		t.Fatalf("over cap: %v", err)
 	}
+	exerciseObjectList(ctx, t, set, account, other)
 	exerciseEC2(ctx, t, set, account, first.Items[0].ID)
 }

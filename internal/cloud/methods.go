@@ -263,6 +263,28 @@ func (s *Service) GetObject(ctx context.Context, c resource.Caller, req resource
 	return meta, rc, nil
 }
 
+// ListObjects lists keys in a bucket the caller owns. One storage call
+// returns the page; the backend reads however many service pages it needs.
+func (s *Service) ListObjects(ctx context.Context, c resource.Caller, q resource.ObjectQuery) (resource.ObjectListing, error) {
+	if err := requireCaller(c); err != nil {
+		return resource.ObjectListing{}, err
+	}
+	q, err := q.Normalize()
+	if err != nil {
+		return resource.ObjectListing{}, err
+	}
+	listing, err := s.backends.Storage.ListObjects(ctx, scope(c), q)
+	if err != nil {
+		return resource.ObjectListing{}, err
+	}
+	for _, obj := range listing.Objects {
+		if err := guardOwner(c.Account, obj); err != nil {
+			return resource.ObjectListing{}, err
+		}
+	}
+	return listing, nil
+}
+
 // DeleteObject removes an object. A missing object is success.
 func (s *Service) DeleteObject(ctx context.Context, c resource.Caller, bucket resource.BucketName, key resource.ObjectKey) error {
 	if bucket.IsZero() || key.IsZero() {

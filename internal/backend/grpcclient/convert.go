@@ -447,7 +447,7 @@ func bucketModel(in *storagev1.Bucket) (resource.Bucket, error) {
 }
 
 func objectProto(o resource.Object, projectID string) *storagev1.Object {
-	return &storagev1.Object{
+	out := &storagev1.Object{
 		Name: objectName(projectID, o.Bucket.String(), o.Key.String()),
 		Etag: o.ETag,
 		Spec: &storagev1.ObjectSpec{ContentType: o.ContentType},
@@ -456,6 +456,10 @@ func objectProto(o resource.Object, projectID string) *storagev1.Object {
 			SizeBytes: o.Size,
 		},
 	}
+	if ts, err := time.Parse(time.RFC3339, o.LastModified); err == nil {
+		out.UpdateTime = timestamppb.New(ts)
+	}
+	return out
 }
 
 func objectModel(in *storagev1.Object) (resource.Object, error) {
@@ -482,9 +486,18 @@ func objectModel(in *storagev1.Object) (resource.Object, error) {
 	if err != nil {
 		return resource.Object{}, err
 	}
+	modified := ""
+	when := in.GetUpdateTime()
+	if when == nil {
+		when = in.GetCreateTime()
+	}
+	if when != nil {
+		modified = when.AsTime().UTC().Format(time.RFC3339)
+	}
 	return resource.Object{
 		Bucket: bucket, Key: key, OwnerID: owner,
 		Size: in.GetStatus().GetSizeBytes(), ETag: in.GetEtag(), ContentType: in.GetSpec().GetContentType(),
+		LastModified: modified,
 	}, nil
 }
 

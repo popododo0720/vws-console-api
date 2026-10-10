@@ -923,6 +923,37 @@ type objectSrv struct {
 	w *loopWorld
 }
 
+func (s *objectSrv) ListObjects(ctx context.Context, req *storagev1.ListObjectsRequest) (*storagev1.ListObjectsResponse, error) {
+	projectID, account, bucket, err := bucketRef(req.GetParent())
+	if err != nil {
+		return nil, toStatus(err)
+	}
+	size := int(req.GetPageSize())
+	if size <= 0 {
+		size = 50
+	}
+	if size > 1000 {
+		size = 1000
+	}
+	// Two keys per page forces the client to follow the service token.
+	if size > 2 {
+		size = 2
+	}
+	// The RPC has no delimiter. An empty delimiter keeps every key as an object
+	// so the client can group after it has read every page.
+	listing, err := s.w.set.Storage.ListObjects(ctx, backend.Scope{Account: account}, resource.ObjectQuery{
+		Bucket: bucket, MaxKeys: size, Token: req.GetPageToken(),
+	})
+	if err != nil {
+		return nil, toStatus(err)
+	}
+	items := make([]*storagev1.Object, 0, len(listing.Objects))
+	for _, obj := range listing.Objects {
+		items = append(items, objectProto(obj, projectID))
+	}
+	return &storagev1.ListObjectsResponse{Objects: items, NextPageToken: listing.NextToken}, nil
+}
+
 func (s *objectSrv) GetObject(ctx context.Context, req *storagev1.GetObjectRequest) (*storagev1.Object, error) {
 	projectID, account, bucket, key, err := objectRef(req.GetName())
 	if err != nil {

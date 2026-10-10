@@ -4,11 +4,14 @@ package s3rest
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/xml"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/popododo0720/vws-console-api/internal/cloud"
 	"github.com/popododo0720/vws-console-api/internal/resource"
@@ -26,11 +29,13 @@ func New(cfg Config) http.Handler {
 	h := &handler{svc: cfg.Service, verifier: cfg.Verifier}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", h.listBuckets)
-	mux.HandleFunc("GET /{bucket}", h.unsupportedList)
+	mux.HandleFunc("GET /{bucket}", h.listObjects)
+	mux.HandleFunc("HEAD /{bucket}", h.headBucket)
 	mux.HandleFunc("PUT /{bucket}", h.createBucket)
 	mux.HandleFunc("DELETE /{bucket}", h.deleteBucket)
 	mux.HandleFunc("PUT /{bucket}/{key...}", h.putObject)
 	mux.HandleFunc("GET /{bucket}/{key...}", h.getObject)
+	mux.HandleFunc("HEAD /{bucket}/{key...}", h.headObject)
 	mux.HandleFunc("DELETE /{bucket}/{key...}", h.deleteObject)
 	return h.wrap(mux)
 }
@@ -103,8 +108,143 @@ func (h *handler) createBucket(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-func (h *handler) unsupportedList(w http.ResponseWriter, r *http.Request) {
-	writeErr(w, r, resource.Unimplemented("object listing"), r.URL.Path)
+func (h *handler) listObjects(w http.ResponseWriter, r *http.Request) {
+	c := callerFrom(r)
+	bucket, err := resource.Parse[resource.BucketName](r.PathValue("bucket"))
+	if err != nil {
+		writeErr(w, r, err, r.PathValue("bucket"))
+		return
+	}
+	q, err := objectListQuery(r, bucket)
+	if err != nil {
+		writeErr(w, r, err, bucket.String())
+		return
+	}
+	page, err := h.svc.ListObjects(r.Context(), c, q)
+	if err != nil {
+		writeErr(w, r, err, bucket.String())
+		return
+	}
+	encode := r.URL.Query().Get("encoding-type") == "url"
+	includeOwner := r.URL.Query().Get("fetch-owner") == "true"
+	contents := make([]objectContentXML, 0, len(page.Objects))
+	for _, obj := range page.Objects {
+		item := objectContentXML{
+			Key:          encodeS3(obj.Key.String(), encode),
+			LastModified: obj.LastModified,
+			ETag:         obj.ETag,
+			Size:         obj.Size,
+			StorageClass: "STANDARD",
+		}
+		if includeOwner {
+			item.Owner = &ownerXML{ID: obj.OwnerID.String()}
+		}
+		contents = append(contents, item)
+	}
+	prefixes := make([]commonPrefixXML, 0, len(page.CommonPrefixes))
+	for _, prefix := range page.CommonPrefixes {
+		prefixes = append(prefixes, commonPrefixXML{Prefix: encodeS3(prefix, encode)})
+	}
+	writeXML(w, http.StatusOK, listObjectsXML{
+		Name:                  bucket.String(),
+		Prefix:                encodeS3(q.Prefix, encode),
+		Delimiter:             encodeS3(q.Delimiter, encode),
+		MaxKeys:               q.MaxKeys,
+		KeyCount:              len(contents) + len(prefixes),
+		EncodingType:          r.URL.Query().Get("encoding-type"),
+		ContinuationToken:     r.URL.Query().Get("continuation-token"),
+		NextContinuationToken: encodeToken(page.NextToken),
+		StartAfter:            encodeS3(q.StartAfter, encode),
+		IsTruncated:           page.NextToken != "",
+		Contents:              contents,
+		CommonPrefixes:        prefixes,
+	})
+}
+
+func objectListQuery(r *http.Request, bucket resource.BucketName) (resource.ObjectQuery, error) {
+	query := r.URL.Query()
+	for key := range query {
+		switch strings.ToLower(key) {
+		case "list-type", "prefix", "delimiter", "max-keys", "continuation-token", "start-after", "encoding-type", "fetch-owner":
+		default:
+			return resource.ObjectQuery{}, resource.Unimplemented(key + " is not served")
+		}
+	}
+	if query.Get("list-type") != "2" {
+		return resource.ObjectQuery{}, resource.Invalid("list-type", "unsupported")
+	}
+	switch query.Get("encoding-type") {
+	case "", "url":
+	default:
+		return resource.ObjectQuery{}, resource.Invalid("encoding-type", "unsupported")
+	}
+	switch query.Get("fetch-owner") {
+	case "", "true", "false":
+	default:
+		return resource.ObjectQuery{}, resource.Invalid("fetch-owner", "unsupported")
+	}
+	token, err := decodeToken(query.Get("continuation-token"))
+	if err != nil {
+		return resource.ObjectQuery{}, err
+	}
+	q := resource.ObjectQuery{
+		Bucket:     bucket,
+		Prefix:     query.Get("prefix"),
+		Delimiter:  query.Get("delimiter"),
+		MaxKeys:    1000,
+		Token:      token,
+		StartAfter: query.Get("start-after"),
+	}
+	if raw := query.Get("max-keys"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 1 {
+			return resource.ObjectQuery{}, resource.Invalid("max-keys", "malformed")
+		}
+		if n > 1000 {
+			n = 1000
+		}
+		q.MaxKeys = n
+	}
+	return q, nil
+}
+
+func encodeToken(token string) string {
+	if token == "" {
+		return ""
+	}
+	return base64.RawURLEncoding.EncodeToString([]byte(token))
+}
+
+func decodeToken(token string) (string, error) {
+	if token == "" {
+		return "", nil
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(token)
+	if err != nil {
+		return "", resource.Invalid("continuation-token", "malformed")
+	}
+	return string(raw), nil
+}
+
+func encodeS3(s string, urlEncode bool) string {
+	if !urlEncode || s == "" {
+		return s
+	}
+	return strings.ReplaceAll(url.QueryEscape(s), "+", "%20")
+}
+
+func (h *handler) headBucket(w http.ResponseWriter, r *http.Request) {
+	c := callerFrom(r)
+	name, err := resource.Parse[resource.BucketName](r.PathValue("bucket"))
+	if err != nil {
+		writeErr(w, r, err, r.PathValue("bucket"))
+		return
+	}
+	if _, err := h.svc.GetBucket(r.Context(), c, name); err != nil {
+		writeErr(w, r, err, name.String())
+		return
+	}
+	w.WriteHeader(http.StatusOK)
 }
 
 func (h *handler) deleteBucket(w http.ResponseWriter, r *http.Request) {
@@ -140,26 +280,47 @@ func (h *handler) putObject(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *handler) getObject(w http.ResponseWriter, r *http.Request) {
-	c := callerFrom(r)
-	bucket, key, err := objectPath(r)
-	if err != nil {
-		writeErr(w, r, err, r.URL.Path)
-		return
-	}
-	meta, body, err := h.svc.GetObject(r.Context(), c, resource.GetObjectRequest{Bucket: bucket, Key: key})
+	meta, body, err := h.openObject(r)
 	if err != nil {
 		writeErr(w, r, err, r.URL.Path)
 		return
 	}
 	defer func() { _ = body.Close() }()
+	writeObjectHeaders(w, meta)
+	w.WriteHeader(http.StatusOK)
+	_, _ = io.Copy(w, body)
+}
+
+func (h *handler) headObject(w http.ResponseWriter, r *http.Request) {
+	meta, body, err := h.openObject(r)
+	if err != nil {
+		writeErr(w, r, err, r.URL.Path)
+		return
+	}
+	defer func() { _ = body.Close() }()
+	writeObjectHeaders(w, meta)
+	w.Header().Set("Content-Length", strconv.FormatInt(meta.Size, 10))
+	w.WriteHeader(http.StatusOK)
+}
+
+func (h *handler) openObject(r *http.Request) (resource.Object, io.ReadCloser, error) {
+	bucket, key, err := objectPath(r)
+	if err != nil {
+		return resource.Object{}, nil, err
+	}
+	return h.svc.GetObject(r.Context(), callerFrom(r), resource.GetObjectRequest{Bucket: bucket, Key: key})
+}
+
+func writeObjectHeaders(w http.ResponseWriter, meta resource.Object) {
 	if meta.ContentType != "" {
 		w.Header().Set("Content-Type", meta.ContentType)
 	} else {
 		w.Header().Set("Content-Type", "application/octet-stream")
 	}
 	w.Header().Set("ETag", meta.ETag)
-	w.WriteHeader(http.StatusOK)
-	_, _ = io.Copy(w, body)
+	if ts, err := time.Parse(time.RFC3339, meta.LastModified); err == nil {
+		w.Header().Set("Last-Modified", ts.UTC().Format(http.TimeFormat))
+	}
 }
 
 func (h *handler) deleteObject(w http.ResponseWriter, r *http.Request) {
@@ -196,7 +357,38 @@ type listBucketsXML struct {
 	NextContinuationToken string     `xml:"NextContinuationToken,omitempty"`
 }
 
+type listObjectsXML struct {
+	XMLName               struct{}           `xml:"ListBucketResult"`
+	Name                  string             `xml:"Name"`
+	Prefix                string             `xml:"Prefix"`
+	Delimiter             string             `xml:"Delimiter,omitempty"`
+	MaxKeys               int                `xml:"MaxKeys"`
+	KeyCount              int                `xml:"KeyCount"`
+	EncodingType          string             `xml:"EncodingType,omitempty"`
+	ContinuationToken     string             `xml:"ContinuationToken,omitempty"`
+	NextContinuationToken string             `xml:"NextContinuationToken,omitempty"`
+	StartAfter            string             `xml:"StartAfter,omitempty"`
+	IsTruncated           bool               `xml:"IsTruncated"`
+	Contents              []objectContentXML `xml:"Contents,omitempty"`
+	CommonPrefixes        []commonPrefixXML  `xml:"CommonPrefixes,omitempty"`
+}
+
+type objectContentXML struct {
+	Key          string    `xml:"Key"`
+	LastModified string    `xml:"LastModified,omitempty"`
+	ETag         string    `xml:"ETag"`
+	Size         int64     `xml:"Size"`
+	StorageClass string    `xml:"StorageClass"`
+	Owner        *ownerXML `xml:"Owner,omitempty"`
+}
+
+type commonPrefixXML struct {
+	Prefix string `xml:"Prefix"`
+}
+
 func unsupportedObjectQuery(r *http.Request) error {
+	// Copy stays unimplemented. ObjectService has no copy RPC, and GetObject
+	// does not return the payload, so a local copy would write an empty object.
 	if r.Header.Get("X-Amz-Copy-Source") != "" {
 		return resource.Unimplemented("copy is not served")
 	}

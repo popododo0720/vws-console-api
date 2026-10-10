@@ -104,12 +104,13 @@ func (s storage) PutObject(ctx context.Context, sc backend.Scope, req resource.P
 	sum := sha256.Sum256(buf)
 	obj := &storedObject{
 		meta: resource.Object{
-			Bucket:      req.Bucket,
-			Key:         req.Key,
-			OwnerID:     sc.Account,
-			Size:        int64(len(buf)),
-			ETag:        `"` + hex.EncodeToString(sum[:]) + `"`,
-			ContentType: req.ContentType,
+			Bucket:       req.Bucket,
+			Key:          req.Key,
+			OwnerID:      sc.Account,
+			Size:         int64(len(buf)),
+			ETag:         `"` + hex.EncodeToString(sum[:]) + `"`,
+			ContentType:  req.ContentType,
+			LastModified: s.w.now().UTC().Format(time.RFC3339),
 		},
 		body: buf,
 	}
@@ -146,6 +147,30 @@ func (s storage) DeleteObject(ctx context.Context, sc backend.Scope, bucket reso
 	}
 	delete(s.w.obj, objectKey(bucket, key))
 	return nil
+}
+
+func (s storage) ListObjects(ctx context.Context, sc backend.Scope, q resource.ObjectQuery) (resource.ObjectListing, error) {
+	if err := ctx.Err(); err != nil {
+		return resource.ObjectListing{}, err
+	}
+	q, err := q.Normalize()
+	if err != nil {
+		return resource.ObjectListing{}, err
+	}
+	s.w.mu.Lock()
+	b, ok := s.w.buck[q.Bucket]
+	if !ok || b.OwnerID != sc.Account {
+		s.w.mu.Unlock()
+		return resource.ObjectListing{}, resource.NotFound(resource.KindBucket, q.Bucket.String())
+	}
+	keys := make([]resource.Object, 0, len(s.w.obj))
+	for _, obj := range s.w.obj {
+		if obj.meta.Bucket == q.Bucket && obj.meta.OwnerID == sc.Account {
+			keys = append(keys, obj.meta)
+		}
+	}
+	s.w.mu.Unlock()
+	return resource.PageObjects(keys, q)
 }
 
 func objectKey(bucket resource.BucketName, key resource.ObjectKey) string {

@@ -19,12 +19,13 @@ func (b Bucket) Identity() string { return b.Name.String() }
 
 // Object is the metadata of one stored object. The body is a stream beside it.
 type Object struct {
-	Bucket      BucketName `json:"bucket"`
-	Key         ObjectKey  `json:"key"`
-	OwnerID     AccountID  `json:"ownerId"`
-	Size        int64      `json:"size"`
-	ETag        string     `json:"etag"`
-	ContentType string     `json:"contentType,omitempty"`
+	Bucket       BucketName `json:"bucket"`
+	Key          ObjectKey  `json:"key"`
+	OwnerID      AccountID  `json:"ownerId"`
+	Size         int64      `json:"size"`
+	ETag         string     `json:"etag"`
+	ContentType  string     `json:"contentType,omitempty"`
+	LastModified string     `json:"lastModified,omitempty"`
 }
 
 // Owner returns the account that owns the object.
