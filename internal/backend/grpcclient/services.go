@@ -435,11 +435,65 @@ func (c storageClient) GetObject(ctx context.Context, s backend.Scope, req resou
 	if err != nil {
 		return resource.Object{}, nil, fromRPC(err)
 	}
+	if out.GetDeleteTime() != nil {
+		return resource.Object{}, nil, resource.NotFound(resource.KindObject, req.Key.String())
+	}
 	meta, err := objectModel(out)
 	if err != nil {
 		return resource.Object{}, nil, err
 	}
 	return meta, io.NopCloser(bytes.NewReader(nil)), nil
+}
+
+func (c storageClient) ListObjects(ctx context.Context, s backend.Scope, q resource.ObjectQuery) (resource.ObjectListing, error) {
+	q, err := q.Normalize()
+	if err != nil {
+		return resource.ObjectListing{}, err
+	}
+	// ListObjects has no prefix or delimiter. Read every page, then roll the
+	// keys up once. The service token is not the caller's continuation token.
+	// The project is "a" plus the account, the same as every other storage call.
+	parent := bucketName(project(s.Account), q.Bucket.String())
+	var keys []resource.Object
+	serviceToken := ""
+	for page := 0; page < 100; page++ {
+		if err := ctx.Err(); err != nil {
+			return resource.ObjectListing{}, err
+		}
+		out, err := c.objects.ListObjects(ctx, &storagev1.ListObjectsRequest{
+			Parent: parent, PageSize: 1000, PageToken: serviceToken,
+		})
+		if err != nil {
+			return resource.ObjectListing{}, fromRPC(err)
+		}
+		for _, item := range out.GetObjects() {
+			if item.GetDeleteTime() != nil {
+				continue
+			}
+			obj, err := objectModel(item)
+			if err != nil {
+				return resource.ObjectListing{}, err
+			}
+			if obj.Bucket != q.Bucket || obj.OwnerID != s.Account {
+				return resource.ObjectListing{}, resource.Internal(strErr("object from another account"))
+			}
+			keys = append(keys, obj)
+		}
+		next := out.GetNextPageToken()
+		if next == "" {
+			if len(keys) == 0 {
+				if _, err := c.GetBucket(ctx, s, q.Bucket); err != nil {
+					return resource.ObjectListing{}, err
+				}
+			}
+			return resource.PageObjects(keys, q)
+		}
+		if next == serviceToken {
+			return resource.ObjectListing{}, resource.Internal(strErr("object listing is incomplete"))
+		}
+		serviceToken = next
+	}
+	return resource.ObjectListing{}, resource.Internal(strErr("object listing is incomplete"))
 }
 
 func (c storageClient) DeleteObject(ctx context.Context, s backend.Scope, bucket resource.BucketName, key resource.ObjectKey) error {

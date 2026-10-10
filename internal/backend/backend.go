@@ -61,6 +61,9 @@ type Storage interface {
 	PutObject(ctx context.Context, s Scope, req resource.PutObjectRequest, body io.Reader) (resource.Object, error)
 	GetObject(ctx context.Context, s Scope, req resource.GetObjectRequest) (resource.Object, io.ReadCloser, error)
 	DeleteObject(ctx context.Context, s Scope, bucket resource.BucketName, key resource.ObjectKey) error
+	// ListObjects returns one page of keys. Prefix and delimiter grouping
+	// match resource.PageObjects, including common prefixes.
+	ListObjects(ctx context.Context, s Scope, q resource.ObjectQuery) (resource.ObjectListing, error)
 }
 
 // Network is the internal network service.

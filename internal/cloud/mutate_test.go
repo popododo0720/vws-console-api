@@ -176,6 +176,36 @@ func (f foreignCompute) GetOperation(context.Context, backend.Scope, resource.Op
 	return f.op, nil
 }
 
+func TestForeignObjectListingIsInternal(t *testing.T) {
+	other, err := resource.Parse[resource.AccountID]("210987654321")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bucket, err := resource.Parse[resource.BucketName]("build-logs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, err := resource.Parse[resource.ObjectKey]("a.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stub := foreignObjects{obj: resource.Object{Bucket: bucket, Key: key, OwnerID: other}}
+	svc := New(Config{Backends: backend.Set{Storage: stub}})
+	_, err = svc.ListObjects(context.Background(), caller(t), resource.ObjectQuery{Bucket: bucket})
+	if resource.CodeOf(err) != resource.CodeInternal {
+		t.Fatalf("got %v", err)
+	}
+}
+
+type foreignObjects struct {
+	backend.Storage
+	obj resource.Object
+}
+
+func (f foreignObjects) ListObjects(context.Context, backend.Scope, resource.ObjectQuery) (resource.ObjectListing, error) {
+	return resource.ObjectListing{Objects: []resource.Object{f.obj}}, nil
+}
+
 func TestZeroAccountIsUnauthenticated(t *testing.T) {
 	svc := New(Config{Backends: backend.Set{Compute: foreignCompute{}}})
 	_, err := svc.RunInstances(context.Background(), resource.Caller{}, token(t, "launch-web-1"), runReq(t))
