@@ -116,6 +116,8 @@ func TestOperationLocalUUID(t *testing.T) {
 
 func TestOperationLocalServiceNames(t *testing.T) {
 	const hex16 = "0123456789abcdef"
+	const hex20 = "0123456789abcdef0123"
+	const hex40 = "0123456789abcdef0123456789abcdef01234567"
 	const hex32 = "0123456789abcdef0123456789abcdef"
 	uuid := "01234567-89ab-cdef-0123-456789abcdef"
 	cases := []struct {
@@ -123,10 +125,14 @@ func TestOperationLocalServiceNames(t *testing.T) {
 		want string
 	}{
 		{"projects/a123456789012/operations/op-" + hex16, hex16},
+		{"projects/a123456789012/operations/op-" + hex20, hex20},
 		{"projects/a123456789012/operations/op-" + hex32, hex32},
+		{"projects/a123456789012/operations/op-" + hex40, hex40},
 		{"projects/a123456789012/operations/op-" + uuid, hex32},
 		{"projects/a123456789012/operations/" + hex16, hex16},
+		{"projects/a123456789012/operations/" + hex20, hex20},
 		{"projects/a123456789012/operations/" + hex32, hex32},
+		{"projects/a123456789012/operations/" + hex40, hex40},
 		{"projects/a123456789012/operations/" + uuid, hex32},
 	}
 	for _, tc := range cases {
@@ -139,6 +145,7 @@ func TestOperationLocalServiceNames(t *testing.T) {
 		"projects/a123456789012/operations/op-" + strings.ToUpper(hex16),
 		"projects/a123456789012/operations/OP-" + hex16,
 		"projects/a123456789012/operations/op-0123",
+		"projects/a123456789012/operations/op-" + hex40 + "ab",
 		"projects/a123456789012/operations/op-op-" + hex16,
 		"projects/a123456789012/operations/" + strings.ToUpper(uuid),
 		"projects/a123456789012/operations/not-an-operation",
@@ -149,7 +156,7 @@ func TestOperationLocalServiceNames(t *testing.T) {
 			t.Fatalf("%s: %v", name, err)
 		}
 	}
-	for _, local := range []string{hex16, hex32} {
+	for _, local := range []string{hex16, hex20, hex32, hex40} {
 		name := operationName("a123456789012", local)
 		got, err := operationLocal(name)
 		if err != nil || got != local {
@@ -157,10 +164,16 @@ func TestOperationLocalServiceNames(t *testing.T) {
 		}
 	}
 	if seg := canonicalOperationSegment(hex16); seg != "op-"+hex16 {
-		t.Fatalf("compute segment %s", seg)
+		t.Fatalf("16-digit segment %s", seg)
+	}
+	if seg := canonicalOperationSegment(hex20); seg != "op-"+hex20 {
+		t.Fatalf("20-digit segment %s", seg)
+	}
+	if seg := canonicalOperationSegment(hex40); seg != "op-"+hex40 {
+		t.Fatalf("40-digit segment %s", seg)
 	}
 	if seg := canonicalOperationSegment(hex32); seg != uuid {
-		t.Fatalf("storage segment %s", seg)
+		t.Fatalf("uuid segment %s", seg)
 	}
 }
 

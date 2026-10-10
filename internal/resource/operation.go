@@ -122,15 +122,16 @@ func (a *Action) UnmarshalText(b []byte) error {
 }
 
 // OperationID identifies one operation and the service that owns it.
-// The wire form is "op-<service>-<hex>". The hex is 16 digits for an id minted
-// in this process, or 32 digits for a UUID from the resource API, without dashes.
+// The wire form is "op-<service>-<hex>". The hex is 16 to 40 lowercase digits:
+// 16 when this process mints one, 20 when storage or compute mints one, and 32
+// for a UUID from the resource API, without dashes.
 type OperationID struct {
 	service Service
 	local   string
 }
 
 // NewOperationID builds an id the owning service can route without a lookup table.
-// local must be 16 or 32 lowercase hex digits. Backends call this. Surfaces do not.
+// local must be 16 to 40 lowercase hex digits. Backends call this. Surfaces do not.
 func NewOperationID(s Service, local string) (OperationID, error) {
 	if s.String() == "" || !hexLocal(local) {
 		return OperationID{}, Malformed(KindOperation, "op-"+s.String()+"-"+local)
@@ -139,7 +140,7 @@ func NewOperationID(s Service, local string) (OperationID, error) {
 }
 
 func hexLocal(s string) bool {
-	if len(s) != 16 && len(s) != 32 {
+	if len(s) < 16 || len(s) > 40 {
 		return false
 	}
 	for _, r := range s {

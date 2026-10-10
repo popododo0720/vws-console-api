@@ -120,17 +120,18 @@ func operationName(projectID, local string) string {
 }
 
 // canonicalOperationSegment is the last path segment this process sends back
-// to the service that minted local. A 16-digit id is the op- prefix compute
-// and network publish. A 32-digit id is the UUID the resource API names.
+// to the service that minted local. Storage and compute publish op- plus 20
+// hex digits; network publishes op- plus its own hex width. Any width from
+// 16 to 40, other than a 32-digit UUID, goes back out with that prefix. A
+// 32-digit id is the lowercase UUID the proto contract names.
 func canonicalOperationSegment(local string) string {
-	switch len(local) {
-	case 16:
-		return "op-" + local
-	case 32:
+	if len(local) == 32 && isHexString(local, 32) {
 		return local[0:8] + "-" + local[8:12] + "-" + local[12:16] + "-" + local[16:20] + "-" + local[20:32]
-	default:
-		return local
 	}
+	if operationHexWidth(len(local)) && isHexString(local, len(local)) {
+		return "op-" + local
+	}
+	return local
 }
 
 func lastSegment(name string) string {
@@ -141,10 +142,9 @@ func lastSegment(name string) string {
 }
 
 // operationLocal reads the operation id the resource services publish.
-// Compute and network use "op-" plus 16 lowercase hex digits. The proto
-// contract, which storage follows, uses a lowercase UUID. A bare 16- or
-// 32-digit hex segment is the same id with the punctuation already removed.
-// Anything else is rejected. The returned value is 16 or 32 hex digits.
+// The segment is op- plus 16 to 40 lowercase hex digits, a bare hex string of
+// that width, or a lowercase UUID. Storage and compute use 20 digits.
+// Anything else is rejected.
 func operationLocal(name string) (string, error) {
 	local, ok := parseOperationSegment(lastSegment(name))
 	if !ok {
@@ -157,7 +157,7 @@ func parseOperationSegment(seg string) (string, bool) {
 	if rest, ok := strings.CutPrefix(seg, "op-"); ok {
 		seg = rest
 	}
-	if isHexString(seg, 16) || isHexString(seg, 32) {
+	if operationHexWidth(len(seg)) && isHexString(seg, len(seg)) {
 		return seg, true
 	}
 	if len(seg) == 36 && seg[8] == '-' && seg[13] == '-' && seg[18] == '-' && seg[23] == '-' {
@@ -167,6 +167,10 @@ func parseOperationSegment(seg string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+func operationHexWidth(n int) bool {
+	return n >= 16 && n <= 40
 }
 
 func isHexString(s string, n int) bool {
