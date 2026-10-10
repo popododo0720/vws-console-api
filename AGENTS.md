@@ -62,6 +62,7 @@ change.
 | `AllocateAddress` ensures the account default VPC (`172.31.0.0/16`) when the project has none. The address proto has no VPC field. | `TestAllocateAddressEnsuresDefaultVPC` |
 | Describe calls accept the query names boto3 sends. `DescribeSnapshots` keeps `Owner` and `OwnerId` (`OwnerIds=['self']`) and `RestorableBy`. `DescribeImages` keeps `Owner` and `ExecutableBy`. `dryRun` is rejected. `maxResults` and `nextToken` page the same way as `MaxResults` and `NextToken`. An owner other than `self` or the caller is an empty page. A filter this codec does not apply is rejected. | `TestDescribeStandardParameters` |
 | A boot volume is not a `DescribeVolumes` row. `AuthorizeSecurityGroupIngress` writes the whole rule list. Polling `StartInstances` reports that action, from the `vws-action` label. | `exerciseEC2` |
+| `RunInstances` creates the boot volume from `VolumeSpec.image`. `InstanceSpec` does not reference an image. | `TestBootVolumeSourcesTheImage` |
 | `CreateKeyPair`'s private key is not the hash published as the key id or the request id. | `TestKeySeedIsNotThePublishedID` |
 | Volume and snapshot create and delete operations are read from the storage service. A subnet in `DELETING` stays a subnet state. | `TestContractOverGRPC` uses a separate storage listener; `TestSubnetDeletingRoundTrip` |
 | An unknown ingress protocol is invalid. It is not stored as tcp. | `TestIngressProtocolIsCanonical` |

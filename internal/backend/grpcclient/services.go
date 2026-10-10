@@ -58,14 +58,7 @@ func (c computeClient) RunInstances(ctx context.Context, m backend.Mutation, req
 			Parent:    volumeParent(projectID),
 			VolumeId:  volID,
 			RequestId: requestUUID(m.Key, "vol", strconv.Itoa(i)),
-			Volume: &storagev1.Volume{
-				Labels: map[string]string{labelFingerprint: clip(m.Fingerprint, 63)},
-				Spec: &storagev1.VolumeSpec{
-					SizeGib: 8,
-					Type:    storagev1.VolumeType_VOLUME_TYPE_SSD,
-					Source:  &storagev1.VolumeSpec_Image{Image: imageName(projectID, req.ImageID.String())},
-				},
-			},
+			Volume:    bootVolume(projectID, m.Fingerprint, req.ImageID),
 		})
 		if err := rpcErr(volOp, err); err != nil {
 			return resource.Accepted[resource.Instance]{}, err
@@ -123,6 +116,20 @@ func (c computeClient) RunInstances(ctx context.Context, m backend.Mutation, req
 	op.Action = resource.ActionRunInstances
 	op.Targets = instanceRefs(items)
 	return resource.Accepted[resource.Instance]{Operation: op, Items: items}, nil
+}
+
+// bootVolume is the disk RunInstances creates from the machine image.
+// volume.proto sources a volume from a compute image. InstanceSpec has no
+// image field; the instance attaches this volume and marks it boot.
+func bootVolume(projectID, fingerprint string, image resource.ImageID) *storagev1.Volume {
+	return &storagev1.Volume{
+		Labels: map[string]string{labelFingerprint: clip(fingerprint, 63)},
+		Spec: &storagev1.VolumeSpec{
+			SizeGib: 8,
+			Type:    storagev1.VolumeType_VOLUME_TYPE_SSD,
+			Source:  &storagev1.VolumeSpec_Image{Image: imageName(projectID, image.String())},
+		},
+	}
 }
 
 func (c computeClient) StopInstances(ctx context.Context, m backend.Mutation, req resource.StopInstancesRequest) (resource.Accepted[resource.InstanceStateChange], error) {
