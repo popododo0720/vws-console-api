@@ -1,0 +1,77 @@
+# Lint and test only. This repository ships no deployment configuration.
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: golangci/golangci-lint-action@v8
+        with:
+          version: v2.1.6
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: go.mod and go.sum are tidy
+        run: go mod tidy && git diff --exit-code go.mod go.sum
+      - run: go vet ./...
+      - run: go test -race -count=1 ./...
+
+  generated:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: bufbuild/buf-action@v1
+        with:
+          setup_only: true
+      - name: protobuf plugins
+        run: |
+          go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.6
+          go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.5.1
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+      - name: generated code matches proto/
+        run: buf generate && git diff --exit-code
+
+  hygiene:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: no image assets
+        run: |
+          imgs="$(git ls-files '*.png' '*.jpg' '*.jpeg' '*.gif' '*.svg' '*.ico' '*.webp')"
+          if [ -n "$imgs" ]; then
+            echo "image files are not allowed:"
+            echo "$imgs"
+            exit 1
+          fi
+      - name: no deployment manifests
+        run: |
+          hits="$(git ls-files | grep -E '(^|/)(Dockerfile|docker-compose\.ya?ml|Chart\.yaml)$|(^|/)(helm|k8s|deploy)/' || true)"
+          if [ -n "$hits" ]; then
+            echo "deployment files are not allowed:"
+            echo "$hits"
+            exit 1
+          fi

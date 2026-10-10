@@ -1,0 +1,41 @@
+syntax = "proto3";
+
+package vws.network.v1;
+
+import "vws/common/v1/common.proto";
+
+option go_package = "github.com/popododo0720/vws-console-api/internal/backend/grpcclient/internal/pb/networkv1;networkv1";
+
+service Network {
+  rpc CreateSubnet(CreateSubnetRequest) returns (SubnetsAccepted);
+  rpc DescribeSubnets(DescribeSubnetsRequest) returns (DescribeSubnetsResponse);
+  rpc GetOperation(vws.common.v1.GetOperationRequest) returns (vws.common.v1.Operation);
+}
+
+message Subnet {
+  string subnet_id = 1;
+  string owner_id = 2;
+  string cidr_block = 3;
+  string state = 4;
+}
+
+message CreateSubnetRequest {
+  vws.common.v1.Mutation mutation = 1;
+  string cidr_block = 2;
+}
+
+message SubnetsAccepted {
+  vws.common.v1.Operation operation = 1;
+  repeated Subnet subnets = 2;
+}
+
+message DescribeSubnetsRequest {
+  vws.common.v1.Scope scope = 1;
+  repeated string subnet_ids = 2;
+  vws.common.v1.Page page = 3;
+}
+
+message DescribeSubnetsResponse {
+  repeated Subnet subnets = 1;
+  string next_page_token = 2;
+}

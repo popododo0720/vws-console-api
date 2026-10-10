@@ -1,0 +1,11 @@
+#!/bin/sh
+# Refuse a push whose destination is main. Work lands through a pull request.
+while read -r _local_ref _local_sha remote_ref _remote_sha; do
+  case "$remote_ref" in
+    refs/heads/main | refs/heads/master)
+      echo "refusing to push $remote_ref; open a pull request from a branch" >&2
+      exit 1
+      ;;
+  esac
+done
+exit 0

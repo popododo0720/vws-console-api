@@ -1,0 +1,85 @@
+syntax = "proto3";
+
+package vws.storage.v1;
+
+import "vws/common/v1/common.proto";
+
+option go_package = "github.com/popododo0720/vws-console-api/internal/backend/grpcclient/internal/pb/storagev1;storagev1";
+
+service Storage {
+  rpc CreateBucket(CreateBucketRequest) returns (Bucket);
+  rpc GetBucket(GetBucketRequest) returns (Bucket);
+  rpc ListBuckets(ListBucketsRequest) returns (ListBucketsResponse);
+  rpc DeleteBucket(DeleteBucketRequest) returns (Empty);
+  rpc PutObject(PutObjectRequest) returns (Object);
+  rpc GetObject(GetObjectRequest) returns (GetObjectResponse);
+  rpc DeleteObject(DeleteObjectRequest) returns (Empty);
+}
+
+message Empty {}
+
+message Bucket {
+  string name = 1;
+  string owner_id = 2;
+  string creation_date = 3;
+}
+
+message CreateBucketRequest {
+  vws.common.v1.Scope scope = 1;
+  string name = 2;
+}
+
+message GetBucketRequest {
+  vws.common.v1.Scope scope = 1;
+  string name = 2;
+}
+
+message ListBucketsRequest {
+  vws.common.v1.Scope scope = 1;
+  vws.common.v1.Page page = 2;
+}
+
+message ListBucketsResponse {
+  repeated Bucket buckets = 1;
+  string next_page_token = 2;
+}
+
+message DeleteBucketRequest {
+  vws.common.v1.Scope scope = 1;
+  string name = 2;
+}
+
+message Object {
+  string bucket = 1;
+  string key = 2;
+  string owner_id = 3;
+  int64 size = 4;
+  string etag = 5;
+  string content_type = 6;
+}
+
+message PutObjectRequest {
+  vws.common.v1.Scope scope = 1;
+  string bucket = 2;
+  string key = 3;
+  string content_type = 4;
+  bytes body = 5;
+  int64 size = 6;
+}
+
+message GetObjectRequest {
+  vws.common.v1.Scope scope = 1;
+  string bucket = 2;
+  string key = 3;
+}
+
+message GetObjectResponse {
+  Object object = 1;
+  bytes body = 2;
+}
+
+message DeleteObjectRequest {
+  vws.common.v1.Scope scope = 1;
+  string bucket = 2;
+  string key = 3;
+}
