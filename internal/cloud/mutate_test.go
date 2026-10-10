@@ -169,6 +169,26 @@ func (foreignCompute) CreateKeyPair(context.Context, backend.Mutation, resource.
 	return resource.Accepted[resource.KeyPair]{}, errors.New("unused")
 }
 
+func (foreignCompute) DeleteKeyPair(context.Context, backend.Mutation, resource.DeleteKeyPairRequest) (resource.Accepted[resource.KeyPair], error) {
+	return resource.Accepted[resource.KeyPair]{}, errors.New("unused")
+}
+
+func (foreignCompute) DescribeKeyPairs(context.Context, backend.Scope, resource.KeyPairQuery) (resource.Page[resource.KeyPair], error) {
+	return resource.Page[resource.KeyPair]{}, errors.New("unused")
+}
+
+func (foreignCompute) CreateSnapshot(context.Context, backend.Mutation, resource.CreateSnapshotRequest) (resource.Accepted[resource.Snapshot], error) {
+	return resource.Accepted[resource.Snapshot]{}, errors.New("unused")
+}
+
+func (foreignCompute) DeleteSnapshot(context.Context, backend.Mutation, resource.DeleteSnapshotRequest) (resource.Accepted[resource.Snapshot], error) {
+	return resource.Accepted[resource.Snapshot]{}, errors.New("unused")
+}
+
+func (foreignCompute) DescribeSnapshots(context.Context, backend.Scope, resource.SnapshotQuery) (resource.Page[resource.Snapshot], error) {
+	return resource.Page[resource.Snapshot]{}, errors.New("unused")
+}
+
 func (f foreignCompute) GetOperation(context.Context, backend.Scope, resource.OperationID) (resource.Operation, error) {
 	if f.op.ID.IsZero() {
 		return resource.Operation{}, errors.New("unused")

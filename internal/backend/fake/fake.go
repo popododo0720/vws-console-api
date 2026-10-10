@@ -6,6 +6,7 @@ package fake
 
 import (
 	"crypto/rand"
+	"encoding/binary"
 	"errors"
 	"io"
 	"sync"
@@ -38,6 +39,8 @@ type World struct {
 	vol   map[resource.VolumeID]*resource.Volume
 	sg    map[resource.SecurityGroupID]*resource.SecurityGroup
 	key   map[resource.KeyPairID]*resource.KeyPair
+	addr  map[resource.AddressID]*resource.Address
+	snap  map[resource.SnapshotID]*resource.Snapshot
 	buck  map[resource.BucketName]*resource.Bucket
 	obj   map[string]*storedObject
 	seqIP uint32
@@ -80,6 +83,8 @@ func New(opt Options) *World {
 		vol:     map[resource.VolumeID]*resource.Volume{},
 		sg:      map[resource.SecurityGroupID]*resource.SecurityGroup{},
 		key:     map[resource.KeyPairID]*resource.KeyPair{},
+		addr:    map[resource.AddressID]*resource.Address{},
+		snap:    map[resource.SnapshotID]*resource.Snapshot{},
 		buck:    map[resource.BucketName]*resource.Bucket{},
 		obj:     map[string]*storedObject{},
 	}
@@ -205,15 +210,24 @@ func page[T any](items []T, q resource.PageRequest) (resource.Page[T], error) {
 	return resource.Page[T]{Items: out, NextToken: next}, nil
 }
 
-// Sequence is a deterministic entropy source for tests. Each byte is one
-// greater than the last, so minted ids do not collide.
-type Sequence struct{ n byte }
+// Sequence is a deterministic entropy source for tests. Bytes are the
+// big-endian form of 1, 2, 3, and so on, so an 8-byte draw cannot repeat.
+type Sequence struct {
+	n   uint64
+	buf [8]byte
+	off int
+}
 
-// Read fills p with increasing bytes.
+// Read fills p with deterministic bytes.
 func (s *Sequence) Read(p []byte) (int, error) {
 	for i := range p {
-		s.n++
-		p[i] = s.n
+		if s.off == 0 || s.off == len(s.buf) {
+			s.n++
+			binary.BigEndian.PutUint64(s.buf[:], s.n)
+			s.off = 0
+		}
+		p[i] = s.buf[s.off]
+		s.off++
 	}
 	return len(p), nil
 }

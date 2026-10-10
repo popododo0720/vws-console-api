@@ -97,6 +97,14 @@ func keyPairName(projectID, id string) string {
 	return regionParent(projectID) + "/keyPairs/" + id
 }
 
+func addressName(projectID, id string) string {
+	return regionParent(projectID) + "/addresses/" + id
+}
+
+func snapshotName(projectID, id string) string {
+	return regionParent(projectID) + "/snapshots/" + id
+}
+
 func bucketParent(projectID string) string { return "projects/" + projectID }
 
 func bucketName(projectID, name string) string {
@@ -108,7 +116,21 @@ func objectName(projectID, bucket, key string) string {
 }
 
 func operationName(projectID, local string) string {
-	return "projects/" + projectID + "/operations/" + local
+	return "projects/" + projectID + "/operations/" + canonicalOperationSegment(local)
+}
+
+// canonicalOperationSegment is the last path segment this process sends back
+// to the service that minted local. A 16-digit id is the op- prefix compute
+// and network publish. A 32-digit id is the UUID the resource API names.
+func canonicalOperationSegment(local string) string {
+	switch len(local) {
+	case 16:
+		return "op-" + local
+	case 32:
+		return local[0:8] + "-" + local[8:12] + "-" + local[12:16] + "-" + local[16:20] + "-" + local[20:32]
+	default:
+		return local
+	}
 }
 
 func lastSegment(name string) string {
@@ -118,18 +140,45 @@ func lastSegment(name string) string {
 	return name
 }
 
-// operationLocal accepts a 16- or 32-digit hex segment, or a UUID with dashes.
+// operationLocal reads the operation id the resource services publish.
+// Compute and network use "op-" plus 16 lowercase hex digits. The proto
+// contract, which storage follows, uses a lowercase UUID. A bare 16- or
+// 32-digit hex segment is the same id with the punctuation already removed.
+// Anything else is rejected. The returned value is 16 or 32 hex digits.
 func operationLocal(name string) (string, error) {
-	seg := strings.ReplaceAll(lastSegment(name), "-", "")
-	if len(seg) != 16 && len(seg) != 32 {
-		return "", resource.Internal(strErr("bad operation name"))
+	local, ok := parseOperationSegment(lastSegment(name))
+	if !ok {
+		return "", resource.Internal(fmt.Errorf("bad operation name %q", name))
 	}
-	for _, r := range seg {
-		if !isHexChar(r) {
-			return "", resource.Internal(strErr("bad operation name"))
+	return local, nil
+}
+
+func parseOperationSegment(seg string) (string, bool) {
+	if rest, ok := strings.CutPrefix(seg, "op-"); ok {
+		seg = rest
+	}
+	if isHexString(seg, 16) || isHexString(seg, 32) {
+		return seg, true
+	}
+	if len(seg) == 36 && seg[8] == '-' && seg[13] == '-' && seg[18] == '-' && seg[23] == '-' {
+		raw := strings.ReplaceAll(seg, "-", "")
+		if isHexString(raw, 32) {
+			return raw, true
 		}
 	}
-	return seg, nil
+	return "", false
+}
+
+func isHexString(s string, n int) bool {
+	if len(s) != n {
+		return false
+	}
+	for _, r := range s {
+		if !isHexChar(r) {
+			return false
+		}
+	}
+	return true
 }
 
 func isHexChar(r rune) bool {
@@ -225,6 +274,19 @@ func labelOK(key, value string) bool {
 		}
 	}
 	return true
+}
+
+func labelName(labels map[string]string) string {
+	keys := []string{"keyname", "keyname2", "keyname3", "keyname4", "keyname5"}
+	var b strings.Builder
+	for _, key := range keys {
+		part := labels[key]
+		if part == "" {
+			break
+		}
+		b.WriteString(part)
+	}
+	return b.String()
 }
 
 func userTags(labels map[string]string) map[string]string {

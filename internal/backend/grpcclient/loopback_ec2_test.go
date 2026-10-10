@@ -254,6 +254,9 @@ func (s *keySrv) CreateKeyPair(ctx context.Context, req *computev1.CreateKeyPair
 	if err != nil {
 		return nil, toStatus(err)
 	}
+	if fp, ok := fingerprintOfPublicLine(req.GetKeyPair().GetSpec().GetPublicKey()); ok {
+		s.w.rememberKeyFP(acc.Items[0].ID.String(), fp)
+	}
 	return runningOp(projectID, acc.Operation, keyPairName(projectID, acc.Items[0].ID.String()), commonv1.OperationVerb_OPERATION_VERB_CREATE, s.w.now)
 }
 

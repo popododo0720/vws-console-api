@@ -18,6 +18,8 @@ const (
 	KindVolume
 	KindSecurityGroup
 	KindKeyPair
+	KindAddress
+	KindSnapshot
 )
 
 // String returns the wire name. An unknown kind returns "".
@@ -45,6 +47,10 @@ func (k Kind) String() string {
 		return "securityGroup"
 	case KindKeyPair:
 		return "keyPair"
+	case KindAddress:
+		return "address"
+	case KindSnapshot:
+		return "snapshot"
 	case KindUnspecified:
 		return ""
 	default:
@@ -81,6 +87,10 @@ func (k Kind) info() kindInfo {
 		return kindInfo{prefix: "sg-", service: ServiceNetwork}
 	case KindKeyPair:
 		return kindInfo{prefix: "key-", service: ServiceCompute}
+	case KindAddress:
+		return kindInfo{prefix: "eipalloc-", service: ServiceNetwork}
+	case KindSnapshot:
+		return kindInfo{prefix: "snap-", service: ServiceCompute}
 	case KindUnspecified:
 		return kindInfo{}
 	default:

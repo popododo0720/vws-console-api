@@ -29,6 +29,8 @@ type api struct {
 	vpcs       networkv1.VpcServiceClient
 	groups     networkv1.SecurityGroupServiceClient
 	keys       computev1.KeyPairServiceClient
+	addresses  networkv1.AddressServiceClient
+	snapshots  storagev1.SnapshotServiceClient
 	computeOps longrunningpb.OperationsClient
 	storageOps longrunningpb.OperationsClient
 	networkOps longrunningpb.OperationsClient
@@ -404,10 +406,11 @@ func (c storageClient) PutObject(ctx context.Context, s backend.Scope, req resou
 		AllowMissing: true,
 		Contents:     buf,
 		RequestId:    requestUUID(projectID, req.Bucket.String(), req.Key.String(), "put"),
-		UpdateMask:   &fieldmaskpb.FieldMask{Paths: []string{"spec"}},
+		UpdateMask:   objectUpdateMask(),
 		Object: &storagev1.Object{
-			Name: name,
-			Spec: &storagev1.ObjectSpec{ContentType: req.ContentType},
+			Name:   name,
+			Labels: map[string]string{},
+			Spec:   &storagev1.ObjectSpec{ContentType: req.ContentType},
 		},
 	})
 	if err := rpcErr(op, err); err != nil {
@@ -424,6 +427,35 @@ func (c storageClient) PutObject(ctx context.Context, s backend.Scope, req resou
 		return resource.Object{}, fromRPC(err)
 	}
 	return objectModel(out)
+}
+
+// objectUpdateMask is the mask vws-storage's objectMaskOK accepts for a write
+// that replaces spec. An empty mask also passes; a spec-only mask does not.
+// The same mask covers the first put and an overwrite.
+func objectUpdateMask() *fieldmaskpb.FieldMask {
+	return &fieldmaskpb.FieldMask{Paths: []string{"spec", "labels"}}
+}
+
+func objectMaskMatches(mask *fieldmaskpb.FieldMask) bool {
+	paths := mask.GetPaths()
+	if len(paths) == 0 {
+		return true
+	}
+	if len(paths) != 2 {
+		return false
+	}
+	spec, labels := false, false
+	for _, path := range paths {
+		switch path {
+		case "spec":
+			spec = true
+		case "labels":
+			labels = true
+		default:
+			return false
+		}
+	}
+	return spec && labels
 }
 
 func (c storageClient) GetObject(ctx context.Context, s backend.Scope, req resource.GetObjectRequest) (resource.Object, io.ReadCloser, error) {

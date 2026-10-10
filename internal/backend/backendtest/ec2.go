@@ -137,6 +137,11 @@ func exerciseEC2(ctx context.Context, t *testing.T, set backend.Set, account res
 	if err != nil || running.Items[0].State != resource.InstanceRunning {
 		t.Fatalf("started: %v %+v", err, running.Items)
 	}
+	if _, err := set.Network.DeleteSubnet(ctx, backend.Mutation{Scope: scope, Key: "k-del-sub-busy", Fingerprint: "fp-del-sub-busy"}, resource.DeleteSubnetRequest{
+		ID: running.Items[0].SubnetID,
+	}); resource.CodeOf(err) != resource.CodeConflict {
+		t.Fatalf("delete busy subnet: %v", err)
+	}
 	terminated, err := set.Compute.TerminateInstances(ctx, backend.Mutation{Scope: scope, Key: "k-term", Fingerprint: "fp-term"}, resource.TerminateInstancesRequest{
 		IDs: []resource.InstanceID{stopped},
 	})
@@ -207,5 +212,162 @@ func exerciseEC2(ctx context.Context, t *testing.T, set backend.Set, account res
 		IDs: []resource.ImageID{unknown}, Page: resource.PageRequest{Size: 50},
 	}); resource.CodeOf(err) != resource.CodeNotFound {
 		t.Fatalf("unknown image: %v", err)
+	}
+
+	keys, err := set.Compute.DescribeKeyPairs(ctx, scope, resource.KeyPairQuery{
+		Names: []string{"admin"}, Page: resource.PageRequest{Size: 50},
+	})
+	if err != nil || len(keys.Items) != 1 || keys.Items[0].ID != key.Items[0].ID || keys.Items[0].Material != "" || keys.Items[0].Fingerprint != key.Items[0].Fingerprint {
+		t.Fatalf("describe keys: %v %+v", err, keys.Items)
+	}
+	keyDel := backend.Mutation{Scope: scope, Key: "k-del-key", Fingerprint: "fp-del-key"}
+	deletedKey, err := set.Compute.DeleteKeyPair(ctx, keyDel, resource.DeleteKeyPairRequest{Name: "admin"})
+	if err != nil || deletedKey.Items[0].ID != key.Items[0].ID || deletedKey.Items[0].Material != "" {
+		t.Fatalf("delete key: %v %+v", err, deletedKey.Items)
+	}
+	deletedKeyOp, err := set.Compute.GetOperation(ctx, scope, deletedKey.Operation.ID)
+	if err != nil || deletedKeyOp.Action != resource.ActionDeleteKeyPair {
+		t.Fatalf("delete key operation: %v %s", err, deletedKeyOp.Action)
+	}
+	retriedKey, err := set.Compute.DeleteKeyPair(ctx, keyDel, resource.DeleteKeyPairRequest{ID: key.Items[0].ID})
+	if err != nil || retriedKey.Items[0].ID != key.Items[0].ID || retriedKey.Operation.ID != deletedKey.Operation.ID {
+		t.Fatalf("delete key retry: %v %+v", err, retriedKey.Items)
+	}
+	if _, err := set.Compute.DescribeKeyPairs(ctx, scope, resource.KeyPairQuery{
+		IDs: []resource.KeyPairID{key.Items[0].ID}, Page: resource.PageRequest{Size: 50},
+	}); resource.CodeOf(err) != resource.CodeNotFound {
+		t.Fatalf("deleted key: %v", err)
+	}
+
+	otherVpc, err := set.Network.CreateVpc(ctx, backend.Mutation{Scope: scope, Key: "k-vpc-2", Fingerprint: "fp-vpc-2"}, resource.CreateVpcRequest{Cidr: "10.9.0.0/16"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := set.Network.GetOperation(ctx, scope, otherVpc.Operation.ID); err != nil {
+		t.Fatal(err)
+	}
+	otherGroup, err := set.Network.CreateSecurityGroup(ctx, backend.Mutation{Scope: scope, Key: "k-sg-other", Fingerprint: "fp-sg-other"}, resource.CreateSecurityGroupRequest{
+		Name: "web", VpcID: otherVpc.Items[0].ID,
+	})
+	if err != nil || otherGroup.Items[0].VpcID != otherVpc.Items[0].ID {
+		t.Fatalf("second group: %v %+v", err, otherGroup.Items)
+	}
+	if _, err := set.Network.DeleteSecurityGroup(ctx, backend.Mutation{Scope: scope, Key: "k-del-sg-name", Fingerprint: "fp-del-sg-name"}, resource.DeleteSecurityGroupRequest{Name: "web"}); resource.CodeOf(err) != resource.CodeInvalidArgument {
+		t.Fatalf("ambiguous group name: %v", err)
+	}
+	deletedOther, err := set.Network.DeleteSecurityGroup(ctx, backend.Mutation{Scope: scope, Key: "k-del-sg-other", Fingerprint: "fp-del-sg-other"}, resource.DeleteSecurityGroupRequest{ID: otherGroup.Items[0].ID})
+	if err != nil || deletedOther.Items[0].ID != otherGroup.Items[0].ID {
+		t.Fatalf("delete other group: %v %+v", err, deletedOther.Items)
+	}
+	if _, err := set.Network.GetOperation(ctx, scope, deletedOther.Operation.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	groups, err := set.Network.DescribeSecurityGroups(ctx, scope, resource.SecurityGroupQuery{
+		Names: []string{"web"}, Page: resource.PageRequest{Size: 50},
+	})
+	if err != nil || len(groups.Items) != 1 || groups.Items[0].ID != group.Items[0].ID || len(groups.Items[0].Rules) != 2 {
+		t.Fatalf("describe groups: %v %+v", err, groups.Items)
+	}
+	deletedGroup, err := set.Network.DeleteSecurityGroup(ctx, backend.Mutation{Scope: scope, Key: "k-del-sg", Fingerprint: "fp-del-sg"}, resource.DeleteSecurityGroupRequest{ID: group.Items[0].ID})
+	if err != nil || deletedGroup.Items[0].ID != group.Items[0].ID {
+		t.Fatalf("delete group: %v %+v", err, deletedGroup.Items)
+	}
+	deletedGroupOp, err := set.Network.GetOperation(ctx, scope, deletedGroup.Operation.ID)
+	if err != nil || deletedGroupOp.Action != resource.ActionDeleteSecurityGroup {
+		t.Fatalf("delete group operation: %v %s", err, deletedGroupOp.Action)
+	}
+	if _, err := set.Network.DescribeSecurityGroups(ctx, scope, resource.SecurityGroupQuery{
+		IDs: []resource.SecurityGroupID{group.Items[0].ID}, Page: resource.PageRequest{Size: 50},
+	}); resource.CodeOf(err) != resource.CodeNotFound {
+		t.Fatalf("deleted group: %v", err)
+	}
+
+	deletedSub, err := set.Network.DeleteSubnet(ctx, backend.Mutation{Scope: scope, Key: "k-del-sub", Fingerprint: "fp-del-sub"}, resource.DeleteSubnetRequest{ID: sub.Items[0].ID})
+	if err != nil || deletedSub.Items[0].ID != sub.Items[0].ID {
+		t.Fatalf("delete subnet: %v %+v", err, deletedSub.Items)
+	}
+	deletedSubOp, err := set.Network.GetOperation(ctx, scope, deletedSub.Operation.ID)
+	if err != nil || deletedSubOp.Action != resource.ActionDeleteSubnet {
+		t.Fatalf("delete subnet operation: %v %s", err, deletedSubOp.Action)
+	}
+	if _, err := set.Network.DescribeSubnets(ctx, scope, resource.SubnetQuery{
+		IDs: []resource.SubnetID{sub.Items[0].ID}, Page: resource.PageRequest{Size: 50},
+	}); resource.CodeOf(err) != resource.CodeNotFound {
+		t.Fatalf("deleted subnet: %v", err)
+	}
+	recreated, err := set.Network.CreateSubnet(ctx, backend.Mutation{Scope: scope, Key: "k-sub-vpc", Fingerprint: "fp-sub-vpc"}, resource.CreateSubnetRequest{
+		Cidr: "10.8.1.0/24", VpcID: created.Items[0].ID,
+	})
+	if err != nil || recreated.Items[0].ID == sub.Items[0].ID {
+		t.Fatalf("recreate subnet: %v %+v", err, recreated.Items)
+	}
+
+	addr, err := set.Network.AllocateAddress(ctx, backend.Mutation{Scope: scope, Key: "k-addr", Fingerprint: "fp-addr"}, resource.AllocateAddressRequest{Domain: "vpc"})
+	if err != nil || addr.Items[0].PublicIP == "" || addr.Items[0].Domain != "vpc" {
+		t.Fatalf("address: %v %+v", err, addr.Items)
+	}
+	addrOp, err := set.Network.GetOperation(ctx, scope, addr.Operation.ID)
+	if err != nil || addrOp.Action != resource.ActionAllocateAddress {
+		t.Fatalf("allocate operation: %v %s", err, addrOp.Action)
+	}
+	addrs, err := set.Network.DescribeAddresses(ctx, scope, resource.AddressQuery{
+		PublicIPs: []string{addr.Items[0].PublicIP}, Page: resource.PageRequest{Size: 50},
+	})
+	if err != nil || len(addrs.Items) != 1 || addrs.Items[0].ID != addr.Items[0].ID {
+		t.Fatalf("describe addresses: %v %+v", err, addrs.Items)
+	}
+	rel := backend.Mutation{Scope: scope, Key: "k-rel-addr", Fingerprint: "fp-rel-addr"}
+	released, err := set.Network.ReleaseAddress(ctx, rel, resource.ReleaseAddressRequest{ID: addr.Items[0].ID})
+	if err != nil || released.Items[0].ID != addr.Items[0].ID {
+		t.Fatalf("release: %v %+v", err, released.Items)
+	}
+	releasedOp, err := set.Network.GetOperation(ctx, scope, released.Operation.ID)
+	if err != nil || releasedOp.Action != resource.ActionReleaseAddress {
+		t.Fatalf("release operation: %v %s", err, releasedOp.Action)
+	}
+	retriedRel, err := set.Network.ReleaseAddress(ctx, rel, resource.ReleaseAddressRequest{ID: addr.Items[0].ID})
+	if err != nil || retriedRel.Items[0].ID != addr.Items[0].ID || retriedRel.Operation.ID != released.Operation.ID {
+		t.Fatalf("release retry: %v %+v", err, retriedRel.Items)
+	}
+	if _, err := set.Network.DescribeAddresses(ctx, scope, resource.AddressQuery{
+		IDs: []resource.AddressID{addr.Items[0].ID}, Page: resource.PageRequest{Size: 50},
+	}); resource.CodeOf(err) != resource.CodeNotFound {
+		t.Fatalf("released address: %v", err)
+	}
+
+	snap, err := set.Compute.CreateSnapshot(ctx, backend.Mutation{Scope: scope, Key: "k-snap", Fingerprint: "fp-snap"}, resource.CreateSnapshotRequest{
+		VolumeID: vol.Items[0].ID, Description: "daily",
+	})
+	if err != nil || snap.Items[0].VolumeID != vol.Items[0].ID || snap.Items[0].State != resource.SnapshotPending || snap.Items[0].VolumeSize != vol.Items[0].SizeGiB {
+		t.Fatalf("snapshot: %v %+v", err, snap.Items)
+	}
+	snapOp, err := set.Compute.GetOperation(ctx, scope, snap.Operation.ID)
+	if err != nil || snapOp.Action != resource.ActionCreateSnapshot {
+		t.Fatalf("snapshot operation: %v %s", err, snapOp.Action)
+	}
+	snaps, err := set.Compute.DescribeSnapshots(ctx, scope, resource.SnapshotQuery{
+		IDs: []resource.SnapshotID{snap.Items[0].ID}, Page: resource.PageRequest{Size: 50},
+	})
+	if err != nil || len(snaps.Items) != 1 || snaps.Items[0].State != resource.SnapshotCompleted || snaps.Items[0].Description != "daily" {
+		t.Fatalf("describe snapshots: %v %+v", err, snaps.Items)
+	}
+	snapDel := backend.Mutation{Scope: scope, Key: "k-del-snap", Fingerprint: "fp-del-snap"}
+	deletedSnap, err := set.Compute.DeleteSnapshot(ctx, snapDel, resource.DeleteSnapshotRequest{ID: snap.Items[0].ID})
+	if err != nil || deletedSnap.Items[0].ID != snap.Items[0].ID {
+		t.Fatalf("delete snapshot: %v %+v", err, deletedSnap.Items)
+	}
+	deletedSnapOp, err := set.Compute.GetOperation(ctx, scope, deletedSnap.Operation.ID)
+	if err != nil || deletedSnapOp.Action != resource.ActionDeleteSnapshot {
+		t.Fatalf("delete snapshot operation: %v %s", err, deletedSnapOp.Action)
+	}
+	retriedSnap, err := set.Compute.DeleteSnapshot(ctx, snapDel, resource.DeleteSnapshotRequest{ID: snap.Items[0].ID})
+	if err != nil || retriedSnap.Items[0].ID != snap.Items[0].ID || retriedSnap.Operation.ID != deletedSnap.Operation.ID {
+		t.Fatalf("delete snapshot retry: %v %+v", err, retriedSnap.Items)
+	}
+	if _, err := set.Compute.DescribeSnapshots(ctx, scope, resource.SnapshotQuery{
+		IDs: []resource.SnapshotID{snap.Items[0].ID}, Page: resource.PageRequest{Size: 50},
+	}); resource.CodeOf(err) != resource.CodeNotFound {
+		t.Fatalf("deleted snapshot: %v", err)
 	}
 }

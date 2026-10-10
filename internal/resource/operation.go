@@ -25,6 +25,13 @@ const (
 	ActionStartInstances
 	ActionTerminateInstances
 	ActionCreateKeyPair
+	ActionDeleteKeyPair
+	ActionDeleteSecurityGroup
+	ActionDeleteSubnet
+	ActionAllocateAddress
+	ActionReleaseAddress
+	ActionCreateSnapshot
+	ActionDeleteSnapshot
 )
 
 // String returns the wire name. An unknown action returns "".
@@ -56,6 +63,20 @@ func (a Action) String() string {
 		return "TerminateInstances"
 	case ActionCreateKeyPair:
 		return "CreateKeyPair"
+	case ActionDeleteKeyPair:
+		return "DeleteKeyPair"
+	case ActionDeleteSecurityGroup:
+		return "DeleteSecurityGroup"
+	case ActionDeleteSubnet:
+		return "DeleteSubnet"
+	case ActionAllocateAddress:
+		return "AllocateAddress"
+	case ActionReleaseAddress:
+		return "ReleaseAddress"
+	case ActionCreateSnapshot:
+		return "CreateSnapshot"
+	case ActionDeleteSnapshot:
+		return "DeleteSnapshot"
 	case actionNone:
 		return ""
 	default:

@@ -14,8 +14,8 @@ func (s *Service) RunInstances(ctx context.Context, c resource.Caller, token res
 }
 
 // StopInstances accepts a stop and returns the operation.
-// A zero token is filled here. RunInstances and CreateSubnet still require one,
-// because a token minted inside mutate would make every retry a new launch.
+// A zero token is filled here. RunInstances still requires one, because a
+// token minted inside mutate would make every retry a new launch.
 func (s *Service) StopInstances(ctx context.Context, c resource.Caller, token resource.ClientToken, req resource.StopInstancesRequest) (resource.Accepted[resource.InstanceStateChange], error) {
 	token, err := fillToken(token)
 	if err != nil {
@@ -89,6 +89,43 @@ func (s *Service) CreateKeyPair(ctx context.Context, c resource.Caller, token re
 	return mutate(ctx, s, c, token, req, s.backends.Compute.CreateKeyPair)
 }
 
+// DeleteKeyPair accepts a delete and returns the operation.
+func (s *Service) DeleteKeyPair(ctx context.Context, c resource.Caller, token resource.ClientToken, req resource.DeleteKeyPairRequest) (resource.Accepted[resource.KeyPair], error) {
+	token, err := fillToken(token)
+	if err != nil {
+		return resource.Accepted[resource.KeyPair]{}, err
+	}
+	return mutate(ctx, s, c, token, req, s.backends.Compute.DeleteKeyPair)
+}
+
+// DescribeKeyPairs lists key pairs the caller owns.
+func (s *Service) DescribeKeyPairs(ctx context.Context, c resource.Caller, q resource.KeyPairQuery) (resource.Page[resource.KeyPair], error) {
+	return readPage(ctx, c, q, s.backends.Compute.DescribeKeyPairs)
+}
+
+// CreateSnapshot accepts a snapshot and returns the operation.
+func (s *Service) CreateSnapshot(ctx context.Context, c resource.Caller, token resource.ClientToken, req resource.CreateSnapshotRequest) (resource.Accepted[resource.Snapshot], error) {
+	token, err := fillToken(token)
+	if err != nil {
+		return resource.Accepted[resource.Snapshot]{}, err
+	}
+	return mutate(ctx, s, c, token, req, s.backends.Compute.CreateSnapshot)
+}
+
+// DeleteSnapshot accepts a delete and returns the operation.
+func (s *Service) DeleteSnapshot(ctx context.Context, c resource.Caller, token resource.ClientToken, req resource.DeleteSnapshotRequest) (resource.Accepted[resource.Snapshot], error) {
+	token, err := fillToken(token)
+	if err != nil {
+		return resource.Accepted[resource.Snapshot]{}, err
+	}
+	return mutate(ctx, s, c, token, req, s.backends.Compute.DeleteSnapshot)
+}
+
+// DescribeSnapshots lists snapshots the caller owns.
+func (s *Service) DescribeSnapshots(ctx context.Context, c resource.Caller, q resource.SnapshotQuery) (resource.Page[resource.Snapshot], error) {
+	return readPage(ctx, c, q, s.backends.Compute.DescribeSnapshots)
+}
+
 // DescribeInstances lists instances the caller owns.
 func (s *Service) DescribeInstances(ctx context.Context, c resource.Caller, q resource.InstanceQuery) (resource.Page[resource.Instance], error) {
 	return readPage(ctx, c, q, s.backends.Compute.DescribeInstances)
@@ -145,8 +182,24 @@ func (s *Service) GetOperation(ctx context.Context, c resource.Caller, id resour
 }
 
 // CreateSubnet accepts a subnet and returns the operation.
+// EC2 has no ClientToken on this action. An empty token is derived from the
+// normalized request, the same place other actions call fillToken, so a retry
+// is the original subnet instead of a second one.
 func (s *Service) CreateSubnet(ctx context.Context, c resource.Caller, token resource.ClientToken, req resource.CreateSubnetRequest) (resource.Accepted[resource.Subnet], error) {
+	token, req, err := fillTokenFromRequest(c, token, req)
+	if err != nil {
+		return resource.Accepted[resource.Subnet]{}, err
+	}
 	return mutate(ctx, s, c, token, req, s.backends.Network.CreateSubnet)
+}
+
+// DeleteSubnet accepts a delete and returns the operation.
+func (s *Service) DeleteSubnet(ctx context.Context, c resource.Caller, token resource.ClientToken, req resource.DeleteSubnetRequest) (resource.Accepted[resource.Subnet], error) {
+	token, err := fillToken(token)
+	if err != nil {
+		return resource.Accepted[resource.Subnet]{}, err
+	}
+	return mutate(ctx, s, c, token, req, s.backends.Network.DeleteSubnet)
 }
 
 // DescribeSubnets lists subnets the caller owns.
@@ -184,6 +237,43 @@ func (s *Service) CreateSecurityGroup(ctx context.Context, c resource.Caller, to
 		return resource.Accepted[resource.SecurityGroup]{}, err
 	}
 	return mutate(ctx, s, c, token, req, s.backends.Network.CreateSecurityGroup)
+}
+
+// DeleteSecurityGroup accepts a delete and returns the operation.
+func (s *Service) DeleteSecurityGroup(ctx context.Context, c resource.Caller, token resource.ClientToken, req resource.DeleteSecurityGroupRequest) (resource.Accepted[resource.SecurityGroup], error) {
+	token, err := fillToken(token)
+	if err != nil {
+		return resource.Accepted[resource.SecurityGroup]{}, err
+	}
+	return mutate(ctx, s, c, token, req, s.backends.Network.DeleteSecurityGroup)
+}
+
+// DescribeSecurityGroups lists security groups the caller owns.
+func (s *Service) DescribeSecurityGroups(ctx context.Context, c resource.Caller, q resource.SecurityGroupQuery) (resource.Page[resource.SecurityGroup], error) {
+	return readPage(ctx, c, q, s.backends.Network.DescribeSecurityGroups)
+}
+
+// AllocateAddress accepts an allocation and returns the operation.
+func (s *Service) AllocateAddress(ctx context.Context, c resource.Caller, token resource.ClientToken, req resource.AllocateAddressRequest) (resource.Accepted[resource.Address], error) {
+	token, err := fillToken(token)
+	if err != nil {
+		return resource.Accepted[resource.Address]{}, err
+	}
+	return mutate(ctx, s, c, token, req, s.backends.Network.AllocateAddress)
+}
+
+// ReleaseAddress accepts a release and returns the operation.
+func (s *Service) ReleaseAddress(ctx context.Context, c resource.Caller, token resource.ClientToken, req resource.ReleaseAddressRequest) (resource.Accepted[resource.Address], error) {
+	token, err := fillToken(token)
+	if err != nil {
+		return resource.Accepted[resource.Address]{}, err
+	}
+	return mutate(ctx, s, c, token, req, s.backends.Network.ReleaseAddress)
+}
+
+// DescribeAddresses lists addresses the caller owns.
+func (s *Service) DescribeAddresses(ctx context.Context, c resource.Caller, q resource.AddressQuery) (resource.Page[resource.Address], error) {
+	return readPage(ctx, c, q, s.backends.Network.DescribeAddresses)
 }
 
 // AuthorizeSecurityGroupIngress accepts one inbound rule and returns the operation.
