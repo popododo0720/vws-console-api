@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"io"
 	"strconv"
+	"time"
 
 	longrunningpb "cloud.google.com/go/longrunning/autogen/longrunningpb"
 	computev1 "github.com/popododo0720/vws-proto/gen/go/vws/compute/v1"
@@ -418,6 +419,10 @@ func (c storageClient) PutObject(ctx context.Context, s backend.Scope, req resou
 	if err := rpcErr(op, err); err != nil {
 		return resource.Object{}, err
 	}
+	op, err = c.awaitStorage(ctx, op)
+	if err != nil {
+		return resource.Object{}, err
+	}
 	if obj, ok, err := unpackObject(op); err != nil || ok {
 		if err != nil {
 			return resource.Object{}, err
@@ -429,6 +434,37 @@ func (c storageClient) PutObject(ctx context.Context, s backend.Scope, req resou
 		return resource.Object{}, fromRPC(err)
 	}
 	return objectModel(out)
+}
+
+// awaitStorage polls a put until the storage service marks it done. The
+// object is not readable until then, so GetObject before that is NotFound.
+func (c storageClient) awaitStorage(ctx context.Context, op *longrunningpb.Operation) (*longrunningpb.Operation, error) {
+	if op.GetDone() {
+		return op, nil
+	}
+	name := op.GetName()
+	if name == "" {
+		return nil, resource.Internal(strErr("missing operation"))
+	}
+	ticker := time.NewTicker(5 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		got, err := c.storageOps.GetOperation(ctx, &longrunningpb.GetOperationRequest{Name: name})
+		if err != nil {
+			return nil, fromRPC(err)
+		}
+		if got.GetDone() {
+			if got.GetError() != nil {
+				return nil, fromRPC(status.ErrorProto(got.GetError()))
+			}
+			return got, nil
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-ticker.C:
+		}
+	}
 }
 
 // putRequestID includes the payload hash. The storage service treats request
