@@ -11,6 +11,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/anypb"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	longrunningpb "cloud.google.com/go/longrunning/autogen/longrunningpb"
@@ -160,6 +161,18 @@ func TestOperationLocalServiceNames(t *testing.T) {
 	}
 	if seg := canonicalOperationSegment(hex32); seg != uuid {
 		t.Fatalf("storage segment %s", seg)
+	}
+}
+
+func TestObjectMaskMatches(t *testing.T) {
+	if !objectMaskMatches(objectUpdateMask()) {
+		t.Fatal("client mask")
+	}
+	if !objectMaskMatches(nil) || !objectMaskMatches(&fieldmaskpb.FieldMask{}) {
+		t.Fatal("empty mask")
+	}
+	if objectMaskMatches(&fieldmaskpb.FieldMask{Paths: []string{"spec"}}) {
+		t.Fatal("spec-only mask")
 	}
 }
 

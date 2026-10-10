@@ -193,13 +193,19 @@ func Run(t *testing.T, newSet Harness) {
 	if obj.Size != 5 || obj.OwnerID != account {
 		t.Fatalf("object %+v", obj)
 	}
+	replaced, err := set.Storage.PutObject(ctx, backend.Scope{Account: account}, resource.PutObjectRequest{
+		Bucket: name, Key: key, ContentType: "text/plain", Size: 6,
+	}, strings.NewReader("hello!"))
+	if err != nil || replaced.Size != 6 || replaced.ETag == obj.ETag {
+		t.Fatalf("overwrite: %v %+v", err, replaced)
+	}
 	meta, rc, err := set.Storage.GetObject(ctx, backend.Scope{Account: account}, resource.GetObjectRequest{Bucket: name, Key: key})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = rc.Close() }()
-	if meta.ETag != obj.ETag {
-		t.Fatalf("etag %s", meta.ETag)
+	if meta.ETag != replaced.ETag || meta.Size != replaced.Size {
+		t.Fatalf("etag %s size %d", meta.ETag, meta.Size)
 	}
 	if _, err := set.Storage.PutObject(ctx, backend.Scope{Account: account}, resource.PutObjectRequest{
 		Bucket: name, Key: key, Size: 1,

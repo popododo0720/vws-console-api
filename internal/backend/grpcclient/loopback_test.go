@@ -968,6 +968,9 @@ func (s *objectSrv) GetObject(ctx context.Context, req *storagev1.GetObjectReque
 }
 
 func (s *objectSrv) UpdateObject(ctx context.Context, req *storagev1.UpdateObjectRequest) (*longrunningpb.Operation, error) {
+	if !objectMaskMatches(req.GetUpdateMask()) {
+		return nil, toStatus(resource.Unimplemented("object field mask"))
+	}
 	projectID, account, bucket, key, err := objectRef(req.GetObject().GetName())
 	if err != nil {
 		return nil, toStatus(err)
