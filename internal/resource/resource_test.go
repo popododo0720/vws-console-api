@@ -79,6 +79,13 @@ func TestOperationIDRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	long, err := NewOperationID(ServiceNetwork, "0123456789abcdef0123456789abcdef")
+	if err != nil || long.Local() != "0123456789abcdef0123456789abcdef" {
+		t.Fatal(err)
+	}
+	if _, err := Parse[OperationID](long.String()); err != nil {
+		t.Fatal(err)
+	}
 	if parsed != id {
 		t.Fatalf("got %#v", parsed)
 	}

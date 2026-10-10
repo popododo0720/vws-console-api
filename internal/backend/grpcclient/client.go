@@ -4,13 +4,15 @@ import (
 	"context"
 	"time"
 
+	longrunningpb "cloud.google.com/go/longrunning/autogen/longrunningpb"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
+	computev1 "github.com/popododo0720/vws-proto/gen/go/vws/compute/v1"
+	networkv1 "github.com/popododo0720/vws-proto/gen/go/vws/network/v1"
+	storagev1 "github.com/popododo0720/vws-proto/gen/go/vws/storage/v1"
+
 	"github.com/popododo0720/vws-console-api/internal/backend"
-	computev1 "github.com/popododo0720/vws-console-api/internal/backend/grpcclient/internal/pb/computev1"
-	networkv1 "github.com/popododo0720/vws-console-api/internal/backend/grpcclient/internal/pb/networkv1"
-	storagev1 "github.com/popododo0720/vws-console-api/internal/backend/grpcclient/internal/pb/storagev1"
 	"github.com/popododo0720/vws-console-api/internal/resource"
 )
 
@@ -47,12 +49,23 @@ func Dial(ctx context.Context, addrs Addrs) (*Client, error) {
 		_ = storageConn.Close()
 		return nil, err
 	}
+	shared := &api{
+		instances:  computev1.NewInstanceServiceClient(computeConn),
+		volumes:    storagev1.NewVolumeServiceClient(storageConn),
+		buckets:    storagev1.NewBucketServiceClient(storageConn),
+		objects:    storagev1.NewObjectServiceClient(storageConn),
+		subnets:    networkv1.NewSubnetServiceClient(networkConn),
+		vpcs:       networkv1.NewVpcServiceClient(networkConn),
+		computeOps: longrunningpb.NewOperationsClient(computeConn),
+		storageOps: longrunningpb.NewOperationsClient(storageConn),
+		networkOps: longrunningpb.NewOperationsClient(networkConn),
+	}
 	return &Client{
 		conns: []*grpc.ClientConn{computeConn, storageConn, networkConn},
 		set: backend.Set{
-			Compute: computeClient{computev1.NewComputeClient(computeConn)},
-			Storage: storageClient{storagev1.NewStorageClient(storageConn)},
-			Network: networkClient{networkv1.NewNetworkClient(networkConn)},
+			Compute: computeClient{shared},
+			Storage: storageClient{shared},
+			Network: networkClient{shared},
 		},
 	}, nil
 }

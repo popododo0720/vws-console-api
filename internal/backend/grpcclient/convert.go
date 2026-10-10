@@ -3,255 +3,428 @@ package grpcclient
 import (
 	"time"
 
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/anypb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
-	"github.com/popododo0720/vws-console-api/internal/backend"
-	commonv1 "github.com/popododo0720/vws-console-api/internal/backend/grpcclient/internal/pb/commonv1"
-	computev1 "github.com/popododo0720/vws-console-api/internal/backend/grpcclient/internal/pb/computev1"
-	networkv1 "github.com/popododo0720/vws-console-api/internal/backend/grpcclient/internal/pb/networkv1"
-	storagev1 "github.com/popododo0720/vws-console-api/internal/backend/grpcclient/internal/pb/storagev1"
+	longrunningpb "cloud.google.com/go/longrunning/autogen/longrunningpb"
+	commonv1 "github.com/popododo0720/vws-proto/gen/go/vws/common/v1"
+	computev1 "github.com/popododo0720/vws-proto/gen/go/vws/compute/v1"
+	networkv1 "github.com/popododo0720/vws-proto/gen/go/vws/network/v1"
+	storagev1 "github.com/popododo0720/vws-proto/gen/go/vws/storage/v1"
+
 	"github.com/popododo0720/vws-console-api/internal/resource"
 )
 
-func scopeProto(s backend.Scope) *commonv1.Scope {
-	return &commonv1.Scope{AccountId: s.Account.String()}
-}
-
-func mutationProto(m backend.Mutation) *commonv1.Mutation {
-	return &commonv1.Mutation{Scope: scopeProto(m.Scope), Key: m.Key, Fingerprint: m.Fingerprint}
-}
-
-func scopeModel(s *commonv1.Scope) (backend.Scope, error) {
-	if s == nil {
-		return backend.Scope{}, resource.Invalid("account", "required")
-	}
-	account, err := resource.Parse[resource.AccountID](s.GetAccountId())
-	if err != nil {
-		return backend.Scope{}, err
-	}
-	return backend.Scope{Account: account}, nil
-}
-
-func mutationModel(m *commonv1.Mutation) (backend.Mutation, error) {
-	if m == nil {
-		return backend.Mutation{}, resource.Invalid("mutation", "required")
-	}
-	s, err := scopeModel(m.GetScope())
-	if err != nil {
-		return backend.Mutation{}, err
-	}
-	if m.GetKey() == "" || m.GetFingerprint() == "" {
-		return backend.Mutation{}, resource.Invalid("mutation", "required")
-	}
-	return backend.Mutation{Scope: s, Key: m.GetKey(), Fingerprint: m.GetFingerprint()}, nil
-}
-
-func pageProto(p resource.PageRequest) *commonv1.Page {
-	return &commonv1.Page{PageSize: int32(p.Size), PageToken: p.Token}
-}
-
-func pageModel(p *commonv1.Page) resource.PageRequest {
-	if p == nil {
-		return resource.PageRequest{}
-	}
-	return resource.PageRequest{Size: int(p.GetPageSize()), Token: p.GetPageToken()}
-}
-
-func operationProto(op resource.Operation) *commonv1.Operation {
-	targets := make([]*commonv1.Target, 0, len(op.Targets))
-	for _, target := range op.Targets {
-		targets = append(targets, &commonv1.Target{Kind: target.Kind().String(), Id: target.ID()})
-	}
-	out := &commonv1.Operation{
-		Id:         op.ID.String(),
-		Action:     op.Action.String(),
-		State:      op.State.String(),
-		OwnerId:    op.OwnerID.String(),
-		Targets:    targets,
-		CreateTime: op.CreateTime.UTC().Format(time.RFC3339Nano),
-		UpdateTime: op.UpdateTime.UTC().Format(time.RFC3339Nano),
-	}
-	if op.Error != nil {
-		out.ErrorCode = op.Error.Code.String()
-		out.ErrorMessage = op.Error.Message
-	}
-	return out
-}
-
-func operationModel(op *commonv1.Operation) (resource.Operation, error) {
+func operationFrom(op *longrunningpb.Operation, svc resource.Service) (resource.Operation, error) {
 	if op == nil {
-		return resource.Operation{}, resource.Internal(errString("missing operation"))
+		return resource.Operation{}, resource.Internal(strErr("missing operation"))
 	}
-	id, err := resource.Parse[resource.OperationID](op.GetId())
-	if err != nil {
-		return resource.Operation{}, resource.Internal(err)
-	}
-	action, ok := resource.ParseAction(op.GetAction())
-	if !ok {
-		return resource.Operation{}, resource.Internal(errString("bad action"))
-	}
-	state, err := parseOpState(op.GetState())
+	local, err := operationLocal(op.GetName())
 	if err != nil {
 		return resource.Operation{}, err
 	}
-	targets := make([]resource.Ref, 0, len(op.GetTargets()))
-	for _, target := range op.GetTargets() {
-		ref, err := resource.ParseRef(target.GetKind(), target.GetId())
-		if err != nil {
-			return resource.Operation{}, resource.Internal(err)
-		}
-		targets = append(targets, ref)
+	id, err := resource.NewOperationID(svc, local)
+	if err != nil {
+		return resource.Operation{}, resource.Internal(err)
 	}
-	var owner resource.AccountID
-	if op.GetOwnerId() != "" {
-		owner, err = resource.Parse[resource.AccountID](op.GetOwnerId())
-		if err != nil {
-			return resource.Operation{}, resource.Internal(err)
-		}
+	projectID, err := projectOfName(op.GetName())
+	if err != nil {
+		return resource.Operation{}, err
 	}
-	parsed := resource.Operation{ID: id, Action: action, State: state, OwnerID: owner, Targets: targets}
-	if op.GetErrorCode() != "" {
-		parsed.Error = &resource.Error{Code: codeByName(op.GetErrorCode()), Message: op.GetErrorMessage()}
+	owner, err := accountOf(projectID)
+	if err != nil {
+		return resource.Operation{}, err
 	}
-	if op.GetCreateTime() != "" {
-		parsed.CreateTime, err = time.Parse(time.RFC3339Nano, op.GetCreateTime())
-		if err != nil {
+	meta := &commonv1.OperationMetadata{}
+	if op.GetMetadata() != nil {
+		if err := op.GetMetadata().UnmarshalTo(meta); err != nil {
 			return resource.Operation{}, resource.Internal(err)
 		}
 	}
-	if op.GetUpdateTime() != "" {
-		parsed.UpdateTime, err = time.Parse(time.RFC3339Nano, op.GetUpdateTime())
-		if err != nil {
-			return resource.Operation{}, resource.Internal(err)
+	action, err := actionOf(meta.GetResource(), meta.GetVerb())
+	if err != nil {
+		return resource.Operation{}, err
+	}
+	state := resource.OperationRunning
+	var opErr *resource.Error
+	if op.GetDone() {
+		state = resource.OperationSucceeded
+		if op.GetError() != nil {
+			state = resource.OperationFailed
+			opErr = resource.AsError(fromRPC(status.ErrorProto(op.GetError())))
 		}
+	}
+	parsed := resource.Operation{
+		ID: id, Action: action, State: state, OwnerID: owner, Error: opErr,
+	}
+	if ref, ok := refFromResource(meta.GetResource()); ok {
+		parsed.Targets = []resource.Ref{ref}
+	}
+	if meta.GetCreateTime() != nil {
+		parsed.CreateTime = meta.GetCreateTime().AsTime().UTC()
+	}
+	if meta.GetEndTime() != nil {
+		parsed.UpdateTime = meta.GetEndTime().AsTime().UTC()
+	} else {
+		parsed.UpdateTime = parsed.CreateTime
 	}
 	return parsed, nil
 }
 
-func parseOpState(s string) (resource.OperationState, error) {
-	switch s {
-	case resource.OperationRunning.String():
-		return resource.OperationRunning, nil
-	case resource.OperationSucceeded.String():
-		return resource.OperationSucceeded, nil
-	case resource.OperationFailed.String():
-		return resource.OperationFailed, nil
+func actionOf(resourceName string, verb commonv1.OperationVerb) (resource.Action, error) {
+	switch verb {
+	case commonv1.OperationVerb_OPERATION_VERB_CREATE:
+		switch {
+		case containsSegment(resourceName, "instances"):
+			return resource.ActionRunInstances, nil
+		case containsSegment(resourceName, "subnets"):
+			return resource.ActionCreateSubnet, nil
+		default:
+			return 0, resource.Internal(strErr("unsupported operation"))
+		}
+	case commonv1.OperationVerb_OPERATION_VERB_UPDATE:
+		if containsSegment(resourceName, "instances") {
+			return resource.ActionStopInstances, nil
+		}
+		return 0, resource.Internal(strErr("unsupported operation"))
+	case commonv1.OperationVerb_OPERATION_VERB_DELETE, commonv1.OperationVerb_OPERATION_VERB_UNSPECIFIED:
+		return 0, resource.Internal(strErr("unsupported operation"))
 	default:
-		return 0, resource.Internal(errString("bad operation state"))
+		return 0, resource.Internal(strErr("unsupported operation"))
 	}
 }
 
-func instanceProto(inst resource.Instance) *computev1.Instance {
+func containsSegment(name, segment string) bool {
+	return len(name) > 0 && (segmentOf(name, segment))
+}
+
+func segmentOf(name, segment string) bool {
+	parts := splitSlash(name)
+	for _, part := range parts {
+		if part == segment {
+			return true
+		}
+	}
+	return false
+}
+
+func splitSlash(name string) []string {
+	out := make([]string, 0, 8)
+	start := 0
+	for i := 0; i <= len(name); i++ {
+		if i == len(name) || name[i] == '/' {
+			if i > start {
+				out = append(out, name[start:i])
+			}
+			start = i + 1
+		}
+	}
+	return out
+}
+
+func refFromResource(name string) (resource.Ref, bool) {
+	parts := splitSlash(name)
+	if len(parts) < 2 {
+		return resource.Ref{}, false
+	}
+	kind := parts[len(parts)-2]
+	id := parts[len(parts)-1]
+	switch kind {
+	case "instances":
+		parsed, err := resource.Parse[resource.InstanceID](id)
+		if err != nil {
+			return resource.Ref{}, false
+		}
+		return parsed.Ref(), true
+	case "subnets":
+		parsed, err := resource.Parse[resource.SubnetID](id)
+		if err != nil {
+			return resource.Ref{}, false
+		}
+		return parsed.Ref(), true
+	default:
+		return resource.Ref{}, false
+	}
+}
+
+func metadataResource(op *longrunningpb.Operation) (string, error) {
+	if op == nil || op.GetMetadata() == nil {
+		return "", resource.Internal(strErr("missing operation"))
+	}
+	meta := &commonv1.OperationMetadata{}
+	if err := op.GetMetadata().UnmarshalTo(meta); err != nil {
+		return "", resource.Internal(err)
+	}
+	if meta.GetResource() == "" {
+		return "", resource.Internal(strErr("missing operation"))
+	}
+	return meta.GetResource(), nil
+}
+
+func longOp(projectID, local, resourceName, requestID string, verb commonv1.OperationVerb, create time.Time) (*longrunningpb.Operation, error) {
+	meta, err := anypb.New(&commonv1.OperationMetadata{
+		Resource:   resourceName,
+		Verb:       verb,
+		RequestId:  requestID,
+		CreateTime: timestamppb.New(create.UTC()),
+	})
+	if err != nil {
+		return nil, resource.Internal(err)
+	}
+	return &longrunningpb.Operation{
+		Name:     operationName(projectID, local),
+		Metadata: meta,
+	}, nil
+}
+
+func instanceProto(inst resource.Instance, projectID, vpcID string) *computev1.Instance {
+	obs, power := instanceObserved(inst.State)
 	return &computev1.Instance{
-		InstanceId:    inst.ID.String(),
-		ReservationId: inst.ReservationID.String(),
-		OwnerId:       inst.OwnerID.String(),
-		State:         inst.State.String(),
-		ImageId:       inst.ImageID.String(),
-		InstanceType:  inst.InstanceType,
-		SubnetId:      inst.SubnetID.String(),
-		Zone:          inst.Zone,
-		PrivateIp:     inst.PrivateIP,
-		Tags:          inst.Tags,
+		Name: instanceName(projectID, inst.ID.String()),
+		Labels: withInternalLabels(inst.Tags, map[string]string{
+			labelImage:       inst.ImageID.String(),
+			labelReservation: inst.ReservationID.String(),
+		}),
+		Spec: &computev1.InstanceSpec{
+			MachineType: inst.InstanceType,
+			Power:       power,
+			NetworkInterfaces: []*computev1.NetworkInterface{{
+				DeviceName: "nic0",
+				Subnet:     subnetName(projectID, vpcID, inst.SubnetID.String()),
+			}},
+			Volumes: []*computev1.VolumeAttachment{{
+				DeviceName: "boot",
+				Boot:       true,
+			}},
+		},
+		Status: &computev1.InstanceStatus{
+			Observed: &commonv1.ObservedState{State: obs},
+			Power:    power,
+			NetworkInterfaces: []*computev1.ObservedNetworkInterface{{
+				DeviceName:  "nic0",
+				Subnet:      subnetName(projectID, vpcID, inst.SubnetID.String()),
+				PrivateIpv4: inst.PrivateIP,
+			}},
+		},
+	}
+}
+
+func instanceObserved(st resource.InstanceState) (commonv1.ReconciliationState, computev1.InstancePower) {
+	switch st {
+	case resource.InstancePending:
+		return commonv1.ReconciliationState_RECONCILIATION_STATE_PENDING, computev1.InstancePower_INSTANCE_POWER_RUNNING
+	case resource.InstanceRunning:
+		return commonv1.ReconciliationState_RECONCILIATION_STATE_READY, computev1.InstancePower_INSTANCE_POWER_RUNNING
+	case resource.InstanceStopping:
+		return commonv1.ReconciliationState_RECONCILIATION_STATE_RECONCILING, computev1.InstancePower_INSTANCE_POWER_STOPPED
+	case resource.InstanceStopped:
+		return commonv1.ReconciliationState_RECONCILIATION_STATE_READY, computev1.InstancePower_INSTANCE_POWER_STOPPED
+	case resource.InstanceShuttingDown, resource.InstanceTerminated:
+		return commonv1.ReconciliationState_RECONCILIATION_STATE_DELETING, computev1.InstancePower_INSTANCE_POWER_STOPPED
+	default:
+		return commonv1.ReconciliationState_RECONCILIATION_STATE_UNSPECIFIED, computev1.InstancePower_INSTANCE_POWER_UNSPECIFIED
 	}
 }
 
 func instanceModel(in *computev1.Instance) (resource.Instance, error) {
-	id, err := resource.Parse[resource.InstanceID](in.GetInstanceId())
+	if in == nil {
+		return resource.Instance{}, resource.Internal(strErr("missing instance"))
+	}
+	parts := splitSlash(in.GetName())
+	if len(parts) != 6 || parts[2] != "zones" || parts[4] != "instances" {
+		return resource.Instance{}, resource.Internal(strErr("bad instance name"))
+	}
+	id, err := resource.Parse[resource.InstanceID](parts[5])
 	if err != nil {
 		return resource.Instance{}, resource.Internal(err)
 	}
-	res, err := resource.Parse[resource.ReservationID](in.GetReservationId())
+	owner, err := accountOf(parts[1])
+	if err != nil {
+		return resource.Instance{}, err
+	}
+	resID, err := resource.Parse[resource.ReservationID](in.GetLabels()[labelReservation])
 	if err != nil {
 		return resource.Instance{}, resource.Internal(err)
 	}
-	owner, err := resource.Parse[resource.AccountID](in.GetOwnerId())
+	img, err := resource.Parse[resource.ImageID](in.GetLabels()[labelImage])
 	if err != nil {
 		return resource.Instance{}, resource.Internal(err)
 	}
-	img, err := resource.Parse[resource.ImageID](in.GetImageId())
+	nics := in.GetSpec().GetNetworkInterfaces()
+	if len(nics) == 0 {
+		return resource.Instance{}, resource.Internal(strErr("missing subnet"))
+	}
+	sub, err := resource.Parse[resource.SubnetID](lastSegment(nics[0].GetSubnet()))
 	if err != nil {
 		return resource.Instance{}, resource.Internal(err)
 	}
-	sub, err := resource.Parse[resource.SubnetID](in.GetSubnetId())
+	state, err := instanceStateOf(in.GetStatus().GetObserved().GetState(), in.GetStatus().GetPower())
 	if err != nil {
-		return resource.Instance{}, resource.Internal(err)
+		return resource.Instance{}, err
 	}
-	state, ok := resource.ParseInstanceState(in.GetState())
-	if !ok {
-		return resource.Instance{}, resource.Internal(errString("bad instance state"))
+	private := ""
+	if nics := in.GetStatus().GetNetworkInterfaces(); len(nics) > 0 {
+		private = nics[0].GetPrivateIpv4()
 	}
 	return resource.Instance{
-		ID: id, ReservationID: res, OwnerID: owner, State: state, ImageID: img,
-		InstanceType: in.GetInstanceType(), SubnetID: sub, Zone: in.GetZone(),
-		PrivateIP: in.GetPrivateIp(), Tags: in.GetTags(),
+		ID: id, ReservationID: resID, OwnerID: owner, State: state, ImageID: img,
+		InstanceType: in.GetSpec().GetMachineType(), SubnetID: sub, Zone: parts[3],
+		PrivateIP: private, Tags: userTags(in.GetLabels()),
 	}, nil
 }
 
-func subnetProto(s resource.Subnet) *networkv1.Subnet {
-	return &networkv1.Subnet{SubnetId: s.ID.String(), OwnerId: s.OwnerID.String(), CidrBlock: s.Cidr, State: s.State.String()}
+func instanceStateOf(obs commonv1.ReconciliationState, power computev1.InstancePower) (resource.InstanceState, error) {
+	switch obs {
+	case commonv1.ReconciliationState_RECONCILIATION_STATE_PENDING:
+		return resource.InstancePending, nil
+	case commonv1.ReconciliationState_RECONCILIATION_STATE_RECONCILING:
+		if power == computev1.InstancePower_INSTANCE_POWER_STOPPED {
+			return resource.InstanceStopping, nil
+		}
+		return resource.InstancePending, nil
+	case commonv1.ReconciliationState_RECONCILIATION_STATE_READY:
+		if power == computev1.InstancePower_INSTANCE_POWER_STOPPED {
+			return resource.InstanceStopped, nil
+		}
+		return resource.InstanceRunning, nil
+	case commonv1.ReconciliationState_RECONCILIATION_STATE_DELETING:
+		return resource.InstanceShuttingDown, nil
+	case commonv1.ReconciliationState_RECONCILIATION_STATE_ERROR, commonv1.ReconciliationState_RECONCILIATION_STATE_UNSPECIFIED:
+		return 0, resource.Internal(strErr("bad instance state"))
+	default:
+		return 0, resource.Internal(strErr("bad instance state"))
+	}
+}
+
+func subnetProto(sub resource.Subnet, projectID, vpcID string) *networkv1.Subnet {
+	obs := commonv1.ReconciliationState_RECONCILIATION_STATE_PENDING
+	if sub.State == resource.SubnetAvailable {
+		obs = commonv1.ReconciliationState_RECONCILIATION_STATE_READY
+	}
+	return &networkv1.Subnet{
+		Name: subnetName(projectID, vpcID, sub.ID.String()),
+		Spec: &networkv1.SubnetSpec{Zone: resource.ZoneName, Ipv4Cidr: sub.Cidr},
+		Status: &networkv1.SubnetStatus{
+			Observed: &commonv1.ObservedState{State: obs},
+		},
+	}
 }
 
 func subnetModel(in *networkv1.Subnet) (resource.Subnet, error) {
-	id, err := resource.Parse[resource.SubnetID](in.GetSubnetId())
+	if in == nil {
+		return resource.Subnet{}, resource.Internal(strErr("missing subnet"))
+	}
+	parts := splitSlash(in.GetName())
+	if len(parts) != 8 || parts[6] != "subnets" {
+		return resource.Subnet{}, resource.Internal(strErr("bad subnet name"))
+	}
+	id, err := resource.Parse[resource.SubnetID](parts[7])
 	if err != nil {
 		return resource.Subnet{}, resource.Internal(err)
 	}
-	owner, err := resource.Parse[resource.AccountID](in.GetOwnerId())
+	owner, err := accountOf(parts[1])
 	if err != nil {
-		return resource.Subnet{}, resource.Internal(err)
+		return resource.Subnet{}, err
 	}
-	var state resource.SubnetState
-	switch in.GetState() {
-	case resource.SubnetPending.String():
-		state = resource.SubnetPending
-	case resource.SubnetAvailable.String():
-		state = resource.SubnetAvailable
-	default:
-		return resource.Subnet{}, resource.Internal(errString("bad subnet state"))
+	state, err := subnetStateOf(in.GetStatus().GetObserved().GetState())
+	if err != nil {
+		return resource.Subnet{}, err
 	}
-	return resource.Subnet{ID: id, OwnerID: owner, Cidr: in.GetCidrBlock(), State: state}, nil
+	return resource.Subnet{ID: id, OwnerID: owner, Cidr: in.GetSpec().GetIpv4Cidr(), State: state}, nil
 }
 
-func bucketProto(b resource.Bucket) *storagev1.Bucket {
-	return &storagev1.Bucket{Name: b.Name.String(), OwnerId: b.OwnerID.String(), CreationDate: b.CreationDate}
+func subnetStateOf(obs commonv1.ReconciliationState) (resource.SubnetState, error) {
+	switch obs {
+	case commonv1.ReconciliationState_RECONCILIATION_STATE_PENDING, commonv1.ReconciliationState_RECONCILIATION_STATE_RECONCILING:
+		return resource.SubnetPending, nil
+	case commonv1.ReconciliationState_RECONCILIATION_STATE_READY:
+		return resource.SubnetAvailable, nil
+	case commonv1.ReconciliationState_RECONCILIATION_STATE_DELETING, commonv1.ReconciliationState_RECONCILIATION_STATE_ERROR, commonv1.ReconciliationState_RECONCILIATION_STATE_UNSPECIFIED:
+		return 0, resource.Internal(strErr("bad subnet state"))
+	default:
+		return 0, resource.Internal(strErr("bad subnet state"))
+	}
+}
+
+func bucketProto(b resource.Bucket, projectID string) *storagev1.Bucket {
+	out := &storagev1.Bucket{
+		Name: bucketName(projectID, b.Name.String()),
+		Spec: &storagev1.BucketSpec{Region: resource.RegionName},
+		Status: &storagev1.BucketStatus{
+			Observed: &commonv1.ObservedState{State: commonv1.ReconciliationState_RECONCILIATION_STATE_READY},
+		},
+	}
+	if ts, err := time.Parse(time.RFC3339, b.CreationDate); err == nil {
+		out.CreateTime = timestamppb.New(ts)
+	}
+	return out
 }
 
 func bucketModel(in *storagev1.Bucket) (resource.Bucket, error) {
-	name, err := resource.Parse[resource.BucketName](in.GetName())
+	if in == nil {
+		return resource.Bucket{}, resource.Internal(strErr("missing bucket"))
+	}
+	parts := splitSlash(in.GetName())
+	if len(parts) != 4 || parts[2] != "buckets" {
+		return resource.Bucket{}, resource.Internal(strErr("bad bucket name"))
+	}
+	name, err := resource.Parse[resource.BucketName](parts[3])
 	if err != nil {
 		return resource.Bucket{}, resource.Internal(err)
 	}
-	owner, err := resource.Parse[resource.AccountID](in.GetOwnerId())
+	owner, err := accountOf(parts[1])
 	if err != nil {
-		return resource.Bucket{}, resource.Internal(err)
+		return resource.Bucket{}, err
 	}
-	return resource.Bucket{Name: name, OwnerID: owner, CreationDate: in.GetCreationDate()}, nil
+	created := ""
+	if in.GetCreateTime() != nil {
+		created = in.GetCreateTime().AsTime().UTC().Format(time.RFC3339)
+	}
+	return resource.Bucket{Name: name, OwnerID: owner, CreationDate: created}, nil
 }
 
-func objectProto(o resource.Object) *storagev1.Object {
+func objectProto(o resource.Object, projectID string) *storagev1.Object {
 	return &storagev1.Object{
-		Bucket: o.Bucket.String(), Key: o.Key.String(), OwnerId: o.OwnerID.String(),
-		Size: o.Size, Etag: o.ETag, ContentType: o.ContentType,
+		Name: objectName(projectID, o.Bucket.String(), o.Key.String()),
+		Etag: o.ETag,
+		Spec: &storagev1.ObjectSpec{ContentType: o.ContentType},
+		Status: &storagev1.ObjectStatus{
+			Observed:  &commonv1.ObservedState{State: commonv1.ReconciliationState_RECONCILIATION_STATE_READY},
+			SizeBytes: o.Size,
+		},
 	}
 }
 
 func objectModel(in *storagev1.Object) (resource.Object, error) {
-	bucket, err := resource.Parse[resource.BucketName](in.GetBucket())
+	if in == nil {
+		return resource.Object{}, resource.Internal(strErr("missing object"))
+	}
+	parts := splitSlash(in.GetName())
+	if len(parts) != 6 || parts[2] != "buckets" || parts[4] != "objects" {
+		return resource.Object{}, resource.Internal(strErr("bad object name"))
+	}
+	bucket, err := resource.Parse[resource.BucketName](parts[3])
 	if err != nil {
 		return resource.Object{}, resource.Internal(err)
 	}
-	key, err := resource.Parse[resource.ObjectKey](in.GetKey())
+	keyText, err := decodeObjectKey(parts[5])
+	if err != nil {
+		return resource.Object{}, err
+	}
+	key, err := resource.Parse[resource.ObjectKey](keyText)
 	if err != nil {
 		return resource.Object{}, resource.Internal(err)
 	}
-	owner, err := resource.Parse[resource.AccountID](in.GetOwnerId())
+	owner, err := accountOf(parts[1])
 	if err != nil {
-		return resource.Object{}, resource.Internal(err)
+		return resource.Object{}, err
 	}
 	return resource.Object{
-		Bucket: bucket, Key: key, OwnerID: owner, Size: in.GetSize(), ETag: in.GetEtag(), ContentType: in.GetContentType(),
+		Bucket: bucket, Key: key, OwnerID: owner,
+		Size: in.GetStatus().GetSizeBytes(), ETag: in.GetEtag(), ContentType: in.GetSpec().GetContentType(),
 	}, nil
 }
 
@@ -260,13 +433,48 @@ func toStatus(err error) error {
 		return nil
 	}
 	e := resource.AsError(err)
-	st, detailErr := status.New(grpcCode(e.Code), e.Message).WithDetails(&commonv1.Failure{
-		Code: e.Code.String(), Kind: e.Kind.String(), Id: e.ID, Field: e.Field, Message: e.Message,
-	})
+	reason, code, recon := errorDetail(e.Code)
+	info := &errdetails.ErrorInfo{Reason: reason, Domain: "vws.dev"}
+	var st *status.Status
+	var detailErr error
+	if recon != nil {
+		st, detailErr = status.New(code, e.Message).WithDetails(info, recon)
+	} else {
+		st, detailErr = status.New(code, e.Message).WithDetails(info)
+	}
 	if detailErr != nil {
 		return status.Error(codes.Internal, "internal error")
 	}
 	return st.Err()
+}
+
+func errorDetail(c resource.Code) (string, codes.Code, *commonv1.ReconciliationFailure) {
+	switch c {
+	case resource.CodeInvalidArgument, resource.CodePayloadTooLarge:
+		return "INVALID_SPEC", codes.InvalidArgument, nil
+	case resource.CodeNotFound:
+		return "RESOURCE_NOT_FOUND", codes.NotFound, nil
+	case resource.CodeAlreadyExists:
+		return "ALREADY_EXISTS", codes.AlreadyExists, nil
+	case resource.CodeConflict:
+		return "DEPENDENCY_NOT_READY", codes.FailedPrecondition, nil
+	case resource.CodeIdempotencyMismatch:
+		return "IDEMPOTENCY_CONFLICT", codes.Aborted, nil
+	case resource.CodeUnauthenticated:
+		return "ERROR_REASON_UNSPECIFIED", codes.Unauthenticated, nil
+	case resource.CodePermissionDenied:
+		return "ERROR_REASON_UNSPECIFIED", codes.PermissionDenied, nil
+	case resource.CodeResourceExhausted:
+		return "QUOTA_EXCEEDED", codes.ResourceExhausted, nil
+	case resource.CodeUnavailable:
+		return "RECONCILIATION_FAILED", codes.Unavailable, &commonv1.ReconciliationFailure{Retryable: true}
+	case resource.CodeUnimplemented:
+		return "ERROR_REASON_UNSPECIFIED", codes.Unimplemented, nil
+	case resource.CodeInternal, resource.CodeUnspecified:
+		return "RECONCILIATION_FAILED", codes.Internal, &commonv1.ReconciliationFailure{Retryable: false}
+	default:
+		return "RECONCILIATION_FAILED", codes.Internal, &commonv1.ReconciliationFailure{Retryable: false}
+	}
 }
 
 func fromRPC(err error) error {
@@ -277,14 +485,48 @@ func fromRPC(err error) error {
 	if !ok {
 		return resource.Internal(err)
 	}
+	var info *errdetails.ErrorInfo
+	var recon *commonv1.ReconciliationFailure
 	for _, detail := range st.Details() {
-		failure, ok := detail.(*commonv1.Failure)
-		if !ok {
-			continue
+		switch typed := detail.(type) {
+		case *errdetails.ErrorInfo:
+			info = typed
+		case *commonv1.ReconciliationFailure:
+			recon = typed
 		}
-		return failureModel(failure)
 	}
-	return &resource.Error{Code: codeFromGRPC(st.Code()), Message: "backend request failed"}
+	msg := st.Message()
+	if msg == "" {
+		msg = "backend request failed"
+	}
+	if info != nil && info.GetDomain() == "vws.dev" {
+		return reasonError(info.GetReason(), recon, msg, st.Code())
+	}
+	return &resource.Error{Code: codeFromGRPC(st.Code()), Message: msg}
+}
+
+func reasonError(reason string, recon *commonv1.ReconciliationFailure, msg string, code codes.Code) *resource.Error {
+	switch reason {
+	case "RESOURCE_NOT_FOUND":
+		return &resource.Error{Code: resource.CodeNotFound, Message: msg}
+	case "ALREADY_EXISTS":
+		return &resource.Error{Code: resource.CodeAlreadyExists, Message: msg}
+	case "INVALID_RESOURCE_ID", "INVALID_SPEC":
+		return &resource.Error{Code: resource.CodeInvalidArgument, Message: msg}
+	case "IDEMPOTENCY_CONFLICT":
+		return &resource.Error{Code: resource.CodeIdempotencyMismatch, Message: msg}
+	case "ETAG_MISMATCH", "GENERATION_CONFLICT", "DEPENDENCY_NOT_READY", "DEPENDENCY_MISSING":
+		return &resource.Error{Code: resource.CodeConflict, Message: msg}
+	case "QUOTA_EXCEEDED":
+		return &resource.Error{Code: resource.CodeResourceExhausted, Message: msg}
+	case "RECONCILIATION_FAILED":
+		if recon != nil && recon.GetRetryable() {
+			return &resource.Error{Code: resource.CodeUnavailable, Message: msg}
+		}
+		return &resource.Error{Code: resource.CodeInternal, Message: msg}
+	default:
+		return &resource.Error{Code: codeFromGRPC(code), Message: msg}
+	}
 }
 
 func codeFromGRPC(c codes.Code) resource.Code {
@@ -295,7 +537,7 @@ func codeFromGRPC(c codes.Code) resource.Code {
 		return resource.CodeNotFound
 	case codes.AlreadyExists:
 		return resource.CodeAlreadyExists
-	case codes.Aborted:
+	case codes.Aborted, codes.FailedPrecondition:
 		return resource.CodeConflict
 	case codes.Unauthenticated:
 		return resource.CodeUnauthenticated
@@ -307,93 +549,13 @@ func codeFromGRPC(c codes.Code) resource.Code {
 		return resource.CodeUnavailable
 	case codes.Unimplemented:
 		return resource.CodeUnimplemented
-	case codes.Internal, codes.OK, codes.Canceled, codes.DeadlineExceeded, codes.Unknown, codes.FailedPrecondition, codes.OutOfRange, codes.DataLoss:
+	case codes.OK, codes.Canceled, codes.Unknown, codes.DeadlineExceeded, codes.OutOfRange, codes.Internal, codes.DataLoss:
 		return resource.CodeInternal
 	default:
 		return resource.CodeInternal
-	}
-}
-
-func failureModel(f *commonv1.Failure) *resource.Error {
-	return &resource.Error{Code: codeByName(f.GetCode()), Kind: kindByName(f.GetKind()), ID: f.GetId(), Field: f.GetField(), Message: f.GetMessage()}
-}
-
-func codeByName(s string) resource.Code {
-	switch s {
-	case resource.CodeInvalidArgument.String():
-		return resource.CodeInvalidArgument
-	case resource.CodeNotFound.String():
-		return resource.CodeNotFound
-	case resource.CodeAlreadyExists.String():
-		return resource.CodeAlreadyExists
-	case resource.CodeConflict.String():
-		return resource.CodeConflict
-	case resource.CodeIdempotencyMismatch.String():
-		return resource.CodeIdempotencyMismatch
-	case resource.CodeUnauthenticated.String():
-		return resource.CodeUnauthenticated
-	case resource.CodePermissionDenied.String():
-		return resource.CodePermissionDenied
-	case resource.CodeResourceExhausted.String():
-		return resource.CodeResourceExhausted
-	case resource.CodePayloadTooLarge.String():
-		return resource.CodePayloadTooLarge
-	case resource.CodeUnavailable.String():
-		return resource.CodeUnavailable
-	case resource.CodeUnimplemented.String():
-		return resource.CodeUnimplemented
-	case resource.CodeInternal.String():
-		return resource.CodeInternal
-	case resource.CodeUnspecified.String():
-		return resource.CodeUnspecified
-	default:
-		return resource.CodeInternal
-	}
-}
-
-func kindByName(s string) resource.Kind {
-	if s == "" {
-		return resource.KindUnspecified
-	}
-	for _, k := range resource.Kinds() {
-		if k.String() == s {
-			return k
-		}
-	}
-	return resource.KindUnspecified
-}
-
-func grpcCode(c resource.Code) codes.Code {
-	switch c {
-	case resource.CodeInvalidArgument:
-		return codes.InvalidArgument
-	case resource.CodeNotFound:
-		return codes.NotFound
-	case resource.CodeAlreadyExists:
-		return codes.AlreadyExists
-	case resource.CodeConflict, resource.CodeIdempotencyMismatch:
-		return codes.Aborted
-	case resource.CodeUnauthenticated:
-		return codes.Unauthenticated
-	case resource.CodePermissionDenied:
-		return codes.PermissionDenied
-	case resource.CodeResourceExhausted:
-		return codes.ResourceExhausted
-	case resource.CodePayloadTooLarge:
-		return codes.InvalidArgument
-	case resource.CodeUnavailable:
-		return codes.Unavailable
-	case resource.CodeUnimplemented:
-		return codes.Unimplemented
-	case resource.CodeInternal, resource.CodeUnspecified:
-		return codes.Internal
-	default:
-		return codes.Internal
 	}
 }
 
 type strErr string
 
 func (e strErr) Error() string { return string(e) }
-
-func errString(s string) error { return strErr(s) }

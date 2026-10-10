@@ -80,7 +80,7 @@ func harness(t *testing.T) (http.Handler, sigv4.Credential, time.Time) {
 
 func call(t *testing.T, h http.Handler, cred sigv4.Credential, now time.Time, method, rawURL, body string, extra map[string]string) *httptest.ResponseRecorder {
 	t.Helper()
-	req := httptest.NewRequest(method, rawURL, strings.NewReader(body))
+	req := httptest.NewRequestWithContext(t.Context(), method, rawURL, strings.NewReader(body))
 	req.Host = req.URL.Host
 	if body != "" {
 		req.Header.Set("Content-Type", "text/plain")

@@ -80,7 +80,7 @@ func harness(t *testing.T) (http.Handler, sigv4.Credential, time.Time) {
 
 func signed(t *testing.T, h http.Handler, cred sigv4.Credential, now time.Time, body string) *httptest.ResponseRecorder {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:8081/", strings.NewReader(body))
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "http://127.0.0.1:8081/", strings.NewReader(body))
 	req.Host = req.URL.Host
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	if err := sigv4.Sign(req, cred, sigv4.ServiceEC2, resource.RegionName, now); err != nil {

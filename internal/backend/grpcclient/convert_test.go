@@ -5,9 +5,16 @@ import (
 	"testing"
 	"time"
 
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/anypb"
+	"google.golang.org/protobuf/types/known/timestamppb"
+
+	longrunningpb "cloud.google.com/go/longrunning/autogen/longrunningpb"
+	commonv1 "github.com/popododo0720/vws-proto/gen/go/vws/common/v1"
+	computev1 "github.com/popododo0720/vws-proto/gen/go/vws/compute/v1"
 
 	"github.com/popododo0720/vws-console-api/internal/resource"
 )
@@ -25,19 +32,36 @@ func TestOperationFailureRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	op := resource.Operation{
-		ID: id, Action: resource.ActionStopInstances, State: resource.OperationFailed,
-		OwnerID: owner, Targets: []resource.Ref{inst.Ref()},
-		Error:      &resource.Error{Code: resource.CodeConflict, Message: "instance cannot be stopped"},
-		CreateTime: time.Unix(1_700_000_000, 0).UTC(),
-		UpdateTime: time.Unix(1_700_000_001, 0).UTC(),
-	}
-	got, err := operationModel(operationProto(op))
+	st, err := status.New(codes.FailedPrecondition, "instance cannot be stopped").WithDetails(&errdetails.ErrorInfo{
+		Reason: "DEPENDENCY_NOT_READY",
+		Domain: "vws.dev",
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.OwnerID != owner || got.ID != id || got.Error == nil || got.Error.Code != resource.CodeConflict || got.Error.Message != op.Error.Message {
+	meta, err := anypb.New(&commonv1.OperationMetadata{
+		Resource:   instanceName(project(owner), inst.String()),
+		Verb:       commonv1.OperationVerb_OPERATION_VERB_UPDATE,
+		CreateTime: timestamppb.New(time.Unix(1_700_000_000, 0)),
+		EndTime:    timestamppb.New(time.Unix(1_700_000_001, 0)),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := operationFrom(&longrunningpb.Operation{
+		Name:     operationName(project(owner), id.Local()),
+		Metadata: meta,
+		Done:     true,
+		Result:   &longrunningpb.Operation_Error{Error: st.Proto()},
+	}, resource.ServiceCompute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.OwnerID != owner || got.ID != id || got.Action != resource.ActionStopInstances || got.State != resource.OperationFailed {
 		t.Fatalf("%+v", got)
+	}
+	if got.Error == nil || got.Error.Code != resource.CodeConflict || got.Error.Message != "instance cannot be stopped" {
+		t.Fatalf("%+v", got.Error)
 	}
 }
 
@@ -57,5 +81,69 @@ func TestBareResourceExhaustedStaysRetryable(t *testing.T) {
 	err := fromRPC(status.Error(codes.ResourceExhausted, "quota"))
 	if resource.CodeOf(err) != resource.CodeResourceExhausted {
 		t.Fatalf("got %v", err)
+	}
+}
+
+func TestProjectRoundTrip(t *testing.T) {
+	account, err := resource.Parse[resource.AccountID]("123456789012")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := accountOf(project(account))
+	if err != nil || got != account {
+		t.Fatalf("%s %v", got, err)
+	}
+}
+
+func TestVpcParentCIDR(t *testing.T) {
+	id, cidr, err := vpcForCIDR("10.2.0.0/24")
+	if err != nil || id != "vpc-10-2-0-0-16" || cidr != "10.2.0.0/16" {
+		t.Fatalf("%s %s %v", id, cidr, err)
+	}
+	if _, _, err := vpcForCIDR("10.0.0.0/8"); err == nil {
+		t.Fatal("a /8 has no parent shorter by eight bits")
+	}
+}
+
+func TestOperationLocalUUID(t *testing.T) {
+	local, err := operationLocal("projects/a123456789012/operations/01234567-89ab-cdef-0123-456789abcdef")
+	if err != nil || local != "0123456789abcdef0123456789abcdef" {
+		t.Fatalf("%s %v", local, err)
+	}
+}
+
+func TestErrorInfoNotFound(t *testing.T) {
+	st, err := status.New(codes.NotFound, "missing").WithDetails(&errdetails.ErrorInfo{
+		Reason: "RESOURCE_NOT_FOUND",
+		Domain: "vws.dev",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resource.CodeOf(fromRPC(st.Err())) != resource.CodeNotFound {
+		t.Fatalf("got %v", fromRPC(st.Err()))
+	}
+}
+
+func TestInstanceStateMapping(t *testing.T) {
+	cases := []struct {
+		state resource.InstanceState
+		obs   commonv1.ReconciliationState
+		power computev1.InstancePower
+	}{
+		{resource.InstancePending, commonv1.ReconciliationState_RECONCILIATION_STATE_PENDING, computev1.InstancePower_INSTANCE_POWER_RUNNING},
+		{resource.InstanceRunning, commonv1.ReconciliationState_RECONCILIATION_STATE_READY, computev1.InstancePower_INSTANCE_POWER_RUNNING},
+		{resource.InstanceStopping, commonv1.ReconciliationState_RECONCILIATION_STATE_RECONCILING, computev1.InstancePower_INSTANCE_POWER_STOPPED},
+		{resource.InstanceStopped, commonv1.ReconciliationState_RECONCILIATION_STATE_READY, computev1.InstancePower_INSTANCE_POWER_STOPPED},
+	}
+	for _, tc := range cases {
+		obs, power := instanceObserved(tc.state)
+		if obs != tc.obs || power != tc.power {
+			t.Fatalf("%s -> %s %s", tc.state, obs, power)
+		}
+		got, err := instanceStateOf(obs, power)
+		if err != nil || got != tc.state {
+			t.Fatalf("%s: %s %v", tc.state, got, err)
+		}
 	}
 }

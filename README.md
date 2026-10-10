@@ -63,6 +63,13 @@ Header signatures are checked. Presigned query strings are refused.
 This skeleton accepts object bodies up to 5 MiB. A larger body is not a quota
 error.
 
+## Resource API module
+
+The gRPC client imports `github.com/popododo0720/vws-proto`. That module is
+not public yet, so `go.mod` replaces it with `third_party/vws-proto` (a
+snapshot of main `a1c6084`). When vws-proto is public, remove the replace and
+require a tagged version.
+
 ## Layout
 
 See `AGENTS.md` for the rule table, the branch and commit rules, and when to

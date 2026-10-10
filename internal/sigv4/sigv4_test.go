@@ -17,7 +17,7 @@ import (
 func TestRoundTrip(t *testing.T) {
 	now := time.Date(2026, 10, 9, 10, 0, 0, 0, time.UTC)
 	cred := cred(t)
-	req := httptest.NewRequest(http.MethodPut, "http://127.0.0.1:8082/build-logs/a.txt", strings.NewReader("hello"))
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPut, "http://127.0.0.1:8082/build-logs/a.txt", strings.NewReader("hello"))
 	req.Host = "127.0.0.1:8082"
 	req.Header.Set("Content-Type", "text/plain")
 	if err := Sign(req, cred, ServiceS3, resource.RegionName, now); err != nil {
@@ -61,7 +61,7 @@ func TestTamperAndSkew(t *testing.T) {
 }
 
 func TestPresignRefused(t *testing.T) {
-	req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:8081/?X-Amz-Algorithm=AWS4-HMAC-SHA256", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "http://127.0.0.1:8081/?X-Amz-Algorithm=AWS4-HMAC-SHA256", nil)
 	v := verifier(cred(t), ServiceEC2, time.Now())
 	if _, err := v.Verify(req); resource.CodeOf(err) != resource.CodeUnimplemented {
 		t.Fatalf("got %v", err)
@@ -71,7 +71,7 @@ func TestPresignRefused(t *testing.T) {
 func TestQueryWithoutPayloadHeader(t *testing.T) {
 	now := time.Date(2026, 10, 9, 10, 0, 0, 0, time.UTC)
 	c := cred(t)
-	req := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:8081/", strings.NewReader("Action=DescribeInstances&Version=2016-11-15"))
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "http://127.0.0.1:8081/", strings.NewReader("Action=DescribeInstances&Version=2016-11-15"))
 	req.Host = req.URL.Host
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	if err := sign(req, c, ServiceEC2, resource.RegionName, now, false); err != nil {
@@ -109,7 +109,7 @@ func TestTooManyQueryParams(t *testing.T) {
 	for i := 0; i <= maxQueryParams; i++ {
 		parts = append(parts, fmt.Sprintf("p%d=1", i))
 	}
-	req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:8081/?"+strings.Join(parts, "&"), nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "http://127.0.0.1:8081/?"+strings.Join(parts, "&"), nil)
 	req.Host = req.URL.Host
 	if _, err := verifier(cred(t), ServiceEC2, time.Now()).Verify(req); resource.CodeOf(err) != resource.CodeInvalidArgument {
 		t.Fatalf("got %v", err)
@@ -152,7 +152,7 @@ func verifier(c Credential, service Service, now time.Time) *Verifier {
 
 func signed(t *testing.T, c Credential, service Service, now time.Time, method, rawURL, body string) *http.Request {
 	t.Helper()
-	req := httptest.NewRequest(method, rawURL, strings.NewReader(body))
+	req := httptest.NewRequestWithContext(t.Context(), method, rawURL, strings.NewReader(body))
 	req.Host = req.URL.Host
 	if body != "" {
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
