@@ -2,6 +2,7 @@ package grpcclient
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -109,6 +110,56 @@ func TestOperationLocalUUID(t *testing.T) {
 	local, err := operationLocal("projects/a123456789012/operations/01234567-89ab-cdef-0123-456789abcdef")
 	if err != nil || local != "0123456789abcdef0123456789abcdef" {
 		t.Fatalf("%s %v", local, err)
+	}
+}
+
+func TestOperationLocalServiceNames(t *testing.T) {
+	const hex16 = "0123456789abcdef"
+	const hex32 = "0123456789abcdef0123456789abcdef"
+	uuid := "01234567-89ab-cdef-0123-456789abcdef"
+	cases := []struct {
+		name string
+		want string
+	}{
+		{"projects/a123456789012/operations/op-" + hex16, hex16},
+		{"projects/a123456789012/operations/op-" + hex32, hex32},
+		{"projects/a123456789012/operations/op-" + uuid, hex32},
+		{"projects/a123456789012/operations/" + hex16, hex16},
+		{"projects/a123456789012/operations/" + hex32, hex32},
+		{"projects/a123456789012/operations/" + uuid, hex32},
+	}
+	for _, tc := range cases {
+		local, err := operationLocal(tc.name)
+		if err != nil || local != tc.want {
+			t.Fatalf("%s: %s %v", tc.name, local, err)
+		}
+	}
+	rejected := []string{
+		"projects/a123456789012/operations/op-" + strings.ToUpper(hex16),
+		"projects/a123456789012/operations/OP-" + hex16,
+		"projects/a123456789012/operations/op-0123",
+		"projects/a123456789012/operations/op-op-" + hex16,
+		"projects/a123456789012/operations/" + strings.ToUpper(uuid),
+		"projects/a123456789012/operations/not-an-operation",
+	}
+	for _, name := range rejected {
+		_, err := operationLocal(name)
+		if err == nil || !strings.Contains(err.Error(), name) {
+			t.Fatalf("%s: %v", name, err)
+		}
+	}
+	for _, local := range []string{hex16, hex32} {
+		name := operationName("a123456789012", local)
+		got, err := operationLocal(name)
+		if err != nil || got != local {
+			t.Fatalf("round trip %s: %s %v", name, got, err)
+		}
+	}
+	if seg := canonicalOperationSegment(hex16); seg != "op-"+hex16 {
+		t.Fatalf("compute segment %s", seg)
+	}
+	if seg := canonicalOperationSegment(hex32); seg != uuid {
+		t.Fatalf("storage segment %s", seg)
 	}
 }
 

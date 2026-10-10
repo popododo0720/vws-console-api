@@ -11,6 +11,7 @@ import (
 
 	"github.com/popododo0720/vws-console-api/internal/cloud"
 	"github.com/popododo0720/vws-console-api/internal/resource"
+	"github.com/popododo0720/vws-console-api/internal/server"
 	"github.com/popododo0720/vws-console-api/internal/sigv4"
 )
 
@@ -626,6 +627,9 @@ func writeXML(w http.ResponseWriter, v any) {
 
 func writeErr(w http.ResponseWriter, r *http.Request, err error) {
 	e := resource.AsError(err)
+	if statusOf(e.Code) >= http.StatusInternalServerError {
+		server.RecordFailure(w, err)
+	}
 	w.Header().Set("Content-Type", "text/xml; charset=utf-8")
 	w.WriteHeader(statusOf(e.Code))
 	_, _ = w.Write([]byte(xml.Header))

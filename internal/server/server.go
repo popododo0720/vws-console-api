@@ -85,14 +85,35 @@ func wrap(logger *slog.Logger, name string, next http.Handler) http.Handler {
 			}
 		}()
 		next.ServeHTTP(rec, r)
+		if rec.status >= http.StatusInternalServerError {
+			args := []any{"surface", name, "requestId", id, "method", r.Method, "path", r.URL.Path, "status", rec.status}
+			if rec.failure != nil {
+				args = append(args, "err", rec.failure)
+			}
+			logger.ErrorContext(r.Context(), "request failed", args...)
+		}
 		logger.InfoContext(r.Context(), "request", "surface", name, "requestId", id, "method", r.Method, "path", r.URL.Path, "status", rec.status)
 	})
 }
 
+// RecordFailure keeps err for the access log. Surfaces call it when the
+// response is a server error. The cause stays off the wire body.
+func RecordFailure(w http.ResponseWriter, err error) {
+	if err == nil {
+		return
+	}
+	if n, ok := w.(interface{ noteFailure(error) }); ok {
+		n.noteFailure(err)
+	}
+}
+
 type statusRecorder struct {
 	http.ResponseWriter
-	status int
+	status  int
+	failure error
 }
+
+func (s *statusRecorder) noteFailure(err error) { s.failure = err }
 
 func (s *statusRecorder) WriteHeader(code int) {
 	s.status = code

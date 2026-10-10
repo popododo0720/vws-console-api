@@ -12,6 +12,7 @@ import (
 
 	"github.com/popododo0720/vws-console-api/internal/cloud"
 	"github.com/popododo0720/vws-console-api/internal/resource"
+	"github.com/popododo0720/vws-console-api/internal/server"
 )
 
 // Authenticator maps a bearer token to a caller.
@@ -509,6 +510,9 @@ type errorBody struct {
 
 func writeErr(w http.ResponseWriter, r *http.Request, err error) {
 	e := resource.AsError(err)
+	if statusOf(e.Code) >= http.StatusInternalServerError {
+		server.RecordFailure(w, err)
+	}
 	writeJSON(w, statusOf(e.Code), errorBody{Error: e, Request: r.Header.Get("X-Request-Id")})
 }
 
