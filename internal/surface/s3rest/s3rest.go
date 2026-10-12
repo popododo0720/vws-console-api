@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/xml"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -286,10 +287,12 @@ func (h *handler) getObject(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, r, err, r.URL.Path)
 		return
 	}
-	defer func() { _ = body.Close() }()
+	defer server.Close(w, body)
 	writeObjectHeaders(w, meta)
 	w.WriteHeader(http.StatusOK)
-	_, _ = io.Copy(w, body)
+	if _, err := io.Copy(w, body); err != nil {
+		server.RecordFailure(w, fmt.Errorf("copy object body: %w", err))
+	}
 }
 
 func (h *handler) headObject(w http.ResponseWriter, r *http.Request) {
@@ -298,7 +301,7 @@ func (h *handler) headObject(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, r, err, r.URL.Path)
 		return
 	}
-	defer func() { _ = body.Close() }()
+	defer server.Close(w, body)
 	writeObjectHeaders(w, meta)
 	w.Header().Set("Content-Length", strconv.FormatInt(meta.Size, 10))
 	w.WriteHeader(http.StatusOK)
@@ -426,8 +429,11 @@ type errorXML struct {
 func writeXML(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/xml")
 	w.WriteHeader(status)
-	_, _ = w.Write([]byte(xml.Header))
-	_ = xml.NewEncoder(w).Encode(v)
+	_, err := w.Write([]byte(xml.Header))
+	if err == nil {
+		err = xml.NewEncoder(w).Encode(v)
+	}
+	server.RecordFailure(w, err)
 }
 
 func writeErr(w http.ResponseWriter, r *http.Request, err error, resourceName string) {

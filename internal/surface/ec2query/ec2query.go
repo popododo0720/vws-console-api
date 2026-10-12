@@ -791,9 +791,11 @@ func requestID(r *http.Request) string { return r.Header.Get("X-Request-Id") }
 func writeXML(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "text/xml; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte(xml.Header))
-	enc := xml.NewEncoder(w)
-	_ = enc.Encode(v)
+	_, err := w.Write([]byte(xml.Header))
+	if err == nil {
+		err = xml.NewEncoder(w).Encode(v)
+	}
+	server.RecordFailure(w, err)
 }
 
 func writeErr(w http.ResponseWriter, r *http.Request, err error) {
@@ -803,10 +805,13 @@ func writeErr(w http.ResponseWriter, r *http.Request, err error) {
 	}
 	w.Header().Set("Content-Type", "text/xml; charset=utf-8")
 	w.WriteHeader(statusOf(e.Code))
-	_, _ = w.Write([]byte(xml.Header))
-	_ = xml.NewEncoder(w).Encode(errorXML{
-		Code: ec2Code(e), Message: e.Message, RequestID: requestID(r),
-	})
+	_, werr := w.Write([]byte(xml.Header))
+	if werr == nil {
+		werr = xml.NewEncoder(w).Encode(errorXML{
+			Code: ec2Code(e), Message: e.Message, RequestID: requestID(r),
+		})
+	}
+	server.RecordFailure(w, werr)
 }
 
 func statusOf(c resource.Code) int {
