@@ -374,13 +374,13 @@ func vpcXML(v resource.Vpc) vpcItem {
 func volumeCreatedXML(requestID string, v resource.Volume) createVolumeXML {
 	return createVolumeXML{
 		RequestID: requestID, VolumeID: v.ID.String(), Size: v.SizeGiB,
-		Zone: v.Zone, Status: string(v.State), Type: "gp2",
+		Zone: v.Zone, Status: string(v.State), Type: string(v.Type),
 	}
 }
 
 func volumeXML(v resource.Volume) volumeItem {
 	item := volumeItem{
-		VolumeID: v.ID.String(), Size: v.SizeGiB, Zone: v.Zone, Status: string(v.State), Type: "gp2",
+		VolumeID: v.ID.String(), Size: v.SizeGiB, Zone: v.Zone, Status: string(v.State), Type: string(v.Type),
 	}
 	if !v.InstanceID.IsZero() {
 		item.Attachments.Items = []attachmentItem{{

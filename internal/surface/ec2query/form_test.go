@@ -341,3 +341,47 @@ func signed(t *testing.T, h http.Handler, cred sigv4.Credential, now time.Time, 
 	h.ServeHTTP(rec, req)
 	return rec
 }
+
+func TestVolumeTypeRoundTrips(t *testing.T) {
+	h, cred, now := harness(t)
+	for _, want := range []string{"standard", "gp2", "gp3"} {
+		form := url.Values{}
+		form.Set("Action", "CreateVolume")
+		form.Set("Version", Version)
+		form.Set("AvailabilityZone", "vws-1a")
+		form.Set("Size", "1")
+		form.Set("VolumeType", want)
+		res := signed(t, h, cred, now, form.Encode())
+		if res.Code != http.StatusOK || !strings.Contains(res.Body.String(), "<volumeType>"+want+"</volumeType>") {
+			t.Fatalf("create %s: %d %s", want, res.Code, res.Body)
+		}
+		id := between(res.Body.String(), "<volumeId>", "</volumeId>")
+		desc := url.Values{}
+		desc.Set("Action", "DescribeVolumes")
+		desc.Set("Version", Version)
+		desc.Set("VolumeId.1", id)
+		res = signed(t, h, cred, now, desc.Encode())
+		if res.Code != http.StatusOK || !strings.Contains(res.Body.String(), "<volumeType>"+want+"</volumeType>") {
+			t.Fatalf("describe %s: %d %s", want, res.Code, res.Body)
+		}
+	}
+}
+
+func TestCreateVolumeDefaultsToGP2(t *testing.T) {
+	h, cred, now := harness(t)
+	form := url.Values{}
+	form.Set("Action", "CreateVolume")
+	form.Set("Version", Version)
+	form.Set("AvailabilityZone", "vws-1a")
+	form.Set("Size", "1")
+	res := signed(t, h, cred, now, form.Encode())
+	if res.Code != http.StatusOK || !strings.Contains(res.Body.String(), "<volumeType>gp2</volumeType>") {
+		t.Fatalf("%d %s", res.Code, res.Body)
+	}
+}
+
+func between(s, open, close string) string {
+	_, rest, _ := strings.Cut(s, open)
+	out, _, _ := strings.Cut(rest, close)
+	return out
+}

@@ -74,6 +74,12 @@ def network():
     def same_volume():
         check(ec2.create_volume(AvailabilityZone="vws-1a", Size=10, ClientToken="v0")["VolumeId"] == S["vol"], "volume id changed")
     step("CreateVolume same token", same_volume)
+    def standard_volume():
+        vid = ec2.create_volume(AvailabilityZone="vws-1a", Size=1, VolumeType="standard")["VolumeId"]
+        got = ec2.describe_volumes(VolumeIds=[vid])["Volumes"][0]["VolumeType"]
+        ec2.delete_volume(VolumeId=vid)
+        check(got == "standard", f"type {got}")
+    step("CreateVolume VolumeType=standard", standard_volume)
     for name, fn in [
         ("DescribeVpcs", ec2.describe_vpcs), ("DescribeSubnets", ec2.describe_subnets),
         ("DescribeSecurityGroups", ec2.describe_security_groups), ("DescribeKeyPairs", ec2.describe_key_pairs),

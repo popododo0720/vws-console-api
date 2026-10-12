@@ -137,7 +137,7 @@ func (c computeClient) CreateVolume(ctx context.Context, m backend.Mutation, req
 			Labels: map[string]string{labelFingerprint: clip(m.Fingerprint, 63)},
 			Spec: &storagev1.VolumeSpec{
 				SizeGib: req.SizeGiB,
-				Type:    storagev1.VolumeType_VOLUME_TYPE_SSD,
+				Type:    storageType(req.Type),
 			},
 		},
 	})
@@ -576,7 +576,7 @@ func acceptedVolume(op *longrunningpb.Operation, req resource.CreateVolumeReques
 	if err != nil {
 		return resource.Accepted[resource.Volume]{}, err
 	}
-	vol := resource.Volume{ID: id, OwnerID: named, SizeGiB: req.SizeGiB, Zone: req.Zone, State: state}
+	vol := resource.Volume{ID: id, OwnerID: named, SizeGiB: req.SizeGiB, Zone: req.Zone, Type: req.Type, State: state}
 	parsed.Action = resource.ActionCreateVolume
 	parsed.Targets = []resource.Ref{id.Ref()}
 	return resource.Accepted[resource.Volume]{Operation: parsed, Items: []resource.Volume{vol}}, nil
@@ -637,7 +637,7 @@ func volumeModel(in *storagev1.Volume) (resource.Volume, error) {
 	}
 	return resource.Volume{
 		ID: id, OwnerID: owner, SizeGiB: in.GetSpec().GetSizeGib(), Zone: parts[3],
-		State: state, InstanceID: inst, Device: in.GetStatus().GetDeviceName(),
+		Type: volumeTypeOf(in.GetSpec().GetType()), State: state, InstanceID: inst, Device: in.GetStatus().GetDeviceName(),
 	}, nil
 }
 
@@ -856,4 +856,22 @@ func sshString(s string) string {
 	var size [4]byte
 	binary.BigEndian.PutUint32(size[:], uint32(len(s)))
 	return string(size[:]) + s
+}
+
+// storageType maps an EC2 volume type to the storage tier. The storage proto
+// has only STANDARD and SSD, so gp2 and gp3 both land on SSD.
+func storageType(t resource.VolumeType) storagev1.VolumeType {
+	if t == resource.VolumeStandard {
+		return storagev1.VolumeType_VOLUME_TYPE_STANDARD
+	}
+	return storagev1.VolumeType_VOLUME_TYPE_SSD
+}
+
+// volumeTypeOf reports an SSD volume as gp2 because storage does not keep
+// which SSD type was asked for.
+func volumeTypeOf(t storagev1.VolumeType) resource.VolumeType {
+	if t == storagev1.VolumeType_VOLUME_TYPE_STANDARD {
+		return resource.VolumeStandard
+	}
+	return resource.VolumeGP2
 }
