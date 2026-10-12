@@ -49,6 +49,12 @@ func (h *handler) serve(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, r, resource.Invalid("body", "malformed form"))
 		return
 	}
+	for k, vs := range r.Form {
+		if len(vs) > 1 {
+			writeErr(w, r, resource.Invalid(k, "repeated"))
+			return
+		}
+	}
 	if r.Form.Get("Version") != Version {
 		writeErr(w, r, resource.Invalid("Version", "unsupported"))
 		return
