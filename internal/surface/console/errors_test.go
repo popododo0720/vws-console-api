@@ -31,7 +31,7 @@ func TestEveryCodeHasAConsoleStatus(t *testing.T) {
 	}
 	for _, c := range resource.Codes() {
 		rec := httptest.NewRecorder()
-		writeErr(rec, httptest.NewRequest(http.MethodGet, "/", nil), &resource.Error{Code: c, Message: "m"})
+		writeErr(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil), &resource.Error{Code: c, Message: "m"})
 		var body struct {
 			Error struct {
 				Code string `json:"code"`

@@ -17,7 +17,7 @@ type wireErr struct {
 func ec2Wire(t *testing.T, e *resource.Error) wireErr {
 	t.Helper()
 	rec := httptest.NewRecorder()
-	writeErr(rec, httptest.NewRequest(http.MethodPost, "/", nil), e)
+	writeErr(rec, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/", nil), e)
 	var body errorXML
 	if err := xml.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatalf("%v: %v", e.Code, err)

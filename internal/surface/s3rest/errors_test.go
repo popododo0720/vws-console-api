@@ -52,7 +52,7 @@ func TestEveryCodeHasAnS3Error(t *testing.T) {
 func s3Wire(t *testing.T, e *resource.Error) wireErr {
 	t.Helper()
 	rec := httptest.NewRecorder()
-	writeErr(rec, httptest.NewRequest(http.MethodGet, "/b/k", nil), e, "/b/k")
+	writeErr(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/b/k", nil), e, "/b/k")
 	var body errorXML
 	if err := xml.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatalf("%v: %v", e.Code, err)
