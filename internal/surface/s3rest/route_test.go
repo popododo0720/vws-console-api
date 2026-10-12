@@ -110,10 +110,12 @@ func TestListObjectsV2(t *testing.T) {
 		t.Fatalf("start-after %+v", inside)
 	}
 	for _, rawURL := range []string{
-		"http://127.0.0.1:8082/build-logs?list-type=1",
-		"http://127.0.0.1:8082/build-logs",
 		"http://127.0.0.1:8082/build-logs?list-type=2&max-keys=0",
 		"http://127.0.0.1:8082/build-logs?list-type=2&continuation-token=!!!!",
+		"http://127.0.0.1:8082/build-logs?list-type=3",
+		"http://127.0.0.1:8082/build-logs?list-type=2&marker=a",
+		"http://127.0.0.1:8082/build-logs?continuation-token=YQ",
+		"http://127.0.0.1:8082/build-logs?max-keys=0",
 	} {
 		bad := call(t, h, cred, now, http.MethodGet, rawURL, "", nil)
 		if bad.Code != http.StatusBadRequest || !strings.Contains(bad.Body.String(), "InvalidArgument") {
@@ -122,7 +124,6 @@ func TestListObjectsV2(t *testing.T) {
 	}
 	for _, rawURL := range []string{
 		"http://127.0.0.1:8082/build-logs?encryption",
-		"http://127.0.0.1:8082/build-logs?marker=",
 	} {
 		stub := call(t, h, cred, now, http.MethodGet, rawURL, "", nil)
 		if stub.Code != http.StatusNotImplemented || !strings.Contains(stub.Body.String(), "NotImplemented") {
@@ -145,6 +146,79 @@ func TestListObjectsV2(t *testing.T) {
 	if missing.Code != http.StatusNotFound || !strings.Contains(missing.Body.String(), "NoSuchBucket") {
 		t.Fatalf("missing %d %s", missing.Code, missing.Body)
 	}
+}
+
+func TestListObjectsV1(t *testing.T) {
+	h, cred, now := harness(t)
+	if res := call(t, h, cred, now, http.MethodPut, "http://127.0.0.1:8082/build-logs", "", nil); res.Code != http.StatusOK {
+		t.Fatalf("bucket %d %s", res.Code, res.Body)
+	}
+	for _, key := range []string{"a.txt", "b/c.txt", "b/d.txt", "c.txt"} {
+		if res := call(t, h, cred, now, http.MethodPut, "http://127.0.0.1:8082/build-logs/"+key, "x", nil); res.Code != http.StatusOK {
+			t.Fatalf("put %s %d %s", key, res.Code, res.Body)
+		}
+	}
+	all := mustListV1(t, call(t, h, cred, now, http.MethodGet, "http://127.0.0.1:8082/build-logs", "", nil))
+	if keysOfV1(all) != "a.txt,b/c.txt,b/d.txt,c.txt" || all.IsTruncated || all.MaxKeys != 1000 || all.Contents[0].Owner == nil {
+		t.Fatalf("all %+v", all)
+	}
+	prefixed := mustListV1(t, call(t, h, cred, now, http.MethodGet, "http://127.0.0.1:8082/build-logs?prefix=b/", "", nil))
+	if keysOfV1(prefixed) != "b/c.txt,b/d.txt" || prefixed.Prefix != "b/" {
+		t.Fatalf("prefix %+v", prefixed)
+	}
+	rolled := mustListV1(t, call(t, h, cred, now, http.MethodGet, "http://127.0.0.1:8082/build-logs?list-type=1&delimiter=/", "", nil))
+	if keysOfV1(rolled) != "a.txt,c.txt" || len(rolled.CommonPrefixes) != 1 || rolled.CommonPrefixes[0].Prefix != "b/" {
+		t.Fatalf("delimiter %+v", rolled)
+	}
+	var seen []string
+	marker := ""
+	for range 5 {
+		page := mustListV1(t, call(t, h, cred, now, http.MethodGet,
+			"http://127.0.0.1:8082/build-logs?delimiter=/&max-keys=1&marker="+url.QueryEscape(marker), "", nil))
+		if page.Marker != marker || len(page.Contents)+len(page.CommonPrefixes) != 1 {
+			t.Fatalf("page after %q %+v", marker, page)
+		}
+		for _, item := range page.Contents {
+			seen = append(seen, item.Key)
+		}
+		for _, item := range page.CommonPrefixes {
+			seen = append(seen, item.Prefix)
+		}
+		if !page.IsTruncated {
+			if page.NextMarker != "" {
+				t.Fatalf("last page has NextMarker %+v", page)
+			}
+			break
+		}
+		marker = page.NextMarker
+	}
+	if strings.Join(seen, ",") != "a.txt,b/,c.txt" {
+		t.Fatalf("paged %v", seen)
+	}
+	encoded := call(t, h, cred, now, http.MethodGet, "http://127.0.0.1:8082/build-logs?encoding-type=url&prefix=b/", "", nil)
+	if encoded.Code != http.StatusOK || !strings.Contains(encoded.Body.String(), "<Key>b%2Fc.txt</Key>") {
+		t.Fatalf("encoded %d %s", encoded.Code, encoded.Body)
+	}
+}
+
+func mustListV1(t *testing.T, rec *httptest.ResponseRecorder) listObjectsV1XML {
+	t.Helper()
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list %d %s", rec.Code, rec.Body)
+	}
+	var page listObjectsV1XML
+	if err := xml.Unmarshal(rec.Body.Bytes(), &page); err != nil {
+		t.Fatalf("xml %v %s", err, rec.Body)
+	}
+	return page
+}
+
+func keysOfV1(page listObjectsV1XML) string {
+	var keys []string
+	for _, item := range page.Contents {
+		keys = append(keys, item.Key)
+	}
+	return strings.Join(keys, ",")
 }
 
 func mustList(t *testing.T, rec *httptest.ResponseRecorder) listObjectsXML {

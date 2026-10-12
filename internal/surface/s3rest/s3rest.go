@@ -116,7 +116,7 @@ func (h *handler) listObjects(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, r, err, r.PathValue("bucket"))
 		return
 	}
-	q, err := objectListQuery(r, bucket)
+	q, v2, err := objectListQuery(r, bucket)
 	if err != nil {
 		writeErr(w, r, err, bucket.String())
 		return
@@ -126,8 +126,10 @@ func (h *handler) listObjects(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, r, err, bucket.String())
 		return
 	}
-	encode := r.URL.Query().Get("encoding-type") == "url"
-	includeOwner := r.URL.Query().Get("fetch-owner") == "true"
+	query := r.URL.Query()
+	encode := query.Get("encoding-type") == "url"
+	// ListObjects (v1) always returns the owner. V2 returns it on fetch-owner.
+	includeOwner := !v2 || query.Get("fetch-owner") == "true"
 	contents := make([]objectContentXML, 0, len(page.Objects))
 	for _, obj := range page.Objects {
 		item := objectContentXML{
@@ -146,14 +148,29 @@ func (h *handler) listObjects(w http.ResponseWriter, r *http.Request) {
 	for _, prefix := range page.CommonPrefixes {
 		prefixes = append(prefixes, commonPrefixXML{Prefix: encodeS3(prefix, encode)})
 	}
+	if !v2 {
+		writeXML(w, http.StatusOK, listObjectsV1XML{
+			Name:           bucket.String(),
+			Prefix:         encodeS3(q.Prefix, encode),
+			Marker:         encodeS3(q.Token, encode),
+			NextMarker:     encodeS3(page.NextToken, encode),
+			Delimiter:      encodeS3(q.Delimiter, encode),
+			MaxKeys:        q.MaxKeys,
+			EncodingType:   query.Get("encoding-type"),
+			IsTruncated:    page.NextToken != "",
+			Contents:       contents,
+			CommonPrefixes: prefixes,
+		})
+		return
+	}
 	writeXML(w, http.StatusOK, listObjectsXML{
 		Name:                  bucket.String(),
 		Prefix:                encodeS3(q.Prefix, encode),
 		Delimiter:             encodeS3(q.Delimiter, encode),
 		MaxKeys:               q.MaxKeys,
 		KeyCount:              len(contents) + len(prefixes),
-		EncodingType:          r.URL.Query().Get("encoding-type"),
-		ContinuationToken:     r.URL.Query().Get("continuation-token"),
+		EncodingType:          query.Get("encoding-type"),
+		ContinuationToken:     query.Get("continuation-token"),
 		NextContinuationToken: encodeToken(page.NextToken),
 		StartAfter:            encodeS3(q.StartAfter, encode),
 		IsTruncated:           page.NextToken != "",
@@ -162,31 +179,50 @@ func (h *handler) listObjects(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func objectListQuery(r *http.Request, bucket resource.BucketName) (resource.ObjectQuery, error) {
+// objectListQuery parses ListObjects (v1, no list-type or list-type=1) and
+// ListObjectsV2 (list-type=2). The v1 marker is the page position, the same
+// thing as the v2 token, so a rolled-up prefix used as a marker skips its keys.
+func objectListQuery(r *http.Request, bucket resource.BucketName) (resource.ObjectQuery, bool, error) {
 	query := r.URL.Query()
 	for key := range query {
 		switch strings.ToLower(key) {
-		case "list-type", "prefix", "delimiter", "max-keys", "continuation-token", "start-after", "encoding-type", "fetch-owner":
+		case "list-type", "prefix", "delimiter", "max-keys", "continuation-token", "start-after", "encoding-type", "fetch-owner", "marker":
 		default:
-			return resource.ObjectQuery{}, resource.Unimplemented(key + " is not served")
+			return resource.ObjectQuery{}, false, resource.Unimplemented(key + " is not served")
 		}
 	}
-	if query.Get("list-type") != "2" {
-		return resource.ObjectQuery{}, resource.Invalid("list-type", "unsupported")
+	var v2 bool
+	switch query.Get("list-type") {
+	case "", "1":
+		for _, key := range []string{"continuation-token", "start-after", "fetch-owner"} {
+			if query.Has(key) {
+				return resource.ObjectQuery{}, false, resource.Invalid(key, "unsupported without list-type=2")
+			}
+		}
+	case "2":
+		if query.Has("marker") {
+			return resource.ObjectQuery{}, false, resource.Invalid("marker", "unsupported with list-type=2")
+		}
+		v2 = true
+	default:
+		return resource.ObjectQuery{}, false, resource.Invalid("list-type", "unsupported")
 	}
 	switch query.Get("encoding-type") {
 	case "", "url":
 	default:
-		return resource.ObjectQuery{}, resource.Invalid("encoding-type", "unsupported")
+		return resource.ObjectQuery{}, false, resource.Invalid("encoding-type", "unsupported")
 	}
 	switch query.Get("fetch-owner") {
 	case "", "true", "false":
 	default:
-		return resource.ObjectQuery{}, resource.Invalid("fetch-owner", "unsupported")
+		return resource.ObjectQuery{}, false, resource.Invalid("fetch-owner", "unsupported")
 	}
 	token, err := decodeToken(query.Get("continuation-token"))
 	if err != nil {
-		return resource.ObjectQuery{}, err
+		return resource.ObjectQuery{}, false, err
+	}
+	if !v2 {
+		token = query.Get("marker")
 	}
 	q := resource.ObjectQuery{
 		Bucket:     bucket,
@@ -199,14 +235,11 @@ func objectListQuery(r *http.Request, bucket resource.BucketName) (resource.Obje
 	if raw := query.Get("max-keys"); raw != "" {
 		n, err := strconv.Atoi(raw)
 		if err != nil || n < 1 {
-			return resource.ObjectQuery{}, resource.Invalid("max-keys", "malformed")
+			return resource.ObjectQuery{}, false, resource.Invalid("max-keys", "malformed")
 		}
-		if n > 1000 {
-			n = 1000
-		}
-		q.MaxKeys = n
+		q.MaxKeys = min(n, 1000)
 	}
-	return q, nil
+	return q, v2, nil
 }
 
 func encodeToken(token string) string {
@@ -372,6 +405,20 @@ type listObjectsXML struct {
 	IsTruncated           bool               `xml:"IsTruncated"`
 	Contents              []objectContentXML `xml:"Contents,omitempty"`
 	CommonPrefixes        []commonPrefixXML  `xml:"CommonPrefixes,omitempty"`
+}
+
+type listObjectsV1XML struct {
+	XMLName        struct{}           `xml:"ListBucketResult"`
+	Name           string             `xml:"Name"`
+	Prefix         string             `xml:"Prefix"`
+	Marker         string             `xml:"Marker"`
+	NextMarker     string             `xml:"NextMarker,omitempty"`
+	Delimiter      string             `xml:"Delimiter,omitempty"`
+	MaxKeys        int                `xml:"MaxKeys"`
+	EncodingType   string             `xml:"EncodingType,omitempty"`
+	IsTruncated    bool               `xml:"IsTruncated"`
+	Contents       []objectContentXML `xml:"Contents,omitempty"`
+	CommonPrefixes []commonPrefixXML  `xml:"CommonPrefixes,omitempty"`
 }
 
 type objectContentXML struct {
