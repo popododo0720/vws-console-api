@@ -51,7 +51,7 @@ func Run(ctx context.Context, logger *slog.Logger, surfaces ...Surface) error {
 	shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	for _, srv := range servers {
-		_ = srv.Shutdown(shutCtx)
+		runErr = errors.Join(runErr, srv.Shutdown(shutCtx))
 	}
 	wg.Wait()
 	return runErr
