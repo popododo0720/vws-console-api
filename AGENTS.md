@@ -93,6 +93,7 @@ makes a skip exit 3. CI sets it, so the fake run cannot lose a step silently.
 pip install -r e2e/requirements.txt
 e2e/run.sh                          # fake backend, started by the script
 VWS_E2E_BACKEND=grpc python3 e2e/e2e.py   # services already running
+e2e/local.sh                        # grpc stack kept up for manual runs (needs VWS_E2E_BIN, VWS_E2E_IMAGES)
 ```
 
 ## pstack
