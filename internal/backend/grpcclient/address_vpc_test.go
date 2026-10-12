@@ -55,6 +55,9 @@ func (s *vpcGate) CreateAddress(_ context.Context, req *networkv1.CreateAddressR
 	if s.cidr == "" {
 		return nil, status.Error(codes.InvalidArgument, "vpc is required")
 	}
+	if req.GetAddress().GetSpec().GetVpc() == "" {
+		return nil, status.Error(codes.InvalidArgument, "an address is allocated in a vpc")
+	}
 	projectID, err := projectOfName(req.GetParent())
 	if err != nil {
 		return nil, toStatus(err)

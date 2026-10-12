@@ -290,7 +290,8 @@ const defaultVPCCIDR = "172.31.0.0/16"
 
 func (c networkClient) AllocateAddress(ctx context.Context, m backend.Mutation, req resource.AllocateAddressRequest) (resource.Accepted[resource.Address], error) {
 	projectID := project(m.Account)
-	if err := c.ensureDefaultVPC(ctx, projectID); err != nil {
+	vpc, err := c.ensureVPC(ctx, projectID)
+	if err != nil {
 		return resource.Accepted[resource.Address]{}, err
 	}
 	created, err := c.addresses.CreateAddress(ctx, &networkv1.CreateAddressRequest{
@@ -299,7 +300,7 @@ func (c networkClient) AllocateAddress(ctx context.Context, m backend.Mutation, 
 		RequestId: requestUUID(m.Key, "addr"),
 		Address: &networkv1.Address{
 			Labels: map[string]string{labelFingerprint: clip(m.Fingerprint, 63)},
-			Spec:   &networkv1.AddressSpec{IpVersion: networkv1.IpVersion_IP_VERSION_IPV4},
+			Spec:   &networkv1.AddressSpec{IpVersion: networkv1.IpVersion_IP_VERSION_IPV4, Vpc: vpc},
 		},
 	})
 	if err := rpcErr(created, err); err != nil {
@@ -331,33 +332,38 @@ func (c networkClient) AllocateAddress(ctx context.Context, m backend.Mutation, 
 	return resource.Accepted[resource.Address]{Operation: op, Items: []resource.Address{addr}}, nil
 }
 
-func (c networkClient) ensureDefaultVPC(ctx context.Context, projectID string) error {
+// ensureVPC returns the VPC an address is allocated in. The network service
+// requires spec.vpc and the binding is immutable. The first VPC of the project
+// wins, so the address can later attach to an instance there. A project with no
+// VPC gets the default one.
+func (c networkClient) ensureVPC(ctx context.Context, projectID string) (string, error) {
 	token := ""
 	for page := 0; page < 20; page++ {
 		out, err := c.vpcs.ListVpcs(ctx, &networkv1.ListVpcsRequest{
 			Parent: regionParent(projectID), PageSize: 100, PageToken: token,
 		})
 		if err != nil {
-			return fromRPC(err)
+			return "", fromRPC(err)
 		}
 		if len(out.GetVpcs()) > 0 {
-			return nil
+			return out.GetVpcs()[0].GetName(), nil
 		}
 		token = out.GetNextPageToken()
 		if token == "" {
 			break
 		}
 	}
+	id := derivedID("vpc-", projectID, "default")
 	created, err := c.vpcs.CreateVpc(ctx, &networkv1.CreateVpcRequest{
 		Parent:    regionParent(projectID),
-		VpcId:     derivedID("vpc-", projectID, "default"),
+		VpcId:     id,
 		RequestId: requestUUID(projectID, "default-vpc"),
 		Vpc:       &networkv1.Vpc{Spec: &networkv1.VpcSpec{Ipv4Cidr: defaultVPCCIDR}},
 	})
 	if err := rpcErr(created, err); err != nil && resource.CodeOf(err) != resource.CodeAlreadyExists {
-		return err
+		return "", err
 	}
-	return nil
+	return vpcName(projectID, id), nil
 }
 
 func (c networkClient) ReleaseAddress(ctx context.Context, m backend.Mutation, req resource.ReleaseAddressRequest) (resource.Accepted[resource.Address], error) {
