@@ -27,6 +27,7 @@ type imageBoot struct {
 	storagev1.UnimplementedVolumeServiceServer
 	computev1.UnimplementedInstanceServiceServer
 	mu     sync.Mutex
+	labels map[string]string
 	image  string
 	source string
 }
@@ -68,6 +69,9 @@ func (s *imageBoot) CreateVolume(_ context.Context, req *storagev1.CreateVolumeR
 }
 
 func (s *imageBoot) CreateInstance(_ context.Context, req *computev1.CreateInstanceRequest) (*longrunningpb.Operation, error) {
+	s.mu.Lock()
+	s.labels = req.GetInstance().GetLabels()
+	s.mu.Unlock()
 	projectID, err := projectOfName(req.GetParent())
 	if err != nil {
 		return nil, toStatus(err)
@@ -75,13 +79,15 @@ func (s *imageBoot) CreateInstance(_ context.Context, req *computev1.CreateInsta
 	return doneNamed(instanceName(projectID, req.GetInstanceId()), commonv1.OperationVerb_OPERATION_VERB_CREATE)
 }
 
+// GetInstance returns the labels CreateInstance stored, as the real service
+// does. The test must not add labels the caller did not send.
 func (s *imageBoot) GetInstance(_ context.Context, req *computev1.GetInstanceRequest) (*computev1.Instance, error) {
+	s.mu.Lock()
+	labels := s.labels
+	s.mu.Unlock()
 	return &computev1.Instance{
-		Name: req.GetName(),
-		Labels: map[string]string{
-			labelImage:       "ami-0123456789abcdef0",
-			labelReservation: "r-01234567",
-		},
+		Name:   req.GetName(),
+		Labels: labels,
 		Spec: &computev1.InstanceSpec{
 			MachineType: "vws.small",
 			Power:       computev1.InstancePower_INSTANCE_POWER_RUNNING,

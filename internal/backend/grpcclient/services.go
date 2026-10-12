@@ -52,6 +52,8 @@ func (c computeClient) RunInstances(ctx context.Context, m backend.Mutation, req
 	}
 	items := make([]resource.Instance, 0, req.Count)
 	var op resource.Operation
+	// One launch is one reservation. A retry with the same key derives the same id.
+	reservation := derivedID("r-", m.Key, "reservation")
 	for i := 0; i < req.Count; i++ {
 		volID := derivedID("vol-", m.Key, "vol", strconv.Itoa(i))
 		volOp, err := c.volumes.CreateVolume(ctx, &storagev1.CreateVolumeRequest{
@@ -68,6 +70,7 @@ func (c computeClient) RunInstances(ctx context.Context, m backend.Mutation, req
 			labelFingerprint: clip(m.Fingerprint, 63),
 			labelImage:       req.ImageID.String(),
 			labelLaunch:      clip(m.Key, 32),
+			labelReservation: reservation,
 		})
 		created, err := c.instances.CreateInstance(ctx, &computev1.CreateInstanceRequest{
 			Parent:     instanceParent(projectID),
