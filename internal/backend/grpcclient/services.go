@@ -419,6 +419,9 @@ func (c storageClient) PutObject(ctx context.Context, s backend.Scope, req resou
 	}
 	projectID := project(s.Account)
 	name := objectName(projectID, req.Bucket.String(), req.Key.String())
+	if req.IfNoneMatch {
+		return c.createObject(ctx, projectID, name, req, buf)
+	}
 	op, err := c.objects.UpdateObject(ctx, &storagev1.UpdateObjectRequest{
 		AllowMissing: true,
 		Contents:     buf,
@@ -433,7 +436,50 @@ func (c storageClient) PutObject(ctx context.Context, s backend.Scope, req resou
 	if err := rpcErr(op, err); err != nil {
 		return resource.Object{}, err
 	}
-	op, err = c.awaitStorage(ctx, op)
+	return c.finishPut(ctx, name, op)
+}
+
+// createObject is PutObject with If-None-Match: *. CreateObject refuses an
+// existing key atomically when the bytes differ. vws-storage accepts a create
+// whose bytes match the stored object, so an existing key is checked first.
+// Two creates racing with identical bytes can both succeed until storage has
+// a strict create (see the PR).
+func (c storageClient) createObject(ctx context.Context, projectID, name string, req resource.PutObjectRequest, buf []byte) (resource.Object, error) {
+	exists := resource.AlreadyExists(resource.KindObject, req.Key.String())
+	_, err := c.objects.GetObject(ctx, &storagev1.GetObjectRequest{Name: name})
+	if err == nil {
+		return resource.Object{}, exists
+	}
+	if mapped := fromRPC(err); resource.CodeOf(mapped) != resource.CodeNotFound {
+		return resource.Object{}, mapped
+	}
+	op, err := c.objects.CreateObject(ctx, &storagev1.CreateObjectRequest{
+		Parent:    bucketName(projectID, req.Bucket.String()),
+		ObjectId:  encodeObjectKey(req.Key.String()),
+		Contents:  buf,
+		RequestId: requestUUID(projectID, req.Bucket.String(), req.Key.String(), "create", hex.EncodeToString(sha256Of(buf))),
+		Object: &storagev1.Object{
+			Labels: map[string]string{},
+			Spec:   &storagev1.ObjectSpec{ContentType: req.ContentType},
+		},
+	})
+	if err := rpcErr(op, err); err != nil {
+		if resource.CodeOf(err) == resource.CodeAlreadyExists {
+			return resource.Object{}, exists
+		}
+		return resource.Object{}, err
+	}
+	return c.finishPut(ctx, name, op)
+}
+
+func sha256Of(b []byte) []byte {
+	sum := sha256.Sum256(b)
+	return sum[:]
+}
+
+// finishPut waits for a put and returns the stored object.
+func (c storageClient) finishPut(ctx context.Context, name string, op *longrunningpb.Operation) (resource.Object, error) {
+	op, err := c.awaitStorage(ctx, op)
 	if err != nil {
 		return resource.Object{}, err
 	}

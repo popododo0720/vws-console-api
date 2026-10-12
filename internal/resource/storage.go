@@ -57,6 +57,9 @@ type PutObjectRequest struct {
 	Key         ObjectKey  `json:"key"`
 	ContentType string     `json:"contentType,omitempty"`
 	Size        int64      `json:"size"`
+	// IfNoneMatch is If-None-Match: *. The put fails with AlreadyExists of
+	// KindObject when the key already holds an object.
+	IfNoneMatch bool `json:"ifNoneMatch,omitempty"`
 }
 
 // Normalize checks the metadata. Size is the declared length. A negative size

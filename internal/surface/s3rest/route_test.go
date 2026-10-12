@@ -334,3 +334,27 @@ func TestS3CodeForNotFound(t *testing.T) {
 		}
 	}
 }
+
+func TestPutIfNoneMatchIsWriteOnce(t *testing.T) {
+	h, cred, now := harness(t)
+	if res := call(t, h, cred, now, http.MethodPut, "http://127.0.0.1:8082/build-logs", "", nil); res.Code != http.StatusOK {
+		t.Fatalf("bucket %d %s", res.Code, res.Body)
+	}
+	once := map[string]string{"If-None-Match": "*"}
+	const url = "http://127.0.0.1:8082/build-logs/once.txt"
+	if res := call(t, h, cred, now, http.MethodPut, url, "once", once); res.Code != http.StatusOK {
+		t.Fatalf("first put %d %s", res.Code, res.Body)
+	}
+	for _, body := range []string{"once", "twice"} {
+		res := call(t, h, cred, now, http.MethodPut, url, body, once)
+		if res.Code != http.StatusPreconditionFailed || !strings.Contains(res.Body.String(), "<Code>PreconditionFailed</Code>") {
+			t.Fatalf("put %q again: %d %s, want 412 PreconditionFailed", body, res.Code, res.Body)
+		}
+	}
+	if got := call(t, h, cred, now, http.MethodGet, url, "", nil); got.Body.String() != "once" {
+		t.Fatalf("body %q after refused puts", got.Body)
+	}
+	if res := call(t, h, cred, now, http.MethodPut, url, "x", map[string]string{"If-None-Match": `"abc"`}); res.Code != http.StatusNotImplemented {
+		t.Fatalf("If-None-Match etag: %d %s, want 501", res.Code, res.Body)
+	}
+}

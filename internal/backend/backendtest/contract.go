@@ -200,6 +200,26 @@ func Run(t *testing.T, newSet Harness) {
 	if err != nil || replaced.Size != 6 || replaced.ETag == obj.ETag {
 		t.Fatalf("overwrite: %v %+v", err, replaced)
 	}
+	// If-None-Match: * fails on an existing key, even with the same bytes.
+	for _, again := range []string{"hello!", "other"} {
+		if _, err := set.Storage.PutObject(ctx, backend.Scope{Account: account}, resource.PutObjectRequest{
+			Bucket: name, Key: key, Size: int64(len(again)), IfNoneMatch: true,
+		}, strings.NewReader(again)); resource.CodeOf(err) != resource.CodeAlreadyExists || resource.AsError(err).Kind != resource.KindObject {
+			t.Fatalf("if-none-match %q on an existing key: %v", again, err)
+		}
+	}
+	onceKey, err := resource.Parse[resource.ObjectKey]("once.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if once, err := set.Storage.PutObject(ctx, backend.Scope{Account: account}, resource.PutObjectRequest{
+		Bucket: name, Key: onceKey, Size: 4, IfNoneMatch: true,
+	}, strings.NewReader("once")); err != nil || once.Size != 4 {
+		t.Fatalf("if-none-match on a new key: %v %+v", err, once)
+	}
+	if err := set.Storage.DeleteObject(ctx, backend.Scope{Account: account}, name, onceKey); err != nil {
+		t.Fatal(err)
+	}
 	meta, rc, err := set.Storage.GetObject(ctx, backend.Scope{Account: account}, resource.GetObjectRequest{Bucket: name, Key: key})
 	if err != nil {
 		t.Fatal(err)
