@@ -3,6 +3,7 @@ package grpcclient
 import (
 	"context"
 	"net"
+	"strconv"
 	"sync"
 	"testing"
 
@@ -122,4 +123,74 @@ func TestAllocateAddressEnsuresDefaultVPC(t *testing.T) {
 	if cidr != defaultVPCCIDR {
 		t.Fatalf("cidr %s", cidr)
 	}
+}
+
+// vpcList serves a fixed ListVpcs answer, two per page, in the order given.
+type vpcList struct {
+	networkv1.UnimplementedVpcServiceServer
+	vpcs []*networkv1.Vpc
+}
+
+func (s *vpcList) ListVpcs(_ context.Context, req *networkv1.ListVpcsRequest) (*networkv1.ListVpcsResponse, error) {
+	start := 0
+	if req.GetPageToken() != "" {
+		start, _ = strconv.Atoi(req.GetPageToken())
+	}
+	end := min(start+2, len(s.vpcs))
+	next := ""
+	if end < len(s.vpcs) {
+		next = strconv.Itoa(end)
+	}
+	return &networkv1.ListVpcsResponse{Vpcs: s.vpcs[start:end], NextPageToken: next}, nil
+}
+
+func TestEnsureVPCIgnoresListOrder(t *testing.T) {
+	at := func(sec int64) *timestamppb.Timestamp { return &timestamppb.Timestamp{Seconds: sec} }
+	name := func(id string) string { return "projects/p/regions/" + resource.RegionName + "/vpcs/" + id }
+	vpcs := []*networkv1.Vpc{
+		{Name: name("vpc-cccccccc"), CreateTime: at(300)},
+		{Name: name("vpc-bbbbbbbb"), CreateTime: at(100)},
+		{Name: name("vpc-aaaaaaaa"), CreateTime: at(100)},
+		{Name: name("vpc-dddddddd"), CreateTime: at(50)},
+		{Name: name("vpc-eeeeeeee"), CreateTime: at(200)},
+	}
+	want := name("vpc-dddddddd")
+	// The oldest is on the second page. Ties break by name.
+	for i, order := range [][]int{{0, 1, 2, 3, 4}, {4, 3, 2, 1, 0}, {2, 0, 4, 1, 3}} {
+		list := make([]*networkv1.Vpc, 0, len(vpcs))
+		for _, j := range order {
+			list = append(list, vpcs[j])
+		}
+		if got := ensureOver(t, list); got != want {
+			t.Fatalf("order %d: got %s, want %s", i, got, want)
+		}
+	}
+	tied := []*networkv1.Vpc{vpcs[1], vpcs[2]}
+	if got := ensureOver(t, tied); got != name("vpc-aaaaaaaa") {
+		t.Fatalf("tie: got %s", got)
+	}
+}
+
+func ensureOver(t *testing.T, vpcs []*networkv1.Vpc) string {
+	t.Helper()
+	lis := bufconn.Listen(MaxMessageBytes())
+	srv := grpc.NewServer()
+	networkv1.RegisterVpcServiceServer(srv, &vpcList{vpcs: vpcs})
+	go func() { _ = srv.Serve(lis) }()
+	t.Cleanup(srv.Stop)
+	conn, err := grpc.NewClient("passthrough:///network",
+		append(dialOptions(), grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) {
+			return lis.DialContext(ctx)
+		}))...,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	client := networkClient{&api{vpcs: networkv1.NewVpcServiceClient(conn)}}
+	got, err := client.ensureVPC(context.Background(), "p")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return got
 }
