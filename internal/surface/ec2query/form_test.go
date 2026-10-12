@@ -380,6 +380,31 @@ func TestCreateVolumeDefaultsToGP2(t *testing.T) {
 	}
 }
 
+func TestDescribeVolumesHasCreateTime(t *testing.T) {
+	h, cred, now := harness(t)
+	form := url.Values{}
+	form.Set("Action", "CreateVolume")
+	form.Set("Version", Version)
+	form.Set("AvailabilityZone", "vws-1a")
+	form.Set("Size", "1")
+	res := signed(t, h, cred, now, form.Encode())
+	if res.Code != http.StatusOK || between(res.Body.String(), "<createTime>", "</createTime>") == "" {
+		t.Fatalf("create: %d %s", res.Code, res.Body)
+	}
+	desc := url.Values{}
+	desc.Set("Action", "DescribeVolumes")
+	desc.Set("Version", Version)
+	desc.Set("VolumeId.1", between(res.Body.String(), "<volumeId>", "</volumeId>"))
+	res = signed(t, h, cred, now, desc.Encode())
+	got := between(res.Body.String(), "<createTime>", "</createTime>")
+	if res.Code != http.StatusOK || got == "" {
+		t.Fatalf("describe: %d %s", res.Code, res.Body)
+	}
+	if _, err := time.Parse(time.RFC3339, got); err != nil {
+		t.Fatalf("createTime %q: %v", got, err)
+	}
+}
+
 func between(s, open, close string) string {
 	_, rest, _ := strings.Cut(s, open)
 	out, _, _ := strings.Cut(rest, close)

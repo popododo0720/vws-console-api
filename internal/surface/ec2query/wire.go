@@ -2,6 +2,7 @@ package ec2query
 
 import (
 	"encoding/xml"
+	"time"
 
 	"github.com/popododo0720/vws-console-api/internal/resource"
 )
@@ -119,6 +120,7 @@ type createVolumeXML struct {
 	Zone      string   `xml:"availabilityZone"`
 	Status    string   `xml:"status"`
 	Type      string   `xml:"volumeType"`
+	Created   string   `xml:"createTime,omitempty"`
 }
 
 type describeVolumesXML struct {
@@ -136,6 +138,7 @@ type volumeItem struct {
 	Zone        string `xml:"availabilityZone"`
 	Status      string `xml:"status"`
 	Type        string `xml:"volumeType"`
+	Created     string `xml:"createTime,omitempty"`
 	Attachments struct {
 		Items []attachmentItem `xml:"item"`
 	} `xml:"attachmentSet,omitempty"`
@@ -374,13 +377,14 @@ func vpcXML(v resource.Vpc) vpcItem {
 func volumeCreatedXML(requestID string, v resource.Volume) createVolumeXML {
 	return createVolumeXML{
 		RequestID: requestID, VolumeID: v.ID.String(), Size: v.SizeGiB,
-		Zone: v.Zone, Status: string(v.State), Type: string(v.Type),
+		Zone: v.Zone, Status: string(v.State), Type: string(v.Type), Created: awsTime(v.CreateTime),
 	}
 }
 
 func volumeXML(v resource.Volume) volumeItem {
 	item := volumeItem{
 		VolumeID: v.ID.String(), Size: v.SizeGiB, Zone: v.Zone, Status: string(v.State), Type: string(v.Type),
+		Created: awsTime(v.CreateTime),
 	}
 	if !v.InstanceID.IsZero() {
 		item.Attachments.Items = []attachmentItem{{
@@ -431,4 +435,12 @@ func imageXML(img resource.Image) imageItem {
 		ImageID: img.ID.String(), Name: img.Name, State: img.State, OwnerID: img.OwnerID.String(),
 		Architecture: "x86_64", ImageType: "machine", RootDeviceType: "ebs", VirtualizationType: "hvm",
 	}
+}
+
+// awsTime renders t as EC2 does (ISO 8601, UTC, milliseconds); zero is omitted.
+func awsTime(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return t.UTC().Format("2006-01-02T15:04:05.000Z")
 }

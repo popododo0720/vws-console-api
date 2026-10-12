@@ -3,6 +3,7 @@ package resource
 import (
 	"net"
 	"strings"
+	"time"
 )
 
 // Vpc is a regional IPv4 network.
@@ -97,6 +98,7 @@ type Volume struct {
 	State      VolumeState `json:"state"`
 	InstanceID InstanceID  `json:"instanceId,omitempty"`
 	Device     string      `json:"device,omitempty"`
+	CreateTime time.Time   `json:"createTime"`
 }
 
 // Owner returns the account that owns the volume.

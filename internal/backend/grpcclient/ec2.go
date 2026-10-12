@@ -16,6 +16,7 @@ import (
 	networkv1 "github.com/popododo0720/vws-proto/gen/go/vws/network/v1"
 	storagev1 "github.com/popododo0720/vws-proto/gen/go/vws/storage/v1"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	commonv1 "github.com/popododo0720/vws-proto/gen/go/vws/common/v1"
 
@@ -577,7 +578,7 @@ func acceptedVolume(op *longrunningpb.Operation, req resource.CreateVolumeReques
 	if err != nil {
 		return resource.Accepted[resource.Volume]{}, err
 	}
-	vol := resource.Volume{ID: id, OwnerID: named, SizeGiB: req.SizeGiB, Zone: req.Zone, Type: req.Type, State: state}
+	vol := resource.Volume{ID: id, OwnerID: named, SizeGiB: req.SizeGiB, Zone: req.Zone, Type: req.Type, State: state, CreateTime: parsed.CreateTime}
 	parsed.Action = resource.ActionCreateVolume
 	parsed.Targets = []resource.Ref{id.Ref()}
 	return resource.Accepted[resource.Volume]{Operation: parsed, Items: []resource.Volume{vol}}, nil
@@ -639,6 +640,7 @@ func volumeModel(in *storagev1.Volume) (resource.Volume, error) {
 	return resource.Volume{
 		ID: id, OwnerID: owner, SizeGiB: in.GetSpec().GetSizeGib(), Zone: parts[3],
 		Type: volumeTypeOf(in.GetSpec().GetType()), State: state, InstanceID: inst, Device: in.GetStatus().GetDeviceName(),
+		CreateTime: in.GetCreateTime().AsTime().UTC(),
 	}, nil
 }
 
@@ -677,10 +679,15 @@ func volumeProto(v resource.Volume, projectID string) *storagev1.Volume {
 	if !v.InstanceID.IsZero() {
 		status.Instance = instanceName(projectID, v.InstanceID.String())
 	}
+	var created *timestamppb.Timestamp
+	if !v.CreateTime.IsZero() {
+		created = timestamppb.New(v.CreateTime)
+	}
 	return &storagev1.Volume{
-		Name:   volumeName(projectID, v.ID.String()),
-		Spec:   &storagev1.VolumeSpec{SizeGib: v.SizeGiB, Type: storagev1.VolumeType_VOLUME_TYPE_SSD},
-		Status: status,
+		CreateTime: created,
+		Name:       volumeName(projectID, v.ID.String()),
+		Spec:       &storagev1.VolumeSpec{SizeGib: v.SizeGiB, Type: storagev1.VolumeType_VOLUME_TYPE_SSD},
+		Status:     status,
 	}
 }
 
