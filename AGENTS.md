@@ -80,6 +80,19 @@ change.
 | Work on a branch. Each commit is one logical change and passes tests by itself. | Review. Before review: `git rebase -x 'go test ./...' origin/main` |
 | Structural changes use pstack: architect, then interrogate, then correct. | Review: the pull request names the sketch and the interrogate verdict |
 
+## e2e
+
+`e2e/e2e.py` drives the EC2 Query and S3 entry points with boto3.
+`VWS_E2E_BACKEND` is `fake` or `grpc`. `VWS_E2E_CAPS` lists what the backend
+can do (`vm`, `eip`). A step that needs a missing capability prints
+`skipped(reason)` and does not count as a pass.
+
+```sh
+pip install -r e2e/requirements.txt
+e2e/run.sh                          # fake backend, started by the script
+VWS_E2E_BACKEND=grpc python3 e2e/e2e.py   # services already running
+```
+
 ## pstack
 
 Use these three skills, in this order, when the change adds a package, a type
