@@ -7,8 +7,12 @@ Environment:
   VWS_E2E_CAPS     Comma list of capabilities the backend has: vm, eip.
                    Default is vm,eip for fake and none for grpc.
 
+  VWS_E2E_STRICT   1 makes a skipped step a failure (exit 3). Default is off.
+
 A step that needs a missing capability prints skipped(reason). A skipped step
-is not a pass. The exit code is 1 on any failure.
+is not a pass. The run ends with a banner and a status line: PASS, FAIL, or
+INCOMPLETE (nothing failed, something was skipped). The exit code is 1 on any
+failure, 3 on a skip under VWS_E2E_STRICT, and 0 otherwise.
 """
 import os
 import sys
@@ -26,13 +30,16 @@ s3 = boto3.client(
     "s3", endpoint_url=os.environ.get("VWS_E2E_S3", "http://127.0.0.1:8082"),
     config=Config(retries={"total_max_attempts": 1}, s3={"addressing_style": "path"}), **KW)
 
+STRICT = os.environ.get("VWS_E2E_STRICT") == "1"
 results = {"ok": 0, "skipped": 0, "FAIL": 0}
+SKIPPED = []
 S = {}
 
 
 def step(name, fn, need=None):
     if need and need not in CAPS:
         results["skipped"] += 1
+        SKIPPED.append(name)
         print(f"skipped({need} not available on {BACKEND} backend)  {name}")
         return None
     try:
@@ -141,4 +148,14 @@ if __name__ == "__main__":
     objects()
     cleanup()
     print(f"ok={results['ok']} skipped={results['skipped']} FAIL={results['FAIL']}")
-    sys.exit(1 if results["FAIL"] else 0)
+    if SKIPPED:
+        bar = "!" * 60
+        print(f"\n{bar}\n{len(SKIPPED)} STEP(S) SKIPPED ON THE {BACKEND.upper()} BACKEND. NOT TESTED:")
+        for name in SKIPPED:
+            print(f"  - {name}")
+        print(f"{bar}")
+    status = "FAIL" if results["FAIL"] else "INCOMPLETE" if SKIPPED else "PASS"
+    print(f"status={status}")
+    if results["FAIL"]:
+        sys.exit(1)
+    sys.exit(3 if SKIPPED and STRICT else 0)
