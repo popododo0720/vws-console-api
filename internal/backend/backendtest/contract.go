@@ -204,7 +204,11 @@ func Run(t *testing.T, newSet Harness) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = rc.Close() }()
+	defer func() {
+		if err := rc.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	if meta.ETag != replaced.ETag || meta.Size != replaced.Size {
 		t.Fatalf("etag %s size %d", meta.ETag, meta.Size)
 	}

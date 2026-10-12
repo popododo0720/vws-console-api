@@ -507,7 +507,11 @@ func withCaller(ctx context.Context, c resource.Caller) context.Context {
 	return context.WithValue(ctx, callerKey{}, c)
 }
 
+// callerFrom returns the zero caller when none is set. The kernel rejects
+// a zero caller as unauthenticated.
 func callerFrom(r *http.Request) resource.Caller {
-	c, _ := r.Context().Value(callerKey{}).(resource.Caller)
-	return c
+	if c, ok := r.Context().Value(callerKey{}).(resource.Caller); ok {
+		return c
+	}
+	return resource.Caller{}
 }
