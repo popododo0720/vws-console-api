@@ -80,6 +80,8 @@ def network():
         ec2.delete_volume(VolumeId=vid)
         check(got == "standard", f"type {got}")
     step("CreateVolume VolumeType=standard", standard_volume)
+    step("DescribeVolumes has CreateTime", lambda: check(
+        all("CreateTime" in v for v in ec2.describe_volumes()["Volumes"]), "CreateTime missing"))
     for name, fn in [
         ("DescribeVpcs", ec2.describe_vpcs), ("DescribeSubnets", ec2.describe_subnets),
         ("DescribeSecurityGroups", ec2.describe_security_groups), ("DescribeKeyPairs", ec2.describe_key_pairs),
