@@ -48,7 +48,7 @@ func Run(ctx context.Context, logger *slog.Logger, surfaces ...Surface) error {
 	case <-ctx.Done():
 	case runErr = <-errc:
 	}
-	shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	shutCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
 	for _, srv := range servers {
 		runErr = errors.Join(runErr, srv.Shutdown(shutCtx))

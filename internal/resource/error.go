@@ -83,6 +83,7 @@ func (e *Error) Unwrap() error { return e.cause }
 
 // MarshalJSON encodes the caller-visible fields.
 func (e *Error) MarshalJSON() ([]byte, error) {
+	//nolint:wrapcheck // MarshalJSON returns encoding/json's own error to encoding/json.
 	return json.Marshal(struct {
 		Code    string `json:"code"`
 		Kind    string `json:"kind,omitempty"`

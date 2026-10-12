@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"time"
@@ -487,11 +488,11 @@ func cidrInside(child, parent string) bool {
 func keyMaterial(entropy io.Reader) (string, string, error) {
 	_, priv, err := ed25519.GenerateKey(entropy)
 	if err != nil {
-		return "", "", err
+		return "", "", fmt.Errorf("generate key pair: %w", err)
 	}
 	der, err := x509.MarshalPKCS8PrivateKey(priv)
 	if err != nil {
-		return "", "", err
+		return "", "", fmt.Errorf("encode private key: %w", err)
 	}
 	block := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})
 	pub, ok := priv.Public().(ed25519.PublicKey)

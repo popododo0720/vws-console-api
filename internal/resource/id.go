@@ -172,7 +172,7 @@ func Parse[T any, PT textValue[T]](s string) (T, error) {
 	var v T
 	if err := PT(&v).UnmarshalText([]byte(s)); err != nil {
 		var zero T
-		return zero, err
+		return zero, err //nolint:wrapcheck // UnmarshalText already returns the caller-facing *Error.
 	}
 	return v, nil
 }

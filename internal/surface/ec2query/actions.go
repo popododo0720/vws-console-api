@@ -1,6 +1,7 @@
 package ec2query
 
 import (
+	"context"
 	"encoding/xml"
 	"net/http"
 	"strconv"
@@ -222,18 +223,18 @@ func (h *handler) authorizeIngress(w http.ResponseWriter, r *http.Request, c res
 }
 
 func (h *handler) startInstances(w http.ResponseWriter, r *http.Request, c resource.Caller) {
-	h.changeInstances(w, r, "StartInstancesResponse", func(token resource.ClientToken, ids []resource.InstanceID) (resource.Accepted[resource.InstanceStateChange], error) {
-		return h.svc.StartInstances(r.Context(), c, token, resource.StartInstancesRequest{IDs: ids})
+	h.changeInstances(w, r, "StartInstancesResponse", func(ctx context.Context, token resource.ClientToken, ids []resource.InstanceID) (resource.Accepted[resource.InstanceStateChange], error) {
+		return h.svc.StartInstances(ctx, c, token, resource.StartInstancesRequest{IDs: ids})
 	})
 }
 
 func (h *handler) terminateInstances(w http.ResponseWriter, r *http.Request, c resource.Caller) {
-	h.changeInstances(w, r, "TerminateInstancesResponse", func(token resource.ClientToken, ids []resource.InstanceID) (resource.Accepted[resource.InstanceStateChange], error) {
-		return h.svc.TerminateInstances(r.Context(), c, token, resource.TerminateInstancesRequest{IDs: ids})
+	h.changeInstances(w, r, "TerminateInstancesResponse", func(ctx context.Context, token resource.ClientToken, ids []resource.InstanceID) (resource.Accepted[resource.InstanceStateChange], error) {
+		return h.svc.TerminateInstances(ctx, c, token, resource.TerminateInstancesRequest{IDs: ids})
 	})
 }
 
-func (h *handler) changeInstances(w http.ResponseWriter, r *http.Request, root string, call func(resource.ClientToken, []resource.InstanceID) (resource.Accepted[resource.InstanceStateChange], error)) {
+func (h *handler) changeInstances(w http.ResponseWriter, r *http.Request, root string, call func(context.Context, resource.ClientToken, []resource.InstanceID) (resource.Accepted[resource.InstanceStateChange], error)) {
 	token, err := optionalClientToken(r)
 	if err != nil {
 		writeErr(w, r, err)
@@ -244,7 +245,7 @@ func (h *handler) changeInstances(w http.ResponseWriter, r *http.Request, root s
 		writeErr(w, r, err)
 		return
 	}
-	acc, err := call(token, ids)
+	acc, err := call(r.Context(), token, ids)
 	if err != nil {
 		writeErr(w, r, err)
 		return

@@ -322,7 +322,7 @@ func tags(r *http.Request) (map[string]string, error) {
 		out[k] = v
 	}
 	if len(out) == 0 {
-		return nil, nil
+		return nil, nil //nolint:nilnil // A nil map means the request has no tags.
 	}
 	return out, nil
 }
@@ -364,7 +364,7 @@ func tagSpecifications(r *http.Request) (map[string]string, error) {
 		}
 	}
 	if len(out) == 0 {
-		return nil, nil
+		return nil, nil //nolint:nilnil // A nil map means the request has no tags.
 	}
 	return out, nil
 }

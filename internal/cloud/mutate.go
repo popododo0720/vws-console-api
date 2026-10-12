@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 
 	"github.com/popododo0720/vws-console-api/internal/backend"
@@ -194,7 +195,7 @@ func mutation[R resource.Request[R]](c resource.Caller, token resource.ClientTok
 	}
 	canon, err := json.Marshal(req)
 	if err != nil {
-		return backend.Mutation{}, err
+		return backend.Mutation{}, fmt.Errorf("fingerprint %s: %w", req.Action(), err)
 	}
 	f := sha256.Sum256(append([]byte(idempotencyVersion+"\x00"), canon...))
 	return backend.Mutation{
