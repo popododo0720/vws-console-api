@@ -137,9 +137,11 @@ func (r RunInstancesRequest) Normalize() (RunInstancesRequest, error) {
 	if r.ImageID.IsZero() {
 		return RunInstancesRequest{}, Invalid("imageId", "required")
 	}
-	if !validInstanceType(r.InstanceType) {
-		return RunInstancesRequest{}, Invalid("instanceType", "malformed")
+	typ, ok := vwsInstanceType(r.InstanceType)
+	if !ok {
+		return RunInstancesRequest{}, Invalid("instanceType", "unsupported instance type")
 	}
+	r.InstanceType = typ
 	if r.SubnetID.IsZero() {
 		return RunInstancesRequest{}, Invalid("subnetId", "required")
 	}
@@ -201,23 +203,26 @@ func (q InstanceQuery) Normalize() (InstanceQuery, error) {
 	return q, nil
 }
 
-func validInstanceType(s string) bool {
-	if len(s) < 1 || len(s) > 32 {
-		return false
+// vwsInstanceType maps an EC2 instance type to the vws-compute machine type
+// nearest by vCPU and memory. vws-compute accepts only vws.small (1 vCPU,
+// 1 GiB), vws.medium (2, 4 GiB), vws.large (4, 8 GiB), and vws.xlarge
+// (8, 16 GiB). Nearest is the least |log2 vCPU ratio| + |log2 memory ratio|;
+// a tie takes the smaller type. A vws name maps to itself.
+func vwsInstanceType(s string) (string, bool) {
+	switch s {
+	case "vws.small", "vws.medium", "vws.large", "vws.xlarge":
+		return s, true
+	case "t2.nano", "t2.micro", "t2.small", "t3.nano", "t3.micro", "t3a.nano", "t3a.micro":
+		return "vws.small", true
+	case "t2.medium", "t2.large", "t3.small", "t3.medium", "t3.large",
+		"t3a.small", "t3a.medium", "t3a.large", "m5.large", "c5.large":
+		return "vws.medium", true
+	case "t2.xlarge", "t3.xlarge", "t3a.xlarge", "m5.xlarge", "c5.xlarge":
+		return "vws.large", true
+	case "t2.2xlarge", "t3.2xlarge", "t3a.2xlarge", "m5.2xlarge", "c5.2xlarge":
+		return "vws.xlarge", true
 	}
-	for i, r := range s {
-		alnum := r >= 'a' && r <= 'z' || r >= '0' && r <= '9'
-		if i == 0 || i == len(s)-1 {
-			if !alnum {
-				return false
-			}
-			continue
-		}
-		if !alnum && r != '.' && r != '-' {
-			return false
-		}
-	}
-	return true
+	return "", false
 }
 
 func validTags(tags map[string]string) error {
