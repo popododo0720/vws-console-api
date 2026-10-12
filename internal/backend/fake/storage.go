@@ -124,12 +124,12 @@ func (s storage) GetObject(ctx context.Context, sc backend.Scope, req resource.G
 	}
 	s.w.mu.Lock()
 	defer s.w.mu.Unlock()
+	if b, exists := s.w.buck[req.Bucket]; !exists || b.OwnerID != sc.Account {
+		return resource.Object{}, nil, resource.NotFound(resource.KindBucket, req.Bucket.String())
+	}
 	obj, ok := s.w.obj[objectKey(req.Bucket, req.Key)]
 	if !ok || obj.meta.OwnerID != sc.Account {
 		return resource.Object{}, nil, resource.NotFound(resource.KindObject, req.Key.String())
-	}
-	if b, exists := s.w.buck[req.Bucket]; !exists || b.OwnerID != sc.Account {
-		return resource.Object{}, nil, resource.NotFound(resource.KindBucket, req.Bucket.String())
 	}
 	body := append([]byte(nil), obj.body...)
 	return obj.meta, io.NopCloser(bytes.NewReader(body)), nil

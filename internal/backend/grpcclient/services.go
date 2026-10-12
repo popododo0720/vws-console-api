@@ -520,7 +520,7 @@ func (c storageClient) GetObject(ctx context.Context, s backend.Scope, req resou
 		Name: objectName(project(s.Account), req.Bucket.String(), req.Key.String()),
 	})
 	if err != nil {
-		return resource.Object{}, nil, fromRPC(err)
+		return resource.Object{}, nil, c.objectErr(ctx, s, req.Bucket, req.Key, fromRPC(err))
 	}
 	if out.GetObject().GetDeleteTime() != nil {
 		return resource.Object{}, nil, resource.NotFound(resource.KindObject, req.Key.String())
@@ -590,7 +590,22 @@ func (c storageClient) DeleteObject(ctx context.Context, s backend.Scope, bucket
 		AllowMissing: true,
 		RequestId:    requestUUID(projectID, bucket.String(), key.String(), "delete-object"),
 	})
-	return rpcErr(op, err)
+	return c.objectErr(ctx, s, bucket, key, rpcErr(op, err))
+}
+
+// objectErr names what is missing. vws-storage sends the same NotFound for a
+// missing bucket and a missing object, so ask for the bucket to tell them apart.
+func (c storageClient) objectErr(ctx context.Context, s backend.Scope, bucket resource.BucketName, key resource.ObjectKey, err error) error {
+	if resource.CodeOf(err) != resource.CodeNotFound {
+		return err
+	}
+	if _, bErr := c.GetBucket(ctx, s, bucket); bErr != nil {
+		if resource.CodeOf(bErr) == resource.CodeNotFound {
+			return resource.NotFound(resource.KindBucket, bucket.String())
+		}
+		return bErr
+	}
+	return resource.NotFound(resource.KindObject, key.String())
 }
 
 type networkClient struct{ *api }
