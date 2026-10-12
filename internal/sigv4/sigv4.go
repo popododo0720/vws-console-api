@@ -105,9 +105,6 @@ func (v *Verifier) Verify(r *http.Request) (resource.Caller, error) {
 	if err != nil {
 		return resource.Caller{}, err
 	}
-	if r.Body != nil {
-		_ = r.Body.Close()
-	}
 	r.Body = io.NopCloser(bytes.NewReader(body))
 	r.ContentLength = int64(len(body))
 
@@ -147,9 +144,6 @@ func sign(r *http.Request, cred Credential, service Service, region string, now 
 	body, err := readBody(r.Body, resource.MaxObjectBytes)
 	if err != nil {
 		return err
-	}
-	if r.Body != nil {
-		_ = r.Body.Close()
 	}
 	r.Body = io.NopCloser(bytes.NewReader(body))
 	r.ContentLength = int64(len(body))
