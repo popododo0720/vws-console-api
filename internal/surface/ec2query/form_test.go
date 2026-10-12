@@ -385,3 +385,17 @@ func between(s, open, close string) string {
 	out, _, _ := strings.Cut(rest, close)
 	return out
 }
+
+func TestDescribeAcceptsCLIDefaultMaxResults(t *testing.T) {
+	h, cred, now := harness(t)
+	for _, action := range []string{"DescribeVolumes", "DescribeInstances", "DescribeSnapshots"} {
+		form := url.Values{}
+		form.Set("Action", action)
+		form.Set("Version", Version)
+		form.Set("MaxResults", "1000")
+		res := signed(t, h, cred, now, form.Encode())
+		if res.Code != http.StatusOK {
+			t.Fatalf("%s %d %s", action, res.Code, res.Body)
+		}
+	}
+}

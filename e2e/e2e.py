@@ -86,6 +86,8 @@ def network():
         ("DescribeVolumes", ec2.describe_volumes), ("DescribeImages", ec2.describe_images),
     ]:
         step(name, fn)
+    step("DescribeVolumes MaxResults=1000 (aws cli default)", lambda: check(
+        ec2.describe_volumes(MaxResults=1000)["Volumes"], "no volumes"))
 
 
 def vms():
