@@ -74,6 +74,9 @@ func (v *Verifier) Verify(r *http.Request) (resource.Caller, error) {
 	if err := queryWithinCap(r.URL.RawQuery); err != nil {
 		return resource.Caller{}, err
 	}
+	if len(r.Header.Values("Authorization")) > 1 {
+		return resource.Caller{}, resource.Invalid("Authorization", "repeated")
+	}
 	auth, err := parseAuthorization(r.Header.Get("Authorization"))
 	if err != nil {
 		return resource.Caller{}, err
@@ -186,11 +189,16 @@ func parseAuthorization(h string) (authorization, error) {
 		return authorization{}, resource.Unauthenticated("missing signature")
 	}
 	var out authorization
+	seen := map[string]bool{}
 	for _, item := range strings.Split(rest, ",") {
 		key, val, ok := strings.Cut(strings.TrimSpace(item), "=")
 		if !ok {
 			return authorization{}, resource.Invalid("Authorization", "malformed")
 		}
+		if seen[key] {
+			return authorization{}, resource.Invalid("Authorization", "repeated field")
+		}
+		seen[key] = true
 		switch key {
 		case "Credential":
 			out.credential = val
