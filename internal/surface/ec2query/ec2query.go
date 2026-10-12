@@ -418,7 +418,9 @@ func pageForm(r *http.Request) (resource.PageRequest, error) {
 		if err != nil {
 			return p, resource.Invalid(field, "malformed")
 		}
-		p.Size = n
+		// The AWS CLI sends MaxResults=1000 when the caller gives none. EC2 may
+		// return fewer items than asked with a NextToken, so cap at our page max.
+		p.Size = min(n, 100)
 	}
 	p.Token = r.Form.Get("NextToken")
 	if p.Token == "" {
