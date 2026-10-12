@@ -305,3 +305,32 @@ func call(t *testing.T, h http.Handler, cred sigv4.Credential, now time.Time, me
 	h.ServeHTTP(rec, req)
 	return rec
 }
+
+func TestMissingObjectAndBucketCodes(t *testing.T) {
+	h, cred, now := harness(t)
+	if res := call(t, h, cred, now, http.MethodPut, "http://127.0.0.1:8082/build-logs", "", nil); res.Code != http.StatusOK {
+		t.Fatalf("bucket %d %s", res.Code, res.Body)
+	}
+	for _, tc := range []struct{ method, path, code string }{
+		{http.MethodGet, "/build-logs/missing.txt", "NoSuchKey"},
+		{http.MethodGet, "/no-such-bucket/a.txt", "NoSuchBucket"},
+		{http.MethodHead, "/no-such-bucket/a.txt", ""},
+		{http.MethodDelete, "/no-such-bucket/a.txt", "NoSuchBucket"},
+	} {
+		res := call(t, h, cred, now, tc.method, "http://127.0.0.1:8082"+tc.path, "", nil)
+		if res.Code != http.StatusNotFound || !strings.Contains(res.Body.String(), tc.code) {
+			t.Errorf("%s %s: %d %s, want 404 %s", tc.method, tc.path, res.Code, res.Body, tc.code)
+		}
+	}
+}
+
+func TestS3CodeForNotFound(t *testing.T) {
+	for kind, want := range map[resource.Kind]string{
+		resource.KindObject: "NoSuchKey",
+		resource.KindBucket: "NoSuchBucket",
+	} {
+		if got := s3Code(resource.NotFound(kind, "x")); got != want {
+			t.Errorf("%v: %s, want %s", kind, got, want)
+		}
+	}
+}

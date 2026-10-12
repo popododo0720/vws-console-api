@@ -130,6 +130,24 @@ def objects():
     step("S3 HeadObject", lambda: check(s3.head_object(Bucket=b, Key="a/k")["ContentLength"] == 5, "length"))
     step("S3 Overwrite", lambda: s3.put_object(Bucket=b, Key="a/k", Body=b"world!"))
     step("S3 GetObject after overwrite", lambda: get("a/k", b"world!"))
+
+    def missing(code, status, call):
+        try:
+            call()
+        except s3.exceptions.ClientError as exc:
+            err = exc.response
+            got = (err["Error"]["Code"], err["ResponseMetadata"]["HTTPStatusCode"])
+            check(got == (code, status), f"{got} != {(code, status)}")
+            return
+        raise AssertionError("no error")
+    step("S3 GetObject missing key is NoSuchKey", lambda: missing(
+        "NoSuchKey", 404, lambda: s3.get_object(Bucket=b, Key="no/such")))
+    # HEAD has no body, so botocore reports the status as the code.
+    step("S3 HeadObject missing key is 404", lambda: missing(
+        "404", 404, lambda: s3.head_object(Bucket=b, Key="no/such")))
+    step("S3 GetObject missing bucket is NoSuchBucket", lambda: missing(
+        "NoSuchBucket", 404, lambda: s3.get_object(Bucket="no-such-bucket", Key="a/k")))
+    step("S3 DeleteObject missing key succeeds", lambda: s3.delete_object(Bucket=b, Key="no/such"))
     step("S3 ListObjectsV2 prefix", lambda: check(
         [o["Key"] for o in s3.list_objects_v2(Bucket=b, Prefix="a/")["Contents"]] == ["a/j", "a/k"], "keys"))
     step("S3 ListObjectsV2 delimiter", lambda: check(
