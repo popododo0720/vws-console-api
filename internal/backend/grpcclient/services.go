@@ -430,10 +430,11 @@ func (c storageClient) PutObject(ctx context.Context, s backend.Scope, req resou
 	if err != nil {
 		return resource.Object{}, err
 	}
-	if obj, ok, err := unpackObject(op); err != nil || ok {
-		if err != nil {
-			return resource.Object{}, err
-		}
+	obj, ok, err := unpackObject(op)
+	if err != nil {
+		return resource.Object{}, err
+	}
+	if ok && obj.ETag != "" {
 		return obj, nil
 	}
 	out, err := c.objects.GetObject(ctx, &storagev1.GetObjectRequest{Name: name})

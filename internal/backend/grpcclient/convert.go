@@ -1,6 +1,7 @@
 package grpcclient
 
 import (
+	"strings"
 	"time"
 
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
@@ -485,6 +486,7 @@ func objectProto(o resource.Object, projectID string) *storagev1.Object {
 		Etag: o.ETag,
 		Spec: &storagev1.ObjectSpec{ContentType: o.ContentType},
 		Status: &storagev1.ObjectStatus{
+			Md5:       strings.Trim(o.ETag, `"`),
 			Observed:  &commonv1.ObservedState{State: commonv1.ReconciliationState_RECONCILIATION_STATE_READY},
 			SizeBytes: o.Size,
 		},
@@ -493,6 +495,15 @@ func objectProto(o resource.Object, projectID string) *storagev1.Object {
 		out.UpdateTime = timestamppb.New(ts)
 	}
 	return out
+}
+
+// s3ETag is the quoted MD5. The service fills status.md5 once the put
+// operation is done. Before that the ETag is empty.
+func s3ETag(md5 string) string {
+	if md5 == "" {
+		return ""
+	}
+	return `"` + md5 + `"`
 }
 
 func objectModel(in *storagev1.Object) (resource.Object, error) {
@@ -529,7 +540,7 @@ func objectModel(in *storagev1.Object) (resource.Object, error) {
 	}
 	return resource.Object{
 		Bucket: bucket, Key: key, OwnerID: owner,
-		Size: in.GetStatus().GetSizeBytes(), ETag: in.GetEtag(), ContentType: in.GetSpec().GetContentType(),
+		Size: in.GetStatus().GetSizeBytes(), ETag: s3ETag(in.GetStatus().GetMd5()), ContentType: in.GetSpec().GetContentType(),
 		LastModified: modified,
 	}, nil
 }
