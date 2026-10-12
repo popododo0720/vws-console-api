@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -34,7 +35,7 @@ func main() {
 	}
 }
 
-func run(ctx context.Context, args []string) error {
+func run(ctx context.Context, args []string) (err error) {
 	fs := flag.NewFlagSet("vws-console-api", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	backendKind := fs.String("backend", "fake", "fake or grpc")
@@ -49,7 +50,7 @@ func run(ctx context.Context, args []string) error {
 	storageAddr := fs.String("storage-addr", "127.0.0.1:19002", "storage gRPC address")
 	networkAddr := fs.String("network-addr", "127.0.0.1:19003", "network gRPC address")
 	if err := fs.Parse(args); err != nil {
-		return err
+		return fmt.Errorf("flags: %w", err)
 	}
 
 	account, err := resource.Parse[resource.AccountID](*accountRaw)
@@ -64,15 +65,15 @@ func run(ctx context.Context, args []string) error {
 	case "fake":
 		set = fake.New(fake.Options{}).Set()
 	case "grpc":
-		client, err := grpcclient.Dial(ctx, grpcclient.Addrs{
+		client, dialErr := grpcclient.Dial(ctx, grpcclient.Addrs{
 			Compute: *computeAddr,
 			Storage: *storageAddr,
 			Network: *networkAddr,
 		})
-		if err != nil {
-			return err
+		if dialErr != nil {
+			return dialErr
 		}
-		defer func() { _ = client.Close() }()
+		defer func() { err = errors.Join(err, client.Close()) }()
 		set = client.Set()
 	default:
 		return fmt.Errorf("unknown -backend %q", *backendKind)
