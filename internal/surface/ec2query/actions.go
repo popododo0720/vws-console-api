@@ -79,17 +79,13 @@ func (h *handler) createVolume(w http.ResponseWriter, r *http.Request, c resourc
 		writeErr(w, r, resource.Invalid("SnapshotId", "unsupported"))
 		return
 	}
-	if raw := r.Form.Get("VolumeType"); raw != "" && raw != "gp2" && raw != "gp3" && raw != "standard" {
-		writeErr(w, r, resource.Invalid("VolumeType", "unsupported"))
-		return
-	}
 	size, err := strconv.ParseInt(r.Form.Get("Size"), 10, 64)
 	if err != nil {
 		writeErr(w, r, resource.Invalid("Size", "malformed"))
 		return
 	}
 	acc, err := h.svc.CreateVolume(r.Context(), c, token, resource.CreateVolumeRequest{
-		SizeGiB: size, Zone: r.Form.Get("AvailabilityZone"),
+		SizeGiB: size, Zone: r.Form.Get("AvailabilityZone"), Type: resource.VolumeType(r.Form.Get("VolumeType")),
 	})
 	if err != nil {
 		writeErr(w, r, err)

@@ -93,6 +93,7 @@ type Volume struct {
 	OwnerID    AccountID   `json:"ownerId"`
 	SizeGiB    int64       `json:"size"`
 	Zone       string      `json:"availabilityZone"`
+	Type       VolumeType  `json:"volumeType"`
 	State      VolumeState `json:"state"`
 	InstanceID InstanceID  `json:"instanceId,omitempty"`
 	Device     string      `json:"device,omitempty"`
@@ -104,17 +105,35 @@ func (v Volume) Owner() AccountID { return v.OwnerID }
 // Identity returns the volume id.
 func (v Volume) Identity() string { return v.ID.String() }
 
+// VolumeType is the EC2 volume type name.
+type VolumeType string
+
+// Volume types CreateVolume accepts.
+const (
+	VolumeStandard VolumeType = "standard"
+	VolumeGP2      VolumeType = "gp2"
+	VolumeGP3      VolumeType = "gp3"
+)
+
 // CreateVolumeRequest allocates a volume.
 type CreateVolumeRequest struct {
-	SizeGiB int64  `json:"size"`
-	Zone    string `json:"availabilityZone"`
+	SizeGiB int64      `json:"size"`
+	Zone    string     `json:"availabilityZone"`
+	Type    VolumeType `json:"volumeType,omitempty"`
 }
 
 // Action returns CreateVolume.
 func (CreateVolumeRequest) Action() Action { return ActionCreateVolume }
 
-// Normalize checks the size and zone.
+// Normalize checks the size, zone, and type. The type defaults to gp2.
 func (r CreateVolumeRequest) Normalize() (CreateVolumeRequest, error) {
+	switch r.Type {
+	case "":
+		r.Type = VolumeGP2
+	case VolumeStandard, VolumeGP2, VolumeGP3:
+	default:
+		return CreateVolumeRequest{}, Invalid("volumeType", "unsupported")
+	}
 	if r.SizeGiB < 1 || r.SizeGiB > 16384 {
 		return CreateVolumeRequest{}, Invalid("size", "must be from 1 to 16384")
 	}
