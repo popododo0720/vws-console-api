@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"io"
 	"net"
 	"sort"
 	"strings"
@@ -994,6 +995,23 @@ func (s *objectSrv) GetObject(ctx context.Context, req *storagev1.GetObjectReque
 	}
 	_ = rc.Close()
 	return objectProto(obj, projectID), nil
+}
+
+func (s *objectSrv) ReadObject(ctx context.Context, req *storagev1.ReadObjectRequest) (*storagev1.ReadObjectResponse, error) {
+	projectID, account, bucket, key, err := objectRef(req.GetName())
+	if err != nil {
+		return nil, toStatus(err)
+	}
+	obj, rc, err := s.w.set.Storage.GetObject(ctx, backend.Scope{Account: account}, resource.GetObjectRequest{Bucket: bucket, Key: key})
+	if err != nil {
+		return nil, toStatus(err)
+	}
+	defer func() { _ = rc.Close() }()
+	body, err := io.ReadAll(rc)
+	if err != nil {
+		return nil, toStatus(resource.Internal(err))
+	}
+	return &storagev1.ReadObjectResponse{Contents: body, Object: objectProto(obj, projectID)}, nil
 }
 
 func (s *objectSrv) UpdateObject(ctx context.Context, req *storagev1.UpdateObjectRequest) (*longrunningpb.Operation, error) {

@@ -73,7 +73,7 @@ func (s *pendingObject) GetObject(_ context.Context, req *storagev1.GetObjectReq
 	return &storagev1.Object{
 		Name:   s.name,
 		Spec:   &storagev1.ObjectSpec{ContentType: "text/plain"},
-		Status: &storagev1.ObjectStatus{SizeBytes: s.size},
+		Status: &storagev1.ObjectStatus{SizeBytes: s.size, Md5: "5d41402abc4b2a76b9719d911017c592"},
 	}, nil
 }
 
@@ -113,7 +113,7 @@ func TestPutObjectWaitsForTheOperation(t *testing.T) {
 	obj, err := client.PutObject(context.Background(), backend.Scope{Account: account}, resource.PutObjectRequest{
 		Bucket: bucket, Key: key, ContentType: "text/plain", Size: 5,
 	}, strings.NewReader("hello"))
-	if err != nil || obj.Size != 5 || obj.Key != key {
+	if err != nil || obj.Size != 5 || obj.Key != key || obj.ETag != `"5d41402abc4b2a76b9719d911017c592"` {
 		t.Fatalf("%v %+v", err, obj)
 	}
 }

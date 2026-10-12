@@ -3,7 +3,7 @@ package fake
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
+	"crypto/md5"
 	"encoding/hex"
 	"io"
 	"time"
@@ -101,7 +101,7 @@ func (s storage) PutObject(ctx context.Context, sc backend.Scope, req resource.P
 	if !ok || b.OwnerID != sc.Account {
 		return resource.Object{}, resource.NotFound(resource.KindBucket, req.Bucket.String())
 	}
-	sum := sha256.Sum256(buf)
+	sum := md5.Sum(buf)
 	obj := &storedObject{
 		meta: resource.Object{
 			Bucket:       req.Bucket,
