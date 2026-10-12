@@ -183,6 +183,29 @@ func TestStopOmitsClientToken(t *testing.T) {
 	}
 }
 
+func TestStopRunningInstanceWithoutClientToken(t *testing.T) {
+	h, cred, now := harness(t)
+	send := func(f url.Values) string {
+		t.Helper()
+		f.Set("Version", Version)
+		res := signed(t, h, cred, now, f.Encode())
+		if res.Code != http.StatusOK {
+			t.Fatalf("%s %d %s", f.Get("Action"), res.Code, res.Body)
+		}
+		return res.Body.String()
+	}
+	vpc := send(url.Values{"Action": {"CreateVpc"}, "CidrBlock": {"10.0.0.0/16"}})
+	subnet := send(url.Values{"Action": {"CreateSubnet"}, "VpcId": {xmlText(t, vpc, "vpcId")}, "CidrBlock": {"10.0.1.0/24"}})
+	run := send(url.Values{
+		"Action": {"RunInstances"}, "ImageId": {"ami-0123456789abcdef0"}, "InstanceType": {"vws.small"},
+		"SubnetId": {xmlText(t, subnet, "subnetId")}, "MinCount": {"1"}, "MaxCount": {"1"}, "ClientToken": {"run-1"},
+	})
+	stopped := send(url.Values{"Action": {"StopInstances"}, "InstanceId.1": {xmlText(t, run, "instanceId")}})
+	if !strings.Contains(stopped, "<name>stopping</name>") {
+		t.Fatalf("%s", stopped)
+	}
+}
+
 func TestCatalogActionsAreImplemented(t *testing.T) {
 	h, cred, now := harness(t)
 	for _, action := range []string{"DescribeKeyPairs", "DescribeSecurityGroups", "DescribeAddresses", "DescribeSnapshots"} {
