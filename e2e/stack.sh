@@ -12,6 +12,6 @@ work=${VWS_E2E_WORK:-$(mktemp -d)}
 mkdir -p "$work"
 "$bin/vws-storage" -db "$work/storage.db" -listen 127.0.0.1:19002 >>"$work/storage.log" 2>&1 &
 "$bin/vws-network" -db "$work/network.db" -listen 127.0.0.1:19003 -pool 203.0.113.0/24 >>"$work/network.log" 2>&1 &
-"$bin/vws-compute" -db "$work/compute.db" -listen 127.0.0.1:19001 -seed-images "$images" \
+"$bin/vws-compute" -listen 127.0.0.1:19001 -seed-images "$images" \
   -storage 127.0.0.1:19002 >>"$work/compute.log" 2>&1 &
 stack=$work
