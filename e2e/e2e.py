@@ -7,6 +7,9 @@ Environment:
   VWS_E2E_CAPS     Comma list of capabilities the backend has: vm, eip.
                    Default is vm,eip for fake and none for grpc.
 
+  VWS_E2E_WAIT_TIMEOUT  Seconds to poll DescribeInstances for running/stopped
+                   between power changes. Default 180.
+
   VWS_E2E_STRICT   1 makes a skipped step a failure (exit 3). Default is off.
 
 A step that needs a missing capability prints skipped(reason). A skipped step
@@ -16,6 +19,7 @@ failure, 3 on a skip under VWS_E2E_STRICT, and 0 otherwise.
 """
 import os
 import sys
+import time
 
 import boto3
 from botocore.config import Config
@@ -56,6 +60,27 @@ def step(name, fn, need=None):
 def check(cond, msg):
     if not cond:
         raise AssertionError(msg)
+
+
+WAIT_TIMEOUT = float(os.environ.get("VWS_E2E_WAIT_TIMEOUT", "180"))
+
+
+def wait_state(iid, want, timeout=WAIT_TIMEOUT):
+    """Polls DescribeInstances until iid reaches want, like the boto3
+    instance_stopped/instance_running waiters. Start or Stop issued before the
+    previous transition settles is IncorrectInstanceState on AWS too."""
+    deadline = time.monotonic() + timeout
+    seen = None
+    while True:
+        res = ec2.describe_instances(InstanceIds=[iid])["Reservations"]
+        seen = res[0]["Instances"][0]["State"]["Name"] if res else None
+        if seen == want:
+            return seen
+        if seen in ("terminated", "shutting-down"):
+            raise AssertionError(f"{iid} is {seen}, waiting for {want}")
+        if time.monotonic() >= deadline:
+            raise AssertionError(f"{iid} still {seen} after {timeout:.0f}s, want {want}")
+        time.sleep(2)
 
 
 def run_instance(token):
@@ -100,9 +125,12 @@ def vms():
     if S["iid"]:
         step("RunInstances same token", same_instance, "vm")
         step("DescribeInstances", lambda: check(ec2.describe_instances()["Reservations"], "no reservation"), "vm")
+        step("wait for running after RunInstances", lambda: wait_state(S["iid"], "running"), "vm")
         step("StopInstances without ClientToken", lambda: check(
             ec2.stop_instances(InstanceIds=[S["iid"]])["StoppingInstances"], "empty"), "vm")
+        step("wait for stopped", lambda: wait_state(S["iid"], "stopped"), "vm")
         step("StartInstances", lambda: ec2.start_instances(InstanceIds=[S["iid"]]), "vm")
+        step("wait for running", lambda: wait_state(S["iid"], "running"), "vm")
         step("TerminateInstances", lambda: ec2.terminate_instances(InstanceIds=[S["iid"]]), "vm")
     else:
         step("RunInstances follow-ups", lambda: None, "vm")
