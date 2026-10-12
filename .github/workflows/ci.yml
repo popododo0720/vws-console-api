@@ -46,6 +46,8 @@ jobs:
           go-version-file: go.mod
       - run: pip install -r e2e/requirements.txt
       - run: e2e/run.sh
+        env:
+          VWS_E2E_STRICT: "1"
 
   hygiene:
     runs-on: ubuntu-latest

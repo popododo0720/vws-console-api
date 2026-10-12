@@ -85,7 +85,9 @@ change.
 `e2e/e2e.py` drives the EC2 Query and S3 entry points with boto3.
 `VWS_E2E_BACKEND` is `fake` or `grpc`. `VWS_E2E_CAPS` lists what the backend
 can do (`vm`, `eip`). A step that needs a missing capability prints
-`skipped(reason)` and does not count as a pass.
+`skipped(reason)` and does not count as a pass. The run ends with a banner
+that lists every skip and `status=PASS|FAIL|INCOMPLETE`. `VWS_E2E_STRICT=1`
+makes a skip exit 3. CI sets it, so the fake run cannot lose a step silently.
 
 ```sh
 pip install -r e2e/requirements.txt
