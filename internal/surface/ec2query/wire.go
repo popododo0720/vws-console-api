@@ -120,6 +120,7 @@ type createVolumeXML struct {
 	Zone      string   `xml:"availabilityZone"`
 	Status    string   `xml:"status"`
 	Type      string   `xml:"volumeType"`
+	Snapshot  string   `xml:"snapshotId,omitempty"`
 	Created   string   `xml:"createTime,omitempty"`
 }
 
@@ -138,6 +139,7 @@ type volumeItem struct {
 	Zone        string `xml:"availabilityZone"`
 	Status      string `xml:"status"`
 	Type        string `xml:"volumeType"`
+	Snapshot    string `xml:"snapshotId,omitempty"`
 	Created     string `xml:"createTime,omitempty"`
 	Attachments struct {
 		Items []attachmentItem `xml:"item"`
@@ -378,13 +380,21 @@ func volumeCreatedXML(requestID string, v resource.Volume) createVolumeXML {
 	return createVolumeXML{
 		RequestID: requestID, VolumeID: v.ID.String(), Size: v.SizeGiB,
 		Zone: v.Zone, Status: string(v.State), Type: string(v.Type), Created: awsTime(v.CreateTime),
+		Snapshot: snapshotOf(v),
 	}
+}
+
+func snapshotOf(v resource.Volume) string {
+	if v.SnapshotID.IsZero() {
+		return ""
+	}
+	return v.SnapshotID.String()
 }
 
 func volumeXML(v resource.Volume) volumeItem {
 	item := volumeItem{
 		VolumeID: v.ID.String(), Size: v.SizeGiB, Zone: v.Zone, Status: string(v.State), Type: string(v.Type),
-		Created: awsTime(v.CreateTime),
+		Snapshot: snapshotOf(v), Created: awsTime(v.CreateTime),
 	}
 	if !v.InstanceID.IsZero() {
 		item.Attachments.Items = []attachmentItem{{

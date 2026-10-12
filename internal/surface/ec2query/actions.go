@@ -76,17 +76,24 @@ func (h *handler) createVolume(w http.ResponseWriter, r *http.Request, c resourc
 		writeErr(w, r, err)
 		return
 	}
-	if r.Form.Get("SnapshotId") != "" {
-		writeErr(w, r, resource.Invalid("SnapshotId", "unsupported"))
-		return
+	var snap resource.SnapshotID
+	if raw := r.Form.Get("SnapshotId"); raw != "" {
+		if snap, err = resource.Parse[resource.SnapshotID](raw); err != nil {
+			writeErr(w, r, err)
+			return
+		}
 	}
-	size, err := strconv.ParseInt(r.Form.Get("Size"), 10, 64)
-	if err != nil {
-		writeErr(w, r, resource.Invalid("Size", "malformed"))
-		return
+	// Size may be left out when SnapshotId is given; it is then the snapshot size.
+	var size int64
+	if raw := r.Form.Get("Size"); raw != "" || snap.IsZero() {
+		if size, err = strconv.ParseInt(raw, 10, 64); err != nil {
+			writeErr(w, r, resource.Invalid("Size", "malformed"))
+			return
+		}
 	}
 	acc, err := h.svc.CreateVolume(r.Context(), c, token, resource.CreateVolumeRequest{
 		SizeGiB: size, Zone: r.Form.Get("AvailabilityZone"), Type: resource.VolumeType(r.Form.Get("VolumeType")),
+		SnapshotID: snap,
 	})
 	if err != nil {
 		writeErr(w, r, err)
