@@ -387,7 +387,7 @@ func (h *handler) getObject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if len(buf) > resource.MaxObjectBytes {
-		writeErr(w, r, resource.TooLarge("object exceeds 5 MiB"))
+		writeErr(w, r, resource.TooLarge("object exceeds 4 MiB"))
 		return
 	}
 	writeJSON(w, http.StatusOK, struct {
