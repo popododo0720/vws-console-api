@@ -16,12 +16,8 @@ func (c compute) DeleteKeyPair(ctx context.Context, m backend.Mutation, req reso
 	c.w.mu.Lock()
 	defer c.w.mu.Unlock()
 	c.w.settle(c.w.now())
-	if hit, ok, err := c.w.begin(m.Key, m.Fingerprint); err != nil || ok {
-		if err != nil {
-			return resource.Accepted[resource.KeyPair]{}, err
-		}
-		acc, _ := hit.(resource.Accepted[resource.KeyPair])
-		return acc, nil
+	if acc, ok, err := replay[resource.Accepted[resource.KeyPair]](c.w, m.Key, m.Fingerprint); err != nil || ok {
+		return acc, err
 	}
 	key, err := c.w.findKey(m.Account, req)
 	if err != nil {
@@ -78,12 +74,8 @@ func (c compute) CreateSnapshot(ctx context.Context, m backend.Mutation, req res
 	c.w.mu.Lock()
 	defer c.w.mu.Unlock()
 	c.w.settle(c.w.now())
-	if hit, ok, err := c.w.begin(m.Key, m.Fingerprint); err != nil || ok {
-		if err != nil {
-			return resource.Accepted[resource.Snapshot]{}, err
-		}
-		acc, _ := hit.(resource.Accepted[resource.Snapshot])
-		return acc, nil
+	if acc, ok, err := replay[resource.Accepted[resource.Snapshot]](c.w, m.Key, m.Fingerprint); err != nil || ok {
+		return acc, err
 	}
 	vol, ok := c.w.vol[req.VolumeID]
 	if !ok || vol.OwnerID != m.Account {
@@ -125,12 +117,8 @@ func (c compute) DeleteSnapshot(ctx context.Context, m backend.Mutation, req res
 	c.w.mu.Lock()
 	defer c.w.mu.Unlock()
 	c.w.settle(c.w.now())
-	if hit, ok, err := c.w.begin(m.Key, m.Fingerprint); err != nil || ok {
-		if err != nil {
-			return resource.Accepted[resource.Snapshot]{}, err
-		}
-		acc, _ := hit.(resource.Accepted[resource.Snapshot])
-		return acc, nil
+	if acc, ok, err := replay[resource.Accepted[resource.Snapshot]](c.w, m.Key, m.Fingerprint); err != nil || ok {
+		return acc, err
 	}
 	snap, ok := c.w.snap[req.ID]
 	if !ok || snap.OwnerID != m.Account {
@@ -166,12 +154,8 @@ func (n network) DeleteSubnet(ctx context.Context, m backend.Mutation, req resou
 	n.w.mu.Lock()
 	defer n.w.mu.Unlock()
 	n.w.settle(n.w.now())
-	if hit, ok, err := n.w.begin(m.Key, m.Fingerprint); err != nil || ok {
-		if err != nil {
-			return resource.Accepted[resource.Subnet]{}, err
-		}
-		acc, _ := hit.(resource.Accepted[resource.Subnet])
-		return acc, nil
+	if acc, ok, err := replay[resource.Accepted[resource.Subnet]](n.w, m.Key, m.Fingerprint); err != nil || ok {
+		return acc, err
 	}
 	sub, ok := n.w.sub[req.ID]
 	if !ok || sub.OwnerID != m.Account {
@@ -203,12 +187,8 @@ func (n network) DeleteSecurityGroup(ctx context.Context, m backend.Mutation, re
 	n.w.mu.Lock()
 	defer n.w.mu.Unlock()
 	n.w.settle(n.w.now())
-	if hit, ok, err := n.w.begin(m.Key, m.Fingerprint); err != nil || ok {
-		if err != nil {
-			return resource.Accepted[resource.SecurityGroup]{}, err
-		}
-		acc, _ := hit.(resource.Accepted[resource.SecurityGroup])
-		return acc, nil
+	if acc, ok, err := replay[resource.Accepted[resource.SecurityGroup]](n.w, m.Key, m.Fingerprint); err != nil || ok {
+		return acc, err
 	}
 	group, err := n.w.findGroup(m.Account, req)
 	if err != nil {
@@ -262,12 +242,8 @@ func (n network) AllocateAddress(ctx context.Context, m backend.Mutation, req re
 	n.w.mu.Lock()
 	defer n.w.mu.Unlock()
 	n.w.settle(n.w.now())
-	if hit, ok, err := n.w.begin(m.Key, m.Fingerprint); err != nil || ok {
-		if err != nil {
-			return resource.Accepted[resource.Address]{}, err
-		}
-		acc, _ := hit.(resource.Accepted[resource.Address])
-		return acc, nil
+	if acc, ok, err := replay[resource.Accepted[resource.Address]](n.w, m.Key, m.Fingerprint); err != nil || ok {
+		return acc, err
 	}
 	id, err := resource.Mint[resource.AddressID](n.w.entropy)
 	if err != nil {
@@ -295,12 +271,8 @@ func (n network) ReleaseAddress(ctx context.Context, m backend.Mutation, req res
 	n.w.mu.Lock()
 	defer n.w.mu.Unlock()
 	n.w.settle(n.w.now())
-	if hit, ok, err := n.w.begin(m.Key, m.Fingerprint); err != nil || ok {
-		if err != nil {
-			return resource.Accepted[resource.Address]{}, err
-		}
-		acc, _ := hit.(resource.Accepted[resource.Address])
-		return acc, nil
+	if acc, ok, err := replay[resource.Accepted[resource.Address]](n.w, m.Key, m.Fingerprint); err != nil || ok {
+		return acc, err
 	}
 	addr, ok := n.w.addr[req.ID]
 	if !ok || addr.OwnerID != m.Account {

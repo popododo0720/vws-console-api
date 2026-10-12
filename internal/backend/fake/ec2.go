@@ -31,12 +31,8 @@ func (c compute) changeInstances(ctx context.Context, m backend.Mutation, action
 	c.w.mu.Lock()
 	defer c.w.mu.Unlock()
 	c.w.settle(c.w.now())
-	if hit, ok, err := c.w.begin(m.Key, m.Fingerprint); err != nil || ok {
-		if err != nil {
-			return resource.Accepted[resource.InstanceStateChange]{}, err
-		}
-		acc, _ := hit.(resource.Accepted[resource.InstanceStateChange])
-		return acc, nil
+	if acc, ok, err := replay[resource.Accepted[resource.InstanceStateChange]](c.w, m.Key, m.Fingerprint); err != nil || ok {
+		return acc, err
 	}
 	type plan struct {
 		inst *resource.Instance
@@ -99,12 +95,8 @@ func (c compute) CreateVolume(ctx context.Context, m backend.Mutation, req resou
 	c.w.mu.Lock()
 	defer c.w.mu.Unlock()
 	c.w.settle(c.w.now())
-	if hit, ok, err := c.w.begin(m.Key, m.Fingerprint); err != nil || ok {
-		if err != nil {
-			return resource.Accepted[resource.Volume]{}, err
-		}
-		acc, _ := hit.(resource.Accepted[resource.Volume])
-		return acc, nil
+	if acc, ok, err := replay[resource.Accepted[resource.Volume]](c.w, m.Key, m.Fingerprint); err != nil || ok {
+		return acc, err
 	}
 	id, err := resource.Mint[resource.VolumeID](c.w.entropy)
 	if err != nil {
@@ -138,12 +130,8 @@ func (c compute) AttachVolume(ctx context.Context, m backend.Mutation, req resou
 	c.w.mu.Lock()
 	defer c.w.mu.Unlock()
 	c.w.settle(c.w.now())
-	if hit, ok, err := c.w.begin(m.Key, m.Fingerprint); err != nil || ok {
-		if err != nil {
-			return resource.Accepted[resource.Volume]{}, err
-		}
-		acc, _ := hit.(resource.Accepted[resource.Volume])
-		return acc, nil
+	if acc, ok, err := replay[resource.Accepted[resource.Volume]](c.w, m.Key, m.Fingerprint); err != nil || ok {
+		return acc, err
 	}
 	vol, ok := c.w.vol[req.VolumeID]
 	if !ok || vol.OwnerID != m.Account {
@@ -181,12 +169,8 @@ func (c compute) DeleteVolume(ctx context.Context, m backend.Mutation, req resou
 	c.w.mu.Lock()
 	defer c.w.mu.Unlock()
 	c.w.settle(c.w.now())
-	if hit, ok, err := c.w.begin(m.Key, m.Fingerprint); err != nil || ok {
-		if err != nil {
-			return resource.Accepted[resource.Volume]{}, err
-		}
-		acc, _ := hit.(resource.Accepted[resource.Volume])
-		return acc, nil
+	if acc, ok, err := replay[resource.Accepted[resource.Volume]](c.w, m.Key, m.Fingerprint); err != nil || ok {
+		return acc, err
 	}
 	vol, ok := c.w.vol[req.ID]
 	if !ok || vol.OwnerID != m.Account {
@@ -254,12 +238,8 @@ func (c compute) CreateKeyPair(ctx context.Context, m backend.Mutation, req reso
 	c.w.mu.Lock()
 	defer c.w.mu.Unlock()
 	c.w.settle(c.w.now())
-	if hit, ok, err := c.w.begin(m.Key, m.Fingerprint); err != nil || ok {
-		if err != nil {
-			return resource.Accepted[resource.KeyPair]{}, err
-		}
-		acc, _ := hit.(resource.Accepted[resource.KeyPair])
-		return acc, nil
+	if acc, ok, err := replay[resource.Accepted[resource.KeyPair]](c.w, m.Key, m.Fingerprint); err != nil || ok {
+		return acc, err
 	}
 	for _, existing := range c.w.key {
 		if existing.OwnerID == m.Account && existing.Name == req.Name {
@@ -299,12 +279,8 @@ func (n network) CreateVpc(ctx context.Context, m backend.Mutation, req resource
 	n.w.mu.Lock()
 	defer n.w.mu.Unlock()
 	n.w.settle(n.w.now())
-	if hit, ok, err := n.w.begin(m.Key, m.Fingerprint); err != nil || ok {
-		if err != nil {
-			return resource.Accepted[resource.Vpc]{}, err
-		}
-		acc, _ := hit.(resource.Accepted[resource.Vpc])
-		return acc, nil
+	if acc, ok, err := replay[resource.Accepted[resource.Vpc]](n.w, m.Key, m.Fingerprint); err != nil || ok {
+		return acc, err
 	}
 	id, err := resource.Mint[resource.VpcID](n.w.entropy)
 	if err != nil {
@@ -336,12 +312,8 @@ func (n network) DeleteVpc(ctx context.Context, m backend.Mutation, req resource
 	n.w.mu.Lock()
 	defer n.w.mu.Unlock()
 	n.w.settle(n.w.now())
-	if hit, ok, err := n.w.begin(m.Key, m.Fingerprint); err != nil || ok {
-		if err != nil {
-			return resource.Accepted[resource.Vpc]{}, err
-		}
-		acc, _ := hit.(resource.Accepted[resource.Vpc])
-		return acc, nil
+	if acc, ok, err := replay[resource.Accepted[resource.Vpc]](n.w, m.Key, m.Fingerprint); err != nil || ok {
+		return acc, err
 	}
 	vpc, ok := n.w.vpc[req.ID]
 	if !ok || vpc.OwnerID != m.Account {
@@ -385,12 +357,8 @@ func (n network) CreateSecurityGroup(ctx context.Context, m backend.Mutation, re
 	n.w.mu.Lock()
 	defer n.w.mu.Unlock()
 	n.w.settle(n.w.now())
-	if hit, ok, err := n.w.begin(m.Key, m.Fingerprint); err != nil || ok {
-		if err != nil {
-			return resource.Accepted[resource.SecurityGroup]{}, err
-		}
-		acc, _ := hit.(resource.Accepted[resource.SecurityGroup])
-		return acc, nil
+	if acc, ok, err := replay[resource.Accepted[resource.SecurityGroup]](n.w, m.Key, m.Fingerprint); err != nil || ok {
+		return acc, err
 	}
 	vpc, ok := n.w.vpc[req.VpcID]
 	if !ok || vpc.OwnerID != m.Account {
@@ -427,12 +395,8 @@ func (n network) AuthorizeSecurityGroupIngress(ctx context.Context, m backend.Mu
 	n.w.mu.Lock()
 	defer n.w.mu.Unlock()
 	n.w.settle(n.w.now())
-	if hit, ok, err := n.w.begin(m.Key, m.Fingerprint); err != nil || ok {
-		if err != nil {
-			return resource.Accepted[resource.SecurityGroup]{}, err
-		}
-		acc, _ := hit.(resource.Accepted[resource.SecurityGroup])
-		return acc, nil
+	if acc, ok, err := replay[resource.Accepted[resource.SecurityGroup]](n.w, m.Key, m.Fingerprint); err != nil || ok {
+		return acc, err
 	}
 	group, ok := n.w.sg[req.ID]
 	if !ok || group.OwnerID != m.Account {

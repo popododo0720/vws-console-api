@@ -18,11 +18,10 @@ func (n network) CreateSubnet(ctx context.Context, m backend.Mutation, req resou
 	n.w.mu.Lock()
 	defer n.w.mu.Unlock()
 	n.w.settle(n.w.now())
-	if hit, ok, err := n.w.begin(m.Key, m.Fingerprint); err != nil || ok {
+	if acc, ok, err := replay[resource.Accepted[resource.Subnet]](n.w, m.Key, m.Fingerprint); err != nil || ok {
 		if err != nil {
-			return resource.Accepted[resource.Subnet]{}, err
+			return acc, err
 		}
-		acc, _ := hit.(resource.Accepted[resource.Subnet])
 		if len(acc.Items) == 0 || n.w.sub[acc.Items[0].ID] != nil {
 			return acc, nil
 		}

@@ -18,12 +18,8 @@ func (c compute) RunInstances(ctx context.Context, m backend.Mutation, req resou
 	c.w.mu.Lock()
 	defer c.w.mu.Unlock()
 	c.w.settle(c.w.now())
-	if hit, ok, err := c.w.begin(m.Key, m.Fingerprint); err != nil || ok {
-		if err != nil {
-			return resource.Accepted[resource.Instance]{}, err
-		}
-		acc, _ := hit.(resource.Accepted[resource.Instance])
-		return acc, nil
+	if acc, ok, err := replay[resource.Accepted[resource.Instance]](c.w, m.Key, m.Fingerprint); err != nil || ok {
+		return acc, err
 	}
 	sub, ok := c.w.sub[req.SubnetID]
 	if !ok || sub.OwnerID != m.Account {
@@ -92,12 +88,8 @@ func (c compute) StopInstances(ctx context.Context, m backend.Mutation, req reso
 	c.w.mu.Lock()
 	defer c.w.mu.Unlock()
 	c.w.settle(c.w.now())
-	if hit, ok, err := c.w.begin(m.Key, m.Fingerprint); err != nil || ok {
-		if err != nil {
-			return resource.Accepted[resource.InstanceStateChange]{}, err
-		}
-		acc, _ := hit.(resource.Accepted[resource.InstanceStateChange])
-		return acc, nil
+	if acc, ok, err := replay[resource.Accepted[resource.InstanceStateChange]](c.w, m.Key, m.Fingerprint); err != nil || ok {
+		return acc, err
 	}
 	type stopPlan struct {
 		inst *resource.Instance

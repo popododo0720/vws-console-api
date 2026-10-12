@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"sync"
 	"time"
@@ -107,15 +108,22 @@ func (w *World) settle(now time.Time) {
 	}
 }
 
-func (w *World) begin(key, fingerprint string) (any, bool, error) {
+// replay returns the recorded result for key. A record of another type is
+// an internal error, not a zero value.
+func replay[T any](w *World, key, fingerprint string) (T, bool, error) {
+	var zero T
 	rec, ok := w.idem[key]
 	if !ok {
-		return nil, false, nil
+		return zero, false, nil
 	}
 	if rec.fingerprint != fingerprint {
-		return nil, false, resource.IdempotencyMismatch()
+		return zero, false, resource.IdempotencyMismatch()
 	}
-	return rec.value, true, nil
+	v, ok := rec.value.(T)
+	if !ok {
+		return zero, false, resource.Internal(fmt.Errorf("idempotency record %s holds %T", key, rec.value))
+	}
+	return v, true, nil
 }
 
 func (w *World) finish(key, fingerprint string, value any) {
