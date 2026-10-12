@@ -94,6 +94,21 @@ other packages use, a surface, or a backend method.
    make that mistake fail a compile, a lint, or a test. Update the rule
    table in the same change. Do not leave the rule as prose alone.
 
+## Dev style
+
+Work in poteto-mode style.
+
+- Write short declarative sentences in code comments, commits, and PRs.
+- Keep code simple and the diff minimal. Delete before adding.
+- Prove a change against real artifacts. Run it and paste the output.
+- One issue is one branch and one PR. Commits are atomic.
+- Verify T0 only: unit tests, fakes, and envtest. T1 and T2 are run by the verification bot.
+- Never force-push. Never merge your own PR. The reviewer merges.
+
+## Agents
+
+Do not use Cursor cloud agents on this repository. Use Grok dev bots only.
+
 ## Workflow
 
 1. Branch from `main`. Do not commit on `main`.
