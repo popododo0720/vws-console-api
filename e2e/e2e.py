@@ -134,6 +134,16 @@ def objects():
         [o["Key"] for o in s3.list_objects_v2(Bucket=b, Prefix="a/")["Contents"]] == ["a/j", "a/k"], "keys"))
     step("S3 ListObjectsV2 delimiter", lambda: check(
         [p["Prefix"] for p in s3.list_objects_v2(Bucket=b, Delimiter="/")["CommonPrefixes"]] == ["a/"], "prefixes"))
+    step("S3 ListObjects prefix", lambda: check(
+        [o["Key"] for o in s3.list_objects(Bucket=b, Prefix="a/")["Contents"]] == ["a/j", "a/k"], "keys"))
+    step("S3 ListObjects delimiter", lambda: check(
+        [p["Prefix"] for p in s3.list_objects(Bucket=b, Delimiter="/")["CommonPrefixes"]] == ["a/"], "prefixes"))
+
+    def v1_pages():
+        pages = s3.get_paginator("list_objects").paginate(Bucket=b, PaginationConfig={"PageSize": 1})
+        keys = [o["Key"] for page in pages for o in page.get("Contents", [])]
+        check(keys == sorted(keys) and len(keys) == len(set(keys)) >= 3, f"keys {keys}")
+    step("S3 ListObjects marker pages", v1_pages)
     step("S3 DeleteObject", lambda: s3.delete_object(Bucket=b, Key="top"))
     for key in ("a/k", "a/j"):
         step(f"S3 DeleteObject {key}", lambda key=key: s3.delete_object(Bucket=b, Key=key))
