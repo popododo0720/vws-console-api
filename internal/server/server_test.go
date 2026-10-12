@@ -41,3 +41,34 @@ func TestListenerBounds(t *testing.T) {
 		t.Fatalf("unbounded listener: header %s read %s write %s idle %s", srv.ReadHeaderTimeout, srv.ReadTimeout, srv.WriteTimeout, srv.IdleTimeout)
 	}
 }
+
+func TestPanicIsABare500(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, nil))
+	h := wrap(logger, "s3", http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		panic("secret-key-material")
+	}))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status %d", rec.Code)
+	}
+	if got := rec.Body.String(); got != "Internal Server Error\n" {
+		t.Fatalf("body %q", got)
+	}
+	if !strings.Contains(buf.String(), "secret-key-material") {
+		t.Fatalf("panic not logged: %s", buf.String())
+	}
+}
+
+func TestWriteFailureIsLogged(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, nil))
+	h := wrap(logger, "ec2", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		RecordFailure(w, errors.New("client went away"))
+	}))
+	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/", nil))
+	if !strings.Contains(buf.String(), `level=WARN msg="response failed"`) || !strings.Contains(buf.String(), "client went away") {
+		t.Fatalf("log %s", buf.String())
+	}
+}
