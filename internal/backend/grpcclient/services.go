@@ -513,22 +513,20 @@ func objectMaskMatches(mask *fieldmaskpb.FieldMask) bool {
 }
 
 func (c storageClient) GetObject(ctx context.Context, s backend.Scope, req resource.GetObjectRequest) (resource.Object, io.ReadCloser, error) {
-	// GetObject on the resource API returns metadata only. The bytes stay in
-	// the storage service, so this read has an empty body and the stored etag.
-	out, err := c.objects.GetObject(ctx, &storagev1.GetObjectRequest{
+	out, err := c.objects.ReadObject(ctx, &storagev1.ReadObjectRequest{
 		Name: objectName(project(s.Account), req.Bucket.String(), req.Key.String()),
 	})
 	if err != nil {
 		return resource.Object{}, nil, fromRPC(err)
 	}
-	if out.GetDeleteTime() != nil {
+	if out.GetObject().GetDeleteTime() != nil {
 		return resource.Object{}, nil, resource.NotFound(resource.KindObject, req.Key.String())
 	}
-	meta, err := objectModel(out)
+	meta, err := objectModel(out.GetObject())
 	if err != nil {
 		return resource.Object{}, nil, err
 	}
-	return meta, io.NopCloser(bytes.NewReader(nil)), nil
+	return meta, io.NopCloser(bytes.NewReader(out.GetContents())), nil
 }
 
 func (c storageClient) ListObjects(ctx context.Context, s backend.Scope, q resource.ObjectQuery) (resource.ObjectListing, error) {

@@ -4,6 +4,7 @@ package backendtest
 import (
 	"bytes"
 	"context"
+	"io"
 	"strings"
 	"testing"
 
@@ -206,6 +207,9 @@ func Run(t *testing.T, newSet Harness) {
 	defer func() { _ = rc.Close() }()
 	if meta.ETag != replaced.ETag || meta.Size != replaced.Size {
 		t.Fatalf("etag %s size %d", meta.ETag, meta.Size)
+	}
+	if got, err := io.ReadAll(rc); err != nil || string(got) != "hello!" {
+		t.Fatalf("body %q: %v", got, err)
 	}
 	if _, err := set.Storage.PutObject(ctx, backend.Scope{Account: account}, resource.PutObjectRequest{
 		Bucket: name, Key: key, Size: 1,
