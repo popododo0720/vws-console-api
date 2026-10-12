@@ -186,7 +186,7 @@ func readLimited(r io.Reader, max int) ([]byte, error) {
 		return nil, resource.Internal(err)
 	}
 	if len(buf) > max {
-		return nil, resource.TooLarge("object exceeds 5 MiB")
+		return nil, resource.TooLarge("object exceeds 4 MiB")
 	}
 	return buf, nil
 }

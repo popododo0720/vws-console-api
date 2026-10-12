@@ -401,14 +401,14 @@ func (c storageClient) DeleteBucket(ctx context.Context, s backend.Scope, name r
 
 func (c storageClient) PutObject(ctx context.Context, s backend.Scope, req resource.PutObjectRequest, body io.Reader) (resource.Object, error) {
 	if req.Size > resource.MaxObjectBytes {
-		return resource.Object{}, resource.TooLarge("object exceeds 5 MiB")
+		return resource.Object{}, resource.TooLarge("object exceeds 4 MiB")
 	}
 	buf, err := io.ReadAll(io.LimitReader(body, resource.MaxObjectBytes+1))
 	if err != nil {
 		return resource.Object{}, resource.Internal(err)
 	}
 	if len(buf) > resource.MaxObjectBytes {
-		return resource.Object{}, resource.TooLarge("object exceeds 5 MiB")
+		return resource.Object{}, resource.TooLarge("object exceeds 4 MiB")
 	}
 	if req.Size >= 0 && int64(len(buf)) != req.Size {
 		return resource.Object{}, resource.Invalid("size", "body length does not match")

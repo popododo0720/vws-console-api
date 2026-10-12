@@ -60,7 +60,7 @@ Subresources such as `?tagging` and `X-Amz-Copy-Source` are refused, so they
 cannot replace an object.
 
 Header signatures are checked. Presigned query strings are refused.
-This skeleton accepts object bodies up to 5 MiB. A larger body is not a quota
+This skeleton accepts object bodies up to 4 MiB. A larger body is not a quota
 error.
 
 ## Resource API module

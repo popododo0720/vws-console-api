@@ -254,3 +254,25 @@ func TestZeroVpcIDOmitsFromSubnetJSON(t *testing.T) {
 		t.Fatalf("zero vpc id leaked: %s", b)
 	}
 }
+
+func TestObjectCapMatchesStorageProto(t *testing.T) {
+	if MaxObjectBytes != 4194304 {
+		t.Fatalf("MaxObjectBytes = %d, storage proto caps payloads at 4194304", MaxObjectBytes)
+	}
+	bucket, err := Parse[BucketName]("bkt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, err := Parse[ObjectKey]("k")
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := PutObjectRequest{Bucket: bucket, Key: key, Size: MaxObjectBytes}
+	if _, err := req.Normalize(); err != nil {
+		t.Fatalf("at cap: %v", err)
+	}
+	req.Size = MaxObjectBytes + 1
+	if _, err := req.Normalize(); CodeOf(err) != CodePayloadTooLarge {
+		t.Fatalf("over cap: %v", err)
+	}
+}

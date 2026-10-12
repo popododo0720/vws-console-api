@@ -1,8 +1,9 @@
 package resource
 
 // MaxObjectBytes is the largest object body this process will accept.
-// Larger objects belong on a path that does not buffer them here.
-const MaxObjectBytes = 5 << 20
+// It equals the storage proto cap of 4194304 bytes. Larger objects belong on
+// a path that does not buffer them here.
+const MaxObjectBytes = 4 << 20
 
 // Bucket is an object container.
 type Bucket struct {
@@ -68,7 +69,7 @@ func (r PutObjectRequest) Normalize() (PutObjectRequest, error) {
 		return PutObjectRequest{}, Invalid("key", "required")
 	}
 	if r.Size < -1 || r.Size > MaxObjectBytes {
-		return PutObjectRequest{}, TooLarge("object exceeds 5 MiB")
+		return PutObjectRequest{}, TooLarge("object exceeds 4 MiB")
 	}
 	if len(r.ContentType) > 128 || hasControl(r.ContentType) {
 		return PutObjectRequest{}, Invalid("contentType", "malformed")
