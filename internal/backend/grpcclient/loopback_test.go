@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"io"
 	"net"
 	"sort"
@@ -1079,7 +1080,7 @@ func (s *opsSrv) GetOperation(ctx context.Context, req *longrunningpb.GetOperati
 		}
 	case resource.OperationRunning:
 	default:
-		return nil, toStatus(resource.Internal(strErr("bad operation state")))
+		return nil, toStatus(resource.Internal(errors.New("bad operation state")))
 	}
 	return msg, nil
 }
@@ -1165,7 +1166,7 @@ func vpcFromSubnet(name string) string {
 func bucketRef(name string) (string, resource.AccountID, resource.BucketName, error) {
 	parts := splitSlash(name)
 	if len(parts) != 4 || parts[2] != "buckets" {
-		return "", resource.AccountID{}, resource.BucketName{}, resource.Internal(strErr("bad bucket name"))
+		return "", resource.AccountID{}, resource.BucketName{}, resource.Internal(errors.New("bad bucket name"))
 	}
 	account, err := accountOf(parts[1])
 	if err != nil {
@@ -1181,7 +1182,7 @@ func bucketRef(name string) (string, resource.AccountID, resource.BucketName, er
 func objectRef(name string) (string, resource.AccountID, resource.BucketName, resource.ObjectKey, error) {
 	parts := splitSlash(name)
 	if len(parts) != 6 || parts[2] != "buckets" || parts[4] != "objects" {
-		return "", resource.AccountID{}, resource.BucketName{}, resource.ObjectKey{}, resource.Internal(strErr("bad object name"))
+		return "", resource.AccountID{}, resource.BucketName{}, resource.ObjectKey{}, resource.Internal(errors.New("bad object name"))
 	}
 	account, err := accountOf(parts[1])
 	if err != nil {

@@ -3,6 +3,7 @@ package grpcclient
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"net"
 	"net/url"
@@ -30,7 +31,7 @@ func project(account resource.AccountID) string { return "a" + account.String() 
 func accountOf(projectID string) (resource.AccountID, error) {
 	rest, ok := strings.CutPrefix(projectID, "a")
 	if !ok || rest == projectID {
-		return resource.AccountID{}, resource.Internal(strErr("bad project"))
+		return resource.AccountID{}, resource.Internal(errors.New("bad project"))
 	}
 	account, err := resource.Parse[resource.AccountID](rest)
 	if err != nil {
@@ -42,7 +43,7 @@ func accountOf(projectID string) (resource.AccountID, error) {
 func projectOfName(name string) (string, error) {
 	parts := strings.Split(name, "/")
 	if len(parts) < 2 || parts[0] != "projects" || parts[1] == "" {
-		return "", resource.Internal(strErr("bad resource name"))
+		return "", resource.Internal(errors.New("bad resource name"))
 	}
 	return parts[1], nil
 }

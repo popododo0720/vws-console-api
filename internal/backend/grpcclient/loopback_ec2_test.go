@@ -2,6 +2,7 @@ package grpcclient
 
 import (
 	"context"
+	"errors"
 	"strings"
 
 	longrunningpb "cloud.google.com/go/longrunning/autogen/longrunningpb"
@@ -329,7 +330,7 @@ func hexByte(n int) string {
 func volumeRef(name string) (string, resource.AccountID, resource.VolumeID, error) {
 	parts := splitSlash(name)
 	if len(parts) != 6 || parts[4] != "volumes" {
-		return "", resource.AccountID{}, resource.VolumeID{}, resource.Internal(strErr("bad volume name"))
+		return "", resource.AccountID{}, resource.VolumeID{}, resource.Internal(errors.New("bad volume name"))
 	}
 	account, err := accountOf(parts[1])
 	if err != nil {
