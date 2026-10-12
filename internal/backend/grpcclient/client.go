@@ -13,7 +13,6 @@ import (
 	storagev1 "github.com/popododo0720/vws-proto/gen/go/vws/storage/v1"
 
 	"github.com/popododo0720/vws-console-api/internal/backend"
-	"github.com/popododo0720/vws-console-api/internal/resource"
 )
 
 // Addrs are the internal service endpoints.
@@ -74,9 +73,10 @@ func Dial(ctx context.Context, addrs Addrs) (*Client, error) {
 	}, nil
 }
 
-// MaxMessageBytes is the gRPC frame size. It sits above MaxObjectBytes so a
-// full object plus the request envelope fits in one message.
-func MaxMessageBytes() int { return resource.MaxObjectBytes + (1 << 20) }
+// MaxMessageBytes is the gRPC frame size. ObjectService promises 8MiB
+// responses. It sits above MaxObjectBytes so a full object plus the envelope
+// fits in one message.
+func MaxMessageBytes() int { return 8 << 20 }
 
 func dialOptions() []grpc.DialOption {
 	return []grpc.DialOption{
