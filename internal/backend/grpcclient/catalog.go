@@ -333,10 +333,12 @@ func (c networkClient) AllocateAddress(ctx context.Context, m backend.Mutation, 
 }
 
 // ensureVPC returns the VPC an address is allocated in. The network service
-// requires spec.vpc and the binding is immutable. The first VPC of the project
-// wins, so the address can later attach to an instance there. A project with no
-// VPC gets the default one.
+// requires spec.vpc and the binding is immutable. The oldest VPC of the project
+// wins: sorted by create time, then by name. The choice does not depend on the
+// order ListVpcs returns. The address can later attach to an instance in that
+// VPC only. A project with no VPC gets the default one.
 func (c networkClient) ensureVPC(ctx context.Context, projectID string) (string, error) {
+	var first *networkv1.Vpc
 	token := ""
 	for page := 0; page < 20; page++ {
 		out, err := c.vpcs.ListVpcs(ctx, &networkv1.ListVpcsRequest{
@@ -345,13 +347,18 @@ func (c networkClient) ensureVPC(ctx context.Context, projectID string) (string,
 		if err != nil {
 			return "", fromRPC(err)
 		}
-		if len(out.GetVpcs()) > 0 {
-			return out.GetVpcs()[0].GetName(), nil
+		for _, vpc := range out.GetVpcs() {
+			if first == nil || vpcBefore(vpc, first) {
+				first = vpc
+			}
 		}
 		token = out.GetNextPageToken()
 		if token == "" {
 			break
 		}
+	}
+	if first != nil {
+		return first.GetName(), nil
 	}
 	id := derivedID("vpc-", projectID, "default")
 	created, err := c.vpcs.CreateVpc(ctx, &networkv1.CreateVpcRequest{
@@ -364,6 +371,14 @@ func (c networkClient) ensureVPC(ctx context.Context, projectID string) (string,
 		return "", err
 	}
 	return vpcName(projectID, id), nil
+}
+
+// vpcBefore orders VPCs by create time, then by name.
+func vpcBefore(a, b *networkv1.Vpc) bool {
+	if at, bt := a.GetCreateTime().AsTime(), b.GetCreateTime().AsTime(); !at.Equal(bt) {
+		return at.Before(bt)
+	}
+	return a.GetName() < b.GetName()
 }
 
 func (c networkClient) ReleaseAddress(ctx context.Context, m backend.Mutation, req resource.ReleaseAddressRequest) (resource.Accepted[resource.Address], error) {
