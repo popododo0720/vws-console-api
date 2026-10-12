@@ -49,6 +49,12 @@ func (h *handler) serve(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, r, resource.Invalid("body", "malformed form"))
 		return
 	}
+	for k, vs := range r.Form {
+		if len(vs) > 1 {
+			writeErr(w, r, resource.Invalid(k, "repeated"))
+			return
+		}
+	}
 	if r.Form.Get("Version") != Version {
 		writeErr(w, r, resource.Invalid("Version", "unsupported"))
 		return
@@ -322,7 +328,7 @@ func tags(r *http.Request) (map[string]string, error) {
 		out[k] = v
 	}
 	if len(out) == 0 {
-		return nil, nil
+		return nil, nil //nolint:nilnil // A nil map means the request has no tags.
 	}
 	return out, nil
 }
@@ -364,7 +370,7 @@ func tagSpecifications(r *http.Request) (map[string]string, error) {
 		}
 	}
 	if len(out) == 0 {
-		return nil, nil
+		return nil, nil //nolint:nilnil // A nil map means the request has no tags.
 	}
 	return out, nil
 }
@@ -793,9 +799,11 @@ func requestID(r *http.Request) string { return r.Header.Get("X-Request-Id") }
 func writeXML(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "text/xml; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte(xml.Header))
-	enc := xml.NewEncoder(w)
-	_ = enc.Encode(v)
+	_, err := w.Write([]byte(xml.Header))
+	if err == nil {
+		err = xml.NewEncoder(w).Encode(v)
+	}
+	server.RecordFailure(w, err)
 }
 
 func writeErr(w http.ResponseWriter, r *http.Request, err error) {
@@ -805,10 +813,13 @@ func writeErr(w http.ResponseWriter, r *http.Request, err error) {
 	}
 	w.Header().Set("Content-Type", "text/xml; charset=utf-8")
 	w.WriteHeader(statusOf(e.Code))
-	_, _ = w.Write([]byte(xml.Header))
-	_ = xml.NewEncoder(w).Encode(errorXML{
-		Code: ec2Code(e), Message: e.Message, RequestID: requestID(r),
-	})
+	_, werr := w.Write([]byte(xml.Header))
+	if werr == nil {
+		werr = xml.NewEncoder(w).Encode(errorXML{
+			Code: ec2Code(e), Message: e.Message, RequestID: requestID(r),
+		})
+	}
+	server.RecordFailure(w, werr)
 }
 
 func statusOf(c resource.Code) int {

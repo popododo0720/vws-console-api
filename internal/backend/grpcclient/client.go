@@ -2,6 +2,8 @@ package grpcclient
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"time"
 
 	longrunningpb "cloud.google.com/go/longrunning/autogen/longrunningpb"
@@ -35,18 +37,15 @@ func Dial(ctx context.Context, addrs Addrs) (*Client, error) {
 	}
 	computeConn, err := grpc.NewClient(addrs.Compute, dialOptions()...)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("dial compute: %w", err)
 	}
 	storageConn, err := grpc.NewClient(addrs.Storage, dialOptions()...)
 	if err != nil {
-		_ = computeConn.Close()
-		return nil, err
+		return nil, errors.Join(fmt.Errorf("dial storage: %w", err), computeConn.Close())
 	}
 	networkConn, err := grpc.NewClient(addrs.Network, dialOptions()...)
 	if err != nil {
-		_ = computeConn.Close()
-		_ = storageConn.Close()
-		return nil, err
+		return nil, errors.Join(fmt.Errorf("dial network: %w", err), computeConn.Close(), storageConn.Close())
 	}
 	shared := &api{
 		instances:  computev1.NewInstanceServiceClient(computeConn),

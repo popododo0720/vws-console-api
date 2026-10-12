@@ -6,6 +6,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"log/slog"
 
 	"github.com/popododo0720/vws-console-api/internal/backend"
 	"github.com/popododo0720/vws-console-api/internal/resource"
@@ -69,11 +71,11 @@ func mutate[R resource.Request[R], T resource.Owned](
 	if err := guardAccepted(c.Account, acc); err != nil {
 		return resource.Accepted[T]{}, err
 	}
-	s.audit.InfoContext(ctx, "mutation accepted",
-		"action", req.Action().String(),
-		"account", c.Account.String(),
-		"subject", c.Subject,
-		"operation", acc.Operation.ID.String())
+	s.audit.LogAttrs(ctx, slog.LevelInfo, "mutation accepted",
+		slog.String("action", req.Action().String()),
+		slog.String("account", c.Account.String()),
+		slog.String("subject", c.Subject),
+		slog.String("operation", acc.Operation.ID.String()))
 	return acc, nil
 }
 
@@ -193,7 +195,7 @@ func mutation[R resource.Request[R]](c resource.Caller, token resource.ClientTok
 	}
 	canon, err := json.Marshal(req)
 	if err != nil {
-		return backend.Mutation{}, err
+		return backend.Mutation{}, fmt.Errorf("fingerprint %s: %w", req.Action(), err)
 	}
 	f := sha256.Sum256(append([]byte(idempotencyVersion+"\x00"), canon...))
 	return backend.Mutation{

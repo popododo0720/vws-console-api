@@ -9,6 +9,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/pem"
+	"errors"
 
 	longrunningpb "cloud.google.com/go/longrunning/autogen/longrunningpb"
 	computev1 "github.com/popododo0720/vws-proto/gen/go/vws/compute/v1"
@@ -609,11 +610,11 @@ func stateRefs(items []resource.InstanceStateChange) []resource.Ref {
 
 func volumeModel(in *storagev1.Volume) (resource.Volume, error) {
 	if in == nil {
-		return resource.Volume{}, resource.Internal(strErr("missing volume"))
+		return resource.Volume{}, resource.Internal(errors.New("missing volume"))
 	}
 	parts := splitSlash(in.GetName())
 	if len(parts) != 6 || parts[4] != "volumes" {
-		return resource.Volume{}, resource.Internal(strErr("bad volume name"))
+		return resource.Volume{}, resource.Internal(errors.New("bad volume name"))
 	}
 	id, err := resource.Parse[resource.VolumeID](parts[5])
 	if err != nil {
@@ -653,9 +654,9 @@ func volumeStateOf(in *storagev1.Volume) (resource.VolumeState, error) {
 	case commonv1.ReconciliationState_RECONCILIATION_STATE_DELETING:
 		return resource.VolumeDeleting, nil
 	case commonv1.ReconciliationState_RECONCILIATION_STATE_ERROR, commonv1.ReconciliationState_RECONCILIATION_STATE_UNSPECIFIED:
-		return "", resource.Internal(strErr("bad volume state"))
+		return "", resource.Internal(errors.New("bad volume state"))
 	default:
-		return "", resource.Internal(strErr("bad volume state"))
+		return "", resource.Internal(errors.New("bad volume state"))
 	}
 }
 
@@ -685,11 +686,11 @@ func volumeProto(v resource.Volume, projectID string) *storagev1.Volume {
 
 func vpcModel(in *networkv1.Vpc) (resource.Vpc, error) {
 	if in == nil {
-		return resource.Vpc{}, resource.Internal(strErr("missing vpc"))
+		return resource.Vpc{}, resource.Internal(errors.New("missing vpc"))
 	}
 	parts := splitSlash(in.GetName())
 	if len(parts) != 6 || parts[4] != "vpcs" {
-		return resource.Vpc{}, resource.Internal(strErr("bad vpc name"))
+		return resource.Vpc{}, resource.Internal(errors.New("bad vpc name"))
 	}
 	id, err := resource.Parse[resource.VpcID](parts[5])
 	if err != nil {
@@ -715,9 +716,9 @@ func vpcStateOf(obs commonv1.ReconciliationState) (string, error) {
 	case commonv1.ReconciliationState_RECONCILIATION_STATE_DELETING:
 		return resource.VpcDeleting, nil
 	case commonv1.ReconciliationState_RECONCILIATION_STATE_ERROR, commonv1.ReconciliationState_RECONCILIATION_STATE_UNSPECIFIED:
-		return "", resource.Internal(strErr("bad vpc state"))
+		return "", resource.Internal(errors.New("bad vpc state"))
 	default:
-		return "", resource.Internal(strErr("bad vpc state"))
+		return "", resource.Internal(errors.New("bad vpc state"))
 	}
 }
 
@@ -742,11 +743,11 @@ func vpcObserved(state string) commonv1.ReconciliationState {
 
 func groupModel(in *networkv1.SecurityGroup) (resource.SecurityGroup, error) {
 	if in == nil {
-		return resource.SecurityGroup{}, resource.Internal(strErr("missing security group"))
+		return resource.SecurityGroup{}, resource.Internal(errors.New("missing security group"))
 	}
 	parts := splitSlash(in.GetName())
 	if len(parts) != 8 || parts[6] != "securityGroups" {
-		return resource.SecurityGroup{}, resource.Internal(strErr("bad security group name"))
+		return resource.SecurityGroup{}, resource.Internal(errors.New("bad security group name"))
 	}
 	id, err := resource.Parse[resource.SecurityGroupID](parts[7])
 	if err != nil {
@@ -841,7 +842,7 @@ func derivedKey(parts ...string) (string, string, string, error) {
 	block := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})
 	pub, ok := priv.Public().(ed25519.PublicKey)
 	if !ok {
-		return "", "", "", resource.Internal(strErr("ed25519 public key"))
+		return "", "", "", resource.Internal(errors.New("ed25519 public key"))
 	}
 	fp := sha256.Sum256(pub)
 	return string(block), hex.EncodeToString(fp[:]), sshEd25519(pub), nil

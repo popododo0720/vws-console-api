@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"io"
 	"strconv"
 	"time"
@@ -260,7 +261,7 @@ func (c computeClient) GetOperation(ctx context.Context, s backend.Scope, id res
 		return resource.Operation{}, err
 	}
 	if op.ID != id {
-		return resource.Operation{}, resource.Internal(strErr("backend returned a different operation"))
+		return resource.Operation{}, resource.Internal(errors.New("backend returned a different operation"))
 	}
 	return c.actionFromInstance(ctx, s, op)
 }
@@ -274,8 +275,11 @@ func (c computeClient) actionFromInstance(ctx context.Context, s backend.Scope, 
 	got, err := c.instances.GetInstance(ctx, &computev1.GetInstanceRequest{
 		Name: instanceName(project(s.Account), op.Targets[0].ID()),
 	})
-	if err != nil {
+	if status.Code(err) == codes.NotFound {
 		return op, nil
+	}
+	if err != nil {
+		return resource.Operation{}, fromRPC(err)
 	}
 	if parsed, ok := resource.ParseAction(got.GetLabels()[labelAction]); ok {
 		op.Action = parsed
@@ -455,7 +459,7 @@ func (c storageClient) awaitStorage(ctx context.Context, op *longrunningpb.Opera
 	}
 	name := op.GetName()
 	if name == "" {
-		return nil, resource.Internal(strErr("missing operation"))
+		return nil, resource.Internal(errors.New("missing operation"))
 	}
 	ticker := time.NewTicker(5 * time.Millisecond)
 	defer ticker.Stop()
@@ -562,7 +566,7 @@ func (c storageClient) ListObjects(ctx context.Context, s backend.Scope, q resou
 				return resource.ObjectListing{}, err
 			}
 			if obj.Bucket != q.Bucket || obj.OwnerID != s.Account {
-				return resource.ObjectListing{}, resource.Internal(strErr("object from another account"))
+				return resource.ObjectListing{}, resource.Internal(errors.New("object from another account"))
 			}
 			keys = append(keys, obj)
 		}
@@ -576,11 +580,11 @@ func (c storageClient) ListObjects(ctx context.Context, s backend.Scope, q resou
 			return resource.PageObjects(keys, q)
 		}
 		if next == serviceToken {
-			return resource.ObjectListing{}, resource.Internal(strErr("object listing is incomplete"))
+			return resource.ObjectListing{}, resource.Internal(errors.New("object listing is incomplete"))
 		}
 		serviceToken = next
 	}
-	return resource.ObjectListing{}, resource.Internal(strErr("object listing is incomplete"))
+	return resource.ObjectListing{}, resource.Internal(errors.New("object listing is incomplete"))
 }
 
 func (c storageClient) DeleteObject(ctx context.Context, s backend.Scope, bucket resource.BucketName, key resource.ObjectKey) error {
@@ -731,7 +735,7 @@ func (c networkClient) GetOperation(ctx context.Context, s backend.Scope, id res
 		return resource.Operation{}, err
 	}
 	if op.ID != id {
-		return resource.Operation{}, resource.Internal(strErr("backend returned a different operation"))
+		return resource.Operation{}, resource.Internal(errors.New("backend returned a different operation"))
 	}
 	return op, nil
 }

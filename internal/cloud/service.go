@@ -1,7 +1,6 @@
 package cloud
 
 import (
-	"io"
 	"log/slog"
 
 	"github.com/popododo0720/vws-console-api/internal/backend"
@@ -23,7 +22,7 @@ type Service struct {
 // New builds a kernel. A nil logger discards audit lines.
 func New(cfg Config) *Service {
 	if cfg.Audit == nil {
-		cfg.Audit = slog.New(slog.NewTextHandler(io.Discard, nil))
+		cfg.Audit = slog.New(slog.DiscardHandler)
 	}
 	return &Service{backends: cfg.Backends, audit: cfg.Audit}
 }

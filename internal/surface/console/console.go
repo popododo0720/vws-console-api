@@ -380,7 +380,7 @@ func (h *handler) getObject(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, r, err)
 		return
 	}
-	defer func() { _ = rc.Close() }()
+	defer server.Close(w, rc)
 	buf, err := io.ReadAll(io.LimitReader(rc, resource.MaxObjectBytes+1))
 	if err != nil {
 		writeErr(w, r, resource.Internal(err))
@@ -518,7 +518,7 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.WriteHeader(status)
 	enc := json.NewEncoder(w)
 	enc.SetEscapeHTML(false)
-	_ = enc.Encode(v)
+	server.RecordFailure(w, enc.Encode(v))
 }
 
 type errorBody struct {

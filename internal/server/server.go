@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -25,7 +26,7 @@ type Surface struct {
 // It then shuts the listeners down. In-flight requests get five seconds.
 func Run(ctx context.Context, logger *slog.Logger, surfaces ...Surface) error {
 	if logger == nil {
-		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
+		logger = slog.New(slog.DiscardHandler)
 	}
 	servers := make([]*http.Server, 0, len(surfaces))
 	errc := make(chan error, len(surfaces))
@@ -47,10 +48,10 @@ func Run(ctx context.Context, logger *slog.Logger, surfaces ...Surface) error {
 	case <-ctx.Done():
 	case runErr = <-errc:
 	}
-	shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	shutCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
 	for _, srv := range servers {
-		_ = srv.Shutdown(shutCtx)
+		runErr = errors.Join(runErr, srv.Shutdown(shutCtx))
 	}
 	wg.Wait()
 	return runErr
@@ -78,26 +79,45 @@ func wrap(logger *slog.Logger, name string, next http.Handler) http.Handler {
 		}
 		w.Header().Set("X-Request-Id", id)
 		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
-		defer func() {
-			if recovered := recover(); recovered != nil {
-				logger.ErrorContext(r.Context(), "panic", "surface", name, "requestId", id, "panic", recovered)
-				http.Error(rec, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-			}
-		}()
+		defer recoverPanic(logger, rec, r, name, id)
 		next.ServeHTTP(rec, r)
-		if rec.status >= http.StatusInternalServerError {
-			args := []any{"surface", name, "requestId", id, "method", r.Method, "path", r.URL.Path, "status", rec.status}
-			if rec.failure != nil {
-				args = append(args, "err", rec.failure)
-			}
-			logger.ErrorContext(r.Context(), "request failed", args...)
+		attrs := []slog.Attr{
+			slog.String("surface", name),
+			slog.String("request_id", id),
+			slog.String("method", r.Method),
+			slog.String("path", r.URL.Path),
+			slog.Int("status", rec.status),
 		}
-		logger.InfoContext(r.Context(), "request", "surface", name, "requestId", id, "method", r.Method, "path", r.URL.Path, "status", rec.status)
+		switch {
+		case rec.status >= http.StatusInternalServerError:
+			if rec.failure != nil {
+				attrs = append(attrs, slog.Any("err", rec.failure))
+			}
+			logger.LogAttrs(r.Context(), slog.LevelError, "request failed", attrs...)
+		case rec.failure != nil:
+			logger.LogAttrs(r.Context(), slog.LevelWarn, "response failed", append(attrs, slog.Any("err", rec.failure))...)
+		}
+		logger.LogAttrs(r.Context(), slog.LevelInfo, "request", attrs[:5]...)
 	})
+}
+
+// recoverPanic turns a handler panic into a bare 500. The panic value is
+// logged and never written to the client.
+func recoverPanic(logger *slog.Logger, w http.ResponseWriter, r *http.Request, name, id string) {
+	recovered := recover()
+	if recovered == nil {
+		return
+	}
+	logger.LogAttrs(r.Context(), slog.LevelError, "panic",
+		slog.String("surface", name),
+		slog.String("request_id", id),
+		slog.Any("panic", recovered))
+	http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 }
 
 // RecordFailure keeps err for the access log. Surfaces call it when the
 // response is a server error. The cause stays off the wire body.
+// A failure under a 2xx or 4xx status is logged as a warning.
 func RecordFailure(w http.ResponseWriter, err error) {
 	if err == nil {
 		return
@@ -107,13 +127,18 @@ func RecordFailure(w http.ResponseWriter, err error) {
 	}
 }
 
+// Close closes c and records its error for the access log.
+func Close(w http.ResponseWriter, c io.Closer) {
+	RecordFailure(w, c.Close())
+}
+
 type statusRecorder struct {
 	http.ResponseWriter
 	status  int
 	failure error
 }
 
-func (s *statusRecorder) noteFailure(err error) { s.failure = err }
+func (s *statusRecorder) noteFailure(err error) { s.failure = errors.Join(s.failure, err) }
 
 func (s *statusRecorder) WriteHeader(code int) {
 	s.status = code

@@ -1,6 +1,7 @@
 package grpcclient
 
 import (
+	"errors"
 	"strings"
 	"time"
 
@@ -21,7 +22,7 @@ import (
 
 func operationFrom(op *longrunningpb.Operation, svc resource.Service) (resource.Operation, error) {
 	if op == nil {
-		return resource.Operation{}, resource.Internal(strErr("missing operation"))
+		return resource.Operation{}, resource.Internal(errors.New("missing operation"))
 	}
 	local, err := operationLocal(op.GetName())
 	if err != nil {
@@ -96,7 +97,7 @@ func actionOf(resourceName string, verb commonv1.OperationVerb) (resource.Action
 		case containsSegment(resourceName, "snapshots"):
 			return resource.ActionCreateSnapshot, nil
 		default:
-			return 0, resource.Internal(strErr("unsupported operation"))
+			return 0, resource.Internal(errors.New("unsupported operation"))
 		}
 	case commonv1.OperationVerb_OPERATION_VERB_UPDATE:
 		switch {
@@ -107,7 +108,7 @@ func actionOf(resourceName string, verb commonv1.OperationVerb) (resource.Action
 		case containsSegment(resourceName, "volumes"):
 			return resource.ActionAttachVolume, nil
 		default:
-			return 0, resource.Internal(strErr("unsupported operation"))
+			return 0, resource.Internal(errors.New("unsupported operation"))
 		}
 	case commonv1.OperationVerb_OPERATION_VERB_DELETE:
 		switch {
@@ -128,12 +129,12 @@ func actionOf(resourceName string, verb commonv1.OperationVerb) (resource.Action
 		case containsSegment(resourceName, "snapshots"):
 			return resource.ActionDeleteSnapshot, nil
 		default:
-			return 0, resource.Internal(strErr("unsupported operation"))
+			return 0, resource.Internal(errors.New("unsupported operation"))
 		}
 	case commonv1.OperationVerb_OPERATION_VERB_UNSPECIFIED:
-		return 0, resource.Internal(strErr("unsupported operation"))
+		return 0, resource.Internal(errors.New("unsupported operation"))
 	default:
-		return 0, resource.Internal(strErr("unsupported operation"))
+		return 0, resource.Internal(errors.New("unsupported operation"))
 	}
 }
 
@@ -228,14 +229,14 @@ func refFromResource(name string) (resource.Ref, bool) {
 
 func metadataResource(op *longrunningpb.Operation) (string, error) {
 	if op == nil || op.GetMetadata() == nil {
-		return "", resource.Internal(strErr("missing operation"))
+		return "", resource.Internal(errors.New("missing operation"))
 	}
 	meta := &commonv1.OperationMetadata{}
 	if err := op.GetMetadata().UnmarshalTo(meta); err != nil {
 		return "", resource.Internal(err)
 	}
 	if meta.GetResource() == "" {
-		return "", resource.Internal(strErr("missing operation"))
+		return "", resource.Internal(errors.New("missing operation"))
 	}
 	return meta.GetResource(), nil
 }
@@ -311,11 +312,11 @@ func instanceObserved(st resource.InstanceState) (commonv1.ReconciliationState, 
 
 func instanceModel(in *computev1.Instance) (resource.Instance, error) {
 	if in == nil {
-		return resource.Instance{}, resource.Internal(strErr("missing instance"))
+		return resource.Instance{}, resource.Internal(errors.New("missing instance"))
 	}
 	parts := splitSlash(in.GetName())
 	if len(parts) != 6 || parts[2] != "zones" || parts[4] != "instances" {
-		return resource.Instance{}, resource.Internal(strErr("bad instance name"))
+		return resource.Instance{}, resource.Internal(errors.New("bad instance name"))
 	}
 	id, err := resource.Parse[resource.InstanceID](parts[5])
 	if err != nil {
@@ -335,7 +336,7 @@ func instanceModel(in *computev1.Instance) (resource.Instance, error) {
 	}
 	nics := in.GetSpec().GetNetworkInterfaces()
 	if len(nics) == 0 {
-		return resource.Instance{}, resource.Internal(strErr("missing subnet"))
+		return resource.Instance{}, resource.Internal(errors.New("missing subnet"))
 	}
 	sub, err := resource.Parse[resource.SubnetID](lastSegment(nics[0].GetSubnet()))
 	if err != nil {
@@ -376,9 +377,9 @@ func instanceStateOf(obs commonv1.ReconciliationState, power computev1.InstanceP
 	case commonv1.ReconciliationState_RECONCILIATION_STATE_DELETING:
 		return resource.InstanceShuttingDown, nil
 	case commonv1.ReconciliationState_RECONCILIATION_STATE_ERROR, commonv1.ReconciliationState_RECONCILIATION_STATE_UNSPECIFIED:
-		return 0, resource.Internal(strErr("bad instance state"))
+		return 0, resource.Internal(errors.New("bad instance state"))
 	default:
-		return 0, resource.Internal(strErr("bad instance state"))
+		return 0, resource.Internal(errors.New("bad instance state"))
 	}
 }
 
@@ -403,11 +404,11 @@ func subnetProto(sub resource.Subnet, projectID, vpcID string) *networkv1.Subnet
 
 func subnetModel(in *networkv1.Subnet) (resource.Subnet, error) {
 	if in == nil {
-		return resource.Subnet{}, resource.Internal(strErr("missing subnet"))
+		return resource.Subnet{}, resource.Internal(errors.New("missing subnet"))
 	}
 	parts := splitSlash(in.GetName())
 	if len(parts) != 8 || parts[6] != "subnets" {
-		return resource.Subnet{}, resource.Internal(strErr("bad subnet name"))
+		return resource.Subnet{}, resource.Internal(errors.New("bad subnet name"))
 	}
 	id, err := resource.Parse[resource.SubnetID](parts[7])
 	if err != nil {
@@ -437,9 +438,9 @@ func subnetStateOf(obs commonv1.ReconciliationState) (resource.SubnetState, erro
 	case commonv1.ReconciliationState_RECONCILIATION_STATE_DELETING:
 		return resource.SubnetDeleting, nil
 	case commonv1.ReconciliationState_RECONCILIATION_STATE_ERROR, commonv1.ReconciliationState_RECONCILIATION_STATE_UNSPECIFIED:
-		return 0, resource.Internal(strErr("bad subnet state"))
+		return 0, resource.Internal(errors.New("bad subnet state"))
 	default:
-		return 0, resource.Internal(strErr("bad subnet state"))
+		return 0, resource.Internal(errors.New("bad subnet state"))
 	}
 }
 
@@ -459,11 +460,11 @@ func bucketProto(b resource.Bucket, projectID string) *storagev1.Bucket {
 
 func bucketModel(in *storagev1.Bucket) (resource.Bucket, error) {
 	if in == nil {
-		return resource.Bucket{}, resource.Internal(strErr("missing bucket"))
+		return resource.Bucket{}, resource.Internal(errors.New("missing bucket"))
 	}
 	parts := splitSlash(in.GetName())
 	if len(parts) != 4 || parts[2] != "buckets" {
-		return resource.Bucket{}, resource.Internal(strErr("bad bucket name"))
+		return resource.Bucket{}, resource.Internal(errors.New("bad bucket name"))
 	}
 	name, err := resource.Parse[resource.BucketName](parts[3])
 	if err != nil {
@@ -508,11 +509,11 @@ func s3ETag(md5 string) string {
 
 func objectModel(in *storagev1.Object) (resource.Object, error) {
 	if in == nil {
-		return resource.Object{}, resource.Internal(strErr("missing object"))
+		return resource.Object{}, resource.Internal(errors.New("missing object"))
 	}
 	parts := splitSlash(in.GetName())
 	if len(parts) != 6 || parts[2] != "buckets" || parts[4] != "objects" {
-		return resource.Object{}, resource.Internal(strErr("bad object name"))
+		return resource.Object{}, resource.Internal(errors.New("bad object name"))
 	}
 	bucket, err := resource.Parse[resource.BucketName](parts[3])
 	if err != nil {
@@ -672,7 +673,3 @@ func codeFromGRPC(c codes.Code) resource.Code {
 		return resource.CodeInternal
 	}
 }
-
-type strErr string
-
-func (e strErr) Error() string { return string(e) }

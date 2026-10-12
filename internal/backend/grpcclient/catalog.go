@@ -2,6 +2,7 @@ package grpcclient
 
 import (
 	"context"
+	"errors"
 
 	computev1 "github.com/popododo0720/vws-proto/gen/go/vws/compute/v1"
 	networkv1 "github.com/popododo0720/vws-proto/gen/go/vws/network/v1"
@@ -609,11 +610,11 @@ func (c networkClient) listGroups(ctx context.Context, projectID string) ([]reso
 
 func keyModel(in *computev1.KeyPair) (resource.KeyPair, error) {
 	if in == nil {
-		return resource.KeyPair{}, resource.Internal(strErr("missing key pair"))
+		return resource.KeyPair{}, resource.Internal(errors.New("missing key pair"))
 	}
 	parts := splitSlash(in.GetName())
 	if len(parts) != 6 || parts[4] != "keyPairs" {
-		return resource.KeyPair{}, resource.Internal(strErr("bad key pair name"))
+		return resource.KeyPair{}, resource.Internal(errors.New("bad key pair name"))
 	}
 	id, err := resource.Parse[resource.KeyPairID](parts[5])
 	if err != nil {
@@ -630,11 +631,11 @@ func keyModel(in *computev1.KeyPair) (resource.KeyPair, error) {
 
 func snapshotModel(in *storagev1.Snapshot) (resource.Snapshot, error) {
 	if in == nil {
-		return resource.Snapshot{}, resource.Internal(strErr("missing snapshot"))
+		return resource.Snapshot{}, resource.Internal(errors.New("missing snapshot"))
 	}
 	parts := splitSlash(in.GetName())
 	if len(parts) != 6 || parts[4] != "snapshots" {
-		return resource.Snapshot{}, resource.Internal(strErr("bad snapshot name"))
+		return resource.Snapshot{}, resource.Internal(errors.New("bad snapshot name"))
 	}
 	id, err := resource.Parse[resource.SnapshotID](parts[5])
 	if err != nil {
@@ -660,11 +661,11 @@ func snapshotModel(in *storagev1.Snapshot) (resource.Snapshot, error) {
 
 func addressModel(in *networkv1.Address) (resource.Address, error) {
 	if in == nil {
-		return resource.Address{}, resource.Internal(strErr("missing address"))
+		return resource.Address{}, resource.Internal(errors.New("missing address"))
 	}
 	parts := splitSlash(in.GetName())
 	if len(parts) != 6 || parts[4] != "addresses" {
-		return resource.Address{}, resource.Internal(strErr("bad address name"))
+		return resource.Address{}, resource.Internal(errors.New("bad address name"))
 	}
 	id, err := resource.Parse[resource.AddressID](parts[5])
 	if err != nil {

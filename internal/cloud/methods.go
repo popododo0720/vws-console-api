@@ -2,6 +2,7 @@ package cloud
 
 import (
 	"context"
+	"errors"
 	"io"
 
 	"github.com/popododo0720/vws-console-api/internal/backend"
@@ -347,8 +348,7 @@ func (s *Service) GetObject(ctx context.Context, c resource.Caller, req resource
 		return resource.Object{}, nil, err
 	}
 	if err := guardOwner(c.Account, meta); err != nil {
-		_ = rc.Close()
-		return resource.Object{}, nil, err
+		return resource.Object{}, nil, errors.Join(err, rc.Close())
 	}
 	return meta, rc, nil
 }

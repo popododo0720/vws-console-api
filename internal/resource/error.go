@@ -26,6 +26,15 @@ const (
 	CodeInternal
 )
 
+// Codes returns every specified code, in declaration order.
+func Codes() []Code {
+	var out []Code
+	for c := Code(1); c.String() != "Unspecified"; c++ {
+		out = append(out, c)
+	}
+	return out
+}
+
 // String returns the canonical name, such as "NotFound".
 func (c Code) String() string {
 	switch c {
@@ -83,6 +92,7 @@ func (e *Error) Unwrap() error { return e.cause }
 
 // MarshalJSON encodes the caller-visible fields.
 func (e *Error) MarshalJSON() ([]byte, error) {
+	//nolint:wrapcheck // MarshalJSON returns encoding/json's own error to encoding/json.
 	return json.Marshal(struct {
 		Code    string `json:"code"`
 		Kind    string `json:"kind,omitempty"`

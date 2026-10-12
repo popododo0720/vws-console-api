@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
+	"errors"
 	"strings"
 
 	longrunningpb "cloud.google.com/go/longrunning/autogen/longrunningpb"
@@ -384,7 +385,7 @@ func namedRef[T any, PT interface {
 	var zero T
 	parts := splitSlash(name)
 	if len(parts) != 6 || parts[4] != kind {
-		return "", resource.AccountID{}, zero, resource.Internal(strErr("bad " + kind + " name"))
+		return "", resource.AccountID{}, zero, resource.Internal(errors.New("bad " + kind + " name"))
 	}
 	account, err := accountOf(parts[1])
 	if err != nil {
