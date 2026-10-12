@@ -9,6 +9,12 @@ linters:
   default: standard
   enable:
     - bodyclose
+    - contextcheck
+    - errname
+    - nilerr
+    - nilnil
+    - sloglint
+    - wrapcheck
     - depguard
     - errorlint
     - exhaustive
@@ -22,6 +28,32 @@ linters:
     - unconvert
     - usestdlibvars
   settings:
+    errcheck:
+      check-type-assertions: true
+      check-blank: true
+    errorlint:
+      errorf: true
+      asserts: true
+      comparison: true
+    sloglint:
+      no-mixed-args: true
+      attr-only: true
+      context: all
+      static-msg: true
+      key-naming-case: snake
+    wrapcheck:
+      # The first entries are the linter defaults. ctx.Err() and a gRPC
+      # status are returned as they are: they already are the error.
+      ignore-sigs:
+        - .Errorf(
+        - errors.New(
+        - errors.Unwrap(
+        - errors.Join(
+        - (context.Context).Err()
+        - status.Error(
+        - (*google.golang.org/grpc/internal/status.Status).Err()
+      ignore-package-globs:
+        - github.com/popododo0720/vws-console-api/internal/*
     depguard:
       rules:
         surfaces-use-the-kernel:
@@ -83,9 +115,13 @@ linters:
   exclusions:
     generated: lax
     rules:
+      # Tests build fixtures from constant ids and close test servers.
+      # Production code gets the full errcheck and wrapcheck rules.
       - path: _test\.go
         linters:
+          - errcheck
           - gochecknoglobals
+          - wrapcheck
     paths:
       - third_party
 
