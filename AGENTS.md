@@ -65,6 +65,7 @@ change.
 | `RunInstances` creates the boot volume from `VolumeSpec.image`. `InstanceSpec` does not reference an image. | `TestBootVolumeSourcesTheImage` |
 | `CreateKeyPair`'s private key is not the hash published as the key id or the request id. | `TestKeySeedIsNotThePublishedID` |
 | Volume and snapshot create and delete operations are read from the storage service. A subnet in `DELETING` stays a subnet state. | `TestContractOverGRPC` uses a separate storage listener; `TestSubnetDeletingRoundTrip` |
+| A missing resource read by name is `NotFound` of the kind its name's collection names, so EC2 answers `InvalidVolume.NotFound`, `InvalidSnapshot.NotFound`, `InvalidInstanceID.NotFound`, and the like, not `InvalidParameterValue`. | `TestMissingResourceKeepsItsKind`; e2e `not_found` |
 | An unknown ingress protocol is invalid. It is not stored as tcp. | `TestIngressProtocolIsCanonical` |
 | The signature is checked after the access key is known and before the body is trusted. A missing payload hash is the hash of the body. `UNSIGNED-PAYLOAD` is rejected. A query longer than 128 parameters is rejected before it is sorted. | `TestQueryWithoutPayloadHeader`, `TestUnsignedPayloadAndUnreadBody`, `TestTooManyQueryParams` |
 | A resource created on one surface is the same resource, with the same id and state names, on the others. | `internal/surface/interop` |

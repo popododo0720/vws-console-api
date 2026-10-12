@@ -212,7 +212,7 @@ func (c networkClient) DeleteSubnet(ctx context.Context, m backend.Mutation, req
 	}
 	current, err := c.subnets.GetSubnet(ctx, &networkv1.GetSubnetRequest{Name: name})
 	if err != nil {
-		return resource.Accepted[resource.Subnet]{}, fromRPC(err)
+		return resource.Accepted[resource.Subnet]{}, fromNamedRPC(name, err)
 	}
 	sub, err := subnetModel(current)
 	if err != nil {
@@ -488,9 +488,10 @@ func (c computeClient) findKey(ctx context.Context, projectID string, req resour
 }
 
 func (c computeClient) getKey(ctx context.Context, projectID, id string) (resource.KeyPair, error) {
-	out, err := c.keys.GetKeyPair(ctx, &computev1.GetKeyPairRequest{Name: keyPairName(projectID, id)})
+	name := keyPairName(projectID, id)
+	out, err := c.keys.GetKeyPair(ctx, &computev1.GetKeyPairRequest{Name: name})
 	if err != nil {
-		return resource.KeyPair{}, fromRPC(err)
+		return resource.KeyPair{}, fromNamedRPC(name, err)
 	}
 	return keyModel(out)
 }
@@ -521,17 +522,19 @@ func (c computeClient) listKeys(ctx context.Context, projectID string) ([]resour
 }
 
 func (c computeClient) getSnapshot(ctx context.Context, projectID, id string) (resource.Snapshot, error) {
-	out, err := c.snapshots.GetSnapshot(ctx, &storagev1.GetSnapshotRequest{Name: snapshotName(projectID, id)})
+	name := snapshotName(projectID, id)
+	out, err := c.snapshots.GetSnapshot(ctx, &storagev1.GetSnapshotRequest{Name: name})
 	if err != nil {
-		return resource.Snapshot{}, fromRPC(err)
+		return resource.Snapshot{}, fromNamedRPC(name, err)
 	}
 	return snapshotModel(out)
 }
 
 func (c networkClient) getAddress(ctx context.Context, projectID, id string) (resource.Address, error) {
-	out, err := c.addresses.GetAddress(ctx, &networkv1.GetAddressRequest{Name: addressName(projectID, id)})
+	name := addressName(projectID, id)
+	out, err := c.addresses.GetAddress(ctx, &networkv1.GetAddressRequest{Name: name})
 	if err != nil {
-		return resource.Address{}, fromRPC(err)
+		return resource.Address{}, fromNamedRPC(name, err)
 	}
 	return addressModel(out)
 }
