@@ -494,7 +494,9 @@ func s3Code(e *resource.Error) string {
 		return "NotImplemented"
 	case resource.CodeUnavailable:
 		return "ServiceUnavailable"
-	case resource.CodeIdempotencyMismatch, resource.CodeInternal, resource.CodeUnspecified:
+	case resource.CodeIdempotencyMismatch:
+		return "OperationAborted"
+	case resource.CodeInternal, resource.CodeUnspecified:
 		return "InternalError"
 	default:
 		return "InternalError"
