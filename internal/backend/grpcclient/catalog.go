@@ -770,8 +770,21 @@ func (c networkClient) AssociateAddress(ctx context.Context, m backend.Mutation,
 	return c.updateAssociation(ctx, m, req.ID, assoc, req.InstanceID, resource.ActionAssociateAddress)
 }
 
-// DisassociateAddress clears spec.association.
+// DisassociateAddress clears spec.association. An unknown address, or one
+// with neither a desired (spec) nor an observed (status) association, is
+// AssociationNotFound; the read and the update are not atomic.
 func (c networkClient) DisassociateAddress(ctx context.Context, m backend.Mutation, req resource.DisassociateAddressRequest) (resource.Accepted[resource.Address], error) {
+	name := addressName(project(m.Account), req.ID.String())
+	cur, err := c.addresses.GetAddress(ctx, &networkv1.GetAddressRequest{Name: name})
+	if err != nil {
+		if e := resource.AsError(fromNamedRPC(name, err)); e != nil && e.Code == resource.CodeNotFound {
+			return resource.Accepted[resource.Address]{}, resource.AssociationNotFound(req.ID)
+		}
+		return resource.Accepted[resource.Address]{}, fromNamedRPC(name, err)
+	}
+	if cur.GetSpec().GetAssociation() == nil && cur.GetStatus().GetInstance() == "" {
+		return resource.Accepted[resource.Address]{}, resource.AssociationNotFound(req.ID)
+	}
 	return c.updateAssociation(ctx, m, req.ID, nil, resource.InstanceID{}, resource.ActionDisassociateAddress)
 }
 

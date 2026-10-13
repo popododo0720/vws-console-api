@@ -277,6 +277,14 @@ func TestAssociateAndDisassociateAddress(t *testing.T) {
 	if code, body := call(url.Values{"Action": {"DisassociateAddress"}, "AssociationId": {alloc}}); code != http.StatusBadRequest || !strings.Contains(body, "InvalidParameterValue") {
 		t.Fatalf("malformed association %d %s", code, body)
 	}
+	for name, id := range map[string]string{
+		"idle address":       "eipassoc-" + digits,
+		"unknown allocation": "eipassoc-00000000000000000",
+	} {
+		if code, body := call(url.Values{"Action": {"DisassociateAddress"}, "AssociationId": {id}}); code != http.StatusBadRequest || !strings.Contains(body, "<Code>InvalidAssociationID.NotFound</Code>") {
+			t.Fatalf("disassociate %s: %d %s", name, code, body)
+		}
+	}
 }
 
 func TestCatalogActionsAreImplemented(t *testing.T) {

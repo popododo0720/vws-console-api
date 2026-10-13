@@ -153,6 +153,8 @@ def not_found():
         ("ReleaseAddress", "InvalidAllocationID.NotFound", lambda: ec2.release_address(AllocationId="eipalloc-00000000000000000")),
         ("AssociateAddress", "InvalidAllocationID.NotFound", lambda: ec2.associate_address(
             AllocationId="eipalloc-00000000000000000", InstanceId="i-00000000000000000")),
+        ("DisassociateAddress", "InvalidAssociationID.NotFound", lambda: ec2.disassociate_address(
+            AssociationId="eipassoc-00000000000000000")),
     ]:
         step(f"{name} missing is {code}", lambda code=code, call=call: ec2_error(code, call))
 
@@ -193,6 +195,8 @@ def associate():
     step("DisassociateAddress", lambda: ec2.disassociate_address(AssociationId=S["assoc"]), need)
     step("DescribeAddresses after DisassociateAddress", lambda: check(
         "InstanceId" not in ec2.describe_addresses(AllocationIds=[alloc])["Addresses"][0], "still associated"), need)
+    step("DisassociateAddress again is InvalidAssociationID.NotFound", lambda: ec2_error(
+        "InvalidAssociationID.NotFound", lambda: ec2.disassociate_address(AssociationId=S["assoc"])), need)
     step("ReleaseAddress after DisassociateAddress", lambda: ec2.release_address(AllocationId=alloc), need)
 
 
