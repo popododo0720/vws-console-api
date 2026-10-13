@@ -153,7 +153,7 @@ func (h *handler) associateAddress(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, r, err)
 		return
 	}
-	writeAccepted(w, r, acc)
+	writeAccepted(w, acc)
 }
 
 func (h *handler) disassociateAddress(w http.ResponseWriter, r *http.Request) {
@@ -171,7 +171,7 @@ func (h *handler) disassociateAddress(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, r, err)
 		return
 	}
-	writeAccepted(w, r, acc)
+	writeAccepted(w, acc)
 }
 
 func (h *handler) listAddresses(w http.ResponseWriter, r *http.Request) {
