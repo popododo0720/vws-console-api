@@ -27,6 +27,9 @@ go run ./cmd/vws-console-api -backend=fake \
 ```
 
 `-backend=grpc` dials `-compute-addr`, `-storage-addr`, and `-network-addr`.
+With `-backend=grpc`, `-console-token`, `-access-key`, and `-secret` must be
+given explicitly. Their defaults (`dev-token`, `AKIDEXAMPLE`, `secret`) are
+public development values and are refused against real backends.
 The fake backend is in-memory and is gone when the process exits.
 
 Console:
