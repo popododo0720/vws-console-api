@@ -137,7 +137,7 @@ func (h *handler) runInstances(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, r, err)
 		return
 	}
-	writeAccepted(w, r, acc)
+	writeAccepted(w, acc)
 }
 
 func (h *handler) stopInstance(w http.ResponseWriter, r *http.Request) {
@@ -155,7 +155,7 @@ func (h *handler) stopInstance(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, r, err)
 		return
 	}
-	writeAccepted(w, r, acc)
+	writeAccepted(w, acc)
 }
 
 func (h *handler) createSubnet(w http.ResponseWriter, r *http.Request) {
@@ -173,7 +173,7 @@ func (h *handler) createSubnet(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, r, err)
 		return
 	}
-	writeAccepted(w, r, acc)
+	writeAccepted(w, acc)
 }
 
 func (h *handler) listInstances(w http.ResponseWriter, r *http.Request) {
@@ -507,10 +507,9 @@ func decode(w http.ResponseWriter, r *http.Request, dst any) error {
 	return nil
 }
 
-func writeAccepted[T any](w http.ResponseWriter, r *http.Request, acc resource.Accepted[T]) {
+func writeAccepted[T any](w http.ResponseWriter, acc resource.Accepted[T]) {
 	w.Header().Set("Location", "/api/v1/operations/"+acc.Operation.ID.String())
 	writeJSON(w, http.StatusAccepted, acc)
-	_ = r
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
