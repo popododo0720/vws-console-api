@@ -267,3 +267,26 @@ func TestInstanceStateMapping(t *testing.T) {
 		}
 	}
 }
+
+// TestComputeStateRejectionIsConflict pins that compute refusing a power
+// change for the current state (FailedPrecondition, with or without a vws.dev
+// reason) maps to a conflict, which EC2 reports as IncorrectInstanceState 400
+// rather than InternalError or InvalidParameterValue.
+func TestComputeStateRejectionIsConflict(t *testing.T) {
+	withReason := func(reason string) error {
+		st, err := status.New(codes.FailedPrecondition, "instance cannot be started from pending").WithDetails(&errdetails.ErrorInfo{Reason: reason, Domain: "vws.dev"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return st.Err()
+	}
+	for name, err := range map[string]error{
+		"DEPENDENCY_NOT_READY": withReason("DEPENDENCY_NOT_READY"),
+		"unknown reason":       withReason("SOMETHING_NEW"),
+		"bare":                 status.Error(codes.FailedPrecondition, "instance cannot be started from pending"),
+	} {
+		if got := resource.CodeOf(fromRPC(err)); got != resource.CodeConflict {
+			t.Errorf("%s: got %v", name, got)
+		}
+	}
+}

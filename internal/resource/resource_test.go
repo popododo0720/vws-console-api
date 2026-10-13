@@ -3,6 +3,7 @@ package resource
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -274,5 +275,18 @@ func TestObjectCapMatchesStorageProto(t *testing.T) {
 	req.Size = MaxObjectBytes + 1
 	if _, err := req.Normalize(); CodeOf(err) != CodePayloadTooLarge {
 		t.Fatalf("over cap: %v", err)
+	}
+}
+
+// TestStartRejectedUntilStopped pins the AWS rule: StartInstances only
+// applies to a stopped instance. Anything else, including a Stop still in
+// flight, is an instance-kind conflict (IncorrectInstanceState on the wire).
+func TestStartRejectedUntilStopped(t *testing.T) {
+	for _, from := range []InstanceState{InstancePending, InstanceRunning, InstanceStopping, InstanceShuttingDown, InstanceTerminated} {
+		_, _, err := NextInstanceState(ActionStartInstances, from)
+		var e *Error
+		if !errors.As(err, &e) || e.Code != CodeConflict || e.Kind != KindInstance {
+			t.Errorf("start from %s: %v", from, err)
+		}
 	}
 }

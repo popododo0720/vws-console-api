@@ -74,6 +74,8 @@ func TestEC2ErrorByKind(t *testing.T) {
 		{resource.CodeNotFound, resource.KindSnapshot, wireErr{400, "InvalidSnapshot.NotFound"}},
 		{resource.CodeAlreadyExists, resource.KindSecurityGroup, wireErr{400, "InvalidGroup.Duplicate"}},
 		{resource.CodeAlreadyExists, resource.KindKeyPair, wireErr{400, "InvalidKeyPair.Duplicate"}},
+		{resource.CodeConflict, resource.KindInstance, wireErr{400, "IncorrectInstanceState"}},
+		{resource.CodeConflict, resource.KindUnspecified, wireErr{400, "IncorrectInstanceState"}},
 		{resource.CodeConflict, resource.KindVolume, wireErr{400, "IncorrectState"}},
 		{resource.CodeConflict, resource.KindVpc, wireErr{400, "DependencyViolation"}},
 		{resource.CodeConflict, resource.KindSubnet, wireErr{400, "DependencyViolation"}},
