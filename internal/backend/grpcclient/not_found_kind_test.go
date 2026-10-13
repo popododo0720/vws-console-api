@@ -89,16 +89,18 @@ func emptyClient(t *testing.T) (*api, backend.Mutation) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &api{
-			instances: computev1.NewInstanceServiceClient(conn),
-			keys:      computev1.NewKeyPairServiceClient(conn),
-			volumes:   storagev1.NewVolumeServiceClient(conn),
-			snapshots: storagev1.NewSnapshotServiceClient(conn),
-			vpcs:      networkv1.NewVpcServiceClient(conn),
-			addresses: networkv1.NewAddressServiceClient(conn),
-		}, backend.Mutation{
-			Scope: backend.Scope{Account: account}, Key: "k", Fingerprint: "f",
-		}
+	c := &api{
+		instances: computev1.NewInstanceServiceClient(conn),
+		keys:      computev1.NewKeyPairServiceClient(conn),
+		volumes:   storagev1.NewVolumeServiceClient(conn),
+		snapshots: storagev1.NewSnapshotServiceClient(conn),
+		vpcs:      networkv1.NewVpcServiceClient(conn),
+		addresses: networkv1.NewAddressServiceClient(conn),
+	}
+	m := backend.Mutation{
+		Scope: backend.Scope{Account: account}, Key: "k", Fingerprint: "f",
+	}
+	return c, m
 }
 
 func must[T any](v T, err error) T {
