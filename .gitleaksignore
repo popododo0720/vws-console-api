@@ -1,0 +1,4 @@
+# Golden idempotency-key hashes in a test, not credentials (generic-api-key).
+a6e38815cd5b654a29b5176497f8a818da7c0302:internal/cloud/mutate_test.go:generic-api-key:26
+9cd9294f081efaa3aab486e619d5ee4d2ef96c04:internal/cloud/mutate_test.go:generic-api-key:26
+internal/cloud/mutate_test.go:generic-api-key:26
