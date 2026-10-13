@@ -119,7 +119,7 @@ func TestOperationIDRoundTrip(t *testing.T) {
 
 func TestActionsAreDerived(t *testing.T) {
 	got := Actions()
-	if len(got) != 20 {
+	if len(got) != 22 {
 		t.Fatalf("actions: %v", got)
 	}
 	for _, a := range got {
@@ -287,6 +287,26 @@ func TestStartRejectedUntilStopped(t *testing.T) {
 		var e *Error
 		if !errors.As(err, &e) || e.Code != CodeConflict || e.Kind != KindInstance {
 			t.Errorf("start from %s: %v", from, err)
+		}
+	}
+}
+
+func TestAssociationIDNamesItsAddress(t *testing.T) {
+	id, err := Parse[AddressID]("eipalloc-0db45e5461e9f63e1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	assoc := AssociationID(id)
+	if assoc != "eipassoc-0db45e5461e9f63e1" {
+		t.Fatal(assoc)
+	}
+	back, err := ParseAssociationID(assoc)
+	if err != nil || back != id {
+		t.Fatalf("%v %v", back, err)
+	}
+	for _, bad := range []string{"", "eipalloc-0db45e5461e9f63e1", "eipassoc-x", "eipassoc-"} {
+		if _, err := ParseAssociationID(bad); CodeOf(err) != CodeInvalidArgument {
+			t.Fatalf("%q: %v", bad, err)
 		}
 	}
 }

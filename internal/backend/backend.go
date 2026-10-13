@@ -87,6 +87,8 @@ type Network interface {
 	AllocateAddress(ctx context.Context, m Mutation, req resource.AllocateAddressRequest) (resource.Accepted[resource.Address], error)
 	ReleaseAddress(ctx context.Context, m Mutation, req resource.ReleaseAddressRequest) (resource.Accepted[resource.Address], error)
 	DescribeAddresses(ctx context.Context, s Scope, q resource.AddressQuery) (resource.Page[resource.Address], error)
+	AssociateAddress(ctx context.Context, m Mutation, req resource.AssociateAddressRequest) (resource.Accepted[resource.Address], error)
+	DisassociateAddress(ctx context.Context, m Mutation, req resource.DisassociateAddressRequest) (resource.Accepted[resource.Address], error)
 }
 
 // Set is the three services one process talks to.

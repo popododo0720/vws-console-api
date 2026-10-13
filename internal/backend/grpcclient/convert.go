@@ -107,6 +107,8 @@ func actionOf(resourceName string, verb commonv1.OperationVerb) (resource.Action
 			return resource.ActionAuthorizeSecurityGroupIngress, nil
 		case containsSegment(resourceName, "volumes"):
 			return resource.ActionAttachVolume, nil
+		case containsSegment(resourceName, "addresses"):
+			return resource.ActionAssociateAddress, nil
 		default:
 			return 0, resource.Internal(errors.New("unsupported operation"))
 		}

@@ -292,6 +292,19 @@ type releaseAddressXML struct {
 	Return    bool     `xml:"return"`
 }
 
+type associateAddressXML struct {
+	XMLName       struct{} `xml:"AssociateAddressResponse"`
+	RequestID     string   `xml:"requestId"`
+	Return        bool     `xml:"return"`
+	AssociationID string   `xml:"associationId"`
+}
+
+type disassociateAddressXML struct {
+	XMLName   struct{} `xml:"DisassociateAddressResponse"`
+	RequestID string   `xml:"requestId"`
+	Return    bool     `xml:"return"`
+}
+
 type describeAddressesXML struct {
 	XMLName   struct{} `xml:"DescribeAddressesResponse"`
 	RequestID string   `xml:"requestId"`
@@ -302,10 +315,11 @@ type describeAddressesXML struct {
 }
 
 type addressItem struct {
-	PublicIP     string `xml:"publicIp,omitempty"`
-	Domain       string `xml:"domain,omitempty"`
-	AllocationID string `xml:"allocationId"`
-	InstanceID   string `xml:"instanceId,omitempty"`
+	PublicIP      string `xml:"publicIp,omitempty"`
+	Domain        string `xml:"domain,omitempty"`
+	AllocationID  string `xml:"allocationId"`
+	InstanceID    string `xml:"instanceId,omitempty"`
+	AssociationID string `xml:"associationId,omitempty"`
 }
 
 type createSnapshotXML struct {
@@ -420,9 +434,13 @@ func groupXML(group resource.SecurityGroup) groupItem {
 }
 
 func addressXML(addr resource.Address) addressItem {
-	return addressItem{
+	item := addressItem{
 		PublicIP: addr.PublicIP, Domain: addr.Domain, AllocationID: addr.ID.String(), InstanceID: addr.InstanceID.String(),
 	}
+	if !addr.InstanceID.IsZero() {
+		item.AssociationID = resource.AssociationID(addr.ID)
+	}
+	return item
 }
 
 func snapshotXML(snap resource.Snapshot) snapshotItem {

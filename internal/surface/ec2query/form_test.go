@@ -228,6 +228,57 @@ func TestStopRunningInstanceWithoutClientToken(t *testing.T) {
 	}
 }
 
+func TestAssociateAndDisassociateAddress(t *testing.T) {
+	h, cred, now := harness(t)
+	call := func(f url.Values) (int, string) {
+		t.Helper()
+		f.Set("Version", Version)
+		res := signed(t, h, cred, now, f.Encode())
+		return res.Code, res.Body.String()
+	}
+	send := func(f url.Values) string {
+		t.Helper()
+		code, body := call(f)
+		if code != http.StatusOK {
+			t.Fatalf("%s %d %s", f.Get("Action"), code, body)
+		}
+		return body
+	}
+	vpc := send(url.Values{"Action": {"CreateVpc"}, "CidrBlock": {"10.0.0.0/16"}})
+	subnet := send(url.Values{"Action": {"CreateSubnet"}, "VpcId": {xmlText(t, vpc, "vpcId")}, "CidrBlock": {"10.0.1.0/24"}})
+	run := send(url.Values{
+		"Action": {"RunInstances"}, "ImageId": {"ami-0123456789abcdef0"}, "InstanceType": {"vws.small"},
+		"SubnetId": {xmlText(t, subnet, "subnetId")}, "MinCount": {"1"}, "MaxCount": {"1"}, "ClientToken": {"run-1"},
+	})
+	inst := xmlText(t, run, "instanceId")
+	alloc := xmlText(t, send(url.Values{"Action": {"AllocateAddress"}, "Domain": {"vpc"}}), "allocationId")
+	digits := strings.TrimPrefix(alloc, "eipalloc-")
+
+	assoc := send(url.Values{"Action": {"AssociateAddress"}, "AllocationId": {alloc}, "InstanceId": {inst}})
+	if got := xmlText(t, assoc, "associationId"); got != "eipassoc-"+digits {
+		t.Fatalf("association id %q", got)
+	}
+	described := send(url.Values{"Action": {"DescribeAddresses"}, "AllocationId.1": {alloc}})
+	if xmlText(t, described, "instanceId") != inst || xmlText(t, described, "associationId") != "eipassoc-"+digits {
+		t.Fatalf("describe associated %s", described)
+	}
+	if code, body := call(url.Values{"Action": {"AssociateAddress"}, "AllocationId": {alloc}, "InstanceId": {"i-00000000000000000"}}); code != http.StatusBadRequest || !strings.Contains(body, "InvalidInstanceID.NotFound") {
+		t.Fatalf("missing instance %d %s", code, body)
+	}
+	if code, body := call(url.Values{"Action": {"AssociateAddress"}, "AllocationId": {"eipalloc-00000000000000000"}, "InstanceId": {inst}}); code != http.StatusBadRequest || !strings.Contains(body, "InvalidAllocationID.NotFound") {
+		t.Fatalf("missing address %d %s", code, body)
+	}
+
+	send(url.Values{"Action": {"DisassociateAddress"}, "AssociationId": {"eipassoc-" + digits}})
+	idle := send(url.Values{"Action": {"DescribeAddresses"}, "AllocationId.1": {alloc}})
+	if strings.Contains(idle, "<instanceId>") || strings.Contains(idle, "<associationId>") {
+		t.Fatalf("describe disassociated %s", idle)
+	}
+	if code, body := call(url.Values{"Action": {"DisassociateAddress"}, "AssociationId": {alloc}}); code != http.StatusBadRequest || !strings.Contains(body, "InvalidParameterValue") {
+		t.Fatalf("malformed association %d %s", code, body)
+	}
+}
+
 func TestCatalogActionsAreImplemented(t *testing.T) {
 	h, cred, now := harness(t)
 	for _, action := range []string{"DescribeKeyPairs", "DescribeSecurityGroups", "DescribeAddresses", "DescribeSnapshots"} {

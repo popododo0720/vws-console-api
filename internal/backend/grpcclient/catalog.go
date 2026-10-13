@@ -10,6 +10,8 @@ import (
 
 	commonv1 "github.com/popododo0720/vws-proto/gen/go/vws/common/v1"
 
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
+
 	"github.com/popododo0720/vws-console-api/internal/backend"
 	"github.com/popododo0720/vws-console-api/internal/resource"
 )
@@ -737,4 +739,69 @@ func stringListed(values []string, want string) bool {
 		}
 	}
 	return false
+}
+
+// AssociateAddress sets spec.association to the instance's first network
+// interface. The network service has no AssociateAddress RPC. The instance is
+// read from compute after the address so a missing or terminated one is
+// InvalidInstanceID.NotFound and the device name is the one compute stores.
+func (c networkClient) AssociateAddress(ctx context.Context, m backend.Mutation, req resource.AssociateAddressRequest) (resource.Accepted[resource.Address], error) {
+	projectID := project(m.Account)
+	if _, err := c.getAddress(ctx, projectID, req.ID.String()); err != nil {
+		return resource.Accepted[resource.Address]{}, err
+	}
+	name := instanceName(projectID, req.InstanceID.String())
+	inst, err := c.instances.GetInstance(ctx, &computev1.GetInstanceRequest{Name: name})
+	if err != nil {
+		return resource.Accepted[resource.Address]{}, fromNamedRPC(name, err)
+	}
+	model, err := instanceModel(inst)
+	if err != nil {
+		return resource.Accepted[resource.Address]{}, err
+	}
+	if model.State == resource.InstanceTerminated {
+		return resource.Accepted[resource.Address]{}, resource.NotFound(resource.KindInstance, req.InstanceID.String())
+	}
+	nics := inst.GetSpec().GetNetworkInterfaces()
+	if len(nics) == 0 {
+		return resource.Accepted[resource.Address]{}, resource.Invalid("instanceId", "instance has no network interface")
+	}
+	assoc := &networkv1.AddressAssociation{Instance: name, DeviceName: nics[0].GetDeviceName()}
+	return c.updateAssociation(ctx, m, req.ID, assoc, req.InstanceID, resource.ActionAssociateAddress)
+}
+
+// DisassociateAddress clears spec.association.
+func (c networkClient) DisassociateAddress(ctx context.Context, m backend.Mutation, req resource.DisassociateAddressRequest) (resource.Accepted[resource.Address], error) {
+	return c.updateAssociation(ctx, m, req.ID, nil, resource.InstanceID{}, resource.ActionDisassociateAddress)
+}
+
+func (c networkClient) updateAssociation(ctx context.Context, m backend.Mutation, id resource.AddressID, assoc *networkv1.AddressAssociation, inst resource.InstanceID, action resource.Action) (resource.Accepted[resource.Address], error) {
+	projectID := project(m.Account)
+	name := addressName(projectID, id.String())
+	updated, err := c.addresses.UpdateAddress(ctx, &networkv1.UpdateAddressRequest{
+		Address: &networkv1.Address{
+			Name: name,
+			Spec: &networkv1.AddressSpec{IpVersion: networkv1.IpVersion_IP_VERSION_IPV4, Association: assoc},
+		},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.association"}},
+		RequestId:  requestUUID(m.Key, "addr-assoc"),
+	})
+	if err != nil {
+		return resource.Accepted[resource.Address]{}, fromNamedRPC(name, err)
+	}
+	if err := rpcErr(updated, nil); err != nil {
+		return resource.Accepted[resource.Address]{}, err
+	}
+	op, err := operationFrom(updated, resource.ServiceNetwork)
+	if err != nil {
+		return resource.Accepted[resource.Address]{}, err
+	}
+	addr := resource.Address{ID: id, OwnerID: op.OwnerID, Domain: "vpc"}
+	if got, getErr := c.getAddress(ctx, projectID, id.String()); getErr == nil {
+		addr = got
+	}
+	addr.InstanceID = inst
+	op.Action = action
+	op.Targets = []resource.Ref{id.Ref()}
+	return resource.Accepted[resource.Address]{Operation: op, Items: []resource.Address{addr}}, nil
 }

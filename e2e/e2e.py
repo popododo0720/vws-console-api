@@ -151,6 +151,8 @@ def not_found():
         ("DeleteSubnet", "InvalidSubnetID.NotFound", lambda: ec2.delete_subnet(SubnetId="subnet-00000000000000000")),
         ("StopInstances", "InvalidInstanceID.NotFound", lambda: ec2.stop_instances(InstanceIds=["i-00000000000000000"])),
         ("ReleaseAddress", "InvalidAllocationID.NotFound", lambda: ec2.release_address(AllocationId="eipalloc-00000000000000000")),
+        ("AssociateAddress", "InvalidAllocationID.NotFound", lambda: ec2.associate_address(
+            AllocationId="eipalloc-00000000000000000", InstanceId="i-00000000000000000")),
     ]:
         step(f"{name} missing is {code}", lambda code=code, call=call: ec2_error(code, call))
 
@@ -169,9 +171,29 @@ def vms():
         step("wait for stopped", lambda: wait_state(S["iid"], "stopped"), "vm")
         step("StartInstances", lambda: ec2.start_instances(InstanceIds=[S["iid"]]), "vm")
         step("wait for running", lambda: wait_state(S["iid"], "running"), "vm")
+        associate()
         step("TerminateInstances", lambda: ec2.terminate_instances(InstanceIds=[S["iid"]]), "vm")
     else:
         step("RunInstances follow-ups", lambda: None, "vm")
+
+
+def associate():
+    need = "eip" if "vm" in CAPS else "vm"
+    alloc = step("AllocateAddress for AssociateAddress", lambda: ec2.allocate_address(Domain="vpc")["AllocationId"], need)
+    if not alloc:
+        step("AssociateAddress follow-ups", lambda: None, need)
+        return
+    S["assoc"] = step("AssociateAddress", lambda: ec2.associate_address(
+        AllocationId=alloc, InstanceId=S["iid"])["AssociationId"], need)
+
+    def described():
+        got = ec2.describe_addresses(AllocationIds=[alloc])["Addresses"][0]
+        check(got.get("InstanceId") == S["iid"] and got.get("AssociationId") == S["assoc"], f"address {got}")
+    step("DescribeAddresses shows the association", described, need)
+    step("DisassociateAddress", lambda: ec2.disassociate_address(AssociationId=S["assoc"]), need)
+    step("DescribeAddresses after DisassociateAddress", lambda: check(
+        "InstanceId" not in ec2.describe_addresses(AllocationIds=[alloc])["Addresses"][0], "still associated"), need)
+    step("ReleaseAddress after DisassociateAddress", lambda: ec2.release_address(AllocationId=alloc), need)
 
 
 def addresses():
