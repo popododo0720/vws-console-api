@@ -168,11 +168,6 @@ func Unauthenticated(message string) *Error {
 	return &Error{Code: CodeUnauthenticated, Message: message}
 }
 
-// Exhausted reports a quota the caller can retry later.
-func Exhausted(message string) *Error {
-	return &Error{Code: CodeResourceExhausted, Message: message}
-}
-
 // TooLarge reports a body or object that exceeds the size this process accepts.
 // It is not a quota, so callers must not retry it unchanged.
 func TooLarge(message string) *Error {
