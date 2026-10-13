@@ -92,6 +92,10 @@ def run_instance(token):
 def network():
     S["vpc"] = step("CreateVpc", lambda: ec2.create_vpc(CidrBlock="10.0.0.0/16")["Vpc"]["VpcId"])
     S["subnet"] = step("CreateSubnet", lambda: ec2.create_subnet(VpcId=S["vpc"], CidrBlock="10.0.1.0/24")["Subnet"]["SubnetId"])
+    def subnet_with_zone():
+        sid = ec2.create_subnet(VpcId=S["vpc"], CidrBlock="10.0.2.0/24", AvailabilityZone="vws-1a")["Subnet"]["SubnetId"]
+        ec2.delete_subnet(SubnetId=sid)
+    step("CreateSubnet AvailabilityZone=vws-1a", subnet_with_zone)
     S["sg"] = step("CreateSecurityGroup", lambda: ec2.create_security_group(GroupName="web", Description="d", VpcId=S["vpc"])["GroupId"])
     step("CreateKeyPair", lambda: ec2.create_key_pair(KeyName="k1"))
     S["vol"] = step("CreateVolume", lambda: ec2.create_volume(AvailabilityZone="vws-1a", Size=10, ClientToken="v0")["VolumeId"])

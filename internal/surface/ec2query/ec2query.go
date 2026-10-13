@@ -222,7 +222,7 @@ func (h *handler) createSubnet(w http.ResponseWriter, r *http.Request, c resourc
 			return
 		}
 	}
-	acc, err := h.svc.CreateSubnet(r.Context(), c, token, resource.CreateSubnetRequest{Cidr: r.Form.Get("CidrBlock"), VpcID: vpc})
+	acc, err := h.svc.CreateSubnet(r.Context(), c, token, resource.CreateSubnetRequest{Cidr: r.Form.Get("CidrBlock"), VpcID: vpc, Zone: r.Form.Get("AvailabilityZone")})
 	if err != nil {
 		writeErr(w, r, err)
 		return
@@ -548,7 +548,7 @@ func allowStop(key string) bool {
 }
 
 func allowSubnet(key string) bool {
-	return key == "Action" || key == "Version" || key == "ClientToken" || key == "CidrBlock" || key == "VpcId"
+	return key == "Action" || key == "Version" || key == "ClientToken" || key == "CidrBlock" || key == "VpcId" || key == "AvailabilityZone"
 }
 
 func allowCreateVpc(key string) bool {

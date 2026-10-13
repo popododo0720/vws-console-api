@@ -119,6 +119,28 @@ func TestCreateSubnetOmitsClientToken(t *testing.T) {
 	}
 }
 
+func TestCreateSubnetTakesAvailabilityZone(t *testing.T) {
+	h, cred, now := harness(t)
+	bare := signed(t, h, cred, now, url.Values{
+		"Action": {"CreateSubnet"}, "Version": {Version}, "CidrBlock": {"10.7.3.0/24"},
+	}.Encode())
+	if bare.Code != http.StatusOK {
+		t.Fatalf("bare %d %s", bare.Code, bare.Body)
+	}
+	zoned := signed(t, h, cred, now, url.Values{
+		"Action": {"CreateSubnet"}, "Version": {Version}, "CidrBlock": {"10.7.3.0/24"}, "AvailabilityZone": {resource.ZoneName},
+	}.Encode())
+	if zoned.Code != http.StatusOK || subnetIDOf(t, zoned.Body.String()) != subnetIDOf(t, bare.Body.String()) {
+		t.Fatalf("zoned %d %s", zoned.Code, zoned.Body)
+	}
+	other := signed(t, h, cred, now, url.Values{
+		"Action": {"CreateSubnet"}, "Version": {Version}, "CidrBlock": {"10.7.4.0/24"}, "AvailabilityZone": {"us-east-1a"},
+	}.Encode())
+	if other.Code != http.StatusBadRequest || !strings.Contains(other.Body.String(), "InvalidParameterValue") {
+		t.Fatalf("other zone %d %s", other.Code, other.Body)
+	}
+}
+
 func TestDescribeSecurityGroupReturnsRules(t *testing.T) {
 	h, cred, now := harness(t)
 	vpc := signed(t, h, cred, now, url.Values{

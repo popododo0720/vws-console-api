@@ -71,18 +71,26 @@ func (s Subnet) Identity() string { return s.ID.String() }
 type CreateSubnetRequest struct {
 	Cidr  string `json:"cidrBlock"`
 	VpcID VpcID  `json:"vpcId,omitzero"`
+	Zone  string `json:"availabilityZone,omitempty"`
 }
 
 // Action returns CreateSubnet.
 func (CreateSubnetRequest) Action() Action { return ActionCreateSubnet }
 
-// Normalize checks that cidr is an IPv4 network.
+// Normalize checks that cidr is an IPv4 network and the zone is the one zone.
+// An empty zone is that zone.
 func (r CreateSubnetRequest) Normalize() (CreateSubnetRequest, error) {
 	ip, ipNet, err := net.ParseCIDR(r.Cidr)
 	if err != nil || ip.To4() == nil {
 		return CreateSubnetRequest{}, Invalid("cidrBlock", "must be an ipv4 network")
 	}
 	r.Cidr = ipNet.String()
+	if r.Zone == "" {
+		r.Zone = ZoneName
+	}
+	if r.Zone != ZoneName {
+		return CreateSubnetRequest{}, Invalid("availabilityZone", "unsupported")
+	}
 	return r, nil
 }
 
