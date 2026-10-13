@@ -303,8 +303,15 @@ func (h *handler) putObject(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, r, err, r.URL.Path)
 		return
 	}
+	// If-None-Match: * is a write-once put. An etag list is not applied.
+	ifNoneMatch := r.Header.Get("If-None-Match")
+	if ifNoneMatch != "" && ifNoneMatch != "*" {
+		writeErr(w, r, resource.Unimplemented("If-None-Match other than *"), r.URL.Path)
+		return
+	}
 	obj, err := h.svc.PutObject(r.Context(), c, resource.PutObjectRequest{
 		Bucket: bucket, Key: key, ContentType: r.Header.Get("Content-Type"), Size: r.ContentLength,
+		IfNoneMatch: ifNoneMatch == "*",
 	}, r.Body)
 	if err != nil {
 		writeErr(w, r, err, r.URL.Path)
@@ -499,7 +506,13 @@ func statusOf(e *resource.Error) int {
 		return http.StatusBadRequest
 	case resource.CodeNotFound:
 		return http.StatusNotFound
-	case resource.CodeAlreadyExists, resource.CodeConflict, resource.CodeIdempotencyMismatch:
+	case resource.CodeAlreadyExists:
+		if e.Kind == resource.KindObject {
+			// Only a conditional put refuses an existing object.
+			return http.StatusPreconditionFailed
+		}
+		return http.StatusConflict
+	case resource.CodeConflict, resource.CodeIdempotencyMismatch:
 		return http.StatusConflict
 	case resource.CodeUnauthenticated, resource.CodePermissionDenied:
 		return http.StatusForbidden
@@ -526,6 +539,9 @@ func s3Code(e *resource.Error) string {
 		}
 		return "NoSuchBucket"
 	case resource.CodeAlreadyExists:
+		if e.Kind == resource.KindObject {
+			return "PreconditionFailed"
+		}
 		return "BucketAlreadyExists"
 	case resource.CodeConflict:
 		return "BucketNotEmpty"

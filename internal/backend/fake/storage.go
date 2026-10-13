@@ -101,6 +101,9 @@ func (s storage) PutObject(ctx context.Context, sc backend.Scope, req resource.P
 	if !ok || b.OwnerID != sc.Account {
 		return resource.Object{}, resource.NotFound(resource.KindBucket, req.Bucket.String())
 	}
+	if _, exists := s.w.obj[objectKey(req.Bucket, req.Key)]; exists && req.IfNoneMatch {
+		return resource.Object{}, resource.AlreadyExists(resource.KindObject, req.Key.String())
+	}
 	sum := md5.Sum(buf)
 	obj := &storedObject{
 		meta: resource.Object{

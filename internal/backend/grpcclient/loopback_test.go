@@ -1022,6 +1022,35 @@ func (s *objectSrv) ReadObject(ctx context.Context, req *storagev1.ReadObjectReq
 	return &storagev1.ReadObjectResponse{Contents: body, Object: objectProto(obj, projectID)}, nil
 }
 
+// CreateObject keeps the vws-storage rule: an existing object with the same
+// bytes is accepted as a create, and different bytes are ALREADY_EXISTS.
+func (s *objectSrv) CreateObject(ctx context.Context, req *storagev1.CreateObjectRequest) (*longrunningpb.Operation, error) {
+	name := req.GetParent() + "/objects/" + req.GetObjectId()
+	projectID, account, bucket, key, err := objectRef(name)
+	if err != nil {
+		return nil, toStatus(err)
+	}
+	scope := backend.Scope{Account: account}
+	if obj, rc, err := s.w.set.Storage.GetObject(ctx, scope, resource.GetObjectRequest{Bucket: bucket, Key: key}); err == nil {
+		stored, readErr := io.ReadAll(rc)
+		_ = rc.Close()
+		if readErr != nil {
+			return nil, toStatus(resource.Internal(readErr))
+		}
+		if !bytes.Equal(stored, req.GetContents()) {
+			return nil, toStatus(resource.AlreadyExists(resource.KindUnspecified, name))
+		}
+		return doneResource(projectID, req.GetRequestId(), name, objectProto(obj, projectID), s.w.now)
+	}
+	obj, err := s.w.set.Storage.PutObject(ctx, scope, resource.PutObjectRequest{
+		Bucket: bucket, Key: key, ContentType: req.GetObject().GetSpec().GetContentType(), Size: int64(len(req.GetContents())),
+	}, bytes.NewReader(req.GetContents()))
+	if err != nil {
+		return nil, toStatus(err)
+	}
+	return doneResource(projectID, req.GetRequestId(), name, objectProto(obj, projectID), s.w.now)
+}
+
 func (s *objectSrv) UpdateObject(ctx context.Context, req *storagev1.UpdateObjectRequest) (*longrunningpb.Operation, error) {
 	if !objectMaskMatches(req.GetUpdateMask()) {
 		return nil, toStatus(resource.Unimplemented("object field mask"))
