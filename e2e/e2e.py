@@ -174,10 +174,20 @@ def objects():
         keys = [o["Key"] for page in pages for o in page.get("Contents", [])]
         check(keys == sorted(keys) and len(keys) == len(set(keys)) >= 3, f"keys {keys}")
     step("S3 ListObjects marker pages", v1_pages)
-    step("S3 PutObject If-None-Match * new key", lambda: s3.put_object(Bucket=b, Key="once", Body=b"1", IfNoneMatch="*"))
+    def put_once(body):
+        # Set the header on the wire instead of passing IfNoneMatch=, which
+        # only botocore releases from late 2024 accept. Signed like any header.
+        def add(request, **_):
+            request.headers["If-None-Match"] = "*"
+        s3.meta.events.register_first("before-sign.s3.PutObject", add)
+        try:
+            return s3.put_object(Bucket=b, Key="once", Body=body)
+        finally:
+            s3.meta.events.unregister("before-sign.s3.PutObject", add)
+    step("S3 PutObject If-None-Match * new key", lambda: put_once(b"1"))
     for body in (b"1", b"2"):
         step(f"S3 PutObject If-None-Match * existing key ({body!r}) is 412", lambda body=body: missing(
-            "PreconditionFailed", 412, lambda: s3.put_object(Bucket=b, Key="once", Body=body, IfNoneMatch="*")))
+            "PreconditionFailed", 412, lambda: put_once(body)))
     step("S3 GetObject after refused put", lambda: get("once", b"1"))
     step("S3 DeleteObject once", lambda: s3.delete_object(Bucket=b, Key="once"))
     step("S3 DeleteObject", lambda: s3.delete_object(Bucket=b, Key="top"))
