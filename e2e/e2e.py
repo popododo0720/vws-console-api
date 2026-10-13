@@ -82,6 +82,16 @@ def network():
     step("CreateVolume VolumeType=standard", standard_volume)
     step("DescribeVolumes has CreateTime", lambda: check(
         all("CreateTime" in v for v in ec2.describe_volumes()["Volumes"]), "CreateTime missing"))
+    def restore():
+        snap = ec2.create_snapshot(VolumeId=S["vol"])["SnapshotId"]
+        ec2.get_waiter("snapshot_completed").wait(SnapshotIds=[snap], WaiterConfig={"Delay": 1, "MaxAttempts": 30})
+        vol = ec2.create_volume(AvailabilityZone="vws-1a", SnapshotId=snap)
+        got = ec2.describe_volumes(VolumeIds=[vol["VolumeId"]])["Volumes"][0]
+        ec2.get_waiter("volume_available").wait(VolumeIds=[vol["VolumeId"]], WaiterConfig={"Delay": 1, "MaxAttempts": 30})
+        ec2.delete_volume(VolumeId=vol["VolumeId"])
+        check(got.get("SnapshotId") == snap and got["Size"] == 10, f"restored {got}")
+        S["restored_snap"] = snap
+    step("CreateVolume SnapshotId (restore)", restore)
     for name, fn in [
         ("DescribeVpcs", ec2.describe_vpcs), ("DescribeSubnets", ec2.describe_subnets),
         ("DescribeSecurityGroups", ec2.describe_security_groups), ("DescribeKeyPairs", ec2.describe_key_pairs),
@@ -195,6 +205,8 @@ def objects():
 
 
 def cleanup():
+    if S.get("restored_snap"):
+        step("DeleteSnapshot", lambda: ec2.delete_snapshot(SnapshotId=S["restored_snap"]))
     step("DeleteVolume", lambda: ec2.delete_volume(VolumeId=S["vol"]))
     step("DeleteKeyPair", lambda: ec2.delete_key_pair(KeyName="k1"))
     step("DeleteSecurityGroup", lambda: ec2.delete_security_group(GroupId=S["sg"]))
