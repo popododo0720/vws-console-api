@@ -92,6 +92,10 @@ def run_instance(token):
 def network():
     S["vpc"] = step("CreateVpc", lambda: ec2.create_vpc(CidrBlock="10.0.0.0/16")["Vpc"]["VpcId"])
     S["subnet"] = step("CreateSubnet", lambda: ec2.create_subnet(VpcId=S["vpc"], CidrBlock="10.0.1.0/24")["Subnet"]["SubnetId"])
+    def subnet_with_zone():
+        sid = ec2.create_subnet(VpcId=S["vpc"], CidrBlock="10.0.2.0/24", AvailabilityZone="vws-1a")["Subnet"]["SubnetId"]
+        ec2.delete_subnet(SubnetId=sid)
+    step("CreateSubnet AvailabilityZone=vws-1a", subnet_with_zone)
     S["sg"] = step("CreateSecurityGroup", lambda: ec2.create_security_group(GroupName="web", Description="d", VpcId=S["vpc"])["GroupId"])
     step("CreateKeyPair", lambda: ec2.create_key_pair(KeyName="k1"))
     S["vol"] = step("CreateVolume", lambda: ec2.create_volume(AvailabilityZone="vws-1a", Size=10, ClientToken="v0")["VolumeId"])
@@ -147,6 +151,8 @@ def not_found():
         ("DeleteSubnet", "InvalidSubnetID.NotFound", lambda: ec2.delete_subnet(SubnetId="subnet-00000000000000000")),
         ("StopInstances", "InvalidInstanceID.NotFound", lambda: ec2.stop_instances(InstanceIds=["i-00000000000000000"])),
         ("ReleaseAddress", "InvalidAllocationID.NotFound", lambda: ec2.release_address(AllocationId="eipalloc-00000000000000000")),
+        ("AssociateAddress", "InvalidAllocationID.NotFound", lambda: ec2.associate_address(
+            AllocationId="eipalloc-00000000000000000", InstanceId="i-00000000000000000")),
     ]:
         step(f"{name} missing is {code}", lambda code=code, call=call: ec2_error(code, call))
 
@@ -165,9 +171,29 @@ def vms():
         step("wait for stopped", lambda: wait_state(S["iid"], "stopped"), "vm")
         step("StartInstances", lambda: ec2.start_instances(InstanceIds=[S["iid"]]), "vm")
         step("wait for running", lambda: wait_state(S["iid"], "running"), "vm")
+        associate()
         step("TerminateInstances", lambda: ec2.terminate_instances(InstanceIds=[S["iid"]]), "vm")
     else:
         step("RunInstances follow-ups", lambda: None, "vm")
+
+
+def associate():
+    need = "eip" if "vm" in CAPS else "vm"
+    alloc = step("AllocateAddress for AssociateAddress", lambda: ec2.allocate_address(Domain="vpc")["AllocationId"], need)
+    if not alloc:
+        step("AssociateAddress follow-ups", lambda: None, need)
+        return
+    S["assoc"] = step("AssociateAddress", lambda: ec2.associate_address(
+        AllocationId=alloc, InstanceId=S["iid"])["AssociationId"], need)
+
+    def described():
+        got = ec2.describe_addresses(AllocationIds=[alloc])["Addresses"][0]
+        check(got.get("InstanceId") == S["iid"] and got.get("AssociationId") == S["assoc"], f"address {got}")
+    step("DescribeAddresses shows the association", described, need)
+    step("DisassociateAddress", lambda: ec2.disassociate_address(AssociationId=S["assoc"]), need)
+    step("DescribeAddresses after DisassociateAddress", lambda: check(
+        "InstanceId" not in ec2.describe_addresses(AllocationIds=[alloc])["Addresses"][0], "still associated"), need)
+    step("ReleaseAddress after DisassociateAddress", lambda: ec2.release_address(AllocationId=alloc), need)
 
 
 def addresses():

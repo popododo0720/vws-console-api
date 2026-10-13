@@ -117,6 +117,10 @@ func (h *handler) serve(w http.ResponseWriter, r *http.Request) {
 		h.createSnapshot(w, r, caller)
 	case resource.ActionDeleteSnapshot.String():
 		h.deleteSnapshot(w, r, caller)
+	case resource.ActionAssociateAddress.String():
+		h.associateAddress(w, r, caller)
+	case resource.ActionDisassociateAddress.String():
+		h.disassociateAddress(w, r, caller)
 	case "DescribeInstances":
 		h.describeInstances(w, r, caller)
 	case "DescribeSubnets":
@@ -222,7 +226,7 @@ func (h *handler) createSubnet(w http.ResponseWriter, r *http.Request, c resourc
 			return
 		}
 	}
-	acc, err := h.svc.CreateSubnet(r.Context(), c, token, resource.CreateSubnetRequest{Cidr: r.Form.Get("CidrBlock"), VpcID: vpc})
+	acc, err := h.svc.CreateSubnet(r.Context(), c, token, resource.CreateSubnetRequest{Cidr: r.Form.Get("CidrBlock"), VpcID: vpc, Zone: r.Form.Get("AvailabilityZone")})
 	if err != nil {
 		writeErr(w, r, err)
 		return
@@ -501,6 +505,10 @@ func rejectUnknown(r *http.Request, action string) error {
 		allow = allowCreateSnapshot
 	case resource.ActionDeleteSnapshot.String():
 		allow = allowDeleteSnapshot
+	case resource.ActionAssociateAddress.String():
+		allow = allowAssociateAddress
+	case resource.ActionDisassociateAddress.String():
+		allow = allowDisassociateAddress
 	case "DescribeInstances":
 		allow = allowDescribeInstances
 	case "DescribeSubnets":
@@ -548,7 +556,7 @@ func allowStop(key string) bool {
 }
 
 func allowSubnet(key string) bool {
-	return key == "Action" || key == "Version" || key == "ClientToken" || key == "CidrBlock" || key == "VpcId"
+	return key == "Action" || key == "Version" || key == "ClientToken" || key == "CidrBlock" || key == "VpcId" || key == "AvailabilityZone"
 }
 
 func allowCreateVpc(key string) bool {
@@ -604,6 +612,14 @@ func allowAllocateAddress(key string) bool {
 
 func allowReleaseAddress(key string) bool {
 	return key == "Action" || key == "Version" || key == "ClientToken" || key == "AllocationId"
+}
+
+func allowAssociateAddress(key string) bool {
+	return key == "Action" || key == "Version" || key == "ClientToken" || key == "AllocationId" || key == "InstanceId"
+}
+
+func allowDisassociateAddress(key string) bool {
+	return key == "Action" || key == "Version" || key == "ClientToken" || key == "AssociationId"
 }
 
 func allowCreateSnapshot(key string) bool {

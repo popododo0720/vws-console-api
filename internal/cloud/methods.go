@@ -272,6 +272,24 @@ func (s *Service) ReleaseAddress(ctx context.Context, c resource.Caller, token r
 	return mutate(ctx, s, c, token, req, s.backends.Network.ReleaseAddress)
 }
 
+// AssociateAddress attaches an address to an instance and returns the operation.
+func (s *Service) AssociateAddress(ctx context.Context, c resource.Caller, token resource.ClientToken, req resource.AssociateAddressRequest) (resource.Accepted[resource.Address], error) {
+	token, err := fillToken(token)
+	if err != nil {
+		return resource.Accepted[resource.Address]{}, err
+	}
+	return mutate(ctx, s, c, token, req, s.backends.Network.AssociateAddress)
+}
+
+// DisassociateAddress detaches an address and returns the operation.
+func (s *Service) DisassociateAddress(ctx context.Context, c resource.Caller, token resource.ClientToken, req resource.DisassociateAddressRequest) (resource.Accepted[resource.Address], error) {
+	token, err := fillToken(token)
+	if err != nil {
+		return resource.Accepted[resource.Address]{}, err
+	}
+	return mutate(ctx, s, c, token, req, s.backends.Network.DisassociateAddress)
+}
+
 // DescribeAddresses lists addresses the caller owns.
 func (s *Service) DescribeAddresses(ctx context.Context, c resource.Caller, q resource.AddressQuery) (resource.Page[resource.Address], error) {
 	return readPage(ctx, c, q, s.backends.Network.DescribeAddresses)

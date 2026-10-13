@@ -115,6 +115,10 @@ func (h *handler) mutation(action resource.Action) (string, string, http.Handler
 		return http.MethodPost, "/api/v1/snapshots", h.createSnapshot
 	case resource.ActionDeleteSnapshot:
 		return http.MethodPost, "/api/v1/snapshots/{id}/delete", h.deleteSnapshot
+	case resource.ActionAssociateAddress:
+		return http.MethodPost, "/api/v1/addresses/{id}/associate", h.associateAddress
+	case resource.ActionDisassociateAddress:
+		return http.MethodPost, "/api/v1/addresses/{id}/disassociate", h.disassociateAddress
 	default:
 		return http.MethodGet, "/api/v1/unsupported", func(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, r, resource.Unimplemented(action.String()))

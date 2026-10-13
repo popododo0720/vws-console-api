@@ -161,6 +161,48 @@ func (h *handler) releaseAddress(w http.ResponseWriter, r *http.Request, c resou
 	writeXML(w, releaseAddressXML{RequestID: requestID(r), Return: true})
 }
 
+func (h *handler) associateAddress(w http.ResponseWriter, r *http.Request, c resource.Caller) {
+	token, err := optionalClientToken(r)
+	if err != nil {
+		writeErr(w, r, err)
+		return
+	}
+	id, err := resource.Parse[resource.AddressID](r.Form.Get("AllocationId"))
+	if err != nil {
+		writeErr(w, r, err)
+		return
+	}
+	inst, err := resource.Parse[resource.InstanceID](r.Form.Get("InstanceId"))
+	if err != nil {
+		writeErr(w, r, err)
+		return
+	}
+	acc, err := h.svc.AssociateAddress(r.Context(), c, token, resource.AssociateAddressRequest{ID: id, InstanceID: inst})
+	if err != nil {
+		writeErr(w, r, err)
+		return
+	}
+	writeXML(w, associateAddressXML{RequestID: requestID(r), Return: true, AssociationID: resource.AssociationID(acc.Items[0].ID)})
+}
+
+func (h *handler) disassociateAddress(w http.ResponseWriter, r *http.Request, c resource.Caller) {
+	token, err := optionalClientToken(r)
+	if err != nil {
+		writeErr(w, r, err)
+		return
+	}
+	id, err := resource.ParseAssociationID(r.Form.Get("AssociationId"))
+	if err != nil {
+		writeErr(w, r, err)
+		return
+	}
+	if _, err := h.svc.DisassociateAddress(r.Context(), c, token, resource.DisassociateAddressRequest{ID: id}); err != nil {
+		writeErr(w, r, err)
+		return
+	}
+	writeXML(w, disassociateAddressXML{RequestID: requestID(r), Return: true})
+}
+
 func (h *handler) describeAddresses(w http.ResponseWriter, r *http.Request, c resource.Caller) {
 	ids, err := indexedIDs[resource.AddressID](r, "AllocationId")
 	if err != nil {

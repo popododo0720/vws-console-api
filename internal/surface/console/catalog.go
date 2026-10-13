@@ -132,6 +132,48 @@ func (h *handler) releaseAddress(w http.ResponseWriter, r *http.Request) {
 	writeAccepted(w, r, acc)
 }
 
+func (h *handler) associateAddress(w http.ResponseWriter, r *http.Request) {
+	c, token, ok := h.begin(w, r)
+	if !ok {
+		return
+	}
+	var req resource.AssociateAddressRequest
+	if err := decode(w, r, &req); err != nil {
+		writeErr(w, r, err)
+		return
+	}
+	id, err := resource.Parse[resource.AddressID](r.PathValue("id"))
+	if err != nil {
+		writeErr(w, r, err)
+		return
+	}
+	req.ID = id
+	acc, err := h.svc.AssociateAddress(r.Context(), c, token, req)
+	if err != nil {
+		writeErr(w, r, err)
+		return
+	}
+	writeAccepted(w, r, acc)
+}
+
+func (h *handler) disassociateAddress(w http.ResponseWriter, r *http.Request) {
+	c, token, ok := h.begin(w, r)
+	if !ok {
+		return
+	}
+	id, err := resource.Parse[resource.AddressID](r.PathValue("id"))
+	if err != nil {
+		writeErr(w, r, err)
+		return
+	}
+	acc, err := h.svc.DisassociateAddress(r.Context(), c, token, resource.DisassociateAddressRequest{ID: id})
+	if err != nil {
+		writeErr(w, r, err)
+		return
+	}
+	writeAccepted(w, r, acc)
+}
+
 func (h *handler) listAddresses(w http.ResponseWriter, r *http.Request) {
 	c, ok := h.caller(w, r)
 	if !ok {

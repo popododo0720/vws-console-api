@@ -163,6 +163,39 @@ func (s *addressSrv) CreateAddress(ctx context.Context, req *networkv1.CreateAdd
 	return runningOp(projectID, acc.Operation, addressName(projectID, acc.Items[0].ID.String()), commonv1.OperationVerb_OPERATION_VERB_CREATE, s.w.now)
 }
 
+// UpdateAddress serves only the spec.association mask, the one the client sends.
+func (s *addressSrv) UpdateAddress(ctx context.Context, req *networkv1.UpdateAddressRequest) (*longrunningpb.Operation, error) {
+	if paths := req.GetUpdateMask().GetPaths(); len(paths) != 1 || paths[0] != "spec.association" {
+		return nil, toStatus(resource.Invalid("updateMask", "unsupported"))
+	}
+	projectID, account, id, err := addressRef(req.GetAddress().GetName())
+	if err != nil {
+		return nil, toStatus(err)
+	}
+	fp, err := protoFingerprint(req)
+	if err != nil {
+		return nil, toStatus(err)
+	}
+	m := backend.Mutation{Scope: backend.Scope{Account: account}, Key: req.GetRequestId(), Fingerprint: fp}
+	var acc resource.Accepted[resource.Address]
+	if assoc := req.GetAddress().GetSpec().GetAssociation(); assoc != nil {
+		if assoc.GetDeviceName() != "nic0" {
+			return nil, toStatus(resource.Invalid("deviceName", "no such interface"))
+		}
+		inst, perr := resource.Parse[resource.InstanceID](lastSegment(assoc.GetInstance()))
+		if perr != nil {
+			return nil, toStatus(perr)
+		}
+		acc, err = s.w.set.Network.AssociateAddress(ctx, m, resource.AssociateAddressRequest{ID: id, InstanceID: inst})
+	} else {
+		acc, err = s.w.set.Network.DisassociateAddress(ctx, m, resource.DisassociateAddressRequest{ID: id})
+	}
+	if err != nil {
+		return nil, toStatus(err)
+	}
+	return runningOp(projectID, acc.Operation, addressName(projectID, id.String()), commonv1.OperationVerb_OPERATION_VERB_UPDATE, s.w.now)
+}
+
 func (s *addressSrv) GetAddress(ctx context.Context, req *networkv1.GetAddressRequest) (*networkv1.Address, error) {
 	projectID, account, id, err := addressRef(req.GetName())
 	if err != nil {

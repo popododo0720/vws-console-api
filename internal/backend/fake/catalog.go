@@ -411,3 +411,60 @@ func containsString(values []string, want string) bool {
 	}
 	return false
 }
+
+// AssociateAddress attaches an address to an instance. Like the network
+// service, one instance holds at most one address.
+func (n network) AssociateAddress(ctx context.Context, m backend.Mutation, req resource.AssociateAddressRequest) (resource.Accepted[resource.Address], error) {
+	if err := ctx.Err(); err != nil {
+		return resource.Accepted[resource.Address]{}, err
+	}
+	n.w.mu.Lock()
+	defer n.w.mu.Unlock()
+	n.w.settle(n.w.now())
+	if acc, ok, err := replay[resource.Accepted[resource.Address]](n.w, m.Key, m.Fingerprint); err != nil || ok {
+		return acc, err
+	}
+	addr, ok := n.w.addr[req.ID]
+	if !ok || addr.OwnerID != m.Account {
+		return resource.Accepted[resource.Address]{}, resource.NotFound(resource.KindAddress, req.ID.String())
+	}
+	inst, ok := n.w.inst[req.InstanceID]
+	if !ok || inst.OwnerID != m.Account || inst.State == resource.InstanceTerminated {
+		return resource.Accepted[resource.Address]{}, resource.NotFound(resource.KindInstance, req.InstanceID.String())
+	}
+	for _, other := range n.w.addr {
+		if other.ID != addr.ID && other.InstanceID == req.InstanceID {
+			return resource.Accepted[resource.Address]{}, resource.Invalid("instanceId", "instance already has an address")
+		}
+	}
+	return n.setAssociation(m, addr, req.InstanceID, resource.ActionAssociateAddress)
+}
+
+// DisassociateAddress detaches an address. An idle address stays idle.
+func (n network) DisassociateAddress(ctx context.Context, m backend.Mutation, req resource.DisassociateAddressRequest) (resource.Accepted[resource.Address], error) {
+	if err := ctx.Err(); err != nil {
+		return resource.Accepted[resource.Address]{}, err
+	}
+	n.w.mu.Lock()
+	defer n.w.mu.Unlock()
+	n.w.settle(n.w.now())
+	if acc, ok, err := replay[resource.Accepted[resource.Address]](n.w, m.Key, m.Fingerprint); err != nil || ok {
+		return acc, err
+	}
+	addr, ok := n.w.addr[req.ID]
+	if !ok || addr.OwnerID != m.Account {
+		return resource.Accepted[resource.Address]{}, resource.NotFound(resource.KindAddress, req.ID.String())
+	}
+	return n.setAssociation(m, addr, resource.InstanceID{}, resource.ActionDisassociateAddress)
+}
+
+func (n network) setAssociation(m backend.Mutation, addr *resource.Address, inst resource.InstanceID, action resource.Action) (resource.Accepted[resource.Address], error) {
+	op, err := n.w.newOp(m.Account, resource.ServiceNetwork, action, []resource.Ref{addr.ID.Ref()}, func(time.Time) {})
+	if err != nil {
+		return resource.Accepted[resource.Address]{}, err
+	}
+	addr.InstanceID = inst
+	acc := resource.Accepted[resource.Address]{Operation: op, Items: []resource.Address{*addr}}
+	n.w.finish(m.Key, m.Fingerprint, acc)
+	return acc, nil
+}
