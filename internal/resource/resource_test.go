@@ -290,3 +290,14 @@ func TestStartRejectedUntilStopped(t *testing.T) {
 		}
 	}
 }
+
+func TestKnownImagesIsNotEmpty(t *testing.T) {
+	owner, err := Parse[AccountID]("123456789012")
+	if err != nil {
+		t.Fatal(err)
+	}
+	images := KnownImages(owner)
+	if len(images) != 1 || images[0].ID.String() != knownImageID || images[0].OwnerID != owner {
+		t.Fatalf("KnownImages = %+v, want one %s owned by %s", images, knownImageID, owner)
+	}
+}

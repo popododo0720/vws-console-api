@@ -1,6 +1,7 @@
 package resource
 
 import (
+	"fmt"
 	"net"
 	"strings"
 	"time"
@@ -457,13 +458,18 @@ func normalizeCIDR(cidr string) (string, error) {
 	return ipNet.String(), nil
 }
 
+// knownImageID is the one machine image this process can launch.
+const knownImageID = "ami-0123456789abcdef0"
+
 // KnownImages is the machine image this process can launch. The owner is the
 // caller, so a describe result passes the tenancy check. It is a function so
 // the catalog is not package state.
 func KnownImages(owner AccountID) []Image {
-	id, err := Parse[ImageID]("ami-0123456789abcdef0")
+	id, err := Parse[ImageID](knownImageID)
 	if err != nil {
-		return nil
+		// The id is a constant. A parse failure is a programming error, and an
+		// empty catalog would hide it as "no images" on every surface.
+		panic(fmt.Sprintf("resource: known image id %q: %v", knownImageID, err))
 	}
 	return []Image{{
 		ID: id, OwnerID: owner, Name: "vws-1", State: "available",
