@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"github.com/popododo0720/vws-console-api/internal/backend"
@@ -52,6 +53,12 @@ func run(ctx context.Context, args []string) (err error) {
 	networkAddr := fs.String("network-addr", "127.0.0.1:19003", "network gRPC address")
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("flags: %w", err)
+	}
+
+	if *backendKind == "grpc" {
+		if err := requireExplicit(fs, "console-token", "access-key", "secret"); err != nil {
+			return err
+		}
 	}
 
 	account, err := resource.Parse[resource.AccountID](*accountRaw)
@@ -100,4 +107,22 @@ func run(ctx context.Context, args []string) (err error) {
 		{Name: "ec2", Addr: *ec2Addr, Handler: ec2query.New(ec2query.Config{Service: svc, Verifier: ec2})},
 		{Name: "s3", Addr: *s3Addr, Handler: s3rest.New(s3rest.Config{Service: svc, Verifier: s3})},
 	}})
+}
+
+// requireExplicit rejects a run that would fall back to a built-in development
+// credential. The defaults (dev-token, AKIDEXAMPLE, secret) are public, so
+// against real backends each credential flag must be given on the command line.
+func requireExplicit(fs *flag.FlagSet, names ...string) error {
+	set := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { set[f.Name] = true })
+	var missing []string
+	for _, name := range names {
+		if !set[name] {
+			missing = append(missing, "-"+name)
+		}
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("-backend=grpc needs explicit %s; the defaults are public development credentials", strings.Join(missing, ", "))
+	}
+	return nil
 }
