@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -25,29 +26,61 @@ type Surface struct {
 // Run serves surfaces until ctx is cancelled or a listener fails.
 // It then shuts the listeners down. In-flight requests get five seconds.
 func Run(ctx context.Context, logger *slog.Logger, surfaces ...Surface) error {
+	return Serve(ctx, Options{Logger: logger, Surfaces: surfaces})
+}
+
+// Options configures Serve.
+type Options struct {
+	Logger   *slog.Logger
+	Surfaces []Surface
+	// OpsAddr, when set, serves /healthz, /readyz, and /metrics on its own
+	// listener. /readyz is 200 while the surfaces serve and 503 once
+	// shutdown starts.
+	OpsAddr string
+}
+
+// Serve is Run with an optional operations listener.
+func Serve(ctx context.Context, opts Options) error {
+	logger := opts.Logger
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
-	servers := make([]*http.Server, 0, len(surfaces))
-	errc := make(chan error, len(surfaces))
+	metrics := NewMetrics()
+	var ready atomic.Bool
+	type listener struct {
+		name    string
+		handler http.Handler
+		addr    string
+	}
+	listeners := make([]listener, 0, len(opts.Surfaces)+1)
+	for _, sf := range opts.Surfaces {
+		listeners = append(listeners, listener{sf.Name, instrument(metrics, sf.Name, wrap(logger, sf.Name, sf.Handler)), sf.Addr})
+	}
+	if opts.OpsAddr != "" {
+		listeners = append(listeners, listener{"ops", opsHandler(metrics, &ready), opts.OpsAddr})
+	}
+	servers := make([]*http.Server, 0, len(listeners))
+	errc := make(chan error, len(listeners))
 	var wg sync.WaitGroup
-	for _, sf := range surfaces {
-		srv := newHTTPServer(sf.Addr, wrap(logger, sf.Name, sf.Handler))
+	for _, l := range listeners {
+		srv := newHTTPServer(l.addr, l.handler)
 		servers = append(servers, srv)
 		wg.Add(1)
 		go func(name string) {
 			defer wg.Done()
-			if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 				errc <- fmt.Errorf("%s: %w", name, err)
 			}
-		}(sf.Name)
+		}(l.name)
 	}
+	ready.Store(true)
 
 	var runErr error
 	select {
 	case <-ctx.Done():
 	case runErr = <-errc:
 	}
+	ready.Store(false)
 	shutCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
 	for _, srv := range servers {
