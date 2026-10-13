@@ -42,6 +42,7 @@ func run(ctx context.Context, args []string) (err error) {
 	consoleAddr := fs.String("console-addr", "127.0.0.1:8080", "console listen address")
 	ec2Addr := fs.String("ec2-addr", "127.0.0.1:8081", "query listen address")
 	s3Addr := fs.String("s3-addr", "127.0.0.1:8082", "object listen address")
+	opsAddr := fs.String("ops-addr", "127.0.0.1:8083", "address for /healthz, /readyz, and /metrics; empty disables it")
 	accountRaw := fs.String("account", "123456789012", "account id for the static credential")
 	consoleToken := fs.String("console-token", "dev-token", "bearer token accepted on the console")
 	accessKey := fs.String("access-key", "AKIDEXAMPLE", "access key accepted by the signature check")
@@ -91,12 +92,12 @@ func run(ctx context.Context, args []string) (err error) {
 
 	ctx, stop := signal.NotifyContext(ctx, stopSignals()...)
 	defer stop()
-	return server.Run(ctx, logger,
-		server.Surface{Name: "console", Addr: *consoleAddr, Handler: console.New(console.Config{
+	return server.Serve(ctx, server.Options{Logger: logger, OpsAddr: *opsAddr, Surfaces: []server.Surface{
+		{Name: "console", Addr: *consoleAddr, Handler: console.New(console.Config{
 			Service: svc,
 			Auth:    console.BearerTokens{*consoleToken: caller},
 		})},
-		server.Surface{Name: "ec2", Addr: *ec2Addr, Handler: ec2query.New(ec2query.Config{Service: svc, Verifier: ec2})},
-		server.Surface{Name: "s3", Addr: *s3Addr, Handler: s3rest.New(s3rest.Config{Service: svc, Verifier: s3})},
-	)
+		{Name: "ec2", Addr: *ec2Addr, Handler: ec2query.New(ec2query.Config{Service: svc, Verifier: ec2})},
+		{Name: "s3", Addr: *s3Addr, Handler: s3rest.New(s3rest.Config{Service: svc, Verifier: s3})},
+	}})
 }

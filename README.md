@@ -29,6 +29,13 @@ go run ./cmd/vws-console-api -backend=fake \
 `-backend=grpc` dials `-compute-addr`, `-storage-addr`, and `-network-addr`.
 The fake backend is in-memory and is gone when the process exits.
 
+`-ops-addr` (default `127.0.0.1:8083`, empty disables it) serves `GET /healthz`
+(the process is up), `GET /readyz` (200 while the surfaces serve, 503 once
+shutdown starts), and `GET /metrics` in the Prometheus text format. Every
+series is prefixed `vws_console_api_`: `http_requests_total{surface,code}` and
+`http_request_duration_seconds_sum`/`_count{surface}`. These live on their own
+listener so no path collides with a bucket name or a console route.
+
 Console:
 
 ```http
