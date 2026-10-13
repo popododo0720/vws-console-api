@@ -70,6 +70,7 @@ change.
 | `CreateKeyPair`'s private key is not the hash published as the key id or the request id. | `TestKeySeedIsNotThePublishedID` |
 | Volume and snapshot create and delete operations are read from the storage service. A subnet in `DELETING` stays a subnet state. | `TestContractOverGRPC` uses a separate storage listener; `TestSubnetDeletingRoundTrip` |
 | A missing resource read by name is `NotFound` of the kind its name's collection names, so EC2 answers `InvalidVolume.NotFound`, `InvalidSnapshot.NotFound`, `InvalidInstanceID.NotFound`, and the like, not `InvalidParameterValue`. | `TestMissingResourceKeepsItsKind`; e2e `not_found` |
+| `DisassociateAddress` on an unknown address or one with no association is `resource.AssociationNotFound`, which EC2 answers 400 `InvalidAssociationID.NotFound`. Over gRPC it is a `GetAddress` that finds neither `spec.association` nor `status.instance`. | `exerciseEC2`; `TestAssociateAndDisassociateAddress`; e2e `not_found` |
 | An unknown ingress protocol is invalid. It is not stored as tcp. | `TestIngressProtocolIsCanonical` |
 | The signature is checked after the access key is known and before the body is trusted. A missing payload hash is the hash of the body. `UNSIGNED-PAYLOAD` is rejected. A query longer than 128 parameters is rejected before it is sorted. | `TestQueryWithoutPayloadHeader`, `TestUnsignedPayloadAndUnreadBody`, `TestTooManyQueryParams` |
 | A resource created on one surface is the same resource, with the same id and state names, on the others. | `internal/surface/interop` |

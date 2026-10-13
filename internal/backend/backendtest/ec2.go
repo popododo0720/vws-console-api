@@ -170,6 +170,16 @@ func exerciseEC2(ctx context.Context, t *testing.T, set backend.Set, account res
 	if err != nil || !idle.Items[0].InstanceID.IsZero() {
 		t.Fatalf("describe disassociated: %v %+v", err, idle.Items)
 	}
+	unknownAddr, err := resource.Parse[resource.AddressID]("eipalloc-00000000000000000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, id := range map[string]resource.AddressID{"idle": eip.Items[0].ID, "unknown": unknownAddr} {
+		_, err := set.Network.DisassociateAddress(ctx, backend.Mutation{Scope: scope, Key: "k-disassoc-" + name, Fingerprint: "fp-disassoc-" + name}, resource.DisassociateAddressRequest{ID: id})
+		if e := resource.AsError(err); e == nil || e.Code != resource.CodeNotFound || e.Kind != resource.KindAddress || e.Field != "associationId" {
+			t.Fatalf("disassociate %s address: %v", name, err)
+		}
+	}
 	if _, err := set.Network.ReleaseAddress(ctx, backend.Mutation{Scope: scope, Key: "k-rel-assoc", Fingerprint: "fp-rel-assoc"}, resource.ReleaseAddressRequest{ID: eip.Items[0].ID}); err != nil {
 		t.Fatal(err)
 	}

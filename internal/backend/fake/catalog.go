@@ -440,7 +440,8 @@ func (n network) AssociateAddress(ctx context.Context, m backend.Mutation, req r
 	return n.setAssociation(m, addr, req.InstanceID, resource.ActionAssociateAddress)
 }
 
-// DisassociateAddress detaches an address. An idle address stays idle.
+// DisassociateAddress detaches an address. An unknown or idle address has no
+// association to remove.
 func (n network) DisassociateAddress(ctx context.Context, m backend.Mutation, req resource.DisassociateAddressRequest) (resource.Accepted[resource.Address], error) {
 	if err := ctx.Err(); err != nil {
 		return resource.Accepted[resource.Address]{}, err
@@ -452,8 +453,8 @@ func (n network) DisassociateAddress(ctx context.Context, m backend.Mutation, re
 		return acc, err
 	}
 	addr, ok := n.w.addr[req.ID]
-	if !ok || addr.OwnerID != m.Account {
-		return resource.Accepted[resource.Address]{}, resource.NotFound(resource.KindAddress, req.ID.String())
+	if !ok || addr.OwnerID != m.Account || addr.InstanceID.IsZero() {
+		return resource.Accepted[resource.Address]{}, resource.AssociationNotFound(req.ID)
 	}
 	return n.setAssociation(m, addr, resource.InstanceID{}, resource.ActionDisassociateAddress)
 }

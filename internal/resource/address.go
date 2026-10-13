@@ -74,6 +74,18 @@ func ParseAssociationID(s string) (AddressID, error) {
 	return id, nil
 }
 
+// AssociationNotFound reports a DisassociateAddress whose association does
+// not exist: the address is unknown, or it has no association. EC2 answers
+// InvalidAssociationID.NotFound for both.
+func AssociationNotFound(id AddressID) *Error {
+	return &Error{Code: CodeNotFound, Kind: KindAddress, ID: AssociationID(id), Field: "associationId", Message: "association not found"}
+}
+
+// IsAssociationNotFound reports whether e came from AssociationNotFound.
+func IsAssociationNotFound(e *Error) bool {
+	return e != nil && e.Code == CodeNotFound && e.Kind == KindAddress && e.Field == "associationId"
+}
+
 // AssociateAddressRequest attaches an address to an instance's network
 // interface. It replaces an existing association.
 type AssociateAddressRequest struct {
@@ -95,7 +107,8 @@ func (r AssociateAddressRequest) Normalize() (AssociateAddressRequest, error) {
 	return r, nil
 }
 
-// DisassociateAddressRequest detaches an address. An idle address stays idle.
+// DisassociateAddressRequest detaches an address. An unknown or idle address
+// is AssociationNotFound.
 type DisassociateAddressRequest struct {
 	ID AddressID `json:"allocationId"`
 }

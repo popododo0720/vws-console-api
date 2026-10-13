@@ -862,6 +862,9 @@ func statusOf(c resource.Code) int {
 func ec2Code(e *resource.Error) string {
 	switch e.Code {
 	case resource.CodeNotFound:
+		if resource.IsAssociationNotFound(e) {
+			return "InvalidAssociationID.NotFound"
+		}
 		return notFoundCode(e.Kind)
 	case resource.CodeInvalidArgument:
 		return "InvalidParameterValue"
