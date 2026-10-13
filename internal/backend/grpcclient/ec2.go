@@ -131,16 +131,29 @@ func (c computeClient) changeInstances(ctx context.Context, m backend.Mutation, 
 
 func (c computeClient) CreateVolume(ctx context.Context, m backend.Mutation, req resource.CreateVolumeRequest) (resource.Accepted[resource.Volume], error) {
 	projectID := project(m.Account)
+	spec := &storagev1.VolumeSpec{SizeGib: req.SizeGiB, Type: storageType(req.Type)}
+	if !req.SnapshotID.IsZero() {
+		// A size of 0 is the snapshot size, which only the snapshot knows.
+		snap, err := c.getSnapshot(ctx, projectID, req.SnapshotID.String())
+		if err != nil {
+			return resource.Accepted[resource.Volume]{}, err
+		}
+		if req.SizeGiB == 0 {
+			req.SizeGiB = snap.VolumeSize
+			spec.SizeGib = snap.VolumeSize
+		}
+		if req.SizeGiB < snap.VolumeSize {
+			return resource.Accepted[resource.Volume]{}, resource.Invalid("size", "smaller than the snapshot")
+		}
+		spec.Source = &storagev1.VolumeSpec_Snapshot{Snapshot: snapshotName(projectID, req.SnapshotID.String())}
+	}
 	created, err := c.volumes.CreateVolume(ctx, &storagev1.CreateVolumeRequest{
 		Parent:    volumeParent(projectID),
 		VolumeId:  derivedID("vol-", m.Key, "blank"),
 		RequestId: requestUUID(m.Key, "blank-vol"),
 		Volume: &storagev1.Volume{
 			Labels: map[string]string{labelFingerprint: clip(m.Fingerprint, 63)},
-			Spec: &storagev1.VolumeSpec{
-				SizeGib: req.SizeGiB,
-				Type:    storageType(req.Type),
-			},
+			Spec:   spec,
 		},
 	})
 	if err := rpcErr(created, err); err != nil {
@@ -578,7 +591,7 @@ func acceptedVolume(op *longrunningpb.Operation, req resource.CreateVolumeReques
 	if err != nil {
 		return resource.Accepted[resource.Volume]{}, err
 	}
-	vol := resource.Volume{ID: id, OwnerID: named, SizeGiB: req.SizeGiB, Zone: req.Zone, Type: req.Type, State: state, CreateTime: parsed.CreateTime}
+	vol := resource.Volume{ID: id, OwnerID: named, SizeGiB: req.SizeGiB, Zone: req.Zone, Type: req.Type, State: state, SnapshotID: req.SnapshotID, CreateTime: parsed.CreateTime}
 	parsed.Action = resource.ActionCreateVolume
 	parsed.Targets = []resource.Ref{id.Ref()}
 	return resource.Accepted[resource.Volume]{Operation: parsed, Items: []resource.Volume{vol}}, nil
@@ -637,8 +650,16 @@ func volumeModel(in *storagev1.Volume) (resource.Volume, error) {
 		}
 		inst = parsed
 	}
+	var snap resource.SnapshotID
+	if name := in.GetSpec().GetSnapshot(); name != "" {
+		parsed, err := resource.Parse[resource.SnapshotID](lastSegment(name))
+		if err != nil {
+			return resource.Volume{}, resource.Internal(err)
+		}
+		snap = parsed
+	}
 	return resource.Volume{
-		ID: id, OwnerID: owner, SizeGiB: in.GetSpec().GetSizeGib(), Zone: parts[3],
+		ID: id, OwnerID: owner, SizeGiB: in.GetSpec().GetSizeGib(), Zone: parts[3], SnapshotID: snap,
 		Type: volumeTypeOf(in.GetSpec().GetType()), State: state, InstanceID: inst, Device: in.GetStatus().GetDeviceName(),
 		CreateTime: in.GetCreateTime().AsTime().UTC(),
 	}, nil
@@ -683,10 +704,14 @@ func volumeProto(v resource.Volume, projectID string) *storagev1.Volume {
 	if !v.CreateTime.IsZero() {
 		created = timestamppb.New(v.CreateTime)
 	}
+	spec := &storagev1.VolumeSpec{SizeGib: v.SizeGiB, Type: storagev1.VolumeType_VOLUME_TYPE_SSD}
+	if !v.SnapshotID.IsZero() {
+		spec.Source = &storagev1.VolumeSpec_Snapshot{Snapshot: snapshotName(projectID, v.SnapshotID.String())}
+	}
 	return &storagev1.Volume{
 		CreateTime: created,
 		Name:       volumeName(projectID, v.ID.String()),
-		Spec:       &storagev1.VolumeSpec{SizeGib: v.SizeGiB, Type: storagev1.VolumeType_VOLUME_TYPE_SSD},
+		Spec:       spec,
 		Status:     status,
 	}
 }
@@ -815,9 +840,10 @@ func ruleProto(rule resource.IngressRule, id string) (*networkv1.SecurityGroupRu
 	}, nil
 }
 
+// sourcedVolume reports a boot volume, which RunInstances creates from an
+// image. A volume restored from a snapshot is a DescribeVolumes row.
 func sourcedVolume(in *storagev1.Volume) bool {
-	spec := in.GetSpec()
-	return spec.GetImage() != "" || spec.GetSnapshot() != ""
+	return in.GetSpec().GetImage() != ""
 }
 
 func protocolName(p networkv1.Protocol) string {

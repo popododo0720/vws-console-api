@@ -352,6 +352,28 @@ func exerciseEC2(ctx context.Context, t *testing.T, set backend.Set, account res
 	if err != nil || len(snaps.Items) != 1 || snaps.Items[0].State != resource.SnapshotCompleted || snaps.Items[0].Description != "daily" {
 		t.Fatalf("describe snapshots: %v %+v", err, snaps.Items)
 	}
+	restored, err := set.Compute.CreateVolume(ctx, backend.Mutation{Scope: scope, Key: "k-restore", Fingerprint: "fp-restore"}, resource.CreateVolumeRequest{
+		Zone: resource.ZoneName, Type: resource.VolumeGP2, SnapshotID: snap.Items[0].ID,
+	})
+	if err != nil || restored.Items[0].SnapshotID != snap.Items[0].ID || restored.Items[0].SizeGiB != snap.Items[0].VolumeSize {
+		t.Fatalf("restore volume: %v %+v", err, restored.Items)
+	}
+	restoredRows, err := set.Compute.DescribeVolumes(ctx, scope, resource.VolumeQuery{
+		IDs: []resource.VolumeID{restored.Items[0].ID}, Page: resource.PageRequest{Size: 50},
+	})
+	if err != nil || len(restoredRows.Items) != 1 || restoredRows.Items[0].SnapshotID != snap.Items[0].ID || restoredRows.Items[0].SizeGiB != snap.Items[0].VolumeSize {
+		t.Fatalf("describe restored volume: %v %+v", err, restoredRows.Items)
+	}
+	if _, err := set.Compute.CreateVolume(ctx, backend.Mutation{Scope: scope, Key: "k-restore-small", Fingerprint: "fp-restore-small"}, resource.CreateVolumeRequest{
+		SizeGiB: snap.Items[0].VolumeSize - 1, Zone: resource.ZoneName, Type: resource.VolumeGP2, SnapshotID: snap.Items[0].ID,
+	}); snap.Items[0].VolumeSize > 1 && resource.CodeOf(err) != resource.CodeInvalidArgument {
+		t.Fatalf("restore smaller than the snapshot: %v", err)
+	}
+	if _, err := set.Compute.DeleteVolume(ctx, backend.Mutation{Scope: scope, Key: "k-del-restore", Fingerprint: "fp-del-restore"}, resource.DeleteVolumeRequest{
+		ID: restored.Items[0].ID,
+	}); err != nil {
+		t.Fatalf("delete restored volume: %v", err)
+	}
 	snapDel := backend.Mutation{Scope: scope, Key: "k-del-snap", Fingerprint: "fp-del-snap"}
 	deletedSnap, err := set.Compute.DeleteSnapshot(ctx, snapDel, resource.DeleteSnapshotRequest{ID: snap.Items[0].ID})
 	if err != nil || deletedSnap.Items[0].ID != snap.Items[0].ID {

@@ -99,6 +99,21 @@ func (c compute) CreateVolume(ctx context.Context, m backend.Mutation, req resou
 	if acc, ok, err := replay[resource.Accepted[resource.Volume]](c.w, m.Key, m.Fingerprint); err != nil || ok {
 		return acc, err
 	}
+	if !req.SnapshotID.IsZero() {
+		snap, ok := c.w.snap[req.SnapshotID]
+		if !ok || snap.OwnerID != m.Account {
+			return resource.Accepted[resource.Volume]{}, resource.NotFound(resource.KindSnapshot, req.SnapshotID.String())
+		}
+		if snap.State != resource.SnapshotCompleted {
+			return resource.Accepted[resource.Volume]{}, resource.Conflict(resource.KindSnapshot, req.SnapshotID.String(), "snapshot is not completed")
+		}
+		if req.SizeGiB == 0 {
+			req.SizeGiB = snap.VolumeSize
+		}
+		if req.SizeGiB < snap.VolumeSize {
+			return resource.Accepted[resource.Volume]{}, resource.Invalid("size", "smaller than the snapshot")
+		}
+	}
 	id, err := resource.Mint[resource.VolumeID](c.w.entropy)
 	if err != nil {
 		return resource.Accepted[resource.Volume]{}, err
@@ -108,7 +123,7 @@ func (c compute) CreateVolume(ctx context.Context, m backend.Mutation, req resou
 	}
 	vol := resource.Volume{
 		ID: id, OwnerID: m.Account, SizeGiB: req.SizeGiB, Zone: req.Zone, Type: req.Type, State: resource.VolumeCreating,
-		CreateTime: c.w.now().UTC(),
+		SnapshotID: req.SnapshotID, CreateTime: c.w.now().UTC(),
 	}
 	op, err := c.w.newOp(m.Account, resource.ServiceCompute, resource.ActionCreateVolume, []resource.Ref{id.Ref()}, func(time.Time) {
 		if cur := c.w.vol[id]; cur != nil && cur.State == resource.VolumeCreating {

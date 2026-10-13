@@ -424,3 +424,37 @@ func TestDescribeAcceptsCLIDefaultMaxResults(t *testing.T) {
 		}
 	}
 }
+
+func TestCreateVolumeFromSnapshot(t *testing.T) {
+	h, cred, now := harness(t)
+	call := func(kv ...string) (int, string) {
+		form := url.Values{}
+		form.Set("Version", Version)
+		for i := 0; i < len(kv); i += 2 {
+			form.Set(kv[i], kv[i+1])
+		}
+		res := signed(t, h, cred, now, form.Encode())
+		return res.Code, res.Body.String()
+	}
+	code, body := call("Action", "CreateVolume", "AvailabilityZone", "vws-1a", "Size", "3")
+	if code != http.StatusOK {
+		t.Fatalf("create: %d %s", code, body)
+	}
+	code, body = call("Action", "CreateSnapshot", "VolumeId", between(body, "<volumeId>", "</volumeId>"))
+	if code != http.StatusOK {
+		t.Fatalf("snapshot: %d %s", code, body)
+	}
+	snap := between(body, "<snapshotId>", "</snapshotId>")
+	code, body = call("Action", "CreateVolume", "AvailabilityZone", "vws-1a", "SnapshotId", snap)
+	if code != http.StatusOK || between(body, "<snapshotId>", "</snapshotId>") != snap || between(body, "<size>", "</size>") != "3" {
+		t.Fatalf("restore: %d %s", code, body)
+	}
+	code, body = call("Action", "DescribeVolumes", "VolumeId.1", between(body, "<volumeId>", "</volumeId>"))
+	if code != http.StatusOK || between(body, "<snapshotId>", "</snapshotId>") != snap {
+		t.Fatalf("describe: %d %s", code, body)
+	}
+	code, body = call("Action", "CreateVolume", "AvailabilityZone", "vws-1a", "SnapshotId", "snap-00000000000000000")
+	if code != http.StatusBadRequest || !strings.Contains(body, "<Code>InvalidSnapshot.NotFound</Code>") {
+		t.Fatalf("missing snapshot: %d %s", code, body)
+	}
+}

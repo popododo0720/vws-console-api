@@ -98,6 +98,7 @@ type Volume struct {
 	State      VolumeState `json:"state"`
 	InstanceID InstanceID  `json:"instanceId,omitempty"`
 	Device     string      `json:"device,omitempty"`
+	SnapshotID SnapshotID  `json:"snapshotId,omitzero"`
 	CreateTime time.Time   `json:"createTime"`
 }
 
@@ -119,15 +120,18 @@ const (
 
 // CreateVolumeRequest allocates a volume.
 type CreateVolumeRequest struct {
-	SizeGiB int64      `json:"size"`
-	Zone    string     `json:"availabilityZone"`
-	Type    VolumeType `json:"volumeType,omitempty"`
+	SizeGiB    int64      `json:"size"`
+	Zone       string     `json:"availabilityZone"`
+	Type       VolumeType `json:"volumeType,omitempty"`
+	SnapshotID SnapshotID `json:"snapshotId,omitzero"`
 }
 
 // Action returns CreateVolume.
 func (CreateVolumeRequest) Action() Action { return ActionCreateVolume }
 
 // Normalize checks the size, zone, and type. The type defaults to gp2.
+// A volume restored from a snapshot may leave the size 0, which is the
+// snapshot size.
 func (r CreateVolumeRequest) Normalize() (CreateVolumeRequest, error) {
 	switch r.Type {
 	case "":
@@ -136,7 +140,7 @@ func (r CreateVolumeRequest) Normalize() (CreateVolumeRequest, error) {
 	default:
 		return CreateVolumeRequest{}, Invalid("volumeType", "unsupported")
 	}
-	if r.SizeGiB < 1 || r.SizeGiB > 16384 {
+	if (r.SizeGiB < 1 && (r.SizeGiB != 0 || r.SnapshotID.IsZero())) || r.SizeGiB > 16384 {
 		return CreateVolumeRequest{}, Invalid("size", "must be from 1 to 16384")
 	}
 	if r.Zone == "" {
