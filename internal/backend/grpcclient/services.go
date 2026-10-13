@@ -288,9 +288,10 @@ func (c computeClient) actionFromInstance(ctx context.Context, s backend.Scope, 
 }
 
 func (c computeClient) getInstance(ctx context.Context, projectID, id string) (resource.Instance, error) {
-	out, err := c.instances.GetInstance(ctx, &computev1.GetInstanceRequest{Name: instanceName(projectID, id)})
+	name := instanceName(projectID, id)
+	out, err := c.instances.GetInstance(ctx, &computev1.GetInstanceRequest{Name: name})
 	if err != nil {
-		return resource.Instance{}, fromRPC(err)
+		return resource.Instance{}, fromNamedRPC(name, err)
 	}
 	return instanceModel(out)
 }

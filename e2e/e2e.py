@@ -127,6 +127,30 @@ def network():
         ec2.describe_volumes(MaxResults=1000)["Volumes"], "no volumes"))
 
 
+def ec2_error(code, call):
+    try:
+        call()
+    except ec2.exceptions.ClientError as exc:
+        got = exc.response["Error"]["Code"]
+        check(got == code, f"{got} != {code}")
+        return
+    raise AssertionError("no error")
+
+
+def not_found():
+    vol, snap, vpc = "vol-00000000000000000", "snap-00000000000000000", "vpc-00000000000000000"
+    for name, code, call in [
+        ("DeleteVolume", "InvalidVolume.NotFound", lambda: ec2.delete_volume(VolumeId=vol)),
+        ("CreateSnapshot", "InvalidVolume.NotFound", lambda: ec2.create_snapshot(VolumeId=vol)),
+        ("DeleteSnapshot", "InvalidSnapshot.NotFound", lambda: ec2.delete_snapshot(SnapshotId=snap)),
+        ("DeleteVpc", "InvalidVpcID.NotFound", lambda: ec2.delete_vpc(VpcId=vpc)),
+        ("DeleteSubnet", "InvalidSubnetID.NotFound", lambda: ec2.delete_subnet(SubnetId="subnet-00000000000000000")),
+        ("StopInstances", "InvalidInstanceID.NotFound", lambda: ec2.stop_instances(InstanceIds=["i-00000000000000000"])),
+        ("ReleaseAddress", "InvalidAllocationID.NotFound", lambda: ec2.release_address(AllocationId="eipalloc-00000000000000000")),
+    ]:
+        step(f"{name} missing is {code}", lambda code=code, call=call: ec2_error(code, call))
+
+
 def vms():
     S["iid"] = step("RunInstances", lambda: run_instance("tok-1"), "vm")
 
@@ -221,6 +245,7 @@ def cleanup():
 if __name__ == "__main__":
     print(f"backend={BACKEND} caps={sorted(CAPS) or 'none'}")
     network()
+    not_found()
     vms()
     addresses()
     objects()

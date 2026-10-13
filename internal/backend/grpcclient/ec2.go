@@ -168,11 +168,10 @@ func (c computeClient) AttachVolume(ctx context.Context, m backend.Mutation, req
 	if err != nil {
 		return resource.Accepted[resource.Volume]{}, err
 	}
-	inst, err := c.instances.GetInstance(ctx, &computev1.GetInstanceRequest{
-		Name: instanceName(projectID, req.InstanceID.String()),
-	})
+	instName := instanceName(projectID, req.InstanceID.String())
+	inst, err := c.instances.GetInstance(ctx, &computev1.GetInstanceRequest{Name: instName})
 	if err != nil {
-		return resource.Accepted[resource.Volume]{}, fromRPC(err)
+		return resource.Accepted[resource.Volume]{}, fromNamedRPC(instName, err)
 	}
 	volumes := append([]*computev1.VolumeAttachment{}, inst.GetSpec().GetVolumes()...)
 	volumes = append(volumes, &computev1.VolumeAttachment{
@@ -527,9 +526,10 @@ func (c networkClient) AuthorizeSecurityGroupIngress(ctx context.Context, m back
 }
 
 func (c computeClient) getVolume(ctx context.Context, projectID, id string) (resource.Volume, error) {
-	out, err := c.volumes.GetVolume(ctx, &storagev1.GetVolumeRequest{Name: volumeName(projectID, id)})
+	name := volumeName(projectID, id)
+	out, err := c.volumes.GetVolume(ctx, &storagev1.GetVolumeRequest{Name: name})
 	if err != nil {
-		return resource.Volume{}, fromRPC(err)
+		return resource.Volume{}, fromNamedRPC(name, err)
 	}
 	if sourcedVolume(out) {
 		return resource.Volume{}, resource.NotFound(resource.KindVolume, id)
@@ -538,9 +538,10 @@ func (c computeClient) getVolume(ctx context.Context, projectID, id string) (res
 }
 
 func (c networkClient) getVpc(ctx context.Context, projectID, id string) (resource.Vpc, error) {
-	out, err := c.vpcs.GetVpc(ctx, &networkv1.GetVpcRequest{Name: vpcName(projectID, id)})
+	name := vpcName(projectID, id)
+	out, err := c.vpcs.GetVpc(ctx, &networkv1.GetVpcRequest{Name: name})
 	if err != nil {
-		return resource.Vpc{}, fromRPC(err)
+		return resource.Vpc{}, fromNamedRPC(name, err)
 	}
 	return vpcModel(out)
 }

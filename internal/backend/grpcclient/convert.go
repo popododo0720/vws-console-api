@@ -673,3 +673,34 @@ func codeFromGRPC(c codes.Code) resource.Code {
 		return resource.CodeInternal
 	}
 }
+
+// fromNamedRPC is fromRPC for a call on one named resource. The VWS services
+// report a missing resource as RESOURCE_NOT_FOUND without saying which kind,
+// so the kind comes from the collection in the name the client sent.
+func fromNamedRPC(name string, err error) error {
+	mapped := fromRPC(err)
+	if e := resource.AsError(mapped); e == nil || e.Code != resource.CodeNotFound || e.Kind != resource.KindUnspecified {
+		return mapped
+	}
+	parent, id := name[:max(strings.LastIndex(name, "/"), 0)], lastSegment(name)
+	collection := lastSegment(parent)
+	for _, row := range []struct {
+		collection string
+		kind       resource.Kind
+	}{
+		{"instances", resource.KindInstance},
+		{"volumes", resource.KindVolume},
+		{"snapshots", resource.KindSnapshot},
+		{"images", resource.KindImage},
+		{"keyPairs", resource.KindKeyPair},
+		{"vpcs", resource.KindVpc},
+		{"subnets", resource.KindSubnet},
+		{"securityGroups", resource.KindSecurityGroup},
+		{"addresses", resource.KindAddress},
+	} {
+		if row.collection == collection {
+			return resource.NotFound(row.kind, id)
+		}
+	}
+	return mapped
+}
