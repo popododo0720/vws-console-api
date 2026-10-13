@@ -698,7 +698,7 @@ func (s *volumeSrv) CreateVolume(ctx context.Context, req *storagev1.CreateVolum
 		return nil, toStatus(err)
 	}
 	spec := req.GetVolume().GetSpec()
-	if spec.GetImage() != "" || spec.GetSnapshot() != "" {
+	if spec.GetImage() != "" {
 		name := volumeName(projectID, req.GetVolumeId())
 		fp, err := protoFingerprint(req)
 		if err != nil {
@@ -724,9 +724,16 @@ func (s *volumeSrv) CreateVolume(ctx context.Context, req *storagev1.CreateVolum
 	if err != nil {
 		return nil, toStatus(err)
 	}
+	var snap resource.SnapshotID
+	if name := spec.GetSnapshot(); name != "" {
+		_, _, snap, err = snapshotRef(name)
+		if err != nil {
+			return nil, toStatus(err)
+		}
+	}
 	acc, err := s.w.set.Compute.CreateVolume(ctx, backend.Mutation{
 		Scope: backend.Scope{Account: account}, Key: req.GetRequestId(), Fingerprint: fp,
-	}, resource.CreateVolumeRequest{SizeGiB: spec.GetSizeGib(), Zone: resource.ZoneName})
+	}, resource.CreateVolumeRequest{SizeGiB: spec.GetSizeGib(), Zone: resource.ZoneName, SnapshotID: snap})
 	if err != nil {
 		return nil, toStatus(err)
 	}
