@@ -21,7 +21,7 @@ func (h *handler) deleteKeyPair(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, r, err)
 		return
 	}
-	writeAccepted(w, r, acc)
+	writeAccepted(w, acc)
 }
 
 func (h *handler) listKeyPairs(w http.ResponseWriter, r *http.Request) {
@@ -57,7 +57,7 @@ func (h *handler) deleteSecurityGroup(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, r, err)
 		return
 	}
-	writeAccepted(w, r, acc)
+	writeAccepted(w, acc)
 }
 
 func (h *handler) listSecurityGroups(w http.ResponseWriter, r *http.Request) {
@@ -93,7 +93,7 @@ func (h *handler) deleteSubnet(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, r, err)
 		return
 	}
-	writeAccepted(w, r, acc)
+	writeAccepted(w, acc)
 }
 
 func (h *handler) allocateAddress(w http.ResponseWriter, r *http.Request) {
@@ -111,7 +111,7 @@ func (h *handler) allocateAddress(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, r, err)
 		return
 	}
-	writeAccepted(w, r, acc)
+	writeAccepted(w, acc)
 }
 
 func (h *handler) releaseAddress(w http.ResponseWriter, r *http.Request) {
@@ -129,7 +129,7 @@ func (h *handler) releaseAddress(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, r, err)
 		return
 	}
-	writeAccepted(w, r, acc)
+	writeAccepted(w, acc)
 }
 
 func (h *handler) associateAddress(w http.ResponseWriter, r *http.Request) {
@@ -207,7 +207,7 @@ func (h *handler) createSnapshot(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, r, err)
 		return
 	}
-	writeAccepted(w, r, acc)
+	writeAccepted(w, acc)
 }
 
 func (h *handler) deleteSnapshot(w http.ResponseWriter, r *http.Request) {
@@ -225,7 +225,7 @@ func (h *handler) deleteSnapshot(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, r, err)
 		return
 	}
-	writeAccepted(w, r, acc)
+	writeAccepted(w, acc)
 }
 
 func (h *handler) listSnapshots(w http.ResponseWriter, r *http.Request) {
