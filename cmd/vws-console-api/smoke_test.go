@@ -21,6 +21,7 @@ func TestFakeProcessSmoke(t *testing.T) {
 	consoleAddr := freeAddr(t)
 	ec2Addr := freeAddr(t)
 	s3Addr := freeAddr(t)
+	opsAddr := freeAddr(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	errc := make(chan error, 1)
 	go func() {
@@ -29,6 +30,7 @@ func TestFakeProcessSmoke(t *testing.T) {
 			"-console-addr=" + consoleAddr,
 			"-ec2-addr=" + ec2Addr,
 			"-s3-addr=" + s3Addr,
+			"-ops-addr=" + opsAddr,
 		})
 	}()
 	t.Cleanup(func() {
@@ -45,6 +47,21 @@ func TestFakeProcessSmoke(t *testing.T) {
 	waitListen(t, ec2Addr)
 	waitListen(t, s3Addr)
 	waitListen(t, consoleAddr)
+	waitListen(t, opsAddr)
+	for _, path := range []string{"/healthz", "/readyz", "/metrics"} {
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://"+opsAddr+path, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("%s: %v", path, err)
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("%s %d", path, resp.StatusCode)
+		}
+	}
 
 	account, err := resource.Parse[resource.AccountID]("123456789012")
 	if err != nil {

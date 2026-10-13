@@ -24,8 +24,6 @@ const (
 	ServiceS3  Service = "s3"
 )
 
-func (s Service) String() string { return string(s) }
-
 // Credential is the secret half of an access key.
 type Credential struct {
 	AccessKey string

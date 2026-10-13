@@ -21,7 +21,7 @@ func (h *handler) createVpc(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, r, err)
 		return
 	}
-	writeAccepted(w, r, acc)
+	writeAccepted(w, acc)
 }
 
 func (h *handler) deleteVpc(w http.ResponseWriter, r *http.Request) {
@@ -39,7 +39,7 @@ func (h *handler) deleteVpc(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, r, err)
 		return
 	}
-	writeAccepted(w, r, acc)
+	writeAccepted(w, acc)
 }
 
 func (h *handler) listVpcs(w http.ResponseWriter, r *http.Request) {
@@ -75,7 +75,7 @@ func (h *handler) createVolume(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, r, err)
 		return
 	}
-	writeAccepted(w, r, acc)
+	writeAccepted(w, acc)
 }
 
 func (h *handler) attachVolume(w http.ResponseWriter, r *http.Request) {
@@ -103,7 +103,7 @@ func (h *handler) attachVolume(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, r, err)
 		return
 	}
-	writeAccepted(w, r, acc)
+	writeAccepted(w, acc)
 }
 
 func (h *handler) deleteVolume(w http.ResponseWriter, r *http.Request) {
@@ -121,7 +121,7 @@ func (h *handler) deleteVolume(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, r, err)
 		return
 	}
-	writeAccepted(w, r, acc)
+	writeAccepted(w, acc)
 }
 
 func (h *handler) listVolumes(w http.ResponseWriter, r *http.Request) {
@@ -175,7 +175,7 @@ func (h *handler) createSecurityGroup(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, r, err)
 		return
 	}
-	writeAccepted(w, r, acc)
+	writeAccepted(w, acc)
 }
 
 func (h *handler) authorizeIngress(w http.ResponseWriter, r *http.Request) {
@@ -202,7 +202,7 @@ func (h *handler) authorizeIngress(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, r, err)
 		return
 	}
-	writeAccepted(w, r, acc)
+	writeAccepted(w, acc)
 }
 
 func (h *handler) startInstance(w http.ResponseWriter, r *http.Request) {
@@ -220,7 +220,7 @@ func (h *handler) startInstance(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, r, err)
 		return
 	}
-	writeAccepted(w, r, acc)
+	writeAccepted(w, acc)
 }
 
 func (h *handler) terminateInstance(w http.ResponseWriter, r *http.Request) {
@@ -238,7 +238,7 @@ func (h *handler) terminateInstance(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, r, err)
 		return
 	}
-	writeAccepted(w, r, acc)
+	writeAccepted(w, acc)
 }
 
 func (h *handler) createKeyPair(w http.ResponseWriter, r *http.Request) {
@@ -256,5 +256,5 @@ func (h *handler) createKeyPair(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, r, err)
 		return
 	}
-	writeAccepted(w, r, acc)
+	writeAccepted(w, acc)
 }
