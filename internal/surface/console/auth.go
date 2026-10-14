@@ -124,6 +124,9 @@ func Routes() []string {
 // with no entry in routeAction is refused: authorization fails closed.
 func (h *handler) gate(w http.ResponseWriter, r *http.Request) {
 	_, pattern := h.mux.Handler(r)
+	if h.loginOff && h.signInOff(w, r, pattern) {
+		return
+	}
 	if pattern == "" || pattern == routeLogin {
 		h.mux.ServeHTTP(w, r)
 		return
@@ -153,6 +156,31 @@ func (h *handler) gate(w http.ResponseWriter, r *http.Request) {
 	h.mux.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), callerKey{}, c)))
 }
 
+// errSignInOff answers login and logout when console sign-in is disabled.
+const errSignInOff = "console sign-in requires -iam fake or grpc"
+
+// signInOff serves the auth routes when console sign-in is disabled (-iam
+// static) and reports whether it answered. Login and logout are 501 before
+// any Origin, rate-limit or credential check: there is nothing to sign in to.
+// GET /api/v1/auth/session without an Authorization header is
+// {"loginEnabled":false} with no credentials, so the UI can learn the mode
+// before it has a token; any cookie is ignored. With a bearer token the
+// session route authenticates as usual and adds loginEnabled false.
+func (h *handler) signInOff(w http.ResponseWriter, r *http.Request, pattern string) bool {
+	switch {
+	case pattern == routeLogin || pattern == routeLogout:
+		writeErr(w, r, resource.Unimplemented(errSignInOff))
+		return true
+	case pattern == routeSession && r.Header.Get("Authorization") == "":
+		w.Header().Set("Cache-Control", "no-store")
+		writeJSON(w, http.StatusOK, struct {
+			LoginEnabled bool `json:"loginEnabled"`
+		}{})
+		return true
+	}
+	return false
+}
+
 // authenticate takes the bearer console token (the account root, until it is
 // retired) or the session cookie.
 func (h *handler) authenticate(r *http.Request) (resource.Caller, error) {
@@ -164,7 +192,7 @@ func (h *handler) authenticate(r *http.Request) (resource.Caller, error) {
 		return h.auth.Authenticate(r.Context(), raw[len(prefix):])
 	}
 	ck, err := r.Cookie(SessionCookie)
-	if err != nil || ck.Value == "" || h.iam == nil {
+	if err != nil || ck.Value == "" || h.iam == nil || h.loginOff {
 		return resource.Caller{}, resource.Unauthenticated("sign in required")
 	}
 	s, err := h.iam.ValidateSession(r.Context(), ck.Value)
@@ -201,6 +229,9 @@ type sessionBody struct {
 	Root      bool      `json:"root"`
 	ExpiresAt time.Time `json:"expiresAt"`
 	CSRFToken string    `json:"csrfToken,omitempty"`
+	// LoginEnabled is false under -iam static, where only the bearer
+	// console token signs requests.
+	LoginEnabled bool `json:"loginEnabled"`
 }
 
 func (h *handler) login(w http.ResponseWriter, r *http.Request) {
@@ -246,7 +277,7 @@ func (h *handler) login(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, &http.Cookie{Name: SessionCookie, Value: s.Token, Path: "/", MaxAge: maxAge, HttpOnly: true, Secure: true, SameSite: http.SameSiteStrictMode})
 	http.SetCookie(w, &http.Cookie{Name: CSRFCookie, Value: csrf, Path: "/", MaxAge: maxAge, Secure: true, SameSite: http.SameSiteStrictMode})
 	w.Header().Set("Cache-Control", "no-store")
-	writeJSON(w, http.StatusOK, sessionBody{Principal: s.Principal.ARN, Account: s.Principal.Account.String(), Root: s.Principal.Root, ExpiresAt: s.Expires, CSRFToken: csrf})
+	writeJSON(w, http.StatusOK, sessionBody{Principal: s.Principal.ARN, Account: s.Principal.Account.String(), Root: s.Principal.Root, ExpiresAt: s.Expires, CSRFToken: csrf, LoginEnabled: !h.loginOff})
 }
 
 func (h *handler) logout(w http.ResponseWriter, r *http.Request) {
@@ -267,8 +298,8 @@ func (h *handler) session(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	out := sessionBody{Principal: c.Principal, Account: c.Account.String(), Root: c.Root}
-	if ck, err := r.Cookie(SessionCookie); err == nil && h.iam != nil {
+	out := sessionBody{Principal: c.Principal, Account: c.Account.String(), Root: c.Root, LoginEnabled: !h.loginOff}
+	if ck, err := r.Cookie(SessionCookie); err == nil && h.iam != nil && !h.loginOff {
 		if s, err := h.iam.ValidateSession(r.Context(), ck.Value); err == nil {
 			out.ExpiresAt = s.Expires
 		}

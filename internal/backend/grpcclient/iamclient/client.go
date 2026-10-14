@@ -30,8 +30,10 @@ const (
 	// CallTimeout bounds one attempt when the caller's context has no
 	// earlier deadline.
 	CallTimeout = 5 * time.Second
-	// MaxAttempts bounds retries of the side-effect-free calls
-	// (Authenticate, Authorize) on UNAVAILABLE.
+	// MaxAttempts bounds retries on UNAVAILABLE of the calls that are safe
+	// to repeat: Authenticate, Authorize, ValidateSession and Logout (revoking
+	// a revoked session is a no-op). Login and AssumeRole are tried once: a
+	// retry could count a failed password twice or mint a second session.
 	MaxAttempts = 3
 )
 
@@ -80,7 +82,7 @@ func call[Req, Resp any](ctx context.Context, fn func(context.Context, Req, ...g
 	return fn(ctx, req)
 }
 
-// retry runs a side-effect-free call up to MaxAttempts times while vws-iam is
+// retry runs a call that is safe to repeat up to MaxAttempts times while vws-iam is
 // UNAVAILABLE, with doubling backoff, and never past ctx.
 func retry[Req, Resp any](ctx context.Context, backoff time.Duration, fn func(context.Context, Req, ...grpc.CallOption) (Resp, error), req Req) (Resp, error) {
 	var resp Resp

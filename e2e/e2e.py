@@ -734,6 +734,9 @@ def console_login():
         body["principal"] == f"arn:vws:iam::{account}:user/e2e-carol" and jar["vws_session"] not in json.dumps(body), body))
     step("GET /api/v1/auth/session", lambda: check(expect(200, console_call(
         "GET", "/api/v1/auth/session", cookies=jar))[1]["principal"].endswith(":user/e2e-carol"), "principal"))
+    step("session says loginEnabled true with IAM", lambda: check(console_call(
+        "GET", "/api/v1/auth/session", cookies=jar)[1]["loginEnabled"] is True, "loginEnabled"))
+    step("signed-out session is 401 with IAM", lambda: expect(401, console_call("GET", "/api/v1/auth/session")))
     step("no policy: GET /api/v1/vpcs is 403", lambda: expect(403, console_call("GET", "/api/v1/vpcs", cookies=jar)))
     step("IAM PutUserPolicy ec2:Describe*", lambda: iam.put_user_policy(
         UserName="e2e-carol", PolicyName="read", PolicyDocument=json.dumps({"Version": "2012-10-17", "Statement": [
@@ -758,6 +761,38 @@ def console_login():
     step("IAM DeleteUser e2e-carol", lambda: iam.delete_user(UserName="e2e-carol"))
 
 
+STATIC_CONSOLE_URL = os.environ.get("VWS_E2E_STATIC_CONSOLE", "")
+
+
+def expect_status(want, got):
+    check(got[0] == want, f"status {got[0]} {got[1]}")
+    return got
+
+
+def console_static():
+    """A second process on -iam static (the default install): sign-in is off,
+    the session route says so without credentials, and the bearer token works.
+    Runs only when VWS_E2E_STATIC_CONSOLE names that process's console."""
+    if not STATIC_CONSOLE_URL:
+        return
+    global CONSOLE_URL
+    saved, CONSOLE_URL = CONSOLE_URL, STATIC_CONSOLE_URL
+    try:
+        step("static: anonymous session is exactly {loginEnabled:false}", lambda: check(
+            expect_status(200, console_call("GET", "/api/v1/auth/session"))[1] == {"loginEnabled": False}, "body"))
+        step("static: bearer session is root with loginEnabled false", lambda: check(
+            (lambda b: b["loginEnabled"] is False and b["root"] is True)(expect_status(200, console_call(
+                "GET", "/api/v1/auth/session", headers={"Authorization": "Bearer " + os.environ.get("VWS_E2E_CONSOLE_TOKEN", "dev-token")}))[1]), "body"))
+        for path in ("/api/v1/auth/login", "/api/v1/auth/logout"):
+            step(f"static: POST {path} is 501 Unimplemented", lambda path=path: check(
+                expect_status(501, console_call("POST", path, {"account": "123456789012", "userName": "root", "password": "x" * 12}))[1]["error"]["code"]
+                == "Unimplemented", "code"))
+        step("static: bearer GET /api/v1/vpcs is 200", lambda: expect_status(200, console_call(
+            "GET", "/api/v1/vpcs", headers={"Authorization": "Bearer " + os.environ.get("VWS_E2E_CONSOLE_TOKEN", "dev-token")})))
+    finally:
+        CONSOLE_URL = saved
+
+
 def cleanup():
     if S.get("restored_snap"):
         step("DeleteSnapshot", lambda: ec2.delete_snapshot(SnapshotId=S["restored_snap"]))
@@ -779,6 +814,7 @@ if __name__ == "__main__":
     objects()
     identity()
     console_login()
+    console_static()
     cleanup()
     print(f"ok={results['ok']} skipped={results['skipped']} FAIL={results['FAIL']}")
     if SKIPPED:
