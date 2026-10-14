@@ -1,6 +1,7 @@
 package iam
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -150,4 +151,31 @@ func TestCheckMapsDenyToPermissionDenied(t *testing.T) {
 	if err := Check(t.Context(), NewStatic("AKIDEXAMPLE", "secret", account(t)), root, "ec2:RunInstances", "*"); err != nil {
 		t.Fatalf("root: %v", err)
 	}
+}
+
+func credOf(key, secret, token string) sigv4.Credential {
+	return sigv4.Credential{AccessKey: key, Secret: secret, SessionToken: token}
+}
+
+// authReq builds the AuthRequest the verifier would send for a signed request.
+func authReq(t *testing.T, key, secret, token string) sigv4.AuthRequest {
+	t.Helper()
+	var got sigv4.AuthRequest
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "http://127.0.0.1:8081/", strings.NewReader("Action=DescribeVpcs"))
+	req.Host = req.URL.Host
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	if err := sigv4.Sign(req, credOf(key, secret, token), sigv4.ServiceEC2, resource.RegionName, now); err != nil {
+		t.Fatal(err)
+	}
+	v := sigv4.NewVerifier(sigv4.Verifier{Service: sigv4.ServiceEC2, Region: resource.RegionName, Now: func() time.Time { return now },
+		Auth: captureAuth(func(r sigv4.AuthRequest) { got = r })})
+	_, _ = v.Verify(req)
+	return got
+}
+
+type captureAuth func(sigv4.AuthRequest)
+
+func (c captureAuth) Authenticate(_ context.Context, r sigv4.AuthRequest) (sigv4.Identity, error) {
+	c(r)
+	return sigv4.Identity{}, sigv4.ErrUnknownKey
 }
