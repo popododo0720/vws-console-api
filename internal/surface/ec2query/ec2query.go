@@ -957,6 +957,9 @@ func ec2Code(e *resource.Error) string {
 	case resource.CodeInvalidArgument:
 		// EC2 reports a public key it cannot read as InvalidKey.Format.
 		if strings.EqualFold(e.Field, "publicKeyMaterial") {
+			if e.Message == "required" {
+				return "MissingParameter"
+			}
 			return "InvalidKey.Format"
 		}
 		return "InvalidParameterValue"

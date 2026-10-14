@@ -343,13 +343,16 @@ func (c compute) CreateKeyPair(ctx context.Context, m backend.Mutation, req reso
 		if err != nil {
 			return resource.Accepted[resource.KeyPair]{}, resource.Invalid("publicKeyMaterial", err.Error())
 		}
-		key.Fingerprint, key.Type = pub.Fingerprint, pub.Type
+		key.Fingerprint, key.Type = pub.AWSFingerprint, pub.Type
 	} else {
 		pair, err := sshkey.Generate(req.Type, c.w.entropy)
 		if err != nil {
 			return resource.Accepted[resource.KeyPair]{}, resource.Internal(err)
 		}
-		key.Fingerprint, key.Material = pair.Fingerprint, pair.Private
+		key.Fingerprint, key.Material = pair.AWSFingerprint, pair.Private
+		if req.Format == resource.KeyFormatPPK {
+			key.Material = pair.PPK(req.Name)
+		}
 	}
 	op, err := c.w.newOp(m.Account, resource.ServiceCompute, resource.ActionCreateKeyPair, []resource.Ref{id.Ref()}, func(time.Time) {})
 	if err != nil {

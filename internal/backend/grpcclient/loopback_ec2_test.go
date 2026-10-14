@@ -273,7 +273,7 @@ func (s *keySrv) CreateKeyPair(ctx context.Context, req *computev1.CreateKeyPair
 	if err != nil {
 		return nil, toStatus(err)
 	}
-	s.w.rememberKeyLine(acc.Items[0].ID.String(), req.GetKeyPair().GetSpec().GetPublicKey())
+	s.w.rememberKeyLine(acc.Items[0].ID.String(), req.GetKeyPair().GetSpec().GetPublicKey(), req.GetKeyPair().GetLabels()[labelKeySHA1])
 	return runningOp(projectID, acc.Operation, keyPairName(projectID, acc.Items[0].ID.String()), commonv1.OperationVerb_OPERATION_VERB_CREATE, s.w.now)
 }
 

@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
+	"strings"
 
 	longrunningpb "cloud.google.com/go/longrunning/autogen/longrunningpb"
 	computev1 "github.com/popododo0720/vws-proto/gen/go/vws/compute/v1"
@@ -377,7 +378,7 @@ func (c computeClient) CreateKeyPair(ctx context.Context, m backend.Mutation, re
 		if err != nil {
 			return resource.Accepted[resource.KeyPair]{}, resource.Invalid("publicKeyMaterial", err.Error())
 		}
-		pair = sshkey.Pair{Public: pub.Line, Fingerprint: pub.Fingerprint}
+		pair = sshkey.Pair{Public: pub.Line, AWSFingerprint: pub.AWSFingerprint}
 		req.Type = pub.Type
 	} else {
 		var err error
@@ -388,6 +389,14 @@ func (c computeClient) CreateKeyPair(ctx context.Context, m backend.Mutation, re
 	projectID := project(m.Account)
 	labels := nameLabels(req.Name)
 	labels[labelFingerprint] = clip(m.Fingerprint, 63)
+	if req.PublicKey == "" && req.Type == resource.KeyTypeRSA {
+		// The private key is never stored, so EC2's fingerprint of it is.
+		labels[labelKeySHA1] = strings.ReplaceAll(pair.AWSFingerprint, ":", "")
+	}
+	material := pair.Private
+	if req.Format == resource.KeyFormatPPK {
+		material = pair.PPK(req.Name)
+	}
 	created, err := c.keys.CreateKeyPair(ctx, &computev1.CreateKeyPairRequest{
 		Parent:    regionParent(projectID),
 		KeyPairId: derivedID("key-", m.Key, "key"),
@@ -417,7 +426,7 @@ func (c computeClient) CreateKeyPair(ctx context.Context, m backend.Mutation, re
 		return resource.Accepted[resource.KeyPair]{}, err
 	}
 	key := resource.KeyPair{
-		ID: id, OwnerID: owner, Name: req.Name, Fingerprint: pair.Fingerprint, Material: pair.Private, Type: req.Type,
+		ID: id, OwnerID: owner, Name: req.Name, Fingerprint: pair.AWSFingerprint, Material: material, Type: req.Type,
 	}
 	op.Action = resource.ActionCreateKeyPair
 	op.Targets = []resource.Ref{id.Ref()}

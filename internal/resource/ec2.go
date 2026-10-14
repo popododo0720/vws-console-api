@@ -373,6 +373,15 @@ const (
 	KeyTypeEd25519 KeyType = "ed25519"
 )
 
+// KeyFormat is the private key format CreateKeyPair returns.
+type KeyFormat string
+
+// The formats EC2 offers. CreateKeyPair defaults to PEM.
+const (
+	KeyFormatPEM KeyFormat = "pem"
+	KeyFormatPPK KeyFormat = "ppk"
+)
+
 // KeyPair is an SSH key. Material is set only on the create that minted it.
 type KeyPair struct {
 	ID          KeyPairID `json:"keyPairId"`
@@ -395,6 +404,8 @@ type CreateKeyPairRequest struct {
 	Name      string  `json:"keyName"`
 	Type      KeyType `json:"keyType,omitempty"`
 	PublicKey string  `json:"publicKeyMaterial,omitempty"`
+	// Format is the private key format of a created key.
+	Format KeyFormat `json:"keyFormat,omitempty"`
 }
 
 // Action returns CreateKeyPair.
@@ -407,8 +418,15 @@ func (r CreateKeyPairRequest) Normalize() (CreateKeyPairRequest, error) {
 		return CreateKeyPairRequest{}, Invalid("keyName", "malformed")
 	}
 	if r.PublicKey != "" {
-		r.Type = ""
+		r.Type, r.Format = "", ""
 		return r, nil
+	}
+	switch r.Format {
+	case "":
+		r.Format = KeyFormatPEM
+	case KeyFormatPEM, KeyFormatPPK:
+	default:
+		return CreateKeyPairRequest{}, Invalid("keyFormat", "must be pem or ppk")
 	}
 	switch r.Type {
 	case "":

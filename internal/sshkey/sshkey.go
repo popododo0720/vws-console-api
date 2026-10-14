@@ -28,10 +28,16 @@ const rsaBits = 2048
 // Pair is a generated key. Public is "algorithm base64" with no comment.
 // Fingerprint is the lowercase hex SHA-256 of the public key blob, the value
 // the compute service stores.
+// AWSFingerprint is the fingerprint EC2 reports for a key it created: for
+// RSA the SHA-1 of the PKCS#8 DER private key, for ed25519 the base64 SHA-256
+// of the public key blob.
 type Pair struct {
-	Private     string
-	Public      string
-	Fingerprint string
+	Private        string
+	Public         string
+	Fingerprint    string
+	AWSFingerprint string
+
+	algo, blob, ppkPrivate string
 }
 
 // Public is a parsed authorized_keys line.
@@ -39,6 +45,10 @@ type Public struct {
 	Type        resource.KeyType
 	Line        string
 	Fingerprint string
+	// AWSFingerprint is what EC2 reports for an imported key: for RSA the MD5
+	// of the DER SubjectPublicKeyInfo, for ed25519 the base64 SHA-256 of the
+	// public key blob.
+	AWSFingerprint string
 }
 
 // Generate makes a key of typ from r. The same bytes from r give the same key,
@@ -90,7 +100,16 @@ func generateRSA(r io.Reader) (Pair, error) {
 		}
 		blob := sshString("ssh-rsa") + sshString(string(mpint(e))) + sshString(string(mpint(key.N)))
 		private := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)})
-		return pair(string(private), "ssh-rsa", blob), nil
+		out := pair(string(private), "ssh-rsa", blob)
+		pkcs8, err := x509.MarshalPKCS8PrivateKey(key)
+		if err != nil {
+			return Pair{}, fmt.Errorf("rsa pkcs8: %w", err)
+		}
+		out.AWSFingerprint = ColonHex(sha1Hex(pkcs8))
+		iqmp := new(big.Int).ModInverse(q, p)
+		out.ppkPrivate = sshString(string(mpint(d))) + sshString(string(mpint(key.Primes[0]))) +
+			sshString(string(mpint(key.Primes[1]))) + sshString(string(mpint(iqmp)))
+		return out, nil
 	}
 }
 
@@ -134,7 +153,10 @@ func generateEd25519(r io.Reader) (Pair, error) {
 	body := "openssh-key-v1\x00" + sshString("none") + sshString("none") + sshString("") +
 		string(binary.BigEndian.AppendUint32(nil, 1)) + sshString(blob) + sshString(secret)
 	private := pem.EncodeToMemory(&pem.Block{Type: "OPENSSH PRIVATE KEY", Bytes: []byte(body)})
-	return pair(string(wrap70(private)), "ssh-ed25519", blob), nil
+	p := pair(string(wrap70(private)), "ssh-ed25519", blob)
+	p.AWSFingerprint = base64SHA256(blob)
+	p.ppkPrivate = sshString(string(seed))
+	return p, nil
 }
 
 // wrap70 rewraps the base64 body at 70 columns, as ssh-keygen writes it.
@@ -157,39 +179,9 @@ func pair(private, algo, blob string) Pair {
 		Private:     private,
 		Public:      algo + " " + base64.StdEncoding.EncodeToString([]byte(blob)),
 		Fingerprint: hex.EncodeToString(sum[:]),
+		algo:        algo,
+		blob:        blob,
 	}
-}
-
-// ParsePublic reads one authorized_keys line of an RSA or ed25519 key. It
-// keeps an optional comment and drops surrounding whitespace.
-func ParsePublic(line string) (Public, error) {
-	line = strings.TrimSpace(line)
-	if line == "" || strings.ContainsAny(line, "\r\n") {
-		return Public{}, errors.New("want one OpenSSH public key line")
-	}
-	fields := strings.Fields(line)
-	if len(fields) < 2 {
-		return Public{}, errors.New("want an algorithm and a base64 key")
-	}
-	var typ resource.KeyType
-	switch fields[0] {
-	case "ssh-rsa":
-		typ = resource.KeyTypeRSA
-	case "ssh-ed25519":
-		typ = resource.KeyTypeEd25519
-	default:
-		return Public{}, fmt.Errorf("key algorithm %q is not ssh-rsa or ssh-ed25519", fields[0])
-	}
-	blob, err := base64.StdEncoding.DecodeString(fields[1])
-	if err != nil || len(blob) < 4 {
-		return Public{}, errors.New("key is not base64")
-	}
-	n := binary.BigEndian.Uint32(blob)
-	if uint64(n) > uint64(len(blob)-4) || string(blob[4:4+n]) != fields[0] {
-		return Public{}, errors.New("key blob does not match its algorithm")
-	}
-	sum := sha256.Sum256(blob)
-	return Public{Type: typ, Line: strings.Join(fields, " "), Fingerprint: hex.EncodeToString(sum[:])}, nil
 }
 
 func sshString(s string) string {
