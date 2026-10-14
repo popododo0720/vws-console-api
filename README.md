@@ -42,7 +42,8 @@ listener so no path collides with a bucket name or a console route.
 IAM and STS Query share `-iam-addr` (default `127.0.0.1:8084`). The service in
 the signature's credential scope (`iam` or `sts`, region `vws-1`) picks the API:
 IAM `2010-05-08`, STS `2011-06-15`, with AWS's XML and error codes. Every
-action is authorized as `iam:<Action>` or `sts:<Action>`. `-iam=static` (the
+action except `GetCallerIdentity` (as in AWS) is authorized as `iam:<Action>`
+or `sts:<Action>`; every request must be signed. `-iam=static` (the
 default) serves only `GetCallerIdentity` for the `-access-key` root key.
 `-iam=fake` adds users, groups, roles, managed and inline policies, access keys
 and `AssumeRole` in memory, lost on restart, until the vws-iam client lands

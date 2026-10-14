@@ -141,9 +141,38 @@ func TestLimitedUserAndSTS(t *testing.T) {
 		`<ErrorResponse><Error><Type>Sender</Type>`, `<Code>InvalidClientTokenId</Code>`)
 	wrongSecret := sigv4.Credential{AccessKey: k.AccessKeyID, Secret: "nope"}
 	has(t, call(t, h, wrongSecret, sigv4.ServiceIAM, url.Values{"Action": {"GetUser"}}), http.StatusForbidden, `<Code>SignatureDoesNotMatch</Code>`)
-	for _, want := range []string{"iam:GetUser arn:vws:iam::123456789012:user/bob", "iam:ListUsers *", "sts:GetCallerIdentity *", "sts:AssumeRole arn:vws:iam::123456789012:role/ops"} {
+	for _, want := range []string{"iam:GetUser arn:vws:iam::123456789012:user/bob", "iam:ListUsers *", "sts:AssumeRole arn:vws:iam::123456789012:role/ops"} {
 		if !strings.Contains(strings.Join(rec.seen, "\n"), want) {
 			t.Errorf("not authorized: %q in %v", want, rec.seen)
 		}
 	}
+}
+
+// GetCallerIdentity needs no permission, as in AWS, but still needs a valid
+// signature.
+func TestGetCallerIdentitySkipsAuthorizeButNotAuthentication(t *testing.T) {
+	h, f, rec, root := harness(t)
+	u, err := f.CreateUser(t.Context(), root.Account, "nobody", "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	k, err := f.CreateAccessKey(t.Context(), root.Account, "nobody")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bare := sigv4.Credential{AccessKey: k.AccessKeyID, Secret: k.Secret}
+	has(t, call(t, h, bare, sigv4.ServiceSTS, url.Values{"Action": {"GetCallerIdentity"}}), http.StatusOK, `<Arn>`+u.ARN+`</Arn>`)
+	for _, s := range rec.seen {
+		if strings.HasPrefix(s, "sts:GetCallerIdentity") {
+			t.Errorf("GetCallerIdentity went through Authorize: %v", rec.seen)
+		}
+	}
+	has(t, call(t, h, sigv4.Credential{AccessKey: k.AccessKeyID, Secret: "wrong"}, sigv4.ServiceSTS, url.Values{"Action": {"GetCallerIdentity"}}),
+		http.StatusForbidden, `<Code>SignatureDoesNotMatch</Code>`)
+	unsigned := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "http://127.0.0.1:8084/",
+		strings.NewReader("Action=GetCallerIdentity&Version="+STSVersion))
+	unsigned.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	res := httptest.NewRecorder()
+	h.ServeHTTP(res, unsigned)
+	has(t, res, http.StatusForbidden, `<Code>MissingAuthenticationToken</Code>`)
 }

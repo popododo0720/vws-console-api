@@ -1,7 +1,8 @@
 // Package iamquery serves the IAM and STS Query APIs on one listener. The
 // credential scope of the signature (.../iam/... or .../sts/...) picks the
-// service, its verifier and its API version. Every action
-// is authorized as iam:<Action> or sts:<Action> before it runs.
+// service, its verifier and its API version. Every action except
+// sts:GetCallerIdentity is authorized as iam:<Action> or sts:<Action> before
+// it runs; every request, that one included, must be signed.
 package iamquery
 
 import (
@@ -105,9 +106,11 @@ func (h *handler) serve(w http.ResponseWriter, r *http.Request) {
 	if spec.resource != nil {
 		arn = spec.resource(h, c)
 	}
-	if err := iam.Check(r.Context(), h.cfg.Authorizer, c.caller, string(c.service)+":"+c.action, arn); err != nil {
-		c.fail(err)
-		return
+	if !spec.public {
+		if err := iam.Check(r.Context(), h.cfg.Authorizer, c.caller, string(c.service)+":"+c.action, arn); err != nil {
+			c.fail(err)
+			return
+		}
 	}
 	result, err := spec.run(h, c)
 	if err != nil {

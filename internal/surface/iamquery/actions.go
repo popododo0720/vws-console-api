@@ -17,8 +17,11 @@ type spec struct {
 	params     []string
 	list       bool // also accepts Marker, MaxItems and PathPrefix
 	needsAdmin bool
-	resource   func(h *handler, c *exchange) string
-	run        func(h *handler, c *exchange) (any, error)
+	// public skips Authorize, as AWS does for sts:GetCallerIdentity. The
+	// signature is still verified.
+	public   bool
+	resource func(h *handler, c *exchange) string
+	run      func(h *handler, c *exchange) (any, error)
 }
 
 func (s spec) allows(k string) bool {
@@ -429,7 +432,7 @@ func iamActions() map[string]spec {
 
 func stsActions() map[string]spec {
 	return map[string]spec{
-		"GetCallerIdentity": {run: func(h *handler, c *exchange) (any, error) {
+		"GetCallerIdentity": {public: true, run: func(h *handler, c *exchange) (any, error) {
 			return struct {
 				Arn     string `xml:"Arn"`
 				UserID  string `xml:"UserId"`

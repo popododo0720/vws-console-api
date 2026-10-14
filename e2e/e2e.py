@@ -467,7 +467,7 @@ def identity():
     account = me["Account"]
     step("STS GetCallerIdentity is the account root", lambda: check(me["Arn"] == f"arn:vws:iam::{account}:root", me["Arn"]))
     describe = json.dumps({"Version": "2012-10-17", "Statement": [
-        {"Effect": "Allow", "Action": ["ec2:Describe*", "sts:AssumeRole", "sts:GetCallerIdentity"], "Resource": "*"}]})
+        {"Effect": "Allow", "Action": ["ec2:Describe*", "sts:AssumeRole"], "Resource": "*"}]})
     step("IAM CreateUser", lambda: check(
         iam.create_user(UserName="e2e-bob", Path="/e2e/")["User"]["Arn"] == f"arn:vws:iam::{account}:user/e2e/e2e-bob", "user arn"))
     step("IAM CreateUser again is EntityAlreadyExists", lambda: aws_error(
@@ -510,8 +510,10 @@ def identity():
     step("new user key: inline Deny beats the group Allow", lambda: aws_error(
         "UnauthorizedOperation", lambda: bob_ec2.describe_volumes()))
     step("new user key: IAM ListUsers is AccessDenied", lambda: aws_error("AccessDenied", lambda: bob_iam.list_users()))
-    step("new user key: STS GetCallerIdentity", lambda: check(
+    step("new user key: STS GetCallerIdentity needs no policy", lambda: check(
         bob_sts.get_caller_identity()["Arn"] == f"arn:vws:iam::{account}:user/e2e/e2e-bob", "bob arn"))
+    step("GetCallerIdentity with a wrong secret is SignatureDoesNotMatch", lambda: aws_error(
+        "SignatureDoesNotMatch", lambda: client("sts", key["AccessKeyId"], "wrong-secret").get_caller_identity()))
     step("unknown key is InvalidClientTokenId", lambda: aws_error(
         "InvalidClientTokenId", lambda: client("sts", "AKIANOSUCHKEY0000000", "x").get_caller_identity()))
     trust = json.dumps({"Version": "2012-10-17", "Statement": [{"Effect": "Allow", "Action": "sts:AssumeRole",
@@ -521,7 +523,7 @@ def identity():
     step("IAM GetRole returns the trust policy", lambda: check(
         iam.get_role(RoleName="e2e-ops")["Role"]["AssumeRolePolicyDocument"]["Statement"][0]["Action"] == "sts:AssumeRole", "trust"))
     step("IAM PutRolePolicy", lambda: iam.put_role_policy(RoleName="e2e-ops", PolicyName="vpcs", PolicyDocument=json.dumps({
-        "Version": "2012-10-17", "Statement": [{"Effect": "Allow", "Action": ["ec2:CreateVpc", "ec2:DeleteVpc", "sts:GetCallerIdentity"], "Resource": "*"}]})))
+        "Version": "2012-10-17", "Statement": [{"Effect": "Allow", "Action": ["ec2:CreateVpc", "ec2:DeleteVpc"], "Resource": "*"}]})))
     creds = step("STS AssumeRole", lambda: bob_sts.assume_role(
         RoleArn=S["role_arn"], RoleSessionName="e2e", DurationSeconds=900)["Credentials"])
     if creds:
