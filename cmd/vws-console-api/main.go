@@ -61,7 +61,7 @@ func run(ctx context.Context, args []string) (err error) {
 	iamAddr := fs.String("iam-addr", "127.0.0.1:8084", "IAM and STS Query listen address")
 	consoleOrigins := fs.String("console-origins", "", "comma-separated browser origins allowed to sign in and send cookie writes besides the console's own host, such as https://console.vws.example")
 	trustedProxies := fs.String("trusted-proxies", "", "comma-separated CIDRs of L7 proxies in front of the console whose X-Forwarded-For is trusted for the sign-in client address; empty uses the TCP peer")
-	rootPasswordFile := fs.String("root-password-file", "", "file holding the account root's console password (mount it from a Secret); empty disables root console sign-in")
+	rootPasswordFile := fs.String("root-password-file", "", "file holding the account root's console password (mount it from a Secret); empty disables root console sign-in; no effect with -iam static, where console sign-in is off")
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("flags: %w", err)
 	}
@@ -134,6 +134,7 @@ func run(ctx context.Context, args []string) (err error) {
 	default:
 		return fmt.Errorf("unknown -iam %q", *iamMode)
 	}
+	warnSignIn(ctx, logger, *iamMode, *rootPasswordFile)
 	authn := iam.Authenticator(auth)
 	verifier := func(s sigv4.Service) *sigv4.Verifier {
 		return sigv4.NewVerifier(sigv4.Verifier{Service: s, Region: resource.RegionName, Auth: authn})
@@ -150,6 +151,7 @@ func run(ctx context.Context, args []string) (err error) {
 			Logger:         logger,
 			Origins:        splitList(*consoleOrigins),
 			TrustedProxies: trusted,
+			LoginDisabled:  !signInEnabled(*iamMode),
 		})},
 		{Name: "ec2", Addr: *ec2Addr, Handler: ec2query.New(ec2query.Config{Service: svc, Verifier: ec2, Authorizer: auth})},
 		{Name: "s3", Addr: *s3Addr, Handler: s3rest.New(s3rest.Config{Service: svc, Verifier: s3, Authorizer: auth})},
@@ -200,4 +202,22 @@ func requireExplicit(fs *flag.FlagSet, names ...string) error {
 		return fmt.Errorf("-backend=grpc needs explicit %s; the defaults are public development credentials", strings.Join(missing, ", "))
 	}
 	return nil
+}
+
+// signInEnabled reports whether -iam serves console sign-in. Static has only
+// the access key and the bearer console token: login is off even with
+// -root-password-file, so the default install never takes a password.
+func signInEnabled(iamMode string) bool { return iamMode == "fake" || iamMode == "grpc" }
+
+// warnSignIn logs at start when console sign-in is off.
+func warnSignIn(ctx context.Context, logger *slog.Logger, iamMode, rootPasswordFile string) {
+	if signInEnabled(iamMode) {
+		return
+	}
+	logger.WarnContext(ctx, "console sign-in disabled: the console accepts only the bearer -console-token; use -iam fake or grpc for sign-in",
+		slog.String("iam", iamMode))
+	if rootPasswordFile != "" {
+		logger.WarnContext(ctx, "-root-password-file has no effect with -iam static: console sign-in is disabled",
+			slog.String("iam", iamMode))
+	}
 }

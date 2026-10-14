@@ -88,7 +88,24 @@ Content-Type: application/json
 {"imageId":"ami-0123456789abcdef0","instanceType":"vws.small","subnetId":"subnet-0123456789abcdef0","count":1}
 ```
 
-Console sign-in: `POST /api/v1/auth/login` with
+Console sign-in needs `-iam fake` or `-iam grpc`. With the default
+`-iam static` it is off: the console takes only the bearer `-console-token`,
+`POST /api/v1/auth/login` and `POST /api/v1/auth/logout` answer `501`
+`{"error":{"code":"Unimplemented","message":"console sign-in requires -iam fake or grpc"}}`,
+session cookies are ignored, `-root-password-file` has no effect, and the
+process logs a `WARN` at start saying so. `GET /api/v1/auth/session` always
+carries `loginEnabled` so the UI can tell the modes apart:
+
+| mode | no credentials | bearer token | session cookie |
+| --- | --- | --- | --- |
+| `-iam static` | `200` `{"loginEnabled":false}` | `200` caller + `"loginEnabled":false` | ignored: as no credentials |
+| `-iam fake` / `grpc` | `401` (show the sign-in page) | `200` caller + `"loginEnabled":true` | `200` caller, `expiresAt`, `"loginEnabled":true` |
+
+In static mode the session route needs no credentials because the answer
+names nobody and there is nothing to sign in to; a bad bearer token is still
+`401`. The login response carries `"loginEnabled":true` too.
+
+With sign-in on: `POST /api/v1/auth/login` with
 `{"account","userName","password"}` (an IAM user's `CreateLoginProfile`
 password, or `root` with the password in `-root-password-file`, mounted from a
 Secret). It sets an HttpOnly, Secure, SameSite=Strict `vws_session` cookie

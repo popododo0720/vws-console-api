@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -97,5 +99,38 @@ func TestGRPCIAMNeedsAnEndpoint(t *testing.T) {
 	err := run(t.Context(), []string{"-iam=grpc", "-ops-addr="})
 	if err == nil || !strings.Contains(err.Error(), "-iam-endpoint") {
 		t.Fatalf("err %v", err)
+	}
+}
+
+func TestStaticModeWarnsSignInDisabled(t *testing.T) {
+	for _, tc := range []struct {
+		mode, pwFile string
+		want, not    []string
+	}{
+		{"static", "", []string{"level=WARN", "console sign-in disabled", "-console-token"}, []string{"root-password-file"}},
+		{"static", "/run/secrets/pw", []string{"console sign-in disabled", "-root-password-file has no effect"}, nil},
+		{"fake", "", nil, []string{"console sign-in disabled"}},
+		{"grpc", "/run/secrets/pw", nil, []string{"console sign-in disabled", "no effect"}},
+	} {
+		var buf bytes.Buffer
+		warnSignIn(t.Context(), slog.New(slog.NewTextHandler(&buf, nil)), tc.mode, tc.pwFile)
+		for _, w := range tc.want {
+			if !strings.Contains(buf.String(), w) {
+				t.Errorf("%s %q: no %q in %q", tc.mode, tc.pwFile, w, buf.String())
+			}
+		}
+		for _, w := range tc.not {
+			if strings.Contains(buf.String(), w) {
+				t.Errorf("%s %q: unexpected %q in %q", tc.mode, tc.pwFile, w, buf.String())
+			}
+		}
+	}
+}
+
+func TestSignInEnabledOnlyWithRealIAM(t *testing.T) {
+	for mode, want := range map[string]bool{"static": false, "fake": true, "grpc": true} {
+		if got := signInEnabled(mode); got != want {
+			t.Errorf("%s: %v", mode, got)
+		}
 	}
 }

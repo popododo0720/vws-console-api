@@ -55,6 +55,11 @@ type Config struct {
 	TrustedProxies []netip.Prefix
 	// Now is the clock for sign-in rate limits. Nil uses time.Now.
 	Now func() time.Time
+	// LoginDisabled turns console sign-in off: -iam static. Login and
+	// logout answer 501, and GET /api/v1/auth/session reports
+	// loginEnabled false, without credentials too, so the UI can skip its
+	// sign-in page. The bearer console token keeps working.
+	LoginDisabled bool
 }
 
 // New returns the console handler.
@@ -67,7 +72,7 @@ func New(cfg Config) http.Handler {
 	if now == nil {
 		now = time.Now
 	}
-	h := &handler{svc: cfg.Service, auth: cfg.Auth, iam: cfg.IAM, log: log, mux: http.NewServeMux(), origins: cfg.Origins, trusted: cfg.TrustedProxies, now: now, logins: newLimiter()}
+	h := &handler{svc: cfg.Service, auth: cfg.Auth, iam: cfg.IAM, log: log, mux: http.NewServeMux(), origins: cfg.Origins, trusted: cfg.TrustedProxies, now: now, logins: newLimiter(), loginOff: cfg.LoginDisabled}
 	h.routes(h.mux)
 	return http.HandlerFunc(h.gate)
 }
@@ -117,6 +122,7 @@ type handler struct {
 	svc      *cloud.Service
 	auth     Authenticator
 	iam      iam.Client
+	loginOff bool
 	log      *slog.Logger
 	mux      *http.ServeMux
 	patterns []string
