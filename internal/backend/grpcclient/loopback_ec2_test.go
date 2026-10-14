@@ -269,13 +269,11 @@ func (s *keySrv) CreateKeyPair(ctx context.Context, req *computev1.CreateKeyPair
 	}
 	acc, err := s.w.set.Compute.CreateKeyPair(ctx, backend.Mutation{
 		Scope: backend.Scope{Account: account}, Key: req.GetRequestId(), Fingerprint: fp,
-	}, resource.CreateKeyPairRequest{Name: name})
+	}, resource.CreateKeyPairRequest{Name: name, PublicKey: req.GetKeyPair().GetSpec().GetPublicKey()})
 	if err != nil {
 		return nil, toStatus(err)
 	}
-	if fp, ok := fingerprintOfPublicLine(req.GetKeyPair().GetSpec().GetPublicKey()); ok {
-		s.w.rememberKeyFP(acc.Items[0].ID.String(), fp)
-	}
+	s.w.rememberKeyLine(acc.Items[0].ID.String(), req.GetKeyPair().GetSpec().GetPublicKey())
 	return runningOp(projectID, acc.Operation, keyPairName(projectID, acc.Items[0].ID.String()), commonv1.OperationVerb_OPERATION_VERB_CREATE, s.w.now)
 }
 

@@ -4,6 +4,7 @@
 package ec2query
 
 import (
+	"encoding/base64"
 	"encoding/xml"
 	"net/http"
 	"strconv"
@@ -119,6 +120,8 @@ func (h *handler) serve(w http.ResponseWriter, r *http.Request) {
 		h.createKeyPair(w, r, caller)
 	case resource.ActionDeleteKeyPair.String():
 		h.deleteKeyPair(w, r, caller)
+	case "ImportKeyPair":
+		h.importKeyPair(w, r, caller)
 	case resource.ActionDeleteSecurityGroup.String():
 		h.deleteSecurityGroup(w, r, caller)
 	case resource.ActionDeleteSubnet.String():
@@ -147,6 +150,8 @@ func (h *handler) serve(w http.ResponseWriter, r *http.Request) {
 		h.describeImages(w, r, caller)
 	case "DescribeKeyPairs":
 		h.describeKeyPairs(w, r, caller)
+	case "DescribeInstanceAttribute":
+		h.describeInstanceAttribute(w, r, caller)
 	case "DescribeSecurityGroups":
 		h.describeSecurityGroups(w, r, caller)
 	case "DescribeAddresses":
@@ -184,8 +189,14 @@ func (h *handler) runInstances(w http.ResponseWriter, r *http.Request, c resourc
 		writeErr(w, r, err)
 		return
 	}
+	userData, err := blob(r, "UserData")
+	if err != nil {
+		writeErr(w, r, err)
+		return
+	}
 	acc, err := h.svc.RunInstances(r.Context(), c, token, resource.RunInstancesRequest{
 		ImageID: img, InstanceType: r.Form.Get("InstanceType"), SubnetID: sub, Count: count, Tags: tags,
+		KeyName: r.Form.Get("KeyName"), UserData: userData,
 	})
 	if err != nil {
 		writeErr(w, r, err)
@@ -535,6 +546,10 @@ func rejectUnknown(r *http.Request, action string) error {
 		allow = allowCreateKey
 	case resource.ActionDeleteKeyPair.String():
 		allow = allowDeleteKey
+	case "ImportKeyPair":
+		allow = allowImportKey
+	case "DescribeInstanceAttribute":
+		allow = allowInstanceAttribute
 	case resource.ActionDeleteSecurityGroup.String():
 		allow = allowDeleteGroup
 	case resource.ActionDeleteSubnet.String():
@@ -586,7 +601,7 @@ func allowCommon(key string) bool {
 
 func allowRun(key string) bool {
 	switch key {
-	case "Action", "Version", "ImageId", "InstanceType", "SubnetId", "MinCount", "MaxCount", "ClientToken":
+	case "Action", "Version", "ImageId", "InstanceType", "SubnetId", "MinCount", "MaxCount", "ClientToken", "KeyName", "UserData":
 		return true
 	default:
 		return tagField(key) || tagSpecField(key)
@@ -649,7 +664,15 @@ func allowAuthorize(key string) bool {
 }
 
 func allowCreateKey(key string) bool {
-	return key == "Action" || key == "Version" || key == "ClientToken" || key == "KeyName"
+	return key == "Action" || key == "Version" || key == "ClientToken" || key == "KeyName" || key == "KeyType" || key == "KeyFormat"
+}
+
+func allowImportKey(key string) bool {
+	return key == "Action" || key == "Version" || key == "KeyName" || key == "PublicKeyMaterial"
+}
+
+func allowInstanceAttribute(key string) bool {
+	return key == "Action" || key == "Version" || key == "InstanceId" || key == "Attribute" || key == "DryRun"
 }
 
 func allowDeleteKey(key string) bool {
@@ -932,6 +955,10 @@ func ec2Code(e *resource.Error) string {
 		}
 		return notFoundCode(e.Kind)
 	case resource.CodeInvalidArgument:
+		// EC2 reports a public key it cannot read as InvalidKey.Format.
+		if strings.EqualFold(e.Field, "publicKeyMaterial") {
+			return "InvalidKey.Format"
+		}
 		return "InvalidParameterValue"
 	case resource.CodeAlreadyExists:
 		return alreadyExistsCode(e.Kind)
@@ -1013,4 +1040,18 @@ func alreadyExistsCode(k resource.Kind) string {
 	default:
 		return "InvalidParameterValue"
 	}
+}
+
+// blob decodes a base64 query field, which is how EC2 carries UserData and
+// PublicKeyMaterial. An absent field is "".
+func blob(r *http.Request, field string) (string, error) {
+	raw := r.Form.Get(field)
+	if raw == "" {
+		return "", nil
+	}
+	out, err := base64.StdEncoding.DecodeString(raw)
+	if err != nil {
+		return "", resource.Invalid(field, "must be base64")
+	}
+	return string(out), nil
 }

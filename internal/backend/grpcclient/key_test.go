@@ -4,11 +4,13 @@ import (
 	"encoding/hex"
 	"strings"
 	"testing"
+
+	"github.com/popododo0720/vws-console-api/internal/resource"
 )
 
 func TestKeySeedIsNotThePublishedID(t *testing.T) {
 	const mutation = "mutation-key"
-	if _, _, _, err := derivedKey(mutation, "key-seed"); err != nil {
+	if _, err := derivedKey(resource.KeyTypeEd25519, mutation, "key-seed"); err != nil {
 		t.Fatal(err)
 	}
 	sum := hashParts(mutation, "key-seed")

@@ -28,6 +28,17 @@ func (c compute) RunInstances(ctx context.Context, m backend.Mutation, req resou
 	if sub.State != resource.SubnetAvailable {
 		return resource.Accepted[resource.Instance]{}, resource.Conflict(resource.KindSubnet, req.SubnetID.String(), "subnet is not available")
 	}
+	var key *resource.KeyPair
+	if req.KeyName != "" {
+		for _, k := range c.w.key {
+			if k.OwnerID == m.Account && k.Name == req.KeyName {
+				key = k
+			}
+		}
+		if key == nil {
+			return resource.Accepted[resource.Instance]{}, resource.NotFound(resource.KindKeyPair, req.KeyName)
+		}
+	}
 	resID, err := resource.Mint[resource.ReservationID](c.w.entropy)
 	if err != nil {
 		return resource.Accepted[resource.Instance]{}, err
@@ -60,6 +71,10 @@ func (c compute) RunInstances(ctx context.Context, m backend.Mutation, req resou
 			LaunchTime:    c.w.now().UTC(),
 			PrivateIP:     c.w.nextIP(),
 			Tags:          copyTags(req.Tags),
+			UserData:      req.UserData,
+		}
+		if key != nil {
+			inst.KeyName, inst.KeyPairID = key.Name, key.ID
 		}
 		items = append(items, inst)
 		targets = append(targets, id.Ref())

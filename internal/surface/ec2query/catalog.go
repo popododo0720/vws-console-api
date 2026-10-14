@@ -1,6 +1,7 @@
 package ec2query
 
 import (
+	"encoding/base64"
 	"net/http"
 
 	"github.com/popododo0720/vws-console-api/internal/resource"
@@ -322,4 +323,59 @@ func itoa(n int) string {
 		n /= 10
 	}
 	return string(b[i:])
+}
+
+// importKeyPair stores a public key the caller made. EC2 has no ClientToken
+// here, so a retry of the same key and name is a duplicate.
+func (h *handler) importKeyPair(w http.ResponseWriter, r *http.Request, c resource.Caller) {
+	public, err := blob(r, "PublicKeyMaterial")
+	if err != nil {
+		writeErr(w, r, err)
+		return
+	}
+	if public == "" {
+		writeErr(w, r, resource.Invalid("PublicKeyMaterial", "required"))
+		return
+	}
+	acc, err := h.svc.CreateKeyPair(r.Context(), c, resource.ClientToken{}, resource.CreateKeyPairRequest{
+		Name: r.Form.Get("KeyName"), PublicKey: public,
+	})
+	if err != nil {
+		writeErr(w, r, err)
+		return
+	}
+	key := acc.Items[0]
+	writeXML(w, importKeyXML{
+		RequestID: requestID(r), KeyFingerprint: key.Fingerprint, KeyName: key.Name, KeyPairID: key.ID.String(),
+	})
+}
+
+// describeInstanceAttribute serves the userData attribute, base64 encoded as
+// EC2 returns it.
+func (h *handler) describeInstanceAttribute(w http.ResponseWriter, r *http.Request, c resource.Caller) {
+	if attr := r.Form.Get("Attribute"); attr != "userData" {
+		writeErr(w, r, resource.Invalid("Attribute", "only userData is supported"))
+		return
+	}
+	id, err := resource.Parse[resource.InstanceID](r.Form.Get("InstanceId"))
+	if err != nil {
+		writeErr(w, r, err)
+		return
+	}
+	page, err := h.svc.DescribeInstances(r.Context(), c, resource.InstanceQuery{
+		IDs: []resource.InstanceID{id}, Page: resource.PageRequest{Size: 1},
+	})
+	if err != nil {
+		writeErr(w, r, err)
+		return
+	}
+	if len(page.Items) == 0 {
+		writeErr(w, r, resource.NotFound(resource.KindInstance, id.String()))
+		return
+	}
+	out := instanceAttributeXML{RequestID: requestID(r), InstanceID: id.String()}
+	if ud := page.Items[0].UserData; ud != "" {
+		out.UserData.Value = base64.StdEncoding.EncodeToString([]byte(ud))
+	}
+	writeXML(w, out)
 }

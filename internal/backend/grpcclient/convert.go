@@ -281,6 +281,7 @@ func instanceProto(inst resource.Instance, projectID, vpcID string) *computev1.I
 		Spec: &computev1.InstanceSpec{
 			MachineType: inst.InstanceType,
 			Power:       power,
+			UserData:    inst.UserData,
 			NetworkInterfaces: []*computev1.NetworkInterface{{
 				DeviceName: "nic0",
 				Subnet:     subnetName(projectID, vpcID, inst.SubnetID.String()),
@@ -299,6 +300,9 @@ func instanceProto(inst resource.Instance, projectID, vpcID string) *computev1.I
 				PrivateIpv4: inst.PrivateIP,
 			}},
 		},
+	}
+	if !inst.KeyPairID.IsZero() {
+		out.Spec.KeyPair = keyPairName(projectID, inst.KeyPairID.String())
 	}
 	if inst.State == resource.InstanceTerminated {
 		out.DeleteTime = timestamppb.New(time.Unix(1, 0).UTC())
@@ -370,6 +374,12 @@ func instanceModel(in *computev1.Instance) (resource.Instance, error) {
 	if in.GetDeleteTime() != nil && state == resource.InstanceShuttingDown {
 		state = resource.InstanceTerminated
 	}
+	var keyPairID resource.KeyPairID
+	if name := in.GetSpec().GetKeyPair(); name != "" {
+		if keyPairID, err = resource.Parse[resource.KeyPairID](lastSegment(name)); err != nil {
+			return resource.Instance{}, resource.Internal(err)
+		}
+	}
 	private := ""
 	if nics := in.GetStatus().GetNetworkInterfaces(); len(nics) > 0 {
 		private = nics[0].GetPrivateIpv4()
@@ -378,6 +388,7 @@ func instanceModel(in *computev1.Instance) (resource.Instance, error) {
 		ID: id, ReservationID: resID, OwnerID: owner, State: state, ImageID: img,
 		InstanceType: in.GetSpec().GetMachineType(), SubnetID: sub, VpcID: vpcID, Zone: parts[3],
 		LaunchTime: launchTime(in), PrivateIP: private, Tags: userTags(in.GetLabels()),
+		KeyPairID: keyPairID, UserData: in.GetSpec().GetUserData(),
 	}, nil
 }
 

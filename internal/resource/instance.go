@@ -111,6 +111,12 @@ type Instance struct {
 	PublicIPAllocationID AddressID         `json:"publicIpAllocationId,omitzero"`
 	PrivateIP            string            `json:"privateIpAddress,omitempty"`
 	Tags                 map[string]string `json:"tags,omitempty"`
+	KeyName              string            `json:"keyName,omitempty"`
+	// KeyPairID is the key pair the backend names. A backend that stores only
+	// the id leaves KeyName for the read path to fill.
+	KeyPairID KeyPairID `json:"-"`
+	// UserData is served by DescribeInstanceAttribute, not by listings.
+	UserData string `json:"-"`
 }
 
 // Owner returns the account that owns the instance.
@@ -140,7 +146,13 @@ type RunInstancesRequest struct {
 	SubnetID     SubnetID          `json:"subnetId"`
 	Count        int               `json:"count"`
 	Tags         map[string]string `json:"tags,omitempty"`
+	KeyName      string            `json:"keyName,omitempty"`
+	// UserData is the decoded text handed to the guest on boot.
+	UserData string `json:"userData,omitempty"`
 }
+
+// MaxUserDataBytes is the EC2 limit on decoded user data.
+const MaxUserDataBytes = 16384
 
 // Action returns RunInstances.
 func (RunInstancesRequest) Action() Action { return ActionRunInstances }
@@ -166,6 +178,15 @@ func (r RunInstancesRequest) Normalize() (RunInstancesRequest, error) {
 	}
 	if err := validTags(r.Tags); err != nil {
 		return RunInstancesRequest{}, err
+	}
+	if len(r.KeyName) > 255 {
+		return RunInstancesRequest{}, Invalid("keyName", "malformed")
+	}
+	if len(r.UserData) > MaxUserDataBytes {
+		return RunInstancesRequest{}, Invalid("userData", "exceeds 16384 bytes")
+	}
+	if !utf8.ValidString(r.UserData) {
+		return RunInstancesRequest{}, Invalid("userData", "must be UTF-8 text")
 	}
 	return r, nil
 }

@@ -39,6 +39,7 @@ type instanceItem struct {
 	InstanceID   string   `xml:"instanceId"`
 	ImageID      string   `xml:"imageId"`
 	InstanceType string   `xml:"instanceType"`
+	KeyName      string   `xml:"keyName,omitempty"`
 	SubnetID     string   `xml:"subnetId"`
 	VpcID        string   `xml:"vpcId,omitempty"`
 	LaunchTime   string   `xml:"launchTime,omitempty"`
@@ -313,6 +314,24 @@ type keyItem struct {
 	KeyPairID   string `xml:"keyPairId"`
 	KeyName     string `xml:"keyName"`
 	Fingerprint string `xml:"keyFingerprint"`
+	KeyType     string `xml:"keyType,omitempty"`
+}
+
+type importKeyXML struct {
+	XMLName        struct{} `xml:"ImportKeyPairResponse"`
+	RequestID      string   `xml:"requestId"`
+	KeyFingerprint string   `xml:"keyFingerprint"`
+	KeyName        string   `xml:"keyName"`
+	KeyPairID      string   `xml:"keyPairId"`
+}
+
+type instanceAttributeXML struct {
+	XMLName    struct{} `xml:"DescribeInstanceAttributeResponse"`
+	RequestID  string   `xml:"requestId"`
+	InstanceID string   `xml:"instanceId"`
+	UserData   struct {
+		Value string `xml:"value,omitempty"`
+	} `xml:"userData"`
 }
 
 type deleteGroupXML struct {
@@ -445,6 +464,7 @@ func instanceItems(items []resource.Instance) instanceSet {
 			InstanceID:   inst.ID.String(),
 			ImageID:      inst.ImageID.String(),
 			InstanceType: inst.InstanceType,
+			KeyName:      inst.KeyName,
 			SubnetID:     inst.SubnetID.String(),
 			Zone:         inst.Zone,
 			PrivateIP:    inst.PrivateIP,
@@ -500,7 +520,7 @@ func volumeXML(v resource.Volume) volumeItem {
 }
 
 func keyXML(key resource.KeyPair) keyItem {
-	return keyItem{KeyPairID: key.ID.String(), KeyName: key.Name, Fingerprint: key.Fingerprint}
+	return keyItem{KeyPairID: key.ID.String(), KeyName: key.Name, Fingerprint: key.Fingerprint, KeyType: string(key.Type)}
 }
 
 func groupXML(group resource.SecurityGroup) groupItem {

@@ -14,6 +14,7 @@ import (
 
 	"github.com/popododo0720/vws-console-api/internal/backend"
 	"github.com/popododo0720/vws-console-api/internal/resource"
+	"github.com/popododo0720/vws-console-api/internal/sshkey"
 )
 
 func (c computeClient) DeleteKeyPair(ctx context.Context, m backend.Mutation, req resource.DeleteKeyPairRequest) (resource.Accepted[resource.KeyPair], error) {
@@ -629,9 +630,13 @@ func keyModel(in *computev1.KeyPair) (resource.KeyPair, error) {
 	if err != nil {
 		return resource.KeyPair{}, err
 	}
-	return resource.KeyPair{
+	key := resource.KeyPair{
 		ID: id, OwnerID: owner, Name: labelName(in.GetLabels()), Fingerprint: in.GetStatus().GetFingerprintSha256(),
-	}, nil
+	}
+	if pub, err := sshkey.ParsePublic(in.GetSpec().GetPublicKey()); err == nil {
+		key.Type = pub.Type
+	}
+	return key, nil
 }
 
 func snapshotModel(in *storagev1.Snapshot) (resource.Snapshot, error) {

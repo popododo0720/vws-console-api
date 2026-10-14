@@ -305,6 +305,7 @@ func Run(t *testing.T, newSet Harness) {
 	}
 	exerciseObjectList(ctx, t, set, account, other)
 	exerciseEC2(ctx, t, set, account, first.Items[0].ID)
+	exerciseKeyLaunch(ctx, t, set, account, created.Items[0].ID, img)
 }
 
 // networkTags checks that VPC and subnet tags survive create, describe, and a
