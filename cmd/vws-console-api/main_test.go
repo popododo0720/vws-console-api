@@ -39,3 +39,10 @@ func TestGRPCRefusesDefaultCredentials(t *testing.T) {
 		t.Errorf("error %q names a flag that was given", err)
 	}
 }
+
+func TestUnknownIAMModeIsRejected(t *testing.T) {
+	err := run(t.Context(), []string{"-iam=bogus", "-ops-addr="})
+	if err == nil || !strings.Contains(err.Error(), `unknown -iam "bogus"`) {
+		t.Fatalf("err %v", err)
+	}
+}

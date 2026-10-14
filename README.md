@@ -39,6 +39,21 @@ series is prefixed `vws_console_api_`: `http_requests_total{surface,code}` and
 `http_request_duration_seconds_sum`/`_count{surface}`. These live on their own
 listener so no path collides with a bucket name or a console route.
 
+IAM and STS Query share `-iam-addr` (default `127.0.0.1:8084`). The service in
+the signature's credential scope (`iam` or `sts`, region `vws-1`) picks the API:
+IAM `2010-05-08`, STS `2011-06-15`, with AWS's XML and error codes. Every
+action is authorized as `iam:<Action>` or `sts:<Action>`. `-iam=static` (the
+default) serves only `GetCallerIdentity` for the `-access-key` root key.
+`-iam=fake` adds users, groups, roles, managed and inline policies, access keys
+and `AssumeRole` in memory, lost on restart, until the vws-iam client lands
+(vws-proto#24). The root key keeps working in both modes, and keys created
+there also sign EC2 and S3 calls.
+
+```sh
+aws --endpoint-url http://127.0.0.1:8084 --region vws-1 iam create-user --user-name bob
+aws --endpoint-url http://127.0.0.1:8084 --region vws-1 sts get-caller-identity
+```
+
 Console:
 
 ```http

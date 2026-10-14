@@ -23,6 +23,8 @@ type Service string
 const (
 	ServiceEC2 Service = "ec2"
 	ServiceS3  Service = "s3"
+	ServiceIAM Service = "iam"
+	ServiceSTS Service = "sts"
 )
 
 // Credential is what a client signs with. Only signing (Sign) and local

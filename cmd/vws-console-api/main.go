@@ -23,6 +23,7 @@ import (
 	"github.com/popododo0720/vws-console-api/internal/sigv4"
 	"github.com/popododo0720/vws-console-api/internal/surface/console"
 	"github.com/popododo0720/vws-console-api/internal/surface/ec2query"
+	"github.com/popododo0720/vws-console-api/internal/surface/iamquery"
 	"github.com/popododo0720/vws-console-api/internal/surface/s3rest"
 )
 
@@ -52,6 +53,9 @@ func run(ctx context.Context, args []string) (err error) {
 	computeAddr := fs.String("compute-addr", "127.0.0.1:19001", "compute gRPC address")
 	storageAddr := fs.String("storage-addr", "127.0.0.1:19002", "storage gRPC address")
 	networkAddr := fs.String("network-addr", "127.0.0.1:19003", "network gRPC address")
+	iamMode := fs.String("iam", "static", "static: only the -access-key root key, no IAM/STS management; "+
+		"fake: in-memory IAM users, groups, roles, policies and STS sessions, lost on restart, until the vws-iam client lands (vws-proto#24)")
+	iamAddr := fs.String("iam-addr", "127.0.0.1:8084", "IAM and STS Query listen address")
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("flags: %w", err)
 	}
@@ -91,10 +95,23 @@ func run(ctx context.Context, args []string) (err error) {
 	svc := cloud.New(cloud.Config{Backends: set, Audit: logger})
 	// The static key is the account root. Once the vws/iam/v1 client exists
 	// (vws-proto#24) it goes behind iam.WithRoot.
-	var auth iam.Client = iam.NewStatic(*accessKey, *secret, account)
+	root := iam.NewStatic(*accessKey, *secret, account)
+	var auth iam.Client = root
+	var admin iam.Admin
+	switch *iamMode {
+	case "static":
+	case "fake":
+		fakeIAM := iam.NewFake()
+		auth, admin = iam.WithRoot(root, fakeIAM), fakeIAM
+		logger.WarnContext(ctx, "in-memory IAM: users, keys and roles are lost on restart", slog.String("iam", *iamMode))
+	default:
+		return fmt.Errorf("unknown -iam %q", *iamMode)
+	}
 	authn := iam.Authenticator(auth)
-	ec2 := sigv4.NewVerifier(sigv4.Verifier{Service: sigv4.ServiceEC2, Region: resource.RegionName, Auth: authn})
-	s3 := sigv4.NewVerifier(sigv4.Verifier{Service: sigv4.ServiceS3, Region: resource.RegionName, Auth: authn})
+	verifier := func(s sigv4.Service) *sigv4.Verifier {
+		return sigv4.NewVerifier(sigv4.Verifier{Service: s, Region: resource.RegionName, Auth: authn})
+	}
+	ec2, s3 := verifier(sigv4.ServiceEC2), verifier(sigv4.ServiceS3)
 
 	ctx, stop := signal.NotifyContext(ctx, stopSignals()...)
 	defer stop()
@@ -105,6 +122,9 @@ func run(ctx context.Context, args []string) (err error) {
 		})},
 		{Name: "ec2", Addr: *ec2Addr, Handler: ec2query.New(ec2query.Config{Service: svc, Verifier: ec2, Authorizer: auth})},
 		{Name: "s3", Addr: *s3Addr, Handler: s3rest.New(s3rest.Config{Service: svc, Verifier: s3, Authorizer: auth})},
+		{Name: "iam", Addr: *iamAddr, Handler: iamquery.New(iamquery.Config{
+			Admin: admin, Authorizer: auth, IAM: verifier(sigv4.ServiceIAM), STS: verifier(sigv4.ServiceSTS),
+		})},
 	}})
 }
 
