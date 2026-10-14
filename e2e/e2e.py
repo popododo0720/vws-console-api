@@ -170,6 +170,10 @@ def vms():
         step("RunInstances same token", same_instance, "vm")
         step("DescribeInstances", lambda: check(ec2.describe_instances()["Reservations"], "no reservation"), "vm")
         step("wait for running after RunInstances", lambda: wait_state(S["iid"], "running"), "vm")
+        step("DescribeInstances instance-state-name with two values", lambda: check(any(
+            i["InstanceId"] == S["iid"] for r in ec2.describe_instances(Filters=[
+                {"Name": "instance-state-name", "Values": ["stopped", "running"]}])["Reservations"]
+            for i in r["Instances"]), "running instance missing"), "vm")
         step("StopInstances without ClientToken", lambda: check(
             ec2.stop_instances(InstanceIds=[S["iid"]])["StoppingInstances"], "empty"), "vm")
         step("wait for stopped", lambda: wait_state(S["iid"], "stopped"), "vm")

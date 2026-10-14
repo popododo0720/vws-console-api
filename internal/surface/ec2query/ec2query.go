@@ -390,22 +390,27 @@ func instanceQuery(r *http.Request) (resource.InstanceQuery, error) {
 		if name == "" {
 			continue
 		}
-		value := r.Form.Get("Filter." + strconv.Itoa(i) + ".Value.1")
-		switch name {
-		case "instance-id":
-			id, err := resource.Parse[resource.InstanceID](value)
-			if err != nil {
-				return resource.InstanceQuery{}, err
+		values := indexedStrings(r, "Filter."+strconv.Itoa(i)+".Value")
+		if len(values) == 0 {
+			values = []string{""}
+		}
+		for _, value := range values {
+			switch name {
+			case "instance-id":
+				id, err := resource.Parse[resource.InstanceID](value)
+				if err != nil {
+					return resource.InstanceQuery{}, err
+				}
+				ids = append(ids, id)
+			case "instance-state-name":
+				st, ok := resource.ParseInstanceState(value)
+				if !ok {
+					return resource.InstanceQuery{}, resource.Invalid("Filter", "unknown state")
+				}
+				states = append(states, st)
+			default:
+				return resource.InstanceQuery{}, resource.Invalid("Filter", "unsupported")
 			}
-			ids = append(ids, id)
-		case "instance-state-name":
-			st, ok := resource.ParseInstanceState(value)
-			if !ok {
-				return resource.InstanceQuery{}, resource.Invalid("Filter", "unknown state")
-			}
-			states = append(states, st)
-		default:
-			return resource.InstanceQuery{}, resource.Invalid("Filter", "unsupported")
 		}
 	}
 	page, err := pageForm(r)
@@ -794,8 +799,15 @@ func filterField(key string) bool {
 	if !ok || !inRange(n, 20) {
 		return false
 	}
-	return field == "Name" || field == "Value.1"
+	if field == "Name" {
+		return true
+	}
+	idx, ok := strings.CutPrefix(field, "Value.")
+	return ok && inRange(idx, filterValueMax)
 }
+
+// filterValueMax is the most values one Filter.N takes.
+const filterValueMax = 20
 
 func indexed(key, prefix string, max int) bool {
 	rest, ok := strings.CutPrefix(key, prefix+".")
