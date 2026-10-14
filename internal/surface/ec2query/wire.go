@@ -36,19 +36,48 @@ type instanceSet struct {
 }
 
 type instanceItem struct {
-	InstanceID   string   `xml:"instanceId"`
-	ImageID      string   `xml:"imageId"`
-	InstanceType string   `xml:"instanceType"`
-	KeyName      string   `xml:"keyName,omitempty"`
-	SubnetID     string   `xml:"subnetId"`
-	VpcID        string   `xml:"vpcId,omitempty"`
-	LaunchTime   string   `xml:"launchTime,omitempty"`
-	PublicIP     string   `xml:"ipAddress,omitempty"`
-	NICs         *nicSet  `xml:"networkInterfaceSet,omitempty"`
-	Zone         string   `xml:"placement>availabilityZone"`
-	PrivateIP    string   `xml:"privateIpAddress,omitempty"`
-	State        stateXML `xml:"instanceState"`
-	Tags         *tagSet  `xml:"tagSet,omitempty"`
+	InstanceID   string    `xml:"instanceId"`
+	ImageID      string    `xml:"imageId"`
+	InstanceType string    `xml:"instanceType"`
+	KeyName      string    `xml:"keyName,omitempty"`
+	SubnetID     string    `xml:"subnetId"`
+	VpcID        string    `xml:"vpcId,omitempty"`
+	LaunchTime   string    `xml:"launchTime,omitempty"`
+	PublicIP     string    `xml:"ipAddress,omitempty"`
+	NICs         *nicSet   `xml:"networkInterfaceSet,omitempty"`
+	Zone         string    `xml:"placement>availabilityZone"`
+	PrivateIP    string    `xml:"privateIpAddress,omitempty"`
+	State        stateXML  `xml:"instanceState"`
+	Tags         *tagSet   `xml:"tagSet,omitempty"`
+	RootDevice   string    `xml:"rootDeviceName,omitempty"`
+	RootType     string    `xml:"rootDeviceType,omitempty"`
+	Blocks       *blockSet `xml:"blockDeviceMapping,omitempty"`
+}
+
+type blockSet struct {
+	Items []blockItem `xml:"item"`
+}
+
+type blockItem struct {
+	Device string `xml:"deviceName"`
+	EBS    struct {
+		VolumeID            string `xml:"volumeId"`
+		Status              string `xml:"status"`
+		DeleteOnTermination bool   `xml:"deleteOnTermination"`
+	} `xml:"ebs"`
+}
+
+func blockSetOf(inst resource.Instance) *blockSet {
+	if len(inst.BlockDevices) == 0 {
+		return nil
+	}
+	out := &blockSet{}
+	for _, b := range inst.BlockDevices {
+		item := blockItem{Device: b.Device}
+		item.EBS.VolumeID, item.EBS.Status, item.EBS.DeleteOnTermination = b.VolumeID.String(), "attached", b.DeleteOnTermination
+		out.Items = append(out.Items, item)
+	}
+	return out
 }
 
 type nicSet struct {
@@ -206,6 +235,8 @@ type attachmentItem struct {
 	InstanceID string `xml:"instanceId"`
 	Device     string `xml:"device"`
 	Status     string `xml:"status"`
+	// DeleteOnTermination is always written, as EC2 does.
+	DeleteOnTermination bool `xml:"deleteOnTermination"`
 }
 
 type attachVolumeXML struct {
@@ -474,6 +505,9 @@ func instanceItems(items []resource.Instance) instanceSet {
 			NICs:         nicSetOf(inst),
 			State:        stateXMLOf(inst.State),
 			Tags:         tagSetOf(inst.Tags),
+			RootDevice:   inst.RootDeviceName,
+			RootType:     rootTypeOf(inst),
+			Blocks:       blockSetOf(inst),
 		})
 	}
 	return out
@@ -514,6 +548,7 @@ func volumeXML(v resource.Volume) volumeItem {
 	if !v.InstanceID.IsZero() {
 		item.Attachments.Items = []attachmentItem{{
 			VolumeID: v.ID.String(), InstanceID: v.InstanceID.String(), Device: v.Device, Status: "attached",
+			DeleteOnTermination: v.DeleteOnTermination,
 		}}
 	}
 	return item
@@ -596,4 +631,11 @@ func nicSetOf(inst resource.Instance) *nicSet {
 		}
 	}
 	return &nicSet{Items: []nicItem{nic}}
+}
+
+func rootTypeOf(inst resource.Instance) string {
+	if inst.RootDeviceName == "" {
+		return ""
+	}
+	return "ebs"
 }

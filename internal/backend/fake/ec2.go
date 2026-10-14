@@ -108,6 +108,9 @@ func (c compute) changeInstances(ctx context.Context, m backend.Mutation, action
 			if inst.State == ch.Current {
 				inst.State = settled
 			}
+			if inst.State == resource.InstanceTerminated {
+				c.w.dropRootVolumes(inst.ID)
+			}
 		}
 	})
 	if err != nil {
@@ -574,4 +577,13 @@ func cidrInside(child, parent string) bool {
 	childOnes, childBits := childNet.Mask.Size()
 	parentOnes, parentBits := parentNet.Mask.Size()
 	return childBits == 32 && parentBits == 32 && childOnes > parentOnes
+}
+
+// dropRootVolumes deletes the volumes that go with a terminated instance.
+func (w *World) dropRootVolumes(id resource.InstanceID) {
+	for volID, vol := range w.vol {
+		if vol.InstanceID == id && vol.DeleteOnTermination {
+			delete(w.vol, volID)
+		}
+	}
 }

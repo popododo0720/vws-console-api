@@ -261,6 +261,16 @@ def vms():
             inst = ec2.describe_instances(InstanceIds=[S["iid"]])["Reservations"][0]["Instances"][0]
             check(inst.get("VpcId") == S["vpc"] and inst.get("LaunchTime"), f"instance {inst}")
         step("DescribeInstances returns VpcId and LaunchTime", described_placement, "vm")
+        def root_device():
+            inst = ec2.describe_instances(InstanceIds=[S["iid"]])["Reservations"][0]["Instances"][0]
+            maps = inst.get("BlockDeviceMappings") or []
+            check(inst.get("RootDeviceName") == "/dev/xvda" and inst.get("RootDeviceType") == "ebs", f"root {inst.get('RootDeviceName')}")
+            check(len(maps) == 1 and maps[0]["DeviceName"] == "/dev/xvda" and maps[0]["Ebs"]["DeleteOnTermination"] is True, f"mappings {maps}")
+            vol = ec2.describe_volumes(VolumeIds=[maps[0]["Ebs"]["VolumeId"]])["Volumes"][0]
+            att = vol.get("Attachments") or []
+            check(att and att[0]["InstanceId"] == S["iid"] and att[0]["Device"] == "/dev/xvda" and att[0]["DeleteOnTermination"] is True, f"volume {vol}")
+            check(any(v["VolumeId"] == vol["VolumeId"] for v in ec2.describe_volumes()["Volumes"]), "root volume not listed")
+        step("DescribeInstances RootDeviceName/BlockDeviceMappings and DescribeVolumes root volume", root_device, "vm")
         tagged()
         step("wait for running after RunInstances", lambda: wait_state(S["iid"], "running"), "vm")
         step("DescribeInstances instance-state-name with two values", lambda: check(any(

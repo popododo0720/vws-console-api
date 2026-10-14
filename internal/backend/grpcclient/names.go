@@ -22,6 +22,8 @@ const (
 	labelAction      = "vws-action"
 	labelReservation = "vws-reservation"
 	labelLaunch      = "vws-launch"
+	// labelInstance on a boot volume names the instance it was made for.
+	labelInstance = "vws-instance"
 	// labelNameTag carries the EC2 Name tag. Label keys are lowercase, so the
 	// key "Name" cannot be stored as is.
 	labelNameTag = "vws-name"

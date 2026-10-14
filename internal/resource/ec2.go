@@ -108,6 +108,8 @@ type Volume struct {
 	Device     string      `json:"device,omitempty"`
 	SnapshotID SnapshotID  `json:"snapshotId,omitzero"`
 	CreateTime time.Time   `json:"createTime"`
+	// DeleteOnTermination is set on a root volume, which goes with its instance.
+	DeleteOnTermination bool `json:"deleteOnTermination,omitempty"`
 }
 
 // Owner returns the account that owns the volume.

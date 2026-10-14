@@ -11,10 +11,6 @@ import (
 func exerciseEC2(ctx context.Context, t *testing.T, set backend.Set, account resource.AccountID, stopped resource.InstanceID) {
 	t.Helper()
 	scope := backend.Scope{Account: account}
-	blank, err := set.Compute.DescribeVolumes(ctx, scope, resource.VolumeQuery{Page: resource.PageRequest{Size: 50}})
-	if err != nil || len(blank.Items) != 0 {
-		t.Fatalf("boot volume leaked: %v %+v", err, blank.Items)
-	}
 	vpcReq := resource.CreateVpcRequest{Cidr: "10.8.0.0/16"}
 	vm := backend.Mutation{Scope: scope, Key: "k-vpc", Fingerprint: "fp-vpc"}
 	created, err := set.Network.CreateVpc(ctx, vm, vpcReq)
