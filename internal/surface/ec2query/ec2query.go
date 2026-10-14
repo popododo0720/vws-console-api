@@ -246,18 +246,20 @@ func (h *handler) describeInstances(w http.ResponseWriter, r *http.Request, c re
 		writeErr(w, r, err)
 		return
 	}
+	owner := map[string]string{}
 	groups := map[string][]resource.Instance{}
 	var order []string
 	for _, inst := range page.Items {
 		key := inst.ReservationID.String()
 		if _, ok := groups[key]; !ok {
 			order = append(order, key)
+			owner[key] = inst.OwnerID.String()
 		}
 		groups[key] = append(groups[key], inst)
 	}
 	var items []reservationItem
 	for _, key := range order {
-		items = append(items, reservationItem{ReservationID: key, Instances: instanceItems(groups[key])})
+		items = append(items, reservationItem{ReservationID: key, OwnerID: owner[key], Instances: instanceItems(groups[key])})
 	}
 	writeXML(w, describeInstancesXML{RequestID: requestID(r), NextToken: page.NextToken, Reservations: struct {
 		Items []reservationItem `xml:"item"`

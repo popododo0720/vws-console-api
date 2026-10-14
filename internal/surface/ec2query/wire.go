@@ -2,6 +2,8 @@ package ec2query
 
 import (
 	"encoding/xml"
+	"maps"
+	"slices"
 	"time"
 
 	"github.com/popododo0720/vws-console-api/internal/resource"
@@ -25,6 +27,7 @@ type describeInstancesXML struct {
 
 type reservationItem struct {
 	ReservationID string      `xml:"reservationId"`
+	OwnerID       string      `xml:"ownerId"`
 	Instances     instanceSet `xml:"instancesSet"`
 }
 
@@ -40,6 +43,28 @@ type instanceItem struct {
 	Zone         string   `xml:"placement>availabilityZone"`
 	PrivateIP    string   `xml:"privateIpAddress,omitempty"`
 	State        stateXML `xml:"instanceState"`
+	Tags         *tagSet  `xml:"tagSet,omitempty"`
+}
+
+type tagSet struct {
+	Items []tagItem `xml:"item"`
+}
+
+type tagItem struct {
+	Key   string `xml:"key"`
+	Value string `xml:"value"`
+}
+
+// tagSetOf returns tags sorted by key, or nil when there are none.
+func tagSetOf(tags map[string]string) *tagSet {
+	if len(tags) == 0 {
+		return nil
+	}
+	out := &tagSet{}
+	for _, k := range slices.Sorted(maps.Keys(tags)) {
+		out.Items = append(out.Items, tagItem{Key: k, Value: tags[k]})
+	}
+	return out
 }
 
 type stateXML struct {
@@ -373,6 +398,7 @@ func instanceItems(items []resource.Instance) instanceSet {
 			Zone:         inst.Zone,
 			PrivateIP:    inst.PrivateIP,
 			State:        stateXMLOf(inst.State),
+			Tags:         tagSetOf(inst.Tags),
 		})
 	}
 	return out
