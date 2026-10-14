@@ -79,6 +79,19 @@ minutes, and every failure is the same `401`. `GET /api/v1/auth/session` names
 the caller; `POST /api/v1/auth/logout` ends the session. The bearer
 `-console-token` still acts as the account root until it is retired.
 
+Console sign-in limits for now:
+
+- **Run one replica.** Console sessions (and `-iam=fake` users) live in the
+  process's memory, so a second replica would not know a session the first
+  one issued, and a restart signs everyone out. Keep `replicas: 1` until
+  vws-iam holds sessions.
+- **No MFA yet.** Users have no MFA devices until vws-iam#6, so a login that
+  sends `mfaCode` fails.
+- **No forced password change.** `CreateLoginProfile`/`UpdateLoginProfile`
+  reject `PasswordResetRequired=true` until a change-password flow exists.
+- **`-console-token` stays** as the account root until vws-console signs in
+  with cookies; it is removed after that switch.
+
 The subnet must already exist and belong to the caller. The response is `202`
 with an `operation` and the instances. Poll `GET /api/v1/operations/{id}`.
 `GET /api/v1/buckets/{name}/objects/{key}` returns the object metadata and the
