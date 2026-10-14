@@ -44,6 +44,7 @@ func (c compute) RunInstances(ctx context.Context, m backend.Mutation, req resou
 		return resource.Accepted[resource.Instance]{}, err
 	}
 	items := make([]resource.Instance, 0, req.Count)
+	roots := make([]resource.Volume, 0, req.Count)
 	targets := make([]resource.Ref, 0, req.Count)
 	seen := map[resource.InstanceID]struct{}{}
 	for i := 0; i < req.Count; i++ {
@@ -76,6 +77,20 @@ func (c compute) RunInstances(ctx context.Context, m backend.Mutation, req resou
 		if key != nil {
 			inst.KeyName, inst.KeyPairID = key.Name, key.ID
 		}
+		volID, err := resource.Mint[resource.VolumeID](c.w.entropy)
+		if err != nil {
+			return resource.Accepted[resource.Instance]{}, err
+		}
+		if _, exists := c.w.vol[volID]; exists {
+			return resource.Accepted[resource.Instance]{}, resource.Internal(errors.New("identifier collision"))
+		}
+		inst.RootDeviceName = resource.RootDeviceName
+		inst.BlockDevices = []resource.BlockDevice{{Device: resource.RootDeviceName, VolumeID: volID, DeleteOnTermination: true}}
+		roots = append(roots, resource.Volume{
+			ID: volID, OwnerID: m.Account, SizeGiB: 8, Zone: resource.ZoneName, Type: resource.VolumeGP2,
+			State: resource.VolumeInUse, InstanceID: id, Device: resource.RootDeviceName,
+			CreateTime: c.w.now().UTC(), DeleteOnTermination: true,
+		})
 		items = append(items, inst)
 		targets = append(targets, id.Ref())
 	}
@@ -92,6 +107,10 @@ func (c compute) RunInstances(ctx context.Context, m backend.Mutation, req resou
 	for _, item := range items {
 		stored := item
 		c.w.inst[stored.ID] = &stored
+	}
+	for _, vol := range roots {
+		stored := vol
+		c.w.vol[stored.ID] = &stored
 	}
 	acc := resource.Accepted[resource.Instance]{Operation: op, Items: items}
 	c.w.finish(m.Key, m.Fingerprint, acc)

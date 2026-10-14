@@ -117,6 +117,19 @@ type Instance struct {
 	KeyPairID KeyPairID `json:"-"`
 	// UserData is served by DescribeInstanceAttribute, not by listings.
 	UserData string `json:"-"`
+	// RootDeviceName is RootDeviceName when the instance boots from a volume.
+	RootDeviceName string        `json:"rootDeviceName,omitempty"`
+	BlockDevices   []BlockDevice `json:"blockDeviceMappings,omitempty"`
+}
+
+// RootDeviceName is the device EC2 reports for an instance's boot volume.
+const RootDeviceName = "/dev/xvda"
+
+// BlockDevice is one EBS volume attached to an instance.
+type BlockDevice struct {
+	Device              string   `json:"deviceName"`
+	VolumeID            VolumeID `json:"volumeId"`
+	DeleteOnTermination bool     `json:"deleteOnTermination"`
 }
 
 // Owner returns the account that owns the instance.

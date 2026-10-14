@@ -66,16 +66,16 @@ func (c computeClient) RunInstances(ctx context.Context, m backend.Mutation, req
 	reservation := derivedID("r-", m.Key, "reservation")
 	for i := 0; i < req.Count; i++ {
 		volID := derivedID("vol-", m.Key, "vol", strconv.Itoa(i))
+		instID := derivedID("i-", m.Key, "inst", strconv.Itoa(i))
 		volOp, err := c.volumes.CreateVolume(ctx, &storagev1.CreateVolumeRequest{
 			Parent:    volumeParent(projectID),
 			VolumeId:  volID,
 			RequestId: requestUUID(m.Key, "vol", strconv.Itoa(i)),
-			Volume:    bootVolume(projectID, m.Fingerprint, req.ImageID),
+			Volume:    bootVolume(projectID, m.Fingerprint, req.ImageID, instID),
 		})
 		if err := rpcErr(volOp, err); err != nil {
 			return resource.Accepted[resource.Instance]{}, err
 		}
-		instID := derivedID("i-", m.Key, "inst", strconv.Itoa(i))
 		labels, err := withInternalLabels(req.Tags, map[string]string{
 			labelFingerprint: clip(m.Fingerprint, 63),
 			labelImage:       req.ImageID.String(),
@@ -140,9 +140,9 @@ func (c computeClient) RunInstances(ctx context.Context, m backend.Mutation, req
 // bootVolume is the disk RunInstances creates from the machine image.
 // volume.proto sources a volume from a compute image. InstanceSpec has no
 // image field; the instance attaches this volume and marks it boot.
-func bootVolume(projectID, fingerprint string, image resource.ImageID) *storagev1.Volume {
+func bootVolume(projectID, fingerprint string, image resource.ImageID, instance string) *storagev1.Volume {
 	return &storagev1.Volume{
-		Labels: map[string]string{labelFingerprint: clip(fingerprint, 63)},
+		Labels: map[string]string{labelFingerprint: clip(fingerprint, 63), labelInstance: instance},
 		Spec: &storagev1.VolumeSpec{
 			SizeGib: 8,
 			Type:    storagev1.VolumeType_VOLUME_TYPE_SSD,

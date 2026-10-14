@@ -336,9 +336,6 @@ func (c computeClient) DescribeVolumes(ctx context.Context, s backend.Scope, q r
 	}
 	items := make([]resource.Volume, 0, len(out.GetVolumes()))
 	for _, item := range out.GetVolumes() {
-		if sourcedVolume(item) {
-			continue
-		}
 		vol, err := volumeModel(item)
 		if err != nil {
 			return resource.Page[resource.Volume]{}, err
@@ -634,9 +631,6 @@ func (c computeClient) getVolume(ctx context.Context, projectID, id string) (res
 	if err != nil {
 		return resource.Volume{}, fromNamedRPC(name, err)
 	}
-	if sourcedVolume(out) {
-		return resource.Volume{}, resource.NotFound(resource.KindVolume, id)
-	}
 	return volumeModel(out)
 }
 
@@ -762,11 +756,29 @@ func volumeModel(in *storagev1.Volume) (resource.Volume, error) {
 		}
 		snap = parsed
 	}
-	return resource.Volume{
+	vol := resource.Volume{
 		ID: id, OwnerID: owner, SizeGiB: in.GetSpec().GetSizeGib(), Zone: parts[3], SnapshotID: snap,
 		Type: volumeTypeOf(in.GetSpec().GetType()), State: state, InstanceID: inst, Device: in.GetStatus().GetDeviceName(),
 		CreateTime: in.GetCreateTime().AsTime().UTC(),
-	}, nil
+	}
+	if rootVolume(in) {
+		// RunInstances made it from the image, and compute deletes it with
+		// the instance. Storage may not report the attachment, so the
+		// instance comes from the label RunInstances wrote.
+		vol.DeleteOnTermination = true
+		if vol.InstanceID.IsZero() {
+			if parsed, err := resource.Parse[resource.InstanceID](in.GetLabels()[labelInstance]); err == nil {
+				vol.InstanceID = parsed
+			}
+		}
+		if !vol.InstanceID.IsZero() {
+			vol.Device = resource.RootDeviceName
+			if vol.State == resource.VolumeAvailable {
+				vol.State = resource.VolumeInUse
+			}
+		}
+	}
+	return vol, nil
 }
 
 func volumeStateOf(in *storagev1.Volume) (resource.VolumeState, error) {
@@ -811,6 +823,9 @@ func volumeProto(v resource.Volume, projectID string) *storagev1.Volume {
 	spec := &storagev1.VolumeSpec{SizeGib: v.SizeGiB, Type: storagev1.VolumeType_VOLUME_TYPE_SSD}
 	if !v.SnapshotID.IsZero() {
 		spec.Source = &storagev1.VolumeSpec_Snapshot{Snapshot: snapshotName(projectID, v.SnapshotID.String())}
+	}
+	if v.DeleteOnTermination {
+		spec.Source = &storagev1.VolumeSpec_Image{Image: imageName(projectID, "ami-0123456789abcdef0")}
 	}
 	return &storagev1.Volume{
 		CreateTime: created,
@@ -947,9 +962,8 @@ func ruleProto(rule resource.IngressRule, id string) (*networkv1.SecurityGroupRu
 	}, nil
 }
 
-// sourcedVolume reports a boot volume, which RunInstances creates from an
-// image. A volume restored from a snapshot is a DescribeVolumes row.
-func sourcedVolume(in *storagev1.Volume) bool {
+// rootVolume reports a boot volume, which RunInstances creates from an image.
+func rootVolume(in *storagev1.Volume) bool {
 	return in.GetSpec().GetImage() != ""
 }
 
