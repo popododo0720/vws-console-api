@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/popododo0720/vws-console-api/internal/resource"
 	"github.com/popododo0720/vws-console-api/internal/sigv4"
 )
 
@@ -26,20 +27,30 @@ type Statement struct {
 	Resources []string
 }
 
-// Fake is an in-memory IAM: keys plus identity statements per principal ARN,
-// evaluated as explicit deny, then allow, then implicit deny. It stands in for
-// the vws-iam gRPC client in tests and the fake backend.
+// Fake is an in-memory IAM: users, groups, roles, policies, access keys and
+// STS sessions per account (store.go), plus raw statements per principal ARN
+// for tests. Policies evaluate as explicit deny, then allow, then implicit
+// deny. It stands in for the vws-iam gRPC client until vws-proto#24, and
+// nothing in it survives a restart.
 type Fake struct {
-	// Now is the clock for session expiry. Nil uses time.Now.
-	Now   func() time.Time
-	mu    sync.RWMutex
-	keys  map[string]Key
-	stmts map[string][]Statement
+	// Now is the clock for creation times and session expiry. Nil uses time.Now.
+	Now      func() time.Time
+	mu       sync.RWMutex
+	keys     map[string]Key
+	stmts    map[string][]Statement
+	accounts map[resource.AccountID]*store
 }
 
 // NewFake returns an empty fake.
 func NewFake() *Fake {
-	return &Fake{keys: map[string]Key{}, stmts: map[string][]Statement{}}
+	return &Fake{keys: map[string]Key{}, stmts: map[string][]Statement{}, accounts: map[resource.AccountID]*store{}}
+}
+
+func (f *Fake) now() time.Time {
+	if f.Now != nil {
+		return f.Now().UTC()
+	}
+	return time.Now().UTC()
 }
 
 // AddKey stores a key with its secret.
@@ -64,33 +75,23 @@ func (f *Fake) Authenticate(_ context.Context, req sigv4.AuthRequest) (Principal
 	if !ok {
 		return Principal{}, ErrUnknownKey
 	}
-	now := time.Now
-	if f.Now != nil {
-		now = f.Now
-	}
-	return verifyKey(k, req, now())
+	return verifyKey(k, req, f.now())
 }
 
-// Authorize evaluates the principal's statements.
+// Authorize evaluates the principal's raw statements and, for an IAM user
+// or an assumed role, its identity policies: inline and attached, and for a
+// user those of its groups too.
 func (f *Fake) Authorize(_ context.Context, req Request) (Decision, error) {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
-	allowed := false
+	var stmts []policyStatement
 	for _, s := range f.stmts[req.Principal.ARN] {
-		if !matchAny(s.Actions, req.Action, true) || !matchAny(s.Resources, req.Resource, false) {
-			continue
-		}
-		if s.Effect == Deny {
-			return Decision{Reason: "explicit deny"}, nil
-		}
-		if s.Effect == Allow {
-			allowed = true
-		}
+		stmts = append(stmts, policyStatement{effect: s.Effect, action: s.Actions, resource: s.Resources})
 	}
-	if allowed {
-		return Decision{Allowed: true, Reason: "allowed by identity policy"}, nil
+	if st := f.accounts[req.Principal.Account]; st != nil {
+		stmts = append(stmts, st.statementsFor(req.Principal.ARN)...)
 	}
-	return Decision{Reason: "implicit deny"}, nil
+	return evaluate(stmts, req.Action, req.Resource), nil
 }
 
 func matchAny(patterns []string, s string, fold bool) bool {
