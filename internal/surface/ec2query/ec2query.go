@@ -955,6 +955,10 @@ func ec2Code(e *resource.Error) string {
 		}
 		return notFoundCode(e.Kind)
 	case resource.CodeInvalidArgument:
+		// EC2 reports a public key it cannot read as InvalidKey.Format.
+		if strings.EqualFold(e.Field, "publicKeyMaterial") {
+			return "InvalidKey.Format"
+		}
 		return "InvalidParameterValue"
 	case resource.CodeAlreadyExists:
 		return alreadyExistsCode(e.Kind)

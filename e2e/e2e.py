@@ -205,6 +205,8 @@ def key_launch():
     pub = b"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIG417cXtz5jVkH8Cu0D4exQ0iqZ8aXluTLeM0PhuoDH1 e2e@vws\n"
     step("ImportKeyPair", lambda: check(
         ec2.import_key_pair(KeyName="e2e-import", PublicKeyMaterial=pub)["KeyName"] == "e2e-import", "import"))
+    step("ImportKeyPair malformed key is InvalidKey.Format", lambda: ec2_error("InvalidKey.Format", lambda: ec2.import_key_pair(
+        KeyName="e2e-bad", PublicKeyMaterial=b"not a key")))
     step("DescribeKeyPairs KeyType of an imported key", lambda: check(
         ec2.describe_key_pairs(KeyNames=["e2e-import"])["KeyPairs"][0].get("KeyType") == "ed25519", "key type"))
     user_data = "#cloud-config\nruncmd:\n  - echo vws > /tmp/vws-user-data\n"

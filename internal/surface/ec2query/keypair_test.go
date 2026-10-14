@@ -42,10 +42,16 @@ func TestImportKeyLaunchAndUserData(t *testing.T) {
 	if !strings.Contains(imported, "<ImportKeyPairResponse") || xmlText(t, imported, "keyName") != "laptop" || len(xmlText(t, imported, "keyFingerprint")) == 0 {
 		t.Fatalf("import: %s", imported)
 	}
-	send(url.Values{
-		"Action": {"ImportKeyPair"}, "KeyName": {"junk"},
-		"PublicKeyMaterial": {base64.StdEncoding.EncodeToString([]byte("not a key"))},
-	}, http.StatusBadRequest)
+	for _, junk := range []string{
+		base64.StdEncoding.EncodeToString([]byte("not a key")),
+		base64.StdEncoding.EncodeToString([]byte("ssh-dss AAAAB3NzaC1kc3M=")),
+		"%%%",
+	} {
+		got := send(url.Values{"Action": {"ImportKeyPair"}, "KeyName": {"junk"}, "PublicKeyMaterial": {junk}}, http.StatusBadRequest)
+		if !strings.Contains(got, "<Code>InvalidKey.Format</Code>") {
+			t.Fatalf("malformed key %q: %s", junk, got)
+		}
+	}
 	described := send(url.Values{"Action": {"DescribeKeyPairs"}, "KeyName.1": {"laptop"}}, http.StatusOK)
 	if xmlText(t, described, "keyType") != "ed25519" {
 		t.Fatalf("describe: %s", described)
