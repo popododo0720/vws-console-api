@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/popododo0720/vws-console-api/internal/cloud"
+	"github.com/popododo0720/vws-console-api/internal/iam"
 	"github.com/popododo0720/vws-console-api/internal/resource"
 	"github.com/popododo0720/vws-console-api/internal/server"
 	"github.com/popododo0720/vws-console-api/internal/sigv4"
@@ -28,11 +29,13 @@ import (
 type Config struct {
 	Service  *cloud.Service
 	Verifier *sigv4.Verifier
+	// Authorizer decides each request. Nil denies every request.
+	Authorizer iam.Authorizer
 }
 
 // New returns the object handler. Paths are /{bucket} and /{bucket}/{key}.
 func New(cfg Config) http.Handler {
-	h := &handler{svc: cfg.Service, verifier: cfg.Verifier}
+	h := &handler{svc: cfg.Service, verifier: cfg.Verifier, authz: cfg.Authorizer}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", h.listBuckets)
 	mux.HandleFunc("GET /{bucket}", h.listObjects)
@@ -49,6 +52,7 @@ func New(cfg Config) http.Handler {
 type handler struct {
 	svc      *cloud.Service
 	verifier *sigv4.Verifier
+	authz    iam.Authorizer
 }
 
 func (h *handler) wrap(next http.Handler) http.Handler {
@@ -66,8 +70,48 @@ func (h *handler) wrap(next http.Handler) http.Handler {
 			writeErr(w, r, err, r.URL.Path)
 			return
 		}
+		if action, arn, ok := s3Action(r.Method, r.URL.Path); ok {
+			if err := iam.Check(r.Context(), h.authz, caller, action, arn); err != nil {
+				writeErr(w, r, err, r.URL.Path)
+				return
+			}
+		}
 		next.ServeHTTP(w, r.WithContext(withCaller(r.Context(), caller)))
 	})
+}
+
+// s3Action names the IAM action and ARN of a routed request. The bool is false
+// for a method no route serves; the mux answers that one without acting.
+func s3Action(method, p string) (action, arn string, ok bool) {
+	rest := strings.TrimPrefix(p, "/")
+	bucket, key, isObject := strings.Cut(rest, "/")
+	switch {
+	case rest == "":
+		if method == http.MethodGet {
+			return "s3:ListAllMyBuckets", "arn:vws:s3:::*", true
+		}
+	case isObject:
+		arn = "arn:vws:s3:::" + bucket + "/" + key
+		switch method {
+		case http.MethodPut:
+			return "s3:PutObject", arn, true
+		case http.MethodGet, http.MethodHead:
+			return "s3:GetObject", arn, true
+		case http.MethodDelete:
+			return "s3:DeleteObject", arn, true
+		}
+	default:
+		arn = "arn:vws:s3:::" + bucket
+		switch method {
+		case http.MethodPut:
+			return "s3:CreateBucket", arn, true
+		case http.MethodGet, http.MethodHead:
+			return "s3:ListBucket", arn, true
+		case http.MethodDelete:
+			return "s3:DeleteBucket", arn, true
+		}
+	}
+	return "", "", false
 }
 
 func (h *handler) listBuckets(w http.ResponseWriter, r *http.Request) {
@@ -600,7 +644,12 @@ func s3Code(e *resource.Error) string {
 		return "BucketNotEmpty"
 	case resource.CodeInvalidArgument:
 		return "InvalidArgument"
-	case resource.CodeUnauthenticated, resource.CodePermissionDenied:
+	case resource.CodeUnauthenticated:
+		if e.Field == "AccessKeyId" {
+			return "InvalidAccessKeyId"
+		}
+		return "AccessDenied"
+	case resource.CodePermissionDenied:
 		return "AccessDenied"
 	case resource.CodeResourceExhausted:
 		return "SlowDown"

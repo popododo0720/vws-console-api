@@ -168,6 +168,11 @@ func Unauthenticated(message string) *Error {
 	return &Error{Code: CodeUnauthenticated, Message: message}
 }
 
+// Denied reports a caller that is authenticated but not allowed.
+func Denied(message string) *Error {
+	return &Error{Code: CodePermissionDenied, Message: message}
+}
+
 // TooLarge reports a body or object that exceeds the size this process accepts.
 // It is not a quota, so callers must not retry it unchanged.
 func TooLarge(message string) *Error {

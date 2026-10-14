@@ -2,7 +2,6 @@ package interop
 
 import (
 	"bytes"
-	"context"
 	"encoding"
 	"encoding/json"
 	"net/http"
@@ -14,6 +13,7 @@ import (
 
 	"github.com/popododo0720/vws-console-api/internal/backend/fake"
 	"github.com/popododo0720/vws-console-api/internal/cloud"
+	"github.com/popododo0720/vws-console-api/internal/iam"
 	"github.com/popododo0720/vws-console-api/internal/resource"
 	"github.com/popododo0720/vws-console-api/internal/sigv4"
 	"github.com/popododo0720/vws-console-api/internal/surface/console"
@@ -32,7 +32,7 @@ func TestConsoleAndQueryLaunchTheSameInstance(t *testing.T) {
 	svc := cloud.New(cloud.Config{Backends: world.Set()})
 	ui := console.New(console.Config{Service: svc, Auth: console.BearerTokens{"tok-console": caller}})
 	cred := sigv4.Credential{AccessKey: "AKIDEXAMPLE", Secret: "secret", Account: account}
-	query := ec2query.New(ec2query.Config{Service: svc, Verifier: verifier(cred, sigv4.ServiceEC2, now)})
+	query := ec2query.New(ec2query.Config{Service: svc, Authorizer: iam.NewStatic(cred.AccessKey, cred.Secret, cred.Account), Verifier: verifier(cred, sigv4.ServiceEC2, now)})
 
 	subnetRes := call(t, ui, http.MethodPost, "/api/v1/subnets", `{"cidrBlock":"10.1.0.0/24"}`, map[string]string{
 		"Authorization":   "Bearer tok-console",
@@ -115,7 +115,7 @@ func TestConsoleAndQueryShareAVpc(t *testing.T) {
 	svc := cloud.New(cloud.Config{Backends: world.Set()})
 	ui := console.New(console.Config{Service: svc, Auth: console.BearerTokens{"tok-console": caller}})
 	cred := sigv4.Credential{AccessKey: "AKIDEXAMPLE", Secret: "secret", Account: account}
-	query := ec2query.New(ec2query.Config{Service: svc, Verifier: verifier(cred, sigv4.ServiceEC2, now)})
+	query := ec2query.New(ec2query.Config{Service: svc, Authorizer: iam.NewStatic(cred.AccessKey, cred.Secret, cred.Account), Verifier: verifier(cred, sigv4.ServiceEC2, now)})
 
 	created := call(t, ui, http.MethodPost, "/api/v1/vpcs", `{"cidrBlock":"10.9.0.0/16"}`, map[string]string{
 		"Authorization":   "Bearer tok-console",
@@ -160,7 +160,7 @@ func TestConsoleAndQueryShareAnAddress(t *testing.T) {
 	svc := cloud.New(cloud.Config{Backends: world.Set()})
 	ui := console.New(console.Config{Service: svc, Auth: console.BearerTokens{"tok-console": caller}})
 	cred := sigv4.Credential{AccessKey: "AKIDEXAMPLE", Secret: "secret", Account: account}
-	query := ec2query.New(ec2query.Config{Service: svc, Verifier: verifier(cred, sigv4.ServiceEC2, now)})
+	query := ec2query.New(ec2query.Config{Service: svc, Authorizer: iam.NewStatic(cred.AccessKey, cred.Secret, cred.Account), Verifier: verifier(cred, sigv4.ServiceEC2, now)})
 
 	created := call(t, ui, http.MethodPost, "/api/v1/addresses", `{}`, map[string]string{
 		"Authorization":   "Bearer tok-console",
@@ -204,7 +204,7 @@ func TestS3ObjectRoundTrip(t *testing.T) {
 	world := fake.New(fake.Options{Now: func() time.Time { return now }})
 	svc := cloud.New(cloud.Config{Backends: world.Set()})
 	cred := sigv4.Credential{AccessKey: "AKIDEXAMPLE", Secret: "secret", Account: account}
-	s3 := s3rest.New(s3rest.Config{Service: svc, Verifier: verifier(cred, sigv4.ServiceS3, now)})
+	s3 := s3rest.New(s3rest.Config{Service: svc, Authorizer: iam.NewStatic(cred.AccessKey, cred.Secret, cred.Account), Verifier: verifier(cred, sigv4.ServiceS3, now)})
 
 	bucketRes := serveSigned(t, s3, cred, sigv4.ServiceS3, now, http.MethodPut, "http://127.0.0.1:8082/build-logs", "")
 	if bucketRes.Code != http.StatusOK {
@@ -238,9 +238,7 @@ func verifier(cred sigv4.Credential, service sigv4.Service, now time.Time) *sigv
 		Service: service,
 		Region:  resource.RegionName,
 		Now:     func() time.Time { return now },
-		Lookup: func(_ context.Context, key string) (sigv4.Credential, bool) {
-			return cred, key == cred.AccessKey
-		},
+		Keys:    iam.KeyStore(iam.NewStatic(cred.AccessKey, cred.Secret, cred.Account)),
 	})
 }
 

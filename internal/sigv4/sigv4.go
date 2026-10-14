@@ -6,6 +6,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"io"
 	"net/http"
 	"slices"
@@ -24,21 +25,47 @@ const (
 	ServiceS3  Service = "s3"
 )
 
-// Credential is the secret half of an access key.
+// Credential is the secret half of an access key and who it belongs to.
+// SessionToken and Expires are set for temporary (STS) credentials; such a
+// request must carry the same X-Amz-Security-Token and arrive before Expires.
 type Credential struct {
-	AccessKey string
-	Secret    string
-	Account   resource.AccountID
+	AccessKey    string
+	Secret       string
+	Account      resource.AccountID
+	Principal    string
+	Root         bool
+	SessionToken string
+	Expires      time.Time
 }
 
-// Lookup resolves an access key. The bool is false when the key is unknown.
+// ErrUnknownKey is what a KeyStore returns for an access key it does not hold.
+var ErrUnknownKey = errors.New("unknown access key")
+
+// KeyStore resolves an access key to its signing credential. It returns
+// ErrUnknownKey for a key it does not hold; any other error means the store
+// could not answer.
+type KeyStore interface {
+	SigningCredential(ctx context.Context, accessKey string) (Credential, error)
+}
+
+// Lookup adapts a plain function to a KeyStore. The bool is false when the key
+// is unknown.
 type Lookup func(ctx context.Context, accessKey string) (Credential, bool)
+
+// SigningCredential implements KeyStore.
+func (f Lookup) SigningCredential(ctx context.Context, accessKey string) (Credential, error) {
+	cred, ok := f(ctx, accessKey)
+	if !ok {
+		return Credential{}, ErrUnknownKey
+	}
+	return cred, nil
+}
 
 // Verifier checks one service and region.
 type Verifier struct {
 	Service Service
 	Region  string
-	Lookup  Lookup
+	Keys    KeyStore
 	Now     func() time.Time
 	Skew    time.Duration
 	MaxBody int64
@@ -91,12 +118,21 @@ func (v *Verifier) Verify(r *http.Request) (resource.Caller, error) {
 	if len(parts) != 5 || parts[1] != stamp.Format("20060102") || parts[2] != v.Region || parts[3] != string(v.Service) || parts[4] != "aws4_request" {
 		return resource.Caller{}, resource.Unauthenticated("credential scope rejected")
 	}
-	if v.Lookup == nil {
-		return resource.Caller{}, resource.Unauthenticated("unknown access key")
+	if v.Keys == nil {
+		return resource.Caller{}, unknownKey()
 	}
-	cred, ok := v.Lookup(r.Context(), parts[0])
-	if !ok || cred.Secret == "" || cred.Account.IsZero() {
-		return resource.Caller{}, resource.Unauthenticated("unknown access key")
+	cred, err := v.Keys.SigningCredential(r.Context(), parts[0])
+	switch {
+	case errors.Is(err, ErrUnknownKey):
+		return resource.Caller{}, unknownKey()
+	case err != nil:
+		return resource.Caller{}, &resource.Error{Code: resource.CodeUnavailable, Message: "credential store unavailable"}
+	}
+	if cred.Secret == "" || cred.Account.IsZero() {
+		return resource.Caller{}, unknownKey()
+	}
+	if err := checkSession(r, cred, v.Now()); err != nil {
+		return resource.Caller{}, err
 	}
 	if r.Header.Get("Content-Type") != "" && !headerSigned(auth.signedHeaders, "content-type") {
 		return resource.Caller{}, resource.Unauthenticated("content-type is not signed")
@@ -132,7 +168,30 @@ func (v *Verifier) Verify(r *http.Request) (resource.Caller, error) {
 	if err != nil || !hmac.Equal(want, got) {
 		return resource.Caller{}, resource.Unauthenticated("signature mismatch")
 	}
-	return resource.Caller{Account: cred.Account, Subject: cred.AccessKey}, nil
+	return resource.Caller{Account: cred.Account, Subject: cred.AccessKey, Principal: cred.Principal, Root: cred.Root}, nil
+}
+
+func unknownKey() *resource.Error {
+	return &resource.Error{Code: resource.CodeUnauthenticated, Field: "AccessKeyId", Message: "The access key ID you provided does not exist in our records."}
+}
+
+// checkSession enforces the session token and expiry of a temporary
+// credential, and refuses a token sent with a long-term key.
+func checkSession(r *http.Request, cred Credential, now time.Time) error {
+	got := r.Header.Get("X-Amz-Security-Token")
+	if cred.SessionToken == "" {
+		if got != "" {
+			return resource.Unauthenticated("security token sent with a long-term key")
+		}
+		return nil
+	}
+	if got == "" || !hmac.Equal([]byte(got), []byte(cred.SessionToken)) {
+		return resource.Unauthenticated("the security token included in the request is invalid")
+	}
+	if !cred.Expires.IsZero() && !now.Before(cred.Expires) {
+		return resource.Unauthenticated("the security token included in the request is expired")
+	}
+	return nil
 }
 
 // Sign sets the date, payload hash, and Authorization header on r.
@@ -153,6 +212,10 @@ func sign(r *http.Request, cred Credential, service Service, region string, now 
 	amzDate := now.UTC().Format("20060102T150405Z")
 	r.Header.Set("X-Amz-Date", amzDate)
 	signed := []string{"host", "x-amz-date"}
+	if cred.SessionToken != "" {
+		r.Header.Set("X-Amz-Security-Token", cred.SessionToken)
+		signed = append(signed, "x-amz-security-token")
+	}
 	if payloadHeader {
 		r.Header.Set("X-Amz-Content-Sha256", payload)
 		signed = append(signed, "x-amz-content-sha256")
