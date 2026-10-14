@@ -2,6 +2,7 @@ package resource
 
 import (
 	"strings"
+	"time"
 	"unicode"
 	"unicode/utf8"
 )
@@ -101,7 +102,9 @@ type Instance struct {
 	ImageID       ImageID           `json:"imageId"`
 	InstanceType  string            `json:"instanceType"`
 	SubnetID      SubnetID          `json:"subnetId"`
+	VpcID         VpcID             `json:"vpcId,omitzero"`
 	Zone          string            `json:"availabilityZone"`
+	LaunchTime    time.Time         `json:"launchTime,omitzero"`
 	PrivateIP     string            `json:"privateIpAddress,omitempty"`
 	Tags          map[string]string `json:"tags,omitempty"`
 }

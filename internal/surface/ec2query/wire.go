@@ -40,6 +40,8 @@ type instanceItem struct {
 	ImageID      string   `xml:"imageId"`
 	InstanceType string   `xml:"instanceType"`
 	SubnetID     string   `xml:"subnetId"`
+	VpcID        string   `xml:"vpcId,omitempty"`
+	LaunchTime   string   `xml:"launchTime,omitempty"`
 	Zone         string   `xml:"placement>availabilityZone"`
 	PrivateIP    string   `xml:"privateIpAddress,omitempty"`
 	State        stateXML `xml:"instanceState"`
@@ -106,6 +108,8 @@ type subnetItem struct {
 	VpcID    string `xml:"vpcId,omitempty"`
 	Cidr     string `xml:"cidrBlock"`
 	State    string `xml:"state"`
+	Zone     string `xml:"availabilityZone,omitempty"`
+	MapIP    bool   `xml:"mapPublicIpOnLaunch"`
 }
 
 type createVpcXML struct {
@@ -413,6 +417,8 @@ func instanceItems(items []resource.Instance) instanceSet {
 			SubnetID:     inst.SubnetID.String(),
 			Zone:         inst.Zone,
 			PrivateIP:    inst.PrivateIP,
+			VpcID:        inst.VpcID.String(),
+			LaunchTime:   launchTimeXML(inst.LaunchTime),
 			State:        stateXMLOf(inst.State),
 			Tags:         tagSetOf(inst.Tags),
 		})
@@ -425,7 +431,7 @@ func stateXMLOf(s resource.InstanceState) stateXML {
 }
 
 func subnetXML(s resource.Subnet) subnetItem {
-	return subnetItem{SubnetID: s.ID.String(), VpcID: s.VpcID.String(), Cidr: s.Cidr, State: s.State.String()}
+	return subnetItem{SubnetID: s.ID.String(), VpcID: s.VpcID.String(), Cidr: s.Cidr, State: s.State.String(), Zone: s.Zone, MapIP: s.MapPublicIPOnLaunch}
 }
 
 func vpcXML(v resource.Vpc) vpcItem {
@@ -509,6 +515,14 @@ func imageXML(img resource.Image) imageItem {
 
 // awsTime renders t as EC2 does (ISO 8601, UTC, milliseconds); zero is omitted.
 func awsTime(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return t.UTC().Format("2006-01-02T15:04:05.000Z")
+}
+
+// launchTimeXML formats a launch time as EC2 does, or empty when unknown.
+func launchTimeXML(t time.Time) string {
 	if t.IsZero() {
 		return ""
 	}

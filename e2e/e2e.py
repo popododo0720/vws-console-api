@@ -102,6 +102,9 @@ def network():
         sid = ec2.create_subnet(VpcId=S["vpc"], CidrBlock="10.0.2.0/24", AvailabilityZone="vws-1a")["Subnet"]["SubnetId"]
         ec2.delete_subnet(SubnetId=sid)
     step("CreateSubnet AvailabilityZone=vws-1a", subnet_with_zone)
+    step("DescribeSubnets returns AvailabilityZone and MapPublicIpOnLaunch", lambda: check(
+        all(s.get("AvailabilityZone") == "vws-1a" and s.get("MapPublicIpOnLaunch") is False
+            for s in ec2.describe_subnets(SubnetIds=[S["subnet"]])["Subnets"]), "subnet fields missing"))
     S["sg"] = step("CreateSecurityGroup", lambda: ec2.create_security_group(GroupName="web", Description="d", VpcId=S["vpc"])["GroupId"])
     step("CreateKeyPair", lambda: ec2.create_key_pair(KeyName="k1"))
     S["vol"] = step("CreateVolume", lambda: ec2.create_volume(AvailabilityZone="vws-1a", Size=10, ClientToken="v0")["VolumeId"])
@@ -191,6 +194,11 @@ def vms():
             tags = {t["Key"]: t["Value"] for t in res["Instances"][0].get("Tags", [])}
             check(tags.get("Name") == "e2e-web" and res.get("OwnerId"), f"reservation {res}")
         step("DescribeInstances returns the Name tag and OwnerId", described_tags, "vm")
+
+        def described_placement():
+            inst = ec2.describe_instances(InstanceIds=[S["iid"]])["Reservations"][0]["Instances"][0]
+            check(inst.get("VpcId") == S["vpc"] and inst.get("LaunchTime"), f"instance {inst}")
+        step("DescribeInstances returns VpcId and LaunchTime", described_placement, "vm")
         tagged()
         step("wait for running after RunInstances", lambda: wait_state(S["iid"], "running"), "vm")
         step("DescribeInstances instance-state-name with two values", lambda: check(any(

@@ -13,6 +13,8 @@ type Vpc struct {
 	OwnerID AccountID `json:"ownerId"`
 	Cidr    string    `json:"cidrBlock"`
 	State   string    `json:"state"`
+	// IsDefault is always false: VWS has no default VPC.
+	IsDefault bool `json:"isDefault"`
 }
 
 // Owner returns the account that owns the VPC.
