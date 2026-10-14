@@ -120,6 +120,8 @@ func (h *handler) mutation(action resource.Action) (string, string, http.Handler
 		return http.MethodPost, "/api/v1/addresses/{id}/associate", h.associateAddress
 	case resource.ActionModifyVolume:
 		return http.MethodPost, "/api/v1/volumes/{id}/modify", h.modifyVolume
+	case resource.ActionCreateTags:
+		return http.MethodPost, "/api/v1/instances/{id}/tags", h.createTags
 	case resource.ActionDisassociateAddress:
 		return http.MethodPost, "/api/v1/addresses/{id}/disassociate", h.disassociateAddress
 	default:

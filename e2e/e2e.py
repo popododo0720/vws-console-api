@@ -250,6 +250,12 @@ def tagged():
     step("StopInstances (tagged)", lambda: ec2.stop_instances(InstanceIds=[iid]), "vm")
     step("wait for stopped (tagged)", lambda: wait_state(iid, "stopped"), "vm")
     step("tags survive StopInstances", lambda: check(ec2_tags() == ODD_TAGS, f"{ec2_tags()}"), "vm")
+    def create_tags():
+        ec2.create_tags(Resources=[iid], Tags=[{"Key": "Name", "Value": "renamed"}, {"Key": "Cost Center", "Value": "42"}])
+        want = dict(ODD_TAGS, Name="renamed", **{"Cost Center": "42"})
+        check(ec2_tags() == want, f"{ec2_tags()}")
+        check(console_get("/api/v1/instances/" + iid)["tags"] == want, "console tags differ")
+    step("CreateTags renames and adds tags, keeping the rest", create_tags, "vm")
     step("TerminateInstances (tagged)", lambda: ec2.terminate_instances(InstanceIds=[iid]), "vm")
 
 

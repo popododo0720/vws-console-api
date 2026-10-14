@@ -252,6 +252,44 @@ func vwsInstanceType(s string) (string, bool) {
 	return "", false
 }
 
+// CreateTagsRequest adds or overwrites tags on instances. Other tags stay.
+type CreateTagsRequest struct {
+	IDs  []InstanceID      `json:"instanceIds"`
+	Tags map[string]string `json:"tags"`
+}
+
+// Action returns CreateTags.
+func (CreateTagsRequest) Action() Action { return ActionCreateTags }
+
+// Normalize checks the ids and the tags.
+func (r CreateTagsRequest) Normalize() (CreateTagsRequest, error) {
+	if err := instanceIDs(r.IDs); err != nil {
+		return CreateTagsRequest{}, err
+	}
+	if len(r.Tags) == 0 {
+		return CreateTagsRequest{}, Invalid("tags", "required")
+	}
+	if err := validTags(r.Tags); err != nil {
+		return CreateTagsRequest{}, err
+	}
+	return r, nil
+}
+
+// MergeTags returns base with add written over it, checked as one tag set.
+func MergeTags(base, add map[string]string) (map[string]string, error) {
+	out := make(map[string]string, len(base)+len(add))
+	for k, v := range base {
+		out[k] = v
+	}
+	for k, v := range add {
+		out[k] = v
+	}
+	if err := validTags(out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func validTags(tags map[string]string) error {
 	if len(tags) > 20 {
 		return Invalid("tags", "too many")
@@ -309,7 +347,7 @@ func NextInstanceState(action Action, from InstanceState) (transitional, settled
 		default:
 			return 0, 0, Conflict(KindInstance, "", "instance cannot be terminated from "+from.String())
 		}
-	case ActionRunInstances, ActionCreateSubnet, ActionCreateVpc, ActionDeleteVpc, ActionCreateVolume, ActionAttachVolume, ActionDeleteVolume, ActionCreateSecurityGroup, ActionAuthorizeSecurityGroupIngress, ActionCreateKeyPair, ActionDeleteKeyPair, ActionDeleteSecurityGroup, ActionDeleteSubnet, ActionAllocateAddress, ActionReleaseAddress, ActionCreateSnapshot, ActionDeleteSnapshot, ActionAssociateAddress, ActionDisassociateAddress, ActionModifyVolume, actionNone:
+	case ActionRunInstances, ActionCreateSubnet, ActionCreateVpc, ActionDeleteVpc, ActionCreateVolume, ActionAttachVolume, ActionDeleteVolume, ActionCreateSecurityGroup, ActionAuthorizeSecurityGroupIngress, ActionCreateKeyPair, ActionDeleteKeyPair, ActionDeleteSecurityGroup, ActionDeleteSubnet, ActionAllocateAddress, ActionReleaseAddress, ActionCreateSnapshot, ActionDeleteSnapshot, ActionAssociateAddress, ActionDisassociateAddress, ActionModifyVolume, ActionCreateTags, actionNone:
 		return 0, 0, Invalid("action", "not an instance transition")
 	default:
 		return 0, 0, Invalid("action", "not an instance transition")

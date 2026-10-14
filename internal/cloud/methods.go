@@ -79,6 +79,15 @@ func (s *Service) ModifyVolume(ctx context.Context, c resource.Caller, token res
 	return mutate(ctx, s, c, token, req, s.backends.Compute.ModifyVolume)
 }
 
+// CreateTags accepts tags for instances and returns the operation.
+func (s *Service) CreateTags(ctx context.Context, c resource.Caller, token resource.ClientToken, req resource.CreateTagsRequest) (resource.Accepted[resource.Instance], error) {
+	token, err := fillToken(token)
+	if err != nil {
+		return resource.Accepted[resource.Instance]{}, err
+	}
+	return mutate(ctx, s, c, token, req, s.backends.Compute.CreateTags)
+}
+
 // DescribeVolumes lists volumes the caller owns.
 func (s *Service) DescribeVolumes(ctx context.Context, c resource.Caller, q resource.VolumeQuery) (resource.Page[resource.Volume], error) {
 	return readPage(ctx, c, q, s.backends.Compute.DescribeVolumes)

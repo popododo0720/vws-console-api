@@ -283,3 +283,29 @@ func (h *handler) modifyVolume(w http.ResponseWriter, r *http.Request) {
 	}
 	writeAccepted(w, acc)
 }
+
+// createTags adds or overwrites tags on one instance. The body is
+// {"tags":{"Name":"web"}}. Tags not named stay.
+func (h *handler) createTags(w http.ResponseWriter, r *http.Request) {
+	c, token, ok := h.begin(w, r)
+	if !ok {
+		return
+	}
+	id, err := resource.Parse[resource.InstanceID](r.PathValue("id"))
+	if err != nil {
+		writeErr(w, r, err)
+		return
+	}
+	var req resource.CreateTagsRequest
+	if err := decode(w, r, &req); err != nil {
+		writeErr(w, r, err)
+		return
+	}
+	req.IDs = []resource.InstanceID{id}
+	acc, err := h.svc.CreateTags(r.Context(), c, token, req)
+	if err != nil {
+		writeErr(w, r, err)
+		return
+	}
+	writeAccepted(w, acc)
+}
