@@ -52,7 +52,9 @@ func New(cfg Config) http.Handler {
 	mux.HandleFunc("GET /api/v1/subnets", h.listSubnets)
 	mux.HandleFunc("GET /api/v1/subnets/{id}", h.getSubnet)
 	mux.HandleFunc("GET /api/v1/vpcs", h.listVpcs)
+	mux.HandleFunc("GET /api/v1/vpcs/{id}", h.getVpc)
 	mux.HandleFunc("GET /api/v1/volumes", h.listVolumes)
+	mux.HandleFunc("GET /api/v1/volumes/{id}", h.getVolume)
 	mux.HandleFunc("GET /api/v1/images", h.listImages)
 	mux.HandleFunc("GET /api/v1/instance-types", h.listInstanceTypes)
 	mux.HandleFunc("GET /api/v1/key-pairs", h.listKeyPairs)
@@ -573,4 +575,48 @@ func (h *handler) listInstanceTypes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, resource.Page[resource.InstanceType]{Items: resource.InstanceTypes()})
+}
+
+func (h *handler) getVpc(w http.ResponseWriter, r *http.Request) {
+	c, ok := h.caller(w, r)
+	if !ok {
+		return
+	}
+	id, err := resource.Parse[resource.VpcID](r.PathValue("id"))
+	if err != nil {
+		writeErr(w, r, err)
+		return
+	}
+	page, err := h.svc.DescribeVpcs(r.Context(), c, resource.VpcQuery{IDs: []resource.VpcID{id}})
+	if err != nil {
+		writeErr(w, r, err)
+		return
+	}
+	if len(page.Items) == 0 {
+		writeErr(w, r, resource.NotFound(resource.KindVpc, id.String()))
+		return
+	}
+	writeJSON(w, http.StatusOK, page.Items[0])
+}
+
+func (h *handler) getVolume(w http.ResponseWriter, r *http.Request) {
+	c, ok := h.caller(w, r)
+	if !ok {
+		return
+	}
+	id, err := resource.Parse[resource.VolumeID](r.PathValue("id"))
+	if err != nil {
+		writeErr(w, r, err)
+		return
+	}
+	page, err := h.svc.DescribeVolumes(r.Context(), c, resource.VolumeQuery{IDs: []resource.VolumeID{id}})
+	if err != nil {
+		writeErr(w, r, err)
+		return
+	}
+	if len(page.Items) == 0 {
+		writeErr(w, r, resource.NotFound(resource.KindVolume, id.String()))
+		return
+	}
+	writeJSON(w, http.StatusOK, page.Items[0])
 }
