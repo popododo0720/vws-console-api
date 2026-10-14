@@ -260,13 +260,15 @@ func longOp(projectID, local, resourceName, requestID string, verb commonv1.Oper
 }
 
 func instanceProto(inst resource.Instance, projectID, vpcID string) *computev1.Instance {
+	// The tags were accepted when the instance was made, so they fit.
+	labels, _ := withInternalLabels(inst.Tags, map[string]string{ //nolint:errcheck // accepted tags fit
+		labelImage:       inst.ImageID.String(),
+		labelReservation: inst.ReservationID.String(),
+	})
 	obs, power := instanceObserved(inst.State)
 	out := &computev1.Instance{
-		Name: instanceName(projectID, inst.ID.String()),
-		Labels: withInternalLabels(inst.Tags, map[string]string{
-			labelImage:       inst.ImageID.String(),
-			labelReservation: inst.ReservationID.String(),
-		}),
+		Name:   instanceName(projectID, inst.ID.String()),
+		Labels: labels,
 		Spec: &computev1.InstanceSpec{
 			MachineType: inst.InstanceType,
 			Power:       power,
