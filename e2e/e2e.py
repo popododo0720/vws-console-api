@@ -195,6 +195,69 @@ def not_found():
         step(f"{name} missing is {code}", lambda code=code, call=call: ec2_error(code, call))
 
 
+
+# A 2048-bit RSA public key, as RFC 4716 and as base64 DER, and the MD5 of
+# its DER SubjectPublicKeyInfo (openssl rsa -pubout -outform DER | openssl md5 -c).
+PARITY_RFC4716 = ("---- BEGIN SSH2 PUBLIC KEY ----\nComment: \"e2e\"\n"
+                  "AAAAB3NzaC1yc2EAAAADAQABAAABAQClx+r6bOncI1UxjkWluLJh9YURn5VSLugTDfOBvM\n6d1EjqWNRFSkQrLnf6EBSQJM0/+pEPXUtKyLynaeaK/T7RDuyurcZmo0ovWib/CTQz08Bm\nlOs6brqv0TD/3eQmK2o6cSpVKXWKKalyFJwfK3t3i8ZZCuPw6+VWTVoNq+L71oIP/hJgF9\nQJb3F863V+3yoly4RN3dXPADcBJVp/qPmA3AXuolprWOj7eYAAvaxqyiKUt/Htt4L55Gey\n+5fR4fjnH/E2VA1FZotnqG6Bf6nfqfnxJ2IV6hZr6pfQV3psbbzt/tMjhOYBBgAr0R120I\nNm4MIQI8eY9Zgog8QWTIQN\n---- END SSH2 PUBLIC KEY ----\n")
+PARITY_DER_B64 = "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEApcfq+mzp3CNVMY5FpbiyYfWFEZ+VUi7oEw3zgbzOndRI6ljURUpEKy53+hAUkCTNP/qRD11LSsi8p2nmiv0+0Q7srq3GZqNKL1om/wk0M9PAZpTrOm66r9Ew/93kJitqOnEqVSl1iimpchScHyt7d4vGWQrj8OvlVk1aDavi+9aCD/4SYBfUCW9xfOt1ft8qJcuETd3VzwA3ASVaf6j5gNwF7qJaa1jo+3mAAL2sasoilLfx7beC+eRnsvuX0eH45x/xNlQNRWaLZ6hugX+p36n58SdiFeoWa+qX0Fd6bG287f7TI4TmAQYAK9EddtCDZuDCECPHmPWYKIPEFkyEDQIDAQAB"
+PARITY_RSA_MD5 = "65:e4:c2:b4:21:3e:6e:f2:8b:87:1d:83:2d:fb:e5:e3"
+
+
+def ppk_mac_ok(text):
+    """Checks the HMAC-SHA1 of an unencrypted PuTTY-User-Key-File-2."""
+    import hmac
+    import struct
+    lines = text.rstrip("\n").split("\n")
+    head = dict(line.split(": ", 1) for line in lines if ": " in line)
+    pub_n = int(head["Public-Lines"])
+    i = lines.index(f"Public-Lines: {pub_n}")
+    pub = base64.b64decode("".join(lines[i + 1:i + 1 + pub_n]))
+    priv_n = int(head["Private-Lines"])
+    j = lines.index(f"Private-Lines: {priv_n}")
+    priv = base64.b64decode("".join(lines[j + 1:j + 1 + priv_n]))
+    def s(b):
+        return struct.pack(">I", len(b)) + b
+    data = (s(head["PuTTY-User-Key-File-2"].encode()) + s(b"none") + s(head["Comment"].encode())
+            + s(pub) + s(priv))
+    key = hashlib.sha1(b"putty-private-key-file-mac-key").digest()
+    return hmac.new(key, data, hashlib.sha1).hexdigest() == head["Private-MAC"]
+
+
+def key_parity():
+    """#128 follow-ups: EC2 fingerprints, RFC 4716 and DER imports, ppk, MissingParameter."""
+    ed_line = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIG417cXtz5jVkH8Cu0D4exQ0iqZ8aXluTLeM0PhuoDH1"
+    ed_fp = base64.b64encode(hashlib.sha256(base64.b64decode(ed_line.split()[1])).digest()).decode()
+    step("ImportKeyPair ed25519 fingerprint is base64 SHA-256", lambda: check(
+        ec2.describe_key_pairs(KeyNames=["e2e-import"])["KeyPairs"][0]["KeyFingerprint"] == ed_fp, "ed25519 fingerprint"))
+
+    def imported(name, material):
+        got = ec2.import_key_pair(KeyName=name, PublicKeyMaterial=material)["KeyFingerprint"]
+        check(got == PARITY_RSA_MD5, f"{name} fingerprint {got}")
+        listed = ec2.describe_key_pairs(KeyNames=[name])["KeyPairs"][0]
+        check(listed["KeyFingerprint"] == PARITY_RSA_MD5 and listed.get("KeyType") == "rsa", f"{name} described {listed}")
+    step("ImportKeyPair RFC 4716 RSA, fingerprint MD5 of DER", lambda: imported("e2e-rfc4716", PARITY_RFC4716.encode()))
+    step("ImportKeyPair DER RSA, fingerprint MD5 of DER", lambda: imported("e2e-der", base64.b64decode(PARITY_DER_B64)))
+
+    def created_rsa():
+        made = ec2.create_key_pair(KeyName="e2e-rsa-fp")["KeyFingerprint"]
+        check(len(made) == 59 and made.count(":") == 19, f"created rsa fingerprint {made}")
+        listed = ec2.describe_key_pairs(KeyNames=["e2e-rsa-fp"])["KeyPairs"][0]["KeyFingerprint"]
+        check(listed == made, f"described {listed} created {made}")
+    step("CreateKeyPair rsa fingerprint is colon SHA-1, same on describe", created_rsa)
+
+    def ppk():
+        mat = ec2.create_key_pair(KeyName="e2e-ppk", KeyType="ed25519", KeyFormat="ppk")["KeyMaterial"]
+        check(mat.startswith("PuTTY-User-Key-File-2: ssh-ed25519\n") and ppk_mac_ok(mat), f"ppk {mat[:60]!r}")
+    step("CreateKeyPair KeyFormat=ppk is a PuTTY key with a valid MAC", ppk)
+    step("ImportKeyPair ecdsa is InvalidKey.Format", lambda: ec2_error("InvalidKey.Format", lambda: ec2.import_key_pair(
+        KeyName="e2e-ecdsa", PublicKeyMaterial=b"ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBEm0")))
+    loose = boto3.client(
+        "ec2", endpoint_url=EC2_URL,
+        config=Config(retries={"total_max_attempts": 1}, parameter_validation=False), **KW)
+    step("ImportKeyPair without PublicKeyMaterial is MissingParameter", lambda: ec2_error(
+        "MissingParameter", lambda: loose.import_key_pair(KeyName="e2e-nokey")))
+
 def key_launch():
     """#128: key formats, ImportKeyPair, and a launch with KeyName and UserData."""
     def made(key_type, header):
@@ -209,6 +272,7 @@ def key_launch():
         KeyName="e2e-bad", PublicKeyMaterial=b"not a key")))
     step("DescribeKeyPairs KeyType of an imported key", lambda: check(
         ec2.describe_key_pairs(KeyNames=["e2e-import"])["KeyPairs"][0].get("KeyType") == "ed25519", "key type"))
+    key_parity()
     user_data = "#cloud-config\nruncmd:\n  - echo vws > /tmp/vws-user-data\n"
 
     def launch():

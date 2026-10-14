@@ -634,7 +634,10 @@ func keyModel(in *computev1.KeyPair) (resource.KeyPair, error) {
 		ID: id, OwnerID: owner, Name: labelName(in.GetLabels()), Fingerprint: in.GetStatus().GetFingerprintSha256(),
 	}
 	if pub, err := sshkey.ParsePublic(in.GetSpec().GetPublicKey()); err == nil {
-		key.Type = pub.Type
+		key.Type, key.Fingerprint = pub.Type, pub.AWSFingerprint
+	}
+	if sum := in.GetLabels()[labelKeySHA1]; sum != "" {
+		key.Fingerprint = sshkey.ColonHex(sum)
 	}
 	return key, nil
 }

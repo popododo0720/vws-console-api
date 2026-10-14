@@ -32,7 +32,6 @@ func TestImportKeyLaunchAndUserData(t *testing.T) {
 			t.Fatalf("KeyType %q: %s", typ, got)
 		}
 	}
-	send(url.Values{"Action": {"CreateKeyPair"}, "KeyName": {"ppk"}, "KeyFormat": {"ppk"}}, http.StatusBadRequest)
 	send(url.Values{"Action": {"CreateKeyPair"}, "KeyName": {"dsa"}, "KeyType": {"dsa"}}, http.StatusBadRequest)
 
 	imported := send(url.Values{

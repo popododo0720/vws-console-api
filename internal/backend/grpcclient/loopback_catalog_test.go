@@ -28,7 +28,7 @@ func (s *keySrv) GetKeyPair(ctx context.Context, req *computev1.GetKeyPairReques
 	if len(page.Items) == 0 {
 		return nil, toStatus(resource.NotFound(resource.KindKeyPair, id.String()))
 	}
-	return keyProto(page.Items[0], projectID, s.w.keyLineOf(page.Items[0].ID.String())), nil
+	return keyProto(page.Items[0], projectID)(s.w.keyLineOf(page.Items[0].ID.String())), nil
 }
 
 func (s *keySrv) ListKeyPairs(ctx context.Context, req *computev1.ListKeyPairsRequest) (*computev1.ListKeyPairsResponse, error) {
@@ -44,7 +44,7 @@ func (s *keySrv) ListKeyPairs(ctx context.Context, req *computev1.ListKeyPairsRe
 	}
 	items := make([]*computev1.KeyPair, 0, len(page.Items))
 	for _, key := range page.Items {
-		items = append(items, keyProto(key, projectID, s.w.keyLineOf(key.ID.String())))
+		items = append(items, keyProto(key, projectID)(s.w.keyLineOf(key.ID.String())))
 	}
 	return &computev1.ListKeyPairsResponse{KeyPairs: items, NextPageToken: page.NextToken}, nil
 }
@@ -326,16 +326,21 @@ func (s *snapshotSrv) DeleteSnapshot(ctx context.Context, req *storagev1.DeleteS
 	return runningOp(projectID, acc.Operation, snapshotName(projectID, id.String()), commonv1.OperationVerb_OPERATION_VERB_DELETE, s.w.now)
 }
 
-func (w *loopWorld) rememberKeyLine(id, line string) {
+// rememberKeyLine keeps what compute stores and the fake does not: the
+// public key line and the created-RSA SHA-1 label.
+func (w *loopWorld) rememberKeyLine(id, line, sha1 string) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.keyLine[id] = line
+	if sha1 != "" {
+		w.keySHA1[id] = sha1
+	}
 }
 
-func (w *loopWorld) keyLineOf(id string) string {
+func (w *loopWorld) keyLineOf(id string) (string, string) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	return w.keyLine[id]
+	return w.keyLine[id], w.keySHA1[id]
 }
 
 func (w *loopWorld) groupsIn(vpcID string) []resource.SecurityGroup {
@@ -405,10 +410,20 @@ type encodingText interface {
 	UnmarshalText([]byte) error
 }
 
-func keyProto(key resource.KeyPair, projectID, line string) *computev1.KeyPair {
+func keyProto(key resource.KeyPair, projectID string) func(line, sha1 string) *computev1.KeyPair {
+	return func(line, sha1 string) *computev1.KeyPair {
+		labels := nameLabels(key.Name)
+		if sha1 != "" {
+			labels[labelKeySHA1] = sha1
+		}
+		return keyProtoWith(key, projectID, line, labels)
+	}
+}
+
+func keyProtoWith(key resource.KeyPair, projectID, line string, labels map[string]string) *computev1.KeyPair {
 	return &computev1.KeyPair{
 		Name:   keyPairName(projectID, key.ID.String()),
-		Labels: nameLabels(key.Name),
+		Labels: labels,
 		Spec:   &computev1.KeyPairSpec{PublicKey: line},
 		Status: &computev1.KeyPairStatus{
 			Observed:          &commonv1.ObservedState{State: commonv1.ReconciliationState_RECONCILIATION_STATE_READY},

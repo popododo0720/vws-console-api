@@ -22,6 +22,9 @@ const (
 	labelAction      = "vws-action"
 	labelReservation = "vws-reservation"
 	labelLaunch      = "vws-launch"
+	// labelKeySHA1 holds EC2's fingerprint of a created RSA key: the hex
+	// SHA-1 of its PKCS#8 private key.
+	labelKeySHA1 = "vws-key-sha1"
 	// labelNameTag carries the EC2 Name tag. Label keys are lowercase, so the
 	// key "Name" cannot be stored as is.
 	labelNameTag = "vws-name"

@@ -148,6 +148,7 @@ type loopWorld struct {
 	sub       map[string]subSnap
 	groups    map[string]resource.SecurityGroup
 	keyLine   map[string]string
+	keySHA1   map[string]string
 	opLaunch  map[string]string
 	actions   map[string]string
 	boots     map[string]*storagev1.Volume
@@ -175,6 +176,7 @@ func newLoopWorld(set backend.Set, now time.Time) *loopWorld {
 		inst: map[string]instSnap{}, sub: map[string]subSnap{},
 		groups:   map[string]resource.SecurityGroup{},
 		keyLine:  map[string]string{},
+		keySHA1:  map[string]string{},
 		opLaunch: map[string]string{},
 		actions:  map[string]string{},
 		boots:    map[string]*storagev1.Volume{},
