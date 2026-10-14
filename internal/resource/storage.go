@@ -27,6 +27,8 @@ type Object struct {
 	ETag         string     `json:"etag"`
 	ContentType  string     `json:"contentType,omitempty"`
 	LastModified string     `json:"lastModified,omitempty"`
+	// SHA256 is the lowercase hex SHA-256 of the stored bytes.
+	SHA256 string `json:"sha256,omitempty"`
 }
 
 // Owner returns the account that owns the object.

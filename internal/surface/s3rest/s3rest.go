@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/xml"
 	"fmt"
 	"io"
@@ -360,7 +361,7 @@ func (h *handler) getObject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer server.Close(w, body)
-	writeObjectHeaders(w, meta)
+	writeObjectHeaders(w, r, meta)
 	w.WriteHeader(http.StatusOK)
 	if _, err := io.Copy(w, body); err != nil {
 		server.RecordFailure(w, fmt.Errorf("copy object body: %w", err))
@@ -374,7 +375,7 @@ func (h *handler) headObject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer server.Close(w, body)
-	writeObjectHeaders(w, meta)
+	writeObjectHeaders(w, r, meta)
 	w.Header().Set("Content-Length", strconv.FormatInt(meta.Size, 10))
 	w.WriteHeader(http.StatusOK)
 }
@@ -387,7 +388,13 @@ func (h *handler) openObject(r *http.Request) (resource.Object, io.ReadCloser, e
 	return h.svc.GetObject(r.Context(), callerFrom(r), resource.GetObjectRequest{Bucket: bucket, Key: key})
 }
 
-func writeObjectHeaders(w http.ResponseWriter, meta resource.Object) {
+func writeObjectHeaders(w http.ResponseWriter, r *http.Request, meta resource.Object) {
+	if strings.EqualFold(r.Header.Get("X-Amz-Checksum-Mode"), "ENABLED") && meta.SHA256 != "" {
+		if sum, err := hex.DecodeString(meta.SHA256); err == nil {
+			w.Header().Set("X-Amz-Checksum-Sha256", base64.StdEncoding.EncodeToString(sum))
+			w.Header().Set("X-Amz-Checksum-Type", "FULL_OBJECT")
+		}
+	}
 	if meta.ContentType != "" {
 		w.Header().Set("Content-Type", meta.ContentType)
 	} else {

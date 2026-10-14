@@ -232,6 +232,11 @@ func Run(t *testing.T, newSet Harness) {
 	if meta.ETag != replaced.ETag || meta.Size != replaced.Size {
 		t.Fatalf("etag %s size %d", meta.ETag, meta.Size)
 	}
+	// sha256("hello!"), the value S3 returns as ChecksumSHA256.
+	const helloBangSHA256 = "ce06092fb948d9ffac7d1a376e404b26b7575bcc11ee05a4615fef4fec3a308b"
+	if replaced.SHA256 != helloBangSHA256 || meta.SHA256 != helloBangSHA256 {
+		t.Fatalf("sha256 put %q get %q, want %s", replaced.SHA256, meta.SHA256, helloBangSHA256)
+	}
 	if got, err := io.ReadAll(rc); err != nil || string(got) != "hello!" {
 		t.Fatalf("body %q: %v", got, err)
 	}

@@ -431,7 +431,7 @@ func (c storageClient) PutObject(ctx context.Context, s backend.Scope, req resou
 		Object: &storagev1.Object{
 			Name:   name,
 			Labels: map[string]string{},
-			Spec:   &storagev1.ObjectSpec{ContentType: req.ContentType},
+			Spec:   &storagev1.ObjectSpec{ContentType: req.ContentType, Sha256: hex.EncodeToString(sha256Of(buf))},
 		},
 	})
 	if err := rpcErr(op, err); err != nil {
@@ -461,7 +461,7 @@ func (c storageClient) createObject(ctx context.Context, projectID, name string,
 		RequestId: requestUUID(projectID, req.Bucket.String(), req.Key.String(), "create", hex.EncodeToString(sha256Of(buf))),
 		Object: &storagev1.Object{
 			Labels: map[string]string{},
-			Spec:   &storagev1.ObjectSpec{ContentType: req.ContentType},
+			Spec:   &storagev1.ObjectSpec{ContentType: req.ContentType, Sha256: hex.EncodeToString(sha256Of(buf))},
 		},
 	})
 	if err := rpcErr(op, err); err != nil {

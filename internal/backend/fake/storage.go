@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/md5"
+	"crypto/sha256"
 	"encoding/hex"
 	"io"
 	"time"
@@ -105,6 +106,7 @@ func (s storage) PutObject(ctx context.Context, sc backend.Scope, req resource.P
 		return resource.Object{}, resource.AlreadyExists(resource.KindObject, req.Key.String())
 	}
 	sum := md5.Sum(buf)
+	sha := sha256.Sum256(buf)
 	obj := &storedObject{
 		meta: resource.Object{
 			Bucket:       req.Bucket,
@@ -112,6 +114,7 @@ func (s storage) PutObject(ctx context.Context, sc backend.Scope, req resource.P
 			OwnerID:      sc.Account,
 			Size:         int64(len(buf)),
 			ETag:         `"` + hex.EncodeToString(sum[:]) + `"`,
+			SHA256:       hex.EncodeToString(sha[:]),
 			ContentType:  req.ContentType,
 			LastModified: s.w.now().UTC().Format(time.RFC3339),
 		},

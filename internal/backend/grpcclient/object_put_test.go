@@ -27,10 +27,11 @@ import (
 type pendingObject struct {
 	storagev1.UnimplementedObjectServiceServer
 	longrunningpb.UnimplementedOperationsServer
-	mu    sync.Mutex
-	ready bool
-	name  string
-	size  int64
+	mu     sync.Mutex
+	ready  bool
+	name   string
+	size   int64
+	sha256 string
 }
 
 func (s *pendingObject) UpdateObject(_ context.Context, req *storagev1.UpdateObjectRequest) (*longrunningpb.Operation, error) {
@@ -39,6 +40,7 @@ func (s *pendingObject) UpdateObject(_ context.Context, req *storagev1.UpdateObj
 	s.ready = false
 	s.name = req.GetObject().GetName()
 	s.size = int64(len(req.GetContents()))
+	s.sha256 = req.GetObject().GetSpec().GetSha256()
 	projectID, err := projectOfName(s.name)
 	if err != nil {
 		return nil, toStatus(err)
@@ -72,7 +74,7 @@ func (s *pendingObject) GetObject(_ context.Context, req *storagev1.GetObjectReq
 	}
 	return &storagev1.Object{
 		Name:   s.name,
-		Spec:   &storagev1.ObjectSpec{ContentType: "text/plain"},
+		Spec:   &storagev1.ObjectSpec{ContentType: "text/plain", Sha256: s.sha256},
 		Status: &storagev1.ObjectStatus{SizeBytes: s.size, Md5: "5d41402abc4b2a76b9719d911017c592"},
 	}, nil
 }
@@ -115,5 +117,11 @@ func TestPutObjectWaitsForTheOperation(t *testing.T) {
 	}, strings.NewReader("hello"))
 	if err != nil || obj.Size != 5 || obj.Key != key || obj.ETag != `"5d41402abc4b2a76b9719d911017c592"` {
 		t.Fatalf("%v %+v", err, obj)
+	}
+	// The put names the payload hash in spec.sha256 so vws-storage stores
+	// it with the object, and the object read back carries it.
+	const helloSHA256 = "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+	if pending.sha256 != helloSHA256 || obj.SHA256 != helloSHA256 {
+		t.Fatalf("spec.sha256 sent %q, object %q, want %s", pending.sha256, obj.SHA256, helloSHA256)
 	}
 }
