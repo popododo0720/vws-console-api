@@ -93,6 +93,8 @@ func (h *handler) serve(w http.ResponseWriter, r *http.Request) {
 		h.attachVolume(w, r, caller)
 	case resource.ActionDeleteVolume.String():
 		h.deleteVolume(w, r, caller)
+	case resource.ActionModifyVolume.String():
+		h.modifyVolume(w, r, caller)
 	case resource.ActionCreateSecurityGroup.String():
 		h.createSecurityGroup(w, r, caller)
 	case resource.ActionAuthorizeSecurityGroupIngress.String():
@@ -488,6 +490,8 @@ func rejectUnknown(r *http.Request, action string) error {
 		allow = allowAttachVolume
 	case resource.ActionDeleteVolume.String():
 		allow = allowDeleteVolume
+	case resource.ActionModifyVolume.String():
+		allow = allowModifyVolume
 	case resource.ActionCreateSecurityGroup.String():
 		allow = allowCreateGroup
 	case resource.ActionAuthorizeSecurityGroupIngress.String():
@@ -584,6 +588,10 @@ func allowAttachVolume(key string) bool {
 
 func allowDeleteVolume(key string) bool {
 	return key == "Action" || key == "Version" || key == "ClientToken" || key == "VolumeId"
+}
+
+func allowModifyVolume(key string) bool {
+	return key == "Action" || key == "Version" || key == "ClientToken" || key == "VolumeId" || key == "Size"
 }
 
 func allowCreateGroup(key string) bool {

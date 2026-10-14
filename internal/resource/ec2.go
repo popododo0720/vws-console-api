@@ -193,6 +193,27 @@ func (r DeleteVolumeRequest) Normalize() (DeleteVolumeRequest, error) {
 	return r, nil
 }
 
+// ModifyVolumeRequest grows a volume. Only the size can change: the storage
+// backend serves no type change and never shrinks a volume.
+type ModifyVolumeRequest struct {
+	ID      VolumeID `json:"volumeId"`
+	SizeGiB int64    `json:"size"`
+}
+
+// Action returns ModifyVolume.
+func (ModifyVolumeRequest) Action() Action { return ActionModifyVolume }
+
+// Normalize checks the id and the target size.
+func (r ModifyVolumeRequest) Normalize() (ModifyVolumeRequest, error) {
+	if r.ID.IsZero() {
+		return ModifyVolumeRequest{}, Invalid("volumeId", "required")
+	}
+	if r.SizeGiB < 1 || r.SizeGiB > 16384 {
+		return ModifyVolumeRequest{}, Invalid("size", "must be from 1 to 16384")
+	}
+	return r, nil
+}
+
 // VolumeQuery selects volumes.
 type VolumeQuery struct {
 	IDs  []VolumeID  `json:"volumeIds,omitempty"`

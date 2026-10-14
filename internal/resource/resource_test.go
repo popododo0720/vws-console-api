@@ -119,7 +119,7 @@ func TestOperationIDRoundTrip(t *testing.T) {
 
 func TestActionsAreDerived(t *testing.T) {
 	got := Actions()
-	if len(got) != 22 {
+	if len(got) != 23 {
 		t.Fatalf("actions: %v", got)
 	}
 	for _, a := range got {

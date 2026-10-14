@@ -258,3 +258,28 @@ func (h *handler) createKeyPair(w http.ResponseWriter, r *http.Request) {
 	}
 	writeAccepted(w, acc)
 }
+
+// modifyVolume grows a volume. The body is {"size": N}.
+func (h *handler) modifyVolume(w http.ResponseWriter, r *http.Request) {
+	c, token, ok := h.begin(w, r)
+	if !ok {
+		return
+	}
+	id, err := resource.Parse[resource.VolumeID](r.PathValue("id"))
+	if err != nil {
+		writeErr(w, r, err)
+		return
+	}
+	var req resource.ModifyVolumeRequest
+	if err := decode(w, r, &req); err != nil {
+		writeErr(w, r, err)
+		return
+	}
+	req.ID = id
+	acc, err := h.svc.ModifyVolume(r.Context(), c, token, req)
+	if err != nil {
+		writeErr(w, r, err)
+		return
+	}
+	writeAccepted(w, acc)
+}

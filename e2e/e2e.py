@@ -115,6 +115,18 @@ def network():
         ec2.delete_volume(VolumeId=vid)
         check(got == "standard", f"type {got}")
     step("CreateVolume VolumeType=standard", standard_volume)
+    def modify_volume():
+        vid = ec2.create_volume(AvailabilityZone="vws-1a", Size=1)["VolumeId"]
+        ec2.get_waiter("volume_available").wait(VolumeIds=[vid], WaiterConfig={"Delay": 1, "MaxAttempts": 30})
+        mod = ec2.modify_volume(VolumeId=vid, Size=2)["VolumeModification"]
+        check(mod["VolumeId"] == vid and mod["TargetSize"] == 2 and mod["OriginalSize"] == 1, f"modification {mod}")
+        deadline = time.monotonic() + 30
+        while ec2.describe_volumes(VolumeIds=[vid])["Volumes"][0]["Size"] != 2:
+            check(time.monotonic() < deadline, "size did not reach 2")
+            time.sleep(1)
+        ec2_error("InvalidParameterValue", lambda: ec2.modify_volume(VolumeId=vid, Size=1))
+        ec2.delete_volume(VolumeId=vid)
+    step("ModifyVolume grows a volume and refuses to shrink it", modify_volume)
     step("DescribeVolumes has CreateTime", lambda: check(
         all("CreateTime" in v for v in ec2.describe_volumes()["Volumes"]), "CreateTime missing"))
     def restore():

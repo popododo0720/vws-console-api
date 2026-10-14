@@ -59,6 +59,24 @@ func (s *volumeSrv) ListVolumes(ctx context.Context, req *storagev1.ListVolumesR
 	return &storagev1.ListVolumesResponse{Volumes: items, NextPageToken: page.NextToken}, nil
 }
 
+func (s *volumeSrv) UpdateVolume(ctx context.Context, req *storagev1.UpdateVolumeRequest) (*longrunningpb.Operation, error) {
+	projectID, account, id, err := volumeRef(req.GetVolume().GetName())
+	if err != nil {
+		return nil, toStatus(err)
+	}
+	fp, err := protoFingerprint(req)
+	if err != nil {
+		return nil, toStatus(err)
+	}
+	acc, err := s.w.set.Compute.ModifyVolume(ctx, backend.Mutation{
+		Scope: backend.Scope{Account: account}, Key: req.GetRequestId(), Fingerprint: fp,
+	}, resource.ModifyVolumeRequest{ID: id, SizeGiB: req.GetVolume().GetSpec().GetSizeGib()})
+	if err != nil {
+		return nil, toStatus(err)
+	}
+	return runningOp(projectID, acc.Operation, volumeName(projectID, id.String()), commonv1.OperationVerb_OPERATION_VERB_UPDATE, s.w.now)
+}
+
 func (s *volumeSrv) DeleteVolume(ctx context.Context, req *storagev1.DeleteVolumeRequest) (*longrunningpb.Operation, error) {
 	projectID, account, id, err := volumeRef(req.GetName())
 	if err != nil {

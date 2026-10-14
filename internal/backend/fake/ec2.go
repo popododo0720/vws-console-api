@@ -214,6 +214,39 @@ func (c compute) DeleteVolume(ctx context.Context, m backend.Mutation, req resou
 	return acc, nil
 }
 
+func (c compute) ModifyVolume(ctx context.Context, m backend.Mutation, req resource.ModifyVolumeRequest) (resource.Accepted[resource.Volume], error) {
+	if err := ctx.Err(); err != nil {
+		return resource.Accepted[resource.Volume]{}, err
+	}
+	c.w.mu.Lock()
+	defer c.w.mu.Unlock()
+	c.w.settle(c.w.now())
+	if acc, ok, err := replay[resource.Accepted[resource.Volume]](c.w, m.Key, m.Fingerprint); err != nil || ok {
+		return acc, err
+	}
+	vol, ok := c.w.vol[req.ID]
+	if !ok || vol.OwnerID != m.Account {
+		return resource.Accepted[resource.Volume]{}, resource.NotFound(resource.KindVolume, req.ID.String())
+	}
+	if req.SizeGiB < vol.SizeGiB {
+		return resource.Accepted[resource.Volume]{}, resource.Invalid("size", "a volume cannot shrink")
+	}
+	id, size := vol.ID, req.SizeGiB
+	op, err := c.w.newOp(m.Account, resource.ServiceCompute, resource.ActionModifyVolume, []resource.Ref{id.Ref()}, func(time.Time) {
+		if cur := c.w.vol[id]; cur != nil {
+			cur.SizeGiB = size
+		}
+	})
+	if err != nil {
+		return resource.Accepted[resource.Volume]{}, err
+	}
+	item := *vol
+	item.SizeGiB = size
+	acc := resource.Accepted[resource.Volume]{Operation: op, Items: []resource.Volume{item}}
+	c.w.finish(m.Key, m.Fingerprint, acc)
+	return acc, nil
+}
+
 func (c compute) DescribeVolumes(ctx context.Context, s backend.Scope, q resource.VolumeQuery) (resource.Page[resource.Volume], error) {
 	if err := ctx.Err(); err != nil {
 		return resource.Page[resource.Volume]{}, err
