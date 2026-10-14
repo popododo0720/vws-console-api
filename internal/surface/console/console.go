@@ -7,10 +7,14 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
+	"net/netip"
 	"strconv"
+	"time"
 
 	"github.com/popododo0720/vws-console-api/internal/cloud"
+	"github.com/popododo0720/vws-console-api/internal/iam"
 	"github.com/popododo0720/vws-console-api/internal/resource"
 	"github.com/popododo0720/vws-console-api/internal/server"
 )
@@ -33,52 +37,93 @@ func (b BearerTokens) Authenticate(_ context.Context, token string) (resource.Ca
 }
 
 // Config wires the console surface.
+//
+// IAM signs console users in and authorizes every request; without it only
+// the bearer Auth works and every request is denied. Auth maps the legacy
+// bearer console token to the account root until that token is retired.
 type Config struct {
 	Service *cloud.Service
 	Auth    Authenticator
+	IAM     iam.Client
+	Logger  *slog.Logger
+	// Origins are browser origins allowed besides the console's own host,
+	// such as https://console.vws.example.
+	Origins []string
+	// TrustedProxies are the peers whose X-Forwarded-For is believed when
+	// resolving the client address for sign-in limits and logs. Empty means
+	// the TCP peer is the client.
+	TrustedProxies []netip.Prefix
+	// Now is the clock for sign-in rate limits. Nil uses time.Now.
+	Now func() time.Time
 }
 
 // New returns the console handler.
 func New(cfg Config) http.Handler {
-	h := &handler{svc: cfg.Service, auth: cfg.Auth}
-	mux := http.NewServeMux()
-	for _, action := range resource.Actions() {
-		method, pattern, handle := h.mutation(action)
-		mux.HandleFunc(method+" "+pattern, handle)
+	log := cfg.Logger
+	if log == nil {
+		log = slog.New(slog.DiscardHandler)
 	}
-	mux.HandleFunc("GET /api/v1/instances", h.listInstances)
-	mux.HandleFunc("POST /api/v1/instances/stop", h.stopInstances)
-	mux.HandleFunc("POST /api/v1/instances/start", h.startInstances)
-	mux.HandleFunc("POST /api/v1/instances/terminate", h.terminateInstances)
-	mux.HandleFunc("GET /api/v1/instances/{id}", h.getInstance)
-	mux.HandleFunc("GET /api/v1/operations/{id}", h.getOperation)
-	mux.HandleFunc("GET /api/v1/subnets", h.listSubnets)
-	mux.HandleFunc("GET /api/v1/subnets/{id}", h.getSubnet)
-	mux.HandleFunc("GET /api/v1/vpcs", h.listVpcs)
-	mux.HandleFunc("GET /api/v1/vpcs/{id}", h.getVpc)
-	mux.HandleFunc("POST /api/v1/vpcs/{id}/tags", h.tagVpc)
-	mux.HandleFunc("POST /api/v1/subnets/{id}/tags", h.tagSubnet)
-	mux.HandleFunc("GET /api/v1/volumes", h.listVolumes)
-	mux.HandleFunc("GET /api/v1/volumes/{id}", h.getVolume)
-	mux.HandleFunc("GET /api/v1/images", h.listImages)
-	mux.HandleFunc("GET /api/v1/instance-types", h.listInstanceTypes)
-	mux.HandleFunc("GET /api/v1/key-pairs", h.listKeyPairs)
-	mux.HandleFunc("GET /api/v1/security-groups", h.listSecurityGroups)
-	mux.HandleFunc("GET /api/v1/addresses", h.listAddresses)
-	mux.HandleFunc("GET /api/v1/snapshots", h.listSnapshots)
-	mux.HandleFunc("GET /api/v1/buckets", h.listBuckets)
-	mux.HandleFunc("PUT /api/v1/buckets/{name}", h.createBucket)
-	mux.HandleFunc("GET /api/v1/buckets/{name}", h.getBucket)
-	mux.HandleFunc("DELETE /api/v1/buckets/{name}", h.deleteBucket)
-	mux.HandleFunc("PUT /api/v1/buckets/{name}/objects/{key...}", h.putObject)
-	mux.HandleFunc("GET /api/v1/buckets/{name}/objects/{key...}", h.getObject)
-	mux.HandleFunc("DELETE /api/v1/buckets/{name}/objects/{key...}", h.deleteObject)
-	return mux
+	now := cfg.Now
+	if now == nil {
+		now = time.Now
+	}
+	h := &handler{svc: cfg.Service, auth: cfg.Auth, iam: cfg.IAM, log: log, mux: http.NewServeMux(), origins: cfg.Origins, trusted: cfg.TrustedProxies, now: now, logins: newLimiter()}
+	h.routes(h.mux)
+	return http.HandlerFunc(h.gate)
+}
+
+func (h *handler) routes(mux *http.ServeMux) {
+	handle := func(pattern string, fn http.HandlerFunc) {
+		h.patterns = append(h.patterns, pattern)
+		mux.HandleFunc(pattern, fn)
+	}
+	handle(routeLogin, h.login)
+	handle(routeLogout, h.logout)
+	handle(routeSession, h.session)
+	for _, action := range resource.Actions() {
+		method, pattern, fn := h.mutation(action)
+		handle(method+" "+pattern, fn)
+	}
+	handle("GET /api/v1/instances", h.listInstances)
+	handle("POST /api/v1/instances/stop", h.stopInstances)
+	handle("POST /api/v1/instances/start", h.startInstances)
+	handle("POST /api/v1/instances/terminate", h.terminateInstances)
+	handle("GET /api/v1/instances/{id}", h.getInstance)
+	handle("GET /api/v1/operations/{id}", h.getOperation)
+	handle("GET /api/v1/subnets", h.listSubnets)
+	handle("GET /api/v1/subnets/{id}", h.getSubnet)
+	handle("GET /api/v1/vpcs", h.listVpcs)
+	handle("GET /api/v1/vpcs/{id}", h.getVpc)
+	handle("POST /api/v1/vpcs/{id}/tags", h.tagVpc)
+	handle("POST /api/v1/subnets/{id}/tags", h.tagSubnet)
+	handle("GET /api/v1/volumes", h.listVolumes)
+	handle("GET /api/v1/volumes/{id}", h.getVolume)
+	handle("GET /api/v1/images", h.listImages)
+	handle("GET /api/v1/instance-types", h.listInstanceTypes)
+	handle("GET /api/v1/key-pairs", h.listKeyPairs)
+	handle("GET /api/v1/security-groups", h.listSecurityGroups)
+	handle("GET /api/v1/addresses", h.listAddresses)
+	handle("GET /api/v1/snapshots", h.listSnapshots)
+	handle("GET /api/v1/buckets", h.listBuckets)
+	handle("PUT /api/v1/buckets/{name}", h.createBucket)
+	handle("GET /api/v1/buckets/{name}", h.getBucket)
+	handle("DELETE /api/v1/buckets/{name}", h.deleteBucket)
+	handle("PUT /api/v1/buckets/{name}/objects/{key...}", h.putObject)
+	handle("GET /api/v1/buckets/{name}/objects/{key...}", h.getObject)
+	handle("DELETE /api/v1/buckets/{name}/objects/{key...}", h.deleteObject)
 }
 
 type handler struct {
-	svc  *cloud.Service
-	auth Authenticator
+	svc      *cloud.Service
+	auth     Authenticator
+	iam      iam.Client
+	log      *slog.Logger
+	mux      *http.ServeMux
+	patterns []string
+	origins  []string
+	trusted  []netip.Prefix
+	now      func() time.Time
+	logins   *limiter
 }
 
 func (h *handler) mutation(action resource.Action) (string, string, http.HandlerFunc) {
@@ -442,20 +487,11 @@ func (h *handler) begin(w http.ResponseWriter, r *http.Request) (resource.Caller
 	return c, token, true
 }
 
+// caller is the identity the gate authenticated and authorized.
 func (h *handler) caller(w http.ResponseWriter, r *http.Request) (resource.Caller, bool) {
-	if h.auth == nil {
-		writeErr(w, r, resource.Unauthenticated("bearer token required"))
-		return resource.Caller{}, false
-	}
-	const prefix = "Bearer "
-	raw := r.Header.Get("Authorization")
-	if len(raw) < len(prefix) || raw[:len(prefix)] != prefix {
-		writeErr(w, r, resource.Unauthenticated("bearer token required"))
-		return resource.Caller{}, false
-	}
-	c, err := h.auth.Authenticate(r.Context(), raw[len(prefix):])
-	if err != nil {
-		writeErr(w, r, err)
+	c, ok := r.Context().Value(callerKey{}).(resource.Caller)
+	if !ok {
+		writeErr(w, r, resource.Unauthenticated("sign in required"))
 		return resource.Caller{}, false
 	}
 	return c, true

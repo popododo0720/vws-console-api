@@ -95,3 +95,13 @@ type credentialsXML struct {
 	SessionToken    string `xml:"SessionToken"`
 	Expiration      string `xml:"Expiration"`
 }
+
+type loginProfileXML struct {
+	UserName              string `xml:"UserName"`
+	CreateDate            string `xml:"CreateDate"`
+	PasswordResetRequired bool   `xml:"PasswordResetRequired"`
+}
+
+func toLoginProfile(p iam.LoginProfile) loginProfileXML {
+	return loginProfileXML{UserName: p.UserName, CreateDate: stamp(p.Created)}
+}
