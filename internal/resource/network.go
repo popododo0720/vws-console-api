@@ -59,6 +59,10 @@ type Subnet struct {
 	VpcID   VpcID       `json:"vpcId,omitzero"`
 	Cidr    string      `json:"cidrBlock"`
 	State   SubnetState `json:"state"`
+	Zone    string      `json:"availabilityZone"`
+	// MapPublicIPOnLaunch is always false: VWS assigns public addresses only
+	// through AssociateAddress.
+	MapPublicIPOnLaunch bool `json:"mapPublicIpOnLaunch"`
 }
 
 // Owner returns the account that owns the subnet.

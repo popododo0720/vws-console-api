@@ -94,6 +94,18 @@ func Run(t *testing.T, newSet Harness) {
 	if page.Items[0].State != resource.InstanceRunning {
 		t.Fatalf("state %s", page.Items[0].State)
 	}
+	if got := page.Items[0]; got.LaunchTime.IsZero() {
+		t.Fatalf("launch time missing: %+v", got)
+	}
+	subs, err := set.Network.DescribeSubnets(ctx, backend.Scope{Account: account}, resource.SubnetQuery{
+		IDs: []resource.SubnetID{created.Items[0].ID}, Page: resource.PageRequest{Size: 50},
+	})
+	if err != nil || subs.Items[0].Zone != resource.ZoneName {
+		t.Fatalf("subnet zone: %v %+v", err, subs.Items)
+	}
+	if page.Items[0].VpcID != subs.Items[0].VpcID {
+		t.Fatalf("instance vpc %q, subnet vpc %q", page.Items[0].VpcID, subs.Items[0].VpcID)
+	}
 	if got := page.Items[0].Tags; got["Name"] != "web-1" || got["env"] != "dev" || len(got) != 2 {
 		t.Fatalf("tags %v, want Name=web-1 env=dev", got)
 	}

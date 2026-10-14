@@ -55,7 +55,9 @@ func (c compute) RunInstances(ctx context.Context, m backend.Mutation, req resou
 			ImageID:       req.ImageID,
 			InstanceType:  req.InstanceType,
 			SubnetID:      req.SubnetID,
+			VpcID:         vpcOf(c.w.sub[req.SubnetID]),
 			Zone:          resource.ZoneName,
+			LaunchTime:    c.w.now().UTC(),
 			PrivateIP:     c.w.nextIP(),
 			Tags:          copyTags(req.Tags),
 		}
@@ -233,4 +235,12 @@ func sortInstances(items []resource.Instance) {
 			items[j], items[j-1] = items[j-1], items[j]
 		}
 	}
+}
+
+// vpcOf is the VPC of a subnet, or empty when the subnet is unknown.
+func vpcOf(sub *resource.Subnet) resource.VpcID {
+	if sub == nil {
+		return resource.VpcID{}
+	}
+	return sub.VpcID
 }

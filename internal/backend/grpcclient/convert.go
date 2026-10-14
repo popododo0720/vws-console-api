@@ -266,9 +266,14 @@ func instanceProto(inst resource.Instance, projectID, vpcID string) *computev1.I
 		labelReservation: inst.ReservationID.String(),
 	})
 	obs, power := instanceObserved(inst.State)
+	var created *timestamppb.Timestamp
+	if !inst.LaunchTime.IsZero() {
+		created = timestamppb.New(inst.LaunchTime)
+	}
 	out := &computev1.Instance{
-		Name:   instanceName(projectID, inst.ID.String()),
-		Labels: labels,
+		CreateTime: created,
+		Name:       instanceName(projectID, inst.ID.String()),
+		Labels:     labels,
 		Spec: &computev1.InstanceSpec{
 			MachineType: inst.InstanceType,
 			Power:       power,
@@ -346,6 +351,14 @@ func instanceModel(in *computev1.Instance) (resource.Instance, error) {
 	if err != nil {
 		return resource.Instance{}, resource.Internal(err)
 	}
+	// The subnet name is .../vpcs/{vpc}/subnets/{subnet}. A subnet outside a
+	// user VPC has a segment that is not a VPC id, and the field stays empty.
+	var vpcID resource.VpcID
+	if parts := strings.Split(nics[0].GetSubnet(), "/"); len(parts) == 8 {
+		if parsed, perr := resource.Parse[resource.VpcID](parts[5]); perr == nil {
+			vpcID = parsed
+		}
+	}
 	state, err := instanceStateOf(in.GetStatus().GetObserved().GetState(), in.GetStatus().GetPower())
 	if err != nil {
 		return resource.Instance{}, err
@@ -359,8 +372,8 @@ func instanceModel(in *computev1.Instance) (resource.Instance, error) {
 	}
 	return resource.Instance{
 		ID: id, ReservationID: resID, OwnerID: owner, State: state, ImageID: img,
-		InstanceType: in.GetSpec().GetMachineType(), SubnetID: sub, Zone: parts[3],
-		PrivateIP: private, Tags: userTags(in.GetLabels()),
+		InstanceType: in.GetSpec().GetMachineType(), SubnetID: sub, VpcID: vpcID, Zone: parts[3],
+		LaunchTime: launchTime(in), PrivateIP: private, Tags: userTags(in.GetLabels()),
 	}, nil
 }
 
@@ -430,7 +443,7 @@ func subnetModel(in *networkv1.Subnet) (resource.Subnet, error) {
 	if parsed, parseErr := resource.Parse[resource.VpcID](parts[5]); parseErr == nil {
 		vpcID = parsed
 	}
-	return resource.Subnet{ID: id, OwnerID: owner, VpcID: vpcID, Cidr: in.GetSpec().GetIpv4Cidr(), State: state}, nil
+	return resource.Subnet{ID: id, OwnerID: owner, VpcID: vpcID, Cidr: in.GetSpec().GetIpv4Cidr(), State: state, Zone: in.GetSpec().GetZone()}, nil
 }
 
 func subnetStateOf(obs commonv1.ReconciliationState) (resource.SubnetState, error) {
@@ -707,4 +720,12 @@ func fromNamedRPC(name string, err error) error {
 		}
 	}
 	return mapped
+}
+
+// launchTime is compute's create_time, or zero when compute did not report one.
+func launchTime(in *computev1.Instance) time.Time {
+	if in.GetCreateTime() == nil {
+		return time.Time{}
+	}
+	return in.GetCreateTime().AsTime().UTC()
 }
