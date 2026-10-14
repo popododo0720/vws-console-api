@@ -1,5 +1,11 @@
 package resource
 
+import (
+	"strings"
+	"unicode"
+	"unicode/utf8"
+)
+
 // InstanceState is the life of an instance. The names are the EC2 state names.
 type InstanceState int
 
@@ -230,14 +236,20 @@ func validTags(tags map[string]string) error {
 		return Invalid("tags", "too many")
 	}
 	for k, v := range tags {
-		if len(k) < 1 || len(k) > 128 || hasControl(k) {
+		if n := utf8.RuneCountInString(k); n < 1 || n > 128 || !tagText(k) {
 			return Invalid("tags", "malformed key")
 		}
-		if len(v) > 256 || hasControl(v) {
+		if utf8.RuneCountInString(v) > 256 || !tagText(v) {
 			return Invalid("tags", "malformed value")
 		}
 	}
 	return nil
+}
+
+// tagText reports whether s is valid UTF-8 with no control characters.
+// As in EC2, lengths count characters and spaces are allowed.
+func tagText(s string) bool {
+	return utf8.ValidString(s) && !strings.ContainsFunc(s, unicode.IsControl)
 }
 
 // NextInstanceState is the state an instance reaches when action finishes.
