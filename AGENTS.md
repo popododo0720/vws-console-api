@@ -88,7 +88,7 @@ change.
 | A repeated query parameter, `Authorization` header, or `Authorization` field is an invalid argument. Bucket names, key length, and body size are checked before the backend. | `TestMalformedQueryIsRejected`, `TestAmbiguousAuthorizationIsRejected`, `TestMalformedNamesAndBodies` |
 | No image assets. | CI job `hygiene`; `internal/hygiene` |
 | No branding lines and no vendor API host names. | `internal/hygiene` |
-| No deployment setup. CI only lints and tests. | CI job `hygiene`; `internal/hygiene` |
+| No deployment manifests (Dockerfile, compose, Helm, k8s). CI lints and tests. The only release step is `.github/workflows/publish.yml`: on a push to main, ko builds the image and pushes `ghcr.io/<owner>/vws/console-api:sha-<7-char commit>` with `org.opencontainers.image.revision` (popododo0720/vws-deploy#280). | CI job `hygiene`; `internal/hygiene`; `publish.yml` |
 | Never push to `main`. | `.githooks/pre-push` after `git config core.hooksPath .githooks` |
 | Work on a branch. Each commit is one logical change and passes tests by itself. | Review. Before review: `git rebase -x 'go test ./...' origin/main` |
 | Structural changes use pstack: architect, then interrogate, then correct. | Review: the pull request names the sketch and the interrogate verdict |

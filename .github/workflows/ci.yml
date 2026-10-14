@@ -1,4 +1,4 @@
-# Lint and test only. This repository ships no deployment configuration.
+# Lint and test only. The image is published by publish.yml; no deployment manifests live here.
 name: ci
 
 on:
