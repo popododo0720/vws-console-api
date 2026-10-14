@@ -286,10 +286,7 @@ func instanceProto(inst resource.Instance, projectID, vpcID string) *computev1.I
 				DeviceName: "nic0",
 				Subnet:     subnetName(projectID, vpcID, inst.SubnetID.String()),
 			}},
-			Volumes: []*computev1.VolumeAttachment{{
-				DeviceName: "boot",
-				Boot:       true,
-			}},
+			Volumes: volumeAttachments(projectID, inst.BlockDevices),
 		},
 		Status: &computev1.InstanceStatus{
 			Observed: &commonv1.ObservedState{State: obs},
@@ -380,6 +377,19 @@ func instanceModel(in *computev1.Instance) (resource.Instance, error) {
 			return resource.Instance{}, resource.Internal(err)
 		}
 	}
+	var rootDevice string
+	var blocks []resource.BlockDevice
+	for _, v := range in.GetSpec().GetVolumes() {
+		volID, err := resource.Parse[resource.VolumeID](lastSegment(v.GetVolume()))
+		if err != nil {
+			return resource.Instance{}, resource.Internal(err)
+		}
+		device := v.GetDeviceName()
+		if v.GetBoot() {
+			device, rootDevice = resource.RootDeviceName, resource.RootDeviceName
+		}
+		blocks = append(blocks, resource.BlockDevice{Device: device, VolumeID: volID, DeleteOnTermination: v.GetBoot()})
+	}
 	private := ""
 	if nics := in.GetStatus().GetNetworkInterfaces(); len(nics) > 0 {
 		private = nics[0].GetPrivateIpv4()
@@ -389,6 +399,7 @@ func instanceModel(in *computev1.Instance) (resource.Instance, error) {
 		InstanceType: in.GetSpec().GetMachineType(), SubnetID: sub, VpcID: vpcID, Zone: parts[3],
 		LaunchTime: launchTime(in), PrivateIP: private, Tags: userTags(in.GetLabels()),
 		KeyPairID: keyPairID, UserData: in.GetSpec().GetUserData(),
+		RootDeviceName: rootDevice, BlockDevices: blocks,
 	}, nil
 }
 
@@ -746,4 +757,17 @@ func launchTime(in *computev1.Instance) time.Time {
 		return time.Time{}
 	}
 	return in.GetCreateTime().AsTime().UTC()
+}
+
+func volumeAttachments(projectID string, blocks []resource.BlockDevice) []*computev1.VolumeAttachment {
+	out := make([]*computev1.VolumeAttachment, 0, len(blocks))
+	for _, b := range blocks {
+		boot := b.Device == resource.RootDeviceName
+		device := b.Device
+		if boot {
+			device = "boot"
+		}
+		out = append(out, &computev1.VolumeAttachment{Volume: volumeName(projectID, b.VolumeID.String()), DeviceName: device, Boot: boot})
+	}
+	return out
 }

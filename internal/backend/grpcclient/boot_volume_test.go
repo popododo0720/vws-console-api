@@ -106,7 +106,7 @@ func (s *imageBoot) GetInstance(_ context.Context, req *computev1.GetInstanceReq
 func TestBootVolumeSourcesTheImage(t *testing.T) {
 	const imageID = "ami-0123456789abcdef0"
 	projectID := project(mustAccount(t))
-	vol := bootVolume(projectID, "fp", mustImage(t, imageID))
+	vol := bootVolume(projectID, "fp", mustImage(t, imageID), "i-0123456789abcdef0")
 	if vol.GetSpec().GetImage() != imageName(projectID, imageID) || vol.GetSpec().GetSnapshot() != "" {
 		t.Fatalf("spec %+v", vol.GetSpec())
 	}
