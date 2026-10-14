@@ -321,3 +321,11 @@ func TestKnownImagesIsNotEmpty(t *testing.T) {
 		t.Fatalf("KnownImages = %+v, want one %s owned by %s", images, knownImageID, owner)
 	}
 }
+
+func TestEveryListedInstanceTypeLaunches(t *testing.T) {
+	for _, it := range InstanceTypes() {
+		if got, ok := vwsInstanceType(it.Name); !ok || got != it.Name {
+			t.Fatalf("%s is listed but RunInstances maps it to %q, %v", it.Name, got, ok)
+		}
+	}
+}

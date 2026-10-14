@@ -54,6 +54,7 @@ func New(cfg Config) http.Handler {
 	mux.HandleFunc("GET /api/v1/vpcs", h.listVpcs)
 	mux.HandleFunc("GET /api/v1/volumes", h.listVolumes)
 	mux.HandleFunc("GET /api/v1/images", h.listImages)
+	mux.HandleFunc("GET /api/v1/instance-types", h.listInstanceTypes)
 	mux.HandleFunc("GET /api/v1/key-pairs", h.listKeyPairs)
 	mux.HandleFunc("GET /api/v1/security-groups", h.listSecurityGroups)
 	mux.HandleFunc("GET /api/v1/addresses", h.listAddresses)
@@ -562,4 +563,12 @@ func statusOf(c resource.Code) int {
 	default:
 		return http.StatusInternalServerError
 	}
+}
+
+// listInstanceTypes is the static machine catalog for the launch screen.
+func (h *handler) listInstanceTypes(w http.ResponseWriter, r *http.Request) {
+	if _, ok := h.caller(w, r); !ok {
+		return
+	}
+	writeJSON(w, http.StatusOK, resource.Page[resource.InstanceType]{Items: resource.InstanceTypes()})
 }
