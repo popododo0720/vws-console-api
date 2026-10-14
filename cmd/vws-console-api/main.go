@@ -17,6 +17,7 @@ import (
 	"github.com/popododo0720/vws-console-api/internal/backend/fake"
 	"github.com/popododo0720/vws-console-api/internal/backend/grpcclient"
 	"github.com/popododo0720/vws-console-api/internal/cloud"
+	"github.com/popododo0720/vws-console-api/internal/iam"
 	"github.com/popododo0720/vws-console-api/internal/resource"
 	"github.com/popododo0720/vws-console-api/internal/server"
 	"github.com/popododo0720/vws-console-api/internal/sigv4"
@@ -66,7 +67,7 @@ func run(ctx context.Context, args []string) (err error) {
 		return err
 	}
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
-	caller := resource.Caller{Account: account, Subject: *accessKey}
+	caller := resource.Caller{Account: account, Subject: *accessKey, Principal: iam.RootARN(account), Root: true}
 
 	var set backend.Set
 	switch *backendKind {
@@ -88,14 +89,12 @@ func run(ctx context.Context, args []string) (err error) {
 	}
 
 	svc := cloud.New(cloud.Config{Backends: set, Audit: logger})
-	lookup := func(_ context.Context, key string) (sigv4.Credential, bool) {
-		if key != *accessKey {
-			return sigv4.Credential{}, false
-		}
-		return sigv4.Credential{AccessKey: *accessKey, Secret: *secret, Account: account}, true
-	}
-	ec2 := sigv4.NewVerifier(sigv4.Verifier{Service: sigv4.ServiceEC2, Region: resource.RegionName, Lookup: lookup})
-	s3 := sigv4.NewVerifier(sigv4.Verifier{Service: sigv4.ServiceS3, Region: resource.RegionName, Lookup: lookup})
+	// The static key is the account root. Once the vws/iam/v1 client exists
+	// (vws-proto#24) it goes behind iam.WithRoot.
+	var auth iam.Client = iam.NewStatic(*accessKey, *secret, account)
+	authn := iam.Authenticator(auth)
+	ec2 := sigv4.NewVerifier(sigv4.Verifier{Service: sigv4.ServiceEC2, Region: resource.RegionName, Auth: authn})
+	s3 := sigv4.NewVerifier(sigv4.Verifier{Service: sigv4.ServiceS3, Region: resource.RegionName, Auth: authn})
 
 	ctx, stop := signal.NotifyContext(ctx, stopSignals()...)
 	defer stop()
@@ -104,8 +103,8 @@ func run(ctx context.Context, args []string) (err error) {
 			Service: svc,
 			Auth:    console.BearerTokens{*consoleToken: caller},
 		})},
-		{Name: "ec2", Addr: *ec2Addr, Handler: ec2query.New(ec2query.Config{Service: svc, Verifier: ec2})},
-		{Name: "s3", Addr: *s3Addr, Handler: s3rest.New(s3rest.Config{Service: svc, Verifier: s3})},
+		{Name: "ec2", Addr: *ec2Addr, Handler: ec2query.New(ec2query.Config{Service: svc, Verifier: ec2, Authorizer: auth})},
+		{Name: "s3", Addr: *s3Addr, Handler: s3rest.New(s3rest.Config{Service: svc, Verifier: s3, Authorizer: auth})},
 	}})
 }
 

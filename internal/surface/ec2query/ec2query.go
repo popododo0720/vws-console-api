@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/popododo0720/vws-console-api/internal/cloud"
+	"github.com/popododo0720/vws-console-api/internal/iam"
 	"github.com/popododo0720/vws-console-api/internal/resource"
 	"github.com/popododo0720/vws-console-api/internal/server"
 	"github.com/popododo0720/vws-console-api/internal/sigv4"
@@ -22,17 +23,20 @@ const Version = "2016-11-15"
 type Config struct {
 	Service  *cloud.Service
 	Verifier *sigv4.Verifier
+	// Authorizer decides each request. Nil denies every request.
+	Authorizer iam.Authorizer
 }
 
 // New returns the query handler.
 func New(cfg Config) http.Handler {
-	h := &handler{svc: cfg.Service, verifier: cfg.Verifier}
+	h := &handler{svc: cfg.Service, verifier: cfg.Verifier, authz: cfg.Authorizer}
 	return http.HandlerFunc(h.serve)
 }
 
 type handler struct {
 	svc      *cloud.Service
 	verifier *sigv4.Verifier
+	authz    iam.Authorizer
 }
 
 func (h *handler) serve(w http.ResponseWriter, r *http.Request) {
@@ -75,6 +79,12 @@ func (h *handler) serve(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
+	}
+	// Resource-level ARNs (arn:vws:ec2:<region>:<account>:instance/<id>) are a
+	// follow-up; every action is authorized on "*" for now.
+	if err := iam.Check(r.Context(), h.authz, caller, "ec2:"+action, "*"); err != nil {
+		writeErr(w, r, err)
+		return
 	}
 	switch action {
 	case resource.ActionRunInstances.String():

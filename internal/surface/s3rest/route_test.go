@@ -1,7 +1,6 @@
 package s3rest
 
 import (
-	"context"
 	"encoding/base64"
 	"encoding/xml"
 	"net/http"
@@ -13,6 +12,7 @@ import (
 
 	"github.com/popododo0720/vws-console-api/internal/backend/fake"
 	"github.com/popododo0720/vws-console-api/internal/cloud"
+	"github.com/popododo0720/vws-console-api/internal/iam"
 	"github.com/popododo0720/vws-console-api/internal/resource"
 	"github.com/popododo0720/vws-console-api/internal/sigv4"
 )
@@ -277,13 +277,11 @@ func harness(t *testing.T) (http.Handler, sigv4.Credential, time.Time) {
 	}
 	svc := cloud.New(cloud.Config{Backends: fake.New(fake.Options{Now: func() time.Time { return now }}).Set()})
 	cred := sigv4.Credential{AccessKey: "AKIDEXAMPLE", Secret: "secret", Account: account}
-	h := New(Config{Service: svc, Verifier: sigv4.NewVerifier(sigv4.Verifier{
+	h := New(Config{Service: svc, Authorizer: iam.NewStatic(cred.AccessKey, cred.Secret, cred.Account), Verifier: sigv4.NewVerifier(sigv4.Verifier{
 		Service: sigv4.ServiceS3,
 		Region:  resource.RegionName,
 		Now:     func() time.Time { return now },
-		Lookup: func(_ context.Context, key string) (sigv4.Credential, bool) {
-			return cred, key == cred.AccessKey
-		},
+		Auth:    iam.Authenticator(iam.NewStatic(cred.AccessKey, cred.Secret, cred.Account)),
 	})})
 	return h, cred, now
 }

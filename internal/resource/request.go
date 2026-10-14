@@ -16,6 +16,10 @@ type Query[Q any] interface {
 type Caller struct {
 	Account AccountID
 	Subject string
+	// Principal is the IAM ARN the request is authorized as, such as
+	// arn:vws:iam::123456789012:user/bob. Root marks the account root.
+	Principal string
+	Root      bool
 }
 
 // Owned is a result that names its account. The kernel rejects a result whose
