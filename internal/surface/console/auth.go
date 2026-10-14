@@ -134,6 +134,11 @@ func (h *handler) gate(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, r, resource.Denied("route has no IAM action"))
 		return
 	}
+	if r.Header.Get("Authorization") == "" && r.Method != http.MethodGet && r.Method != http.MethodHead {
+		if _, err := r.Cookie(SessionCookie); err == nil && !h.browserWriteOK(w, r) {
+			return
+		}
+	}
 	c, err := h.authenticate(r)
 	if err != nil {
 		writeErr(w, r, err)
@@ -204,6 +209,15 @@ func (h *handler) login(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, r, resource.Unimplemented("console sign-in is not configured"))
 		return
 	}
+	if !h.browserWriteOK(w, r) {
+		return
+	}
+	if ok, wait := h.logins.take(clientIP(r), h.now()); !ok {
+		h.log.WarnContext(r.Context(), "console sign-in rate limited", slog.String("source_ip", clientIP(r)))
+		retryAfter(w, wait)
+		writeErr(w, r, &resource.Error{Code: resource.CodeResourceExhausted, Message: "too many sign-in attempts; retry later"})
+		return
+	}
 	dec := json.NewDecoder(io.LimitReader(r.Body, maxLoginBody))
 	dec.DisallowUnknownFields()
 	var in loginBody
@@ -224,6 +238,9 @@ func (h *handler) login(w http.ResponseWriter, r *http.Request) {
 	log := h.log.With(slog.String("account", account.String()), slog.String("user", in.UserName), slog.String("source_ip", ip))
 	if err != nil {
 		log.WarnContext(r.Context(), "console sign-in failed", slog.String("code", resource.CodeOf(err).String()))
+		if iam.IsBusy(err) {
+			retryAfter(w, time.Second)
+		}
 		writeErr(w, r, sessionErr(err))
 		return
 	}

@@ -16,10 +16,6 @@ import (
 const (
 	// SessionTTL is how long a console session lasts, like the AWS console.
 	SessionTTL = 12 * time.Hour
-	// MaxLoginFailures failed sign-ins in a row lock a user out for LockoutPeriod.
-	MaxLoginFailures = 5
-	// LockoutPeriod is how long a lockout lasts.
-	LockoutPeriod = 15 * time.Minute
 	// RootUserName signs in as the account root. No IAM user may take it.
 	RootUserName = "root"
 )
@@ -104,10 +100,4 @@ func (t *sessionTable) close(token string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	delete(t.byID, tokenID(token))
-}
-
-// lockout counts consecutive failures per key.
-type lockout struct {
-	failures int
-	until    time.Time
 }

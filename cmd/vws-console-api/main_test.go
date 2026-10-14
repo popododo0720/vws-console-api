@@ -78,7 +78,7 @@ func TestRootPasswordFileIsValidated(t *testing.T) {
 	if err := os.WriteFile(good, []byte("root password 9\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := setRootPassword(root, good); err != nil {
+	if err := setRootPassword(t.Context(), root, good); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := root.Login(t.Context(), iam.LoginRequest{Account: account, UserName: iam.RootUserName, Password: "root password 9"}); err != nil {

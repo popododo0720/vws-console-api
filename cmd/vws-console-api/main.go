@@ -56,6 +56,7 @@ func run(ctx context.Context, args []string) (err error) {
 	iamMode := fs.String("iam", "static", "static: only the -access-key root key, no IAM/STS management; "+
 		"fake: in-memory IAM users, groups, roles, policies and STS sessions, lost on restart, until the vws-iam client lands (vws-proto#24)")
 	iamAddr := fs.String("iam-addr", "127.0.0.1:8084", "IAM and STS Query listen address")
+	consoleOrigins := fs.String("console-origins", "", "comma-separated browser origins allowed to sign in and send cookie writes besides the console's own host, such as https://console.vws.example")
 	rootPasswordFile := fs.String("root-password-file", "", "file holding the account root's console password (mount it from a Secret); empty disables root console sign-in")
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("flags: %w", err)
@@ -97,8 +98,9 @@ func run(ctx context.Context, args []string) (err error) {
 	// The static key is the account root. Once the vws/iam/v1 client exists
 	// (vws-proto#24) it goes behind iam.WithRoot.
 	root := iam.NewStatic(*accessKey, *secret, account)
+	root.SetLogger(logger)
 	if *rootPasswordFile != "" {
-		if err := setRootPassword(root, *rootPasswordFile); err != nil {
+		if err := setRootPassword(ctx, root, *rootPasswordFile); err != nil {
 			return err
 		}
 	}
@@ -108,6 +110,7 @@ func run(ctx context.Context, args []string) (err error) {
 	case "static":
 	case "fake":
 		fakeIAM := iam.NewFake()
+		fakeIAM.SetLogger(logger)
 		auth, admin = iam.WithRoot(root, fakeIAM), fakeIAM
 		logger.WarnContext(ctx, "in-memory IAM: users, keys and roles are lost on restart", slog.String("iam", *iamMode))
 	default:
@@ -127,6 +130,7 @@ func run(ctx context.Context, args []string) (err error) {
 			Auth:    console.BearerTokens{*consoleToken: caller},
 			IAM:     auth,
 			Logger:  logger,
+			Origins: splitList(*consoleOrigins),
 		})},
 		{Name: "ec2", Addr: *ec2Addr, Handler: ec2query.New(ec2query.Config{Service: svc, Verifier: ec2, Authorizer: auth})},
 		{Name: "s3", Addr: *s3Addr, Handler: s3rest.New(s3rest.Config{Service: svc, Verifier: s3, Authorizer: auth})},
@@ -136,15 +140,26 @@ func run(ctx context.Context, args []string) (err error) {
 	}})
 }
 
+// splitList splits a comma-separated flag, dropping empty items.
+func splitList(raw string) []string {
+	var out []string
+	for _, v := range strings.Split(raw, ",") {
+		if v = strings.TrimSpace(v); v != "" {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
 // setRootPassword reads the root console password from path. One trailing
 // newline is dropped, as Secret files and echo leave one.
-func setRootPassword(root *iam.Static, path string) error {
+func setRootPassword(ctx context.Context, root *iam.Static, path string) error {
 	raw, err := os.ReadFile(path) //nolint:gosec // an operator-chosen path, read once at start.
 	if err != nil {
 		return fmt.Errorf("-root-password-file: %w", err)
 	}
 	pw := strings.TrimSuffix(strings.TrimSuffix(string(raw), "\n"), "\r")
-	if err := root.SetPassword(pw); err != nil {
+	if err := root.SetPassword(ctx, pw); err != nil {
 		return fmt.Errorf("-root-password-file %s: %w", path, err)
 	}
 	return nil

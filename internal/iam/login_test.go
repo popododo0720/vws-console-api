@@ -1,6 +1,8 @@
 package iam
 
 import (
+	"bytes"
+	"log/slog"
 	"strings"
 	"testing"
 	"time"
@@ -111,20 +113,98 @@ func TestLoginSessions(t *testing.T) {
 	}
 }
 
-func TestLoginLockout(t *testing.T) {
+func TestLoginLockoutIsPerUserAndIPWithBackoff(t *testing.T) {
 	ctx := t.Context()
 	f, a := loginFake(t)
+	var logs bytes.Buffer
+	f.SetLogger(slog.New(slog.NewJSONHandler(&logs, nil)))
+	clock := now
+	f.Now = func() time.Time { return clock }
+	try := func(ip, pw string) error {
+		_, err := f.Login(ctx, LoginRequest{Account: a, UserName: "bob", Password: pw, SourceIP: ip})
+		return err
+	}
 	for range MaxLoginFailures {
-		if _, err := f.Login(ctx, LoginRequest{Account: a, UserName: "bob", Password: "guess"}); resource.CodeOf(err) != resource.CodeUnauthenticated {
+		if err := try("198.51.100.1", "guess wrong 1"); resource.CodeOf(err) != resource.CodeUnauthenticated {
 			t.Fatal(err)
 		}
 	}
-	if _, err := f.Login(ctx, LoginRequest{Account: a, UserName: "bob", Password: "correct horse 1"}); resource.CodeOf(err) != resource.CodeUnauthenticated {
-		t.Fatalf("locked account accepted the right password: %v", err)
+	if err := try("198.51.100.1", "correct horse 1"); resource.CodeOf(err) != resource.CodeUnauthenticated {
+		t.Fatalf("locked user+IP accepted the right password: %v", err)
 	}
-	f.Now = func() time.Time { return now.Add(LockoutPeriod) }
-	if _, err := f.Login(ctx, LoginRequest{Account: a, UserName: "bob", Password: "correct horse 1"}); err != nil {
-		t.Fatalf("after the lockout period: %v", err)
+	// The attacker's lockout does not lock bob out from his own address.
+	if err := try("192.0.2.50", "correct horse 1"); err != nil {
+		t.Fatalf("bob from another IP: %v", err)
+	}
+	if !strings.Contains(logs.String(), `"msg":"console sign-in locked out"`) || !strings.Contains(logs.String(), `"source_ip":"198.51.100.1"`) || !strings.Contains(logs.String(), `"user":"bob"`) {
+		t.Errorf("no lockout notice: %s", logs.String())
+	}
+	if strings.Contains(logs.String(), "guess wrong") || strings.Contains(logs.String(), "correct horse") {
+		t.Errorf("password in the log: %s", logs.String())
+	}
+	// Backoff: the first lock lasts LockoutBase, the next one twice that.
+	clock = clock.Add(LockoutBase)
+	if err := try("198.51.100.1", "guess wrong 1"); resource.CodeOf(err) != resource.CodeUnauthenticated {
+		t.Fatal(err)
+	}
+	clock = clock.Add(LockoutBase)
+	if err := try("198.51.100.1", "correct horse 1"); err == nil {
+		t.Fatal("second lock should last 2x LockoutBase")
+	}
+	clock = clock.Add(LockoutBase)
+	if err := try("198.51.100.1", "correct horse 1"); err != nil {
+		t.Fatalf("after 2x LockoutBase: %v", err)
+	}
+	// Success clears the count: the next failure does not lock at once.
+	if err := try("198.51.100.1", "guess wrong 1"); err == nil {
+		t.Fatal("wrong password accepted")
+	}
+	if err := try("198.51.100.1", "correct horse 1"); err != nil {
+		t.Fatalf("one failure after a success locked: %v", err)
+	}
+	if d := lockFor(MaxLoginFailures + 40); d != LockoutMax {
+		t.Errorf("backoff not capped: %v", d)
+	}
+}
+
+func TestRootCannotBeLockedOutFromAnotherIP(t *testing.T) {
+	ctx := t.Context()
+	a := account(t)
+	root := NewStatic("AKIDEXAMPLE", "secret", a)
+	must(t, root.SetPassword(t.Context(), "root password 9"))
+	for range MaxLoginFailures + 3 {
+		_, _ = root.Login(ctx, LoginRequest{Account: a, UserName: RootUserName, Password: "nope nope 1", SourceIP: "203.0.113.9"})
+	}
+	if _, err := root.Login(ctx, LoginRequest{Account: a, UserName: RootUserName, Password: "root password 9", SourceIP: "203.0.113.9"}); err == nil {
+		t.Error("attacker IP not locked")
+	}
+	if _, err := root.Login(ctx, LoginRequest{Account: a, UserName: RootUserName, Password: "root password 9", SourceIP: "192.0.2.1"}); err != nil {
+		t.Errorf("root locked out from its own IP: %v", err)
+	}
+}
+
+func TestHashingIsBounded(t *testing.T) {
+	ctx := t.Context()
+	f, a := loginFake(t)
+	f.LimitHashing(1)
+	f.guard.slots <- struct{}{} // the one slot is busy
+	_, err := f.Login(ctx, LoginRequest{Account: a, UserName: "bob", Password: "correct horse 1", SourceIP: "192.0.2.1"})
+	if resource.CodeOf(err) != resource.CodeUnavailable || !IsBusy(err) {
+		t.Fatalf("full hashing slots: %v", err)
+	}
+	if _, err := f.CreateLoginProfile(ctx, a, "bob", "x long enough 1"); !IsBusy(err) && resource.CodeOf(err) != resource.CodeAlreadyExists {
+		t.Fatalf("profile hashing while full: %v", err)
+	}
+	<-f.guard.slots
+	if _, err := f.Login(ctx, LoginRequest{Account: a, UserName: "bob", Password: "correct horse 1", SourceIP: "192.0.2.1"}); err != nil {
+		t.Fatalf("after the slot frees: %v", err)
+	}
+	root := NewStatic("AKIDEXAMPLE", "secret", a)
+	must(t, root.SetPassword(t.Context(), "root password 9"))
+	root.LimitHashing(1)
+	root.guard.slots <- struct{}{}
+	if _, err := root.Login(ctx, LoginRequest{Account: a, UserName: RootUserName, Password: "root password 9"}); !IsBusy(err) {
+		t.Fatalf("root while full: %v", err)
 	}
 }
 
@@ -137,7 +217,7 @@ func TestRootLoginThroughWithRoot(t *testing.T) {
 	if _, err := c.Login(ctx, LoginRequest{Account: a, UserName: RootUserName, Password: "anything"}); resource.CodeOf(err) != resource.CodeUnauthenticated {
 		t.Fatalf("root login without a password set: %v", err)
 	}
-	must(t, root.SetPassword("root password 9"))
+	must(t, root.SetPassword(t.Context(), "root password 9"))
 	s, err := c.Login(ctx, LoginRequest{Account: a, UserName: RootUserName, Password: "root password 9"})
 	if err != nil || !s.Principal.Root || s.Principal.ARN != RootARN(a) {
 		t.Fatalf("root login %+v %v", s, err)

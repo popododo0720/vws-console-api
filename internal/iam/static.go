@@ -17,7 +17,7 @@ type Static struct {
 	key      Key
 	mu       sync.Mutex
 	password string // argon2id hash; empty disables root sign-in
-	lock     lockout
+	guard    *guard
 	sessions *sessionTable
 	dummy    func() string
 }
@@ -27,7 +27,7 @@ func NewStatic(accessKey, secret string, account resource.AccountID) *Static {
 	return &Static{key: Key{
 		AccessKey: accessKey, Secret: secret,
 		Principal: Principal{Account: account, ARN: RootARN(account), Root: true},
-	}, sessions: newSessionTable(), dummy: sync.OnceValue(newDummyHash)}
+	}, sessions: newSessionTable(), guard: newGuard(), dummy: sync.OnceValue(newDummyHash)}
 }
 
 // Authenticate verifies a signature made with its own key, locally, with the

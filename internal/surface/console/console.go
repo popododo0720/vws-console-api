@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/popododo0720/vws-console-api/internal/cloud"
 	"github.com/popododo0720/vws-console-api/internal/iam"
@@ -44,6 +45,11 @@ type Config struct {
 	Auth    Authenticator
 	IAM     iam.Client
 	Logger  *slog.Logger
+	// Origins are browser origins allowed besides the console's own host,
+	// such as https://console.vws.example.
+	Origins []string
+	// Now is the clock for sign-in rate limits. Nil uses time.Now.
+	Now func() time.Time
 }
 
 // New returns the console handler.
@@ -52,7 +58,11 @@ func New(cfg Config) http.Handler {
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
 	}
-	h := &handler{svc: cfg.Service, auth: cfg.Auth, iam: cfg.IAM, log: log, mux: http.NewServeMux()}
+	now := cfg.Now
+	if now == nil {
+		now = time.Now
+	}
+	h := &handler{svc: cfg.Service, auth: cfg.Auth, iam: cfg.IAM, log: log, mux: http.NewServeMux(), origins: cfg.Origins, now: now, logins: newLimiter()}
 	h.routes(h.mux)
 	return http.HandlerFunc(h.gate)
 }
@@ -105,6 +115,9 @@ type handler struct {
 	log      *slog.Logger
 	mux      *http.ServeMux
 	patterns []string
+	origins  []string
+	now      func() time.Time
+	logins   *limiter
 }
 
 func (h *handler) mutation(action resource.Action) (string, string, http.HandlerFunc) {

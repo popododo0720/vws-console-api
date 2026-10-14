@@ -15,12 +15,29 @@ type loginRec struct {
 
 // --- login profiles (Admin) ---
 
+// guardedHash hashes pw in a hashing slot.
+func guardedHash(ctx context.Context, g *guard, pw string) (string, error) {
+	var hash string
+	var err error
+	if busyErr := g.hash(ctx, func() { hash, err = hashPassword(pw) }); busyErr != nil {
+		return "", busyErr
+	}
+	return hash, err
+}
+
+// guardedVerify checks pw against hash in a hashing slot.
+func guardedVerify(ctx context.Context, g *guard, hash, pw string) (bool, error) {
+	var ok bool
+	err := g.hash(ctx, func() { ok = verifyPassword(hash, pw) })
+	return ok, err
+}
+
 // CreateLoginProfile implements Admin: it gives user a console password.
-func (f *Fake) CreateLoginProfile(_ context.Context, a resource.AccountID, user, password string) (LoginProfile, error) {
+func (f *Fake) CreateLoginProfile(ctx context.Context, a resource.AccountID, user, password string) (LoginProfile, error) {
 	if err := checkPassword(password); err != nil {
 		return LoginProfile{}, err
 	}
-	hash, err := hashPassword(password)
+	hash, err := guardedHash(ctx, f.guard, password)
 	if err != nil {
 		return LoginProfile{}, err
 	}
@@ -50,11 +67,11 @@ func (f *Fake) GetLoginProfile(_ context.Context, a resource.AccountID, user str
 
 // UpdateLoginProfile implements Admin: it sets a new password and clears any
 // lockout. Existing sessions stay valid until they expire or sign out.
-func (f *Fake) UpdateLoginProfile(_ context.Context, a resource.AccountID, user, password string) error {
+func (f *Fake) UpdateLoginProfile(ctx context.Context, a resource.AccountID, user, password string) error {
 	if err := checkPassword(password); err != nil {
 		return err
 	}
-	hash, err := hashPassword(password)
+	hash, err := guardedHash(ctx, f.guard, password)
 	if err != nil {
 		return err
 	}
@@ -65,7 +82,7 @@ func (f *Fake) UpdateLoginProfile(_ context.Context, a resource.AccountID, user,
 		return notFound("Login Profile for User", user)
 	}
 	u.login.hash = hash
-	delete(f.lockouts, lockKey(a, user))
+	f.guard.forget(a, user)
 	return nil
 }
 
@@ -78,7 +95,7 @@ func (f *Fake) DeleteLoginProfile(_ context.Context, a resource.AccountID, user 
 		return notFound("Login Profile for User", user)
 	}
 	u.login = nil
-	delete(f.lockouts, lockKey(a, user))
+	f.guard.forget(a, user)
 	return nil
 }
 
@@ -89,17 +106,20 @@ func (st *store) user(name string) *userRec {
 	return st.users[name]
 }
 
-func lockKey(a resource.AccountID, user string) string { return a.String() + "/" + user }
-
 // --- sign-in (Sessions) ---
 
 // Login implements Sessions. Every failure is the same Unauthenticated error
 // and costs one argon2id verification, so it reveals neither whether the user
-// exists nor which field was wrong. MaxLoginFailures in a row lock the user
-// for LockoutPeriod. Users have no MFA devices yet (vws-iam#6), so any MFA
-// code fails.
-func (f *Fake) Login(_ context.Context, req LoginRequest) (Session, error) {
+// exists nor which field was wrong. Hashing runs in a bounded number of
+// slots; when they are full the answer is busy (503) before any work.
+// MaxLoginFailures in a row from one address lock the user from that
+// address only, with exponential backoff. Users have no MFA devices yet
+// (vws-iam#6), so any MFA code fails.
+func (f *Fake) Login(ctx context.Context, req LoginRequest) (Session, error) {
 	now := f.now()
+	if f.guard.locked(lockKey(req.Account, req.UserName, req.SourceIP), now) {
+		return Session{}, errLogin()
+	}
 	f.mu.RLock()
 	u := f.accounts[req.Account].user(req.UserName)
 	hash, p := f.dummy(), Principal{}
@@ -107,31 +127,18 @@ func (f *Fake) Login(_ context.Context, req LoginRequest) (Session, error) {
 		hash, p = u.login.hash, Principal{Account: req.Account, ARN: u.ARN}
 	}
 	f.mu.RUnlock()
-	key := lockKey(req.Account, req.UserName)
-	match := verifyPassword(hash, req.Password)
+	match, err := guardedVerify(ctx, f.guard, hash, req.Password)
+	if err != nil {
+		return Session{}, err
+	}
 	if p.ARN == "" {
 		return Session{}, errLogin()
 	}
-	f.mu.Lock()
-	l := f.lockouts[key]
-	if l != nil && now.Before(l.until) {
-		f.mu.Unlock()
-		return Session{}, errLogin()
-	}
 	if !match || req.MFACode != "" {
-		if l == nil {
-			l = &lockout{}
-			f.lockouts[key] = l
-		}
-		l.failures++
-		if l.failures >= MaxLoginFailures {
-			l.failures, l.until = 0, now.Add(LockoutPeriod)
-		}
-		f.mu.Unlock()
+		f.guard.fail(ctx, req, now)
 		return Session{}, errLogin()
 	}
-	delete(f.lockouts, key)
-	f.mu.Unlock()
+	f.guard.succeed(req)
 	return f.sessions.open(p, now)
 }
 
@@ -154,17 +161,18 @@ func (f *Fake) Logout(_ context.Context, token string) error {
 
 // SetPassword enables root console sign-in with password. The process keeps
 // only its argon2id hash.
-func (s *Static) SetPassword(password string) error {
+func (s *Static) SetPassword(ctx context.Context, password string) error {
 	if err := checkPassword(password); err != nil {
 		return err
 	}
-	hash, err := hashPassword(password)
+	hash, err := guardedHash(ctx, s.guard, password)
 	if err != nil {
 		return err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.password, s.lock = hash, lockout{}
+	s.password = hash
+	s.guard.forget(s.key.Principal.Account, RootUserName)
 	return nil
 }
 
@@ -172,32 +180,33 @@ func (s *Static) isRoot(req LoginRequest) bool {
 	return req.UserName == RootUserName && req.Account == s.key.Principal.Account
 }
 
-// Login implements Sessions for the account root, with the same lockout and
-// uniform failure as IAM users. Root has no MFA device here either.
-func (s *Static) Login(_ context.Context, req LoginRequest) (Session, error) {
+// Login implements Sessions for the account root, with the same bounded
+// hashing, per-address lockout and uniform failure as IAM users. Root has no
+// MFA device here either.
+func (s *Static) Login(ctx context.Context, req LoginRequest) (Session, error) {
 	now := time.Now()
+	if s.guard.locked(lockKey(req.Account, req.UserName, req.SourceIP), now) {
+		return Session{}, errLogin()
+	}
 	s.mu.Lock()
 	hash := s.password
-	locked := now.Before(s.lock.until)
 	s.mu.Unlock()
-	if hash == "" || !s.isRoot(req) {
-		_ = verifyPassword(s.dummy(), req.Password)
+	known := hash != "" && s.isRoot(req)
+	if !known {
+		hash = s.dummy()
+	}
+	match, err := guardedVerify(ctx, s.guard, hash, req.Password)
+	if err != nil {
+		return Session{}, err
+	}
+	if !known {
 		return Session{}, errLogin()
 	}
-	match := verifyPassword(hash, req.Password) && req.MFACode == ""
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if locked {
+	if !match || req.MFACode != "" {
+		s.guard.fail(ctx, req, now)
 		return Session{}, errLogin()
 	}
-	if !match {
-		s.lock.failures++
-		if s.lock.failures >= MaxLoginFailures {
-			s.lock = lockout{until: now.Add(LockoutPeriod)}
-		}
-		return Session{}, errLogin()
-	}
-	s.lock = lockout{}
+	s.guard.succeed(req)
 	return s.sessions.open(s.key.Principal, now)
 }
 

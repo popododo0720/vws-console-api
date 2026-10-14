@@ -74,8 +74,16 @@ Secret). It sets an HttpOnly, Secure, SameSite=Strict `vws_session` cookie
 session must echo `vws_csrf` in `X-CSRF-Token`. Each console route is
 authorized as the matching IAM action (`ec2:DescribeVpcs`, `ec2:CreateVpc`,
 `s3:GetObject`, `vws:GetOperation`, ...), so a session only does what the
-user's policies allow. Five wrong passwords in a row lock the user for 15
-minutes, and every failure is the same `401`. `GET /api/v1/auth/session` names
+user's policies allow. Every failure is the same `401`. Abuse limits: five
+wrong passwords in a row from one address lock that user from that address
+only (1 minute, doubling per further failure up to 1 hour, logged as
+`console sign-in locked out` without secrets), so nobody can lock root out
+from elsewhere; each address gets 10 sign-in attempts, refilling one every
+6 s (`429` with `Retry-After`); argon2id hashing runs in a bounded number of
+slots and a sign-in that cannot get one within 200 ms is `503` with
+`Retry-After`. Sign-in and every state-changing cookie request must be
+`Content-Type: application/json` (else `415`) and carry an `Origin` that is
+the console's own host or one listed in `-console-origins` (else `403`). `GET /api/v1/auth/session` names
 the caller; `POST /api/v1/auth/logout` ends the session. The bearer
 `-console-token` still acts as the account root until it is retired.
 

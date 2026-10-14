@@ -563,11 +563,14 @@ CONSOLE_URL = os.environ.get("VWS_E2E_CONSOLE", "http://127.0.0.1:8080")
 
 def console_call(method, path, body=None, cookies=None, headers=None):
     """One console request. Returns (status, json body or None, Set-Cookie headers)."""
-    h = dict(headers or {})
+    h = {}
     data = None
-    if body is not None:
-        data = json.dumps(body).encode()
+    if method not in ("GET", "HEAD"):
+        # A browser sends its Origin; the console only takes JSON writes.
+        h["Origin"] = CONSOLE_URL
         h["Content-Type"] = "application/json"
+        data = json.dumps(body if body is not None else {}).encode()
+    h.update(headers or {})
     if cookies:
         h["Cookie"] = "; ".join(f"{k}={v}" for k, v in cookies.items())
     req = urllib.request.Request(CONSOLE_URL + path, data=data, method=method, headers=h)
@@ -601,6 +604,10 @@ def console_login():
         "POST", "/api/v1/auth/login", dict(creds, password="nope nope nope"))))
     step("console login unknown user is the same 401", lambda: expect(401, console_call(
         "POST", "/api/v1/auth/login", dict(creds, userName="e2e-nobody"))))
+    step("console login from a foreign Origin is 403", lambda: expect(403, console_call(
+        "POST", "/api/v1/auth/login", creds, headers={"Origin": "https://evil.example"})))
+    step("console login as a form is 415", lambda: expect(415, console_call(
+        "POST", "/api/v1/auth/login", creds, headers={"Content-Type": "application/x-www-form-urlencoded"})))
     got = step("console login", lambda: expect(200, console_call("POST", "/api/v1/auth/login", creds)))
     if not got:
         return
@@ -626,6 +633,9 @@ def console_login():
         "POST", "/api/v1/vpcs", {"cidrBlock": "10.43.0.0/16"}, cookies=jar, headers=write)))
     step("POST with CSRF but no ec2:CreateVpc is 403", lambda: expect(403, console_call(
         "POST", "/api/v1/vpcs", {"cidrBlock": "10.43.0.0/16"}, cookies=jar, headers=dict(write, **{"X-CSRF-Token": jar["vws_csrf"]}))))
+    step("cookie write from a foreign Origin is 403", lambda: expect(403, console_call(
+        "POST", "/api/v1/vpcs", {"cidrBlock": "10.43.0.0/16"}, cookies=jar,
+        headers=dict(write, **{"X-CSRF-Token": jar["vws_csrf"], "Origin": "https://evil.example"}))))
     step("console logout", lambda: expect(204, console_call(
         "POST", "/api/v1/auth/logout", cookies=jar, headers={"X-CSRF-Token": jar["vws_csrf"]})))
     step("after logout the session is 401", lambda: expect(401, console_call("GET", "/api/v1/vpcs", cookies=jar)))
