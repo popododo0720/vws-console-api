@@ -800,7 +800,7 @@ func (s *vpcSrv) CreateVpc(ctx context.Context, req *networkv1.CreateVpcRequest)
 		}
 		acc, err := s.w.set.Network.CreateVpc(ctx, backend.Mutation{
 			Scope: backend.Scope{Account: account}, Key: req.GetRequestId(), Fingerprint: fp,
-		}, resource.CreateVpcRequest{Cidr: req.GetVpc().GetSpec().GetIpv4Cidr()})
+		}, resource.CreateVpcRequest{Cidr: req.GetVpc().GetSpec().GetIpv4Cidr(), Tags: userTags(req.GetVpc().GetLabels())})
 		if err != nil {
 			return nil, toStatus(err)
 		}
@@ -857,7 +857,7 @@ func (s *subnetSrv) CreateSubnet(ctx context.Context, req *networkv1.CreateSubne
 	}
 	acc, err := s.w.set.Network.CreateSubnet(ctx, backend.Mutation{
 		Scope: backend.Scope{Account: account}, Key: req.GetRequestId(), Fingerprint: fp,
-	}, resource.CreateSubnetRequest{Cidr: req.GetSubnet().GetSpec().GetIpv4Cidr(), VpcID: vpcRef})
+	}, resource.CreateSubnetRequest{Cidr: req.GetSubnet().GetSpec().GetIpv4Cidr(), VpcID: vpcRef, Tags: userTags(req.GetSubnet().GetLabels())})
 	if err != nil {
 		return nil, toStatus(err)
 	}

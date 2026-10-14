@@ -695,12 +695,16 @@ func (c networkClient) CreateSubnet(ctx context.Context, m backend.Mutation, req
 		}
 	}
 	subnetID := derivedID("subnet-", m.Key, "subnet")
+	labels, err := withInternalLabels(req.Tags, map[string]string{labelFingerprint: clip(m.Fingerprint, 63)})
+	if err != nil {
+		return resource.Accepted[resource.Subnet]{}, err
+	}
 	created, err := c.subnets.CreateSubnet(ctx, &networkv1.CreateSubnetRequest{
 		Parent:    vpcName(projectID, vpcID),
 		SubnetId:  subnetID,
 		RequestId: requestUUID(m.Key, "subnet"),
 		Subnet: &networkv1.Subnet{
-			Labels: map[string]string{labelFingerprint: clip(m.Fingerprint, 63)},
+			Labels: labels,
 			Spec:   &networkv1.SubnetSpec{Zone: resource.ZoneName, Ipv4Cidr: req.Cidr},
 		},
 	})

@@ -104,12 +104,13 @@ type describeSubnetsXML struct {
 }
 
 type subnetItem struct {
-	SubnetID string `xml:"subnetId"`
-	VpcID    string `xml:"vpcId,omitempty"`
-	Cidr     string `xml:"cidrBlock"`
-	State    string `xml:"state"`
-	Zone     string `xml:"availabilityZone,omitempty"`
-	MapIP    bool   `xml:"mapPublicIpOnLaunch"`
+	SubnetID string  `xml:"subnetId"`
+	VpcID    string  `xml:"vpcId,omitempty"`
+	Cidr     string  `xml:"cidrBlock"`
+	State    string  `xml:"state"`
+	Zone     string  `xml:"availabilityZone,omitempty"`
+	MapIP    bool    `xml:"mapPublicIpOnLaunch"`
+	Tags     *tagSet `xml:"tagSet,omitempty"`
 }
 
 type createVpcXML struct {
@@ -128,11 +129,12 @@ type describeVpcsXML struct {
 }
 
 type vpcItem struct {
-	VpcID     string `xml:"vpcId"`
-	State     string `xml:"state"`
-	Cidr      string `xml:"cidrBlock"`
-	OwnerID   string `xml:"ownerId"`
-	IsDefault bool   `xml:"isDefault"`
+	VpcID     string  `xml:"vpcId"`
+	State     string  `xml:"state"`
+	Cidr      string  `xml:"cidrBlock"`
+	OwnerID   string  `xml:"ownerId"`
+	IsDefault bool    `xml:"isDefault"`
+	Tags      *tagSet `xml:"tagSet,omitempty"`
 }
 
 type deleteVpcXML struct {
@@ -437,11 +439,11 @@ func stateXMLOf(s resource.InstanceState) stateXML {
 }
 
 func subnetXML(s resource.Subnet) subnetItem {
-	return subnetItem{SubnetID: s.ID.String(), VpcID: s.VpcID.String(), Cidr: s.Cidr, State: s.State.String(), Zone: s.Zone, MapIP: s.MapPublicIPOnLaunch}
+	return subnetItem{SubnetID: s.ID.String(), VpcID: s.VpcID.String(), Cidr: s.Cidr, State: s.State.String(), Zone: s.Zone, MapIP: s.MapPublicIPOnLaunch, Tags: tagSetOf(s.Tags)}
 }
 
 func vpcXML(v resource.Vpc) vpcItem {
-	return vpcItem{VpcID: v.ID.String(), State: v.State, Cidr: v.Cidr, OwnerID: v.OwnerID.String()}
+	return vpcItem{VpcID: v.ID.String(), State: v.State, Cidr: v.Cidr, OwnerID: v.OwnerID.String(), Tags: tagSetOf(v.Tags)}
 }
 
 func volumeCreatedXML(requestID string, v resource.Volume) createVolumeXML {

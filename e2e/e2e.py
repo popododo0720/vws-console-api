@@ -222,6 +222,33 @@ ODD_TAGS = {
 }
 
 
+def network_tags():
+    """VPC and subnet tags round-trip through create, CreateTags, EC2 and the console API."""
+    def spec(kind):
+        return [{"ResourceType": kind, "Tags": [{"Key": k, "Value": v} for k, v in ODD_TAGS.items()]}]
+
+    def tags_of(item):
+        return {t["Key"]: t["Value"] for t in item.get("Tags", [])}
+    vpc = step("CreateVpc TagSpecifications", lambda: ec2.create_vpc(
+        CidrBlock="10.9.0.0/16", TagSpecifications=spec("vpc"))["Vpc"]["VpcId"])
+    sub = step("CreateSubnet TagSpecifications", lambda: ec2.create_subnet(
+        VpcId=vpc, CidrBlock="10.9.1.0/24", TagSpecifications=spec("subnet"))["Subnet"]["SubnetId"])
+    vpc_tags = lambda: tags_of(ec2.describe_vpcs(VpcIds=[vpc])["Vpcs"][0])
+    sub_tags = lambda: tags_of(ec2.describe_subnets(SubnetIds=[sub])["Subnets"][0])
+    step("DescribeVpcs returns the tags exactly", lambda: check(vpc_tags() == ODD_TAGS, f"{vpc_tags()}"))
+    step("DescribeSubnets returns the tags exactly", lambda: check(sub_tags() == ODD_TAGS, f"{sub_tags()}"))
+    want = dict(ODD_TAGS, Name="renamed", added="yes")
+    step("CreateTags on a VPC and a subnet in one call", lambda: ec2.create_tags(
+        Resources=[vpc, sub], Tags=[{"Key": "Name", "Value": "renamed"}, {"Key": "added", "Value": "yes"}]))
+    step("CreateTags merged VPC tags", lambda: check(vpc_tags() == want, f"{vpc_tags()}"))
+    step("CreateTags merged subnet tags", lambda: check(sub_tags() == want, f"{sub_tags()}"))
+    step("console GET /api/v1/vpcs/{id} returns the tags", lambda: check(
+        console_get(f"/api/v1/vpcs/{vpc}").get("tags") == want, "console vpc tags"))
+    step("console GET /api/v1/subnets returns the tags", lambda: check(any(
+        s.get("subnetId") == sub and s.get("tags") == want
+        for s in console_get("/api/v1/subnets?pageSize=100")["items"]), "console subnet tags"))
+
+
 def console_get(path):
     req = urllib.request.Request(
         os.environ.get("VWS_E2E_CONSOLE", "http://127.0.0.1:8080") + path,
@@ -408,6 +435,7 @@ def cleanup():
 if __name__ == "__main__":
     print(f"backend={BACKEND} caps={sorted(CAPS) or 'none'}")
     network()
+    network_tags()
     not_found()
     vms()
     addresses()

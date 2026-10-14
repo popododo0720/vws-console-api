@@ -378,7 +378,7 @@ func (n network) CreateVpc(ctx context.Context, m backend.Mutation, req resource
 	if _, exists := n.w.vpc[id]; exists {
 		return resource.Accepted[resource.Vpc]{}, resource.Internal(errors.New("identifier collision"))
 	}
-	vpc := resource.Vpc{ID: id, OwnerID: m.Account, Cidr: req.Cidr, State: resource.VpcPending}
+	vpc := resource.Vpc{ID: id, OwnerID: m.Account, Cidr: req.Cidr, State: resource.VpcPending, Tags: copyTags(req.Tags)}
 	op, err := n.w.newOp(m.Account, resource.ServiceNetwork, resource.ActionCreateVpc, []resource.Ref{id.Ref()}, func(time.Time) {
 		if cur := n.w.vpc[id]; cur != nil && cur.State == resource.VpcPending {
 			cur.State = resource.VpcAvailable
@@ -388,6 +388,7 @@ func (n network) CreateVpc(ctx context.Context, m backend.Mutation, req resource
 		return resource.Accepted[resource.Vpc]{}, err
 	}
 	stored := vpc
+	stored.Tags = copyTags(vpc.Tags)
 	n.w.vpc[id] = &stored
 	acc := resource.Accepted[resource.Vpc]{Operation: op, Items: []resource.Vpc{vpc}}
 	n.w.finish(m.Key, m.Fingerprint, acc)

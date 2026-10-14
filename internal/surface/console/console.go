@@ -56,6 +56,8 @@ func New(cfg Config) http.Handler {
 	mux.HandleFunc("GET /api/v1/subnets/{id}", h.getSubnet)
 	mux.HandleFunc("GET /api/v1/vpcs", h.listVpcs)
 	mux.HandleFunc("GET /api/v1/vpcs/{id}", h.getVpc)
+	mux.HandleFunc("POST /api/v1/vpcs/{id}/tags", h.tagVpc)
+	mux.HandleFunc("POST /api/v1/subnets/{id}/tags", h.tagSubnet)
 	mux.HandleFunc("GET /api/v1/volumes", h.listVolumes)
 	mux.HandleFunc("GET /api/v1/volumes/{id}", h.getVolume)
 	mux.HandleFunc("GET /api/v1/images", h.listImages)

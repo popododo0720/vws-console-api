@@ -88,6 +88,24 @@ func (s *Service) CreateTags(ctx context.Context, c resource.Caller, token resou
 	return mutate(ctx, s, c, token, req, s.backends.Compute.CreateTags)
 }
 
+// TagVpcs accepts tags for VPCs and returns the operation.
+func (s *Service) TagVpcs(ctx context.Context, c resource.Caller, token resource.ClientToken, req resource.TagVpcsRequest) (resource.Accepted[resource.Vpc], error) {
+	token, err := fillToken(token)
+	if err != nil {
+		return resource.Accepted[resource.Vpc]{}, err
+	}
+	return mutate(ctx, s, c, token, req, s.backends.Network.TagVpcs)
+}
+
+// TagSubnets accepts tags for subnets and returns the operation.
+func (s *Service) TagSubnets(ctx context.Context, c resource.Caller, token resource.ClientToken, req resource.TagSubnetsRequest) (resource.Accepted[resource.Subnet], error) {
+	token, err := fillToken(token)
+	if err != nil {
+		return resource.Accepted[resource.Subnet]{}, err
+	}
+	return mutate(ctx, s, c, token, req, s.backends.Network.TagSubnets)
+}
+
 // DescribeVolumes lists volumes the caller owns.
 func (s *Service) DescribeVolumes(ctx context.Context, c resource.Caller, q resource.VolumeQuery) (resource.Page[resource.Volume], error) {
 	return readPage(ctx, c, q, s.backends.Compute.DescribeVolumes)

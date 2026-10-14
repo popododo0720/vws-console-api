@@ -110,6 +110,9 @@ func actionOf(resourceName string, verb commonv1.OperationVerb) (resource.Action
 			return resource.ActionModifyVolume, nil
 		case containsSegment(resourceName, "addresses"):
 			return resource.ActionAssociateAddress, nil
+		case containsSegment(resourceName, "subnets"), containsSegment(resourceName, "vpcs"):
+			// vws-network serves only label updates on VPCs and subnets.
+			return resource.ActionCreateTags, nil
 		default:
 			return 0, resource.Internal(errors.New("unsupported operation"))
 		}
@@ -411,9 +414,12 @@ func subnetProto(sub resource.Subnet, projectID, vpcID string) *networkv1.Subnet
 	case resource.SubnetPending:
 	default:
 	}
+	// The tags were accepted when they were stored, so they fit.
+	labels, _ := withInternalLabels(sub.Tags, nil) //nolint:errcheck // accepted tags fit
 	return &networkv1.Subnet{
-		Name: subnetName(projectID, vpcID, sub.ID.String()),
-		Spec: &networkv1.SubnetSpec{Zone: resource.ZoneName, Ipv4Cidr: sub.Cidr},
+		Name:   subnetName(projectID, vpcID, sub.ID.String()),
+		Labels: labels,
+		Spec:   &networkv1.SubnetSpec{Zone: resource.ZoneName, Ipv4Cidr: sub.Cidr},
 		Status: &networkv1.SubnetStatus{
 			Observed: &commonv1.ObservedState{State: obs},
 		},
@@ -444,7 +450,7 @@ func subnetModel(in *networkv1.Subnet) (resource.Subnet, error) {
 	if parsed, parseErr := resource.Parse[resource.VpcID](parts[5]); parseErr == nil {
 		vpcID = parsed
 	}
-	return resource.Subnet{ID: id, OwnerID: owner, VpcID: vpcID, Cidr: in.GetSpec().GetIpv4Cidr(), State: state, Zone: in.GetSpec().GetZone()}, nil
+	return resource.Subnet{ID: id, OwnerID: owner, VpcID: vpcID, Cidr: in.GetSpec().GetIpv4Cidr(), State: state, Zone: in.GetSpec().GetZone(), Tags: userTags(in.GetLabels())}, nil
 }
 
 func subnetStateOf(obs commonv1.ReconciliationState) (resource.SubnetState, error) {

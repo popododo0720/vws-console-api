@@ -419,12 +419,16 @@ func (c computeClient) CreateKeyPair(ctx context.Context, m backend.Mutation, re
 
 func (c networkClient) CreateVpc(ctx context.Context, m backend.Mutation, req resource.CreateVpcRequest) (resource.Accepted[resource.Vpc], error) {
 	projectID := project(m.Account)
+	labels, err := withInternalLabels(req.Tags, map[string]string{labelFingerprint: clip(m.Fingerprint, 63)})
+	if err != nil {
+		return resource.Accepted[resource.Vpc]{}, err
+	}
 	created, err := c.vpcs.CreateVpc(ctx, &networkv1.CreateVpcRequest{
 		Parent:    regionParent(projectID),
 		VpcId:     derivedID("vpc-", m.Key, "vpc"),
 		RequestId: requestUUID(m.Key, "user-vpc"),
 		Vpc: &networkv1.Vpc{
-			Labels: map[string]string{labelFingerprint: clip(m.Fingerprint, 63)},
+			Labels: labels,
 			Spec:   &networkv1.VpcSpec{Ipv4Cidr: req.Cidr},
 		},
 	})
@@ -447,7 +451,7 @@ func (c networkClient) CreateVpc(ctx context.Context, m backend.Mutation, req re
 	if err != nil {
 		return resource.Accepted[resource.Vpc]{}, err
 	}
-	vpc := resource.Vpc{ID: id, OwnerID: owner, Cidr: req.Cidr, State: resource.VpcPending}
+	vpc := resource.Vpc{ID: id, OwnerID: owner, Cidr: req.Cidr, State: resource.VpcPending, Tags: req.Tags}
 	op.Action = resource.ActionCreateVpc
 	op.Targets = []resource.Ref{id.Ref()}
 	return resource.Accepted[resource.Vpc]{Operation: op, Items: []resource.Vpc{vpc}}, nil
@@ -820,7 +824,7 @@ func vpcModel(in *networkv1.Vpc) (resource.Vpc, error) {
 	if err != nil {
 		return resource.Vpc{}, err
 	}
-	return resource.Vpc{ID: id, OwnerID: owner, Cidr: in.GetSpec().GetIpv4Cidr(), State: state}, nil
+	return resource.Vpc{ID: id, OwnerID: owner, Cidr: in.GetSpec().GetIpv4Cidr(), State: state, Tags: userTags(in.GetLabels())}, nil
 }
 
 func vpcStateOf(obs commonv1.ReconciliationState) (string, error) {
@@ -839,8 +843,11 @@ func vpcStateOf(obs commonv1.ReconciliationState) (string, error) {
 }
 
 func vpcProto(v resource.Vpc, projectID string) *networkv1.Vpc {
+	// The tags were accepted when they were stored, so they fit.
+	labels, _ := withInternalLabels(v.Tags, nil) //nolint:errcheck // accepted tags fit
 	return &networkv1.Vpc{
 		Name:   vpcName(projectID, v.ID.String()),
+		Labels: labels,
 		Spec:   &networkv1.VpcSpec{Ipv4Cidr: v.Cidr},
 		Status: &networkv1.VpcStatus{Observed: &commonv1.ObservedState{State: vpcObserved(v.State)}},
 	}
