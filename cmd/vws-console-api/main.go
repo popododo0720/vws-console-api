@@ -48,9 +48,9 @@ func run(ctx context.Context, args []string) (err error) {
 	s3Addr := fs.String("s3-addr", "127.0.0.1:8082", "object listen address")
 	opsAddr := fs.String("ops-addr", "127.0.0.1:8083", "address for /healthz, /readyz, and /metrics; empty disables it")
 	accountRaw := fs.String("account", "123456789012", "account id for the static credential")
-	consoleToken := fs.String("console-token", "dev-token", "bearer token accepted on the console")
-	accessKey := fs.String("access-key", "AKIDEXAMPLE", "access key accepted by the signature check")
-	secret := fs.String("secret", "secret", "secret for -access-key")
+	consoleToken := fs.String("console-token", "dev-token", "deprecated: bearer token accepted on the console; use VWS_CONSOLE_TOKEN or VWS_CONSOLE_TOKEN_FILE")
+	accessKey := fs.String("access-key", "AKIDEXAMPLE", "deprecated: access key accepted by the signature check; use VWS_ACCESS_KEY or VWS_ACCESS_KEY_FILE")
+	secret := fs.String("secret", "secret", "deprecated: secret for the access key; use VWS_SECRET_KEY or VWS_SECRET_KEY_FILE")
 	computeAddr := fs.String("compute-addr", "127.0.0.1:19001", "compute gRPC address")
 	storageAddr := fs.String("storage-addr", "127.0.0.1:19002", "storage gRPC address")
 	networkAddr := fs.String("network-addr", "127.0.0.1:19003", "network gRPC address")
@@ -66,8 +66,13 @@ func run(ctx context.Context, args []string) (err error) {
 		return fmt.Errorf("flags: %w", err)
 	}
 
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	creds, err := resolveCredentials(ctx, fs, osCredentialEnv(), logger, consoleToken, accessKey, secret)
+	if err != nil {
+		return err
+	}
 	if *backendKind == "grpc" {
-		if err := requireExplicit(fs, "console-token", "access-key", "secret"); err != nil {
+		if err := requireExplicit(creds); err != nil {
 			return err
 		}
 	}
@@ -80,7 +85,6 @@ func run(ctx context.Context, args []string) (err error) {
 	if err != nil {
 		return err
 	}
-	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	caller := resource.Caller{Account: account, Subject: *accessKey, Principal: iam.RootARN(account), Root: true}
 
 	var set backend.Set
@@ -186,22 +190,38 @@ func setRootPassword(ctx context.Context, root *iam.Static, path string) error {
 	return nil
 }
 
-// requireExplicit rejects a run that would fall back to a built-in development
-// credential. The defaults (dev-token, AKIDEXAMPLE, secret) are public, so
-// against real backends each credential flag must be given on the command line.
-func requireExplicit(fs *flag.FlagSet, names ...string) error {
-	set := map[string]bool{}
-	fs.Visit(func(f *flag.Flag) { set[f.Name] = true })
-	var missing []string
-	for _, name := range names {
-		if !set[name] {
-			missing = append(missing, "-"+name)
+// resolveCredentials resolves the three credentials in place (see credential)
+// and returns the ones that were left at their development default.
+func resolveCredentials(ctx context.Context, fs *flag.FlagSet, env credentialEnv, logger *slog.Logger, consoleToken, accessKey, secret *string) ([]credential, error) {
+	var defaulted []credential
+	for _, c := range []struct {
+		cred credential
+		dst  *string
+	}{{credConsoleToken(), consoleToken}, {credAccessKey(), accessKey}, {credSecret(), secret}} {
+		v, given, err := resolveCredential(ctx, fs, env, logger, c.cred, *c.dst)
+		if err != nil {
+			return nil, err
+		}
+		*c.dst = v
+		if !given {
+			defaulted = append(defaulted, c.cred)
 		}
 	}
-	if len(missing) > 0 {
-		return fmt.Errorf("-backend=grpc needs explicit %s; the defaults are public development credentials", strings.Join(missing, ", "))
+	return defaulted, nil
+}
+
+// requireExplicit rejects a run that would fall back to a built-in development
+// credential. The defaults (dev-token, AKIDEXAMPLE, secret) are public, so
+// against real backends each credential must be given (env, _FILE or flag).
+func requireExplicit(defaulted []credential) error {
+	if len(defaulted) == 0 {
+		return nil
 	}
-	return nil
+	var missing []string
+	for _, c := range defaulted {
+		missing = append(missing, c.env+" (or "+c.env+"_FILE)")
+	}
+	return fmt.Errorf("-backend=grpc needs %s; the defaults are public development credentials", strings.Join(missing, ", "))
 }
 
 // signInEnabled reports whether -iam serves console sign-in. Static has only
