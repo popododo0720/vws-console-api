@@ -333,7 +333,21 @@ func (h *handler) putObject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("ETag", obj.ETag)
+	if requestedSHA256(r) && obj.SHA256 != "" {
+		if sum, err := hex.DecodeString(obj.SHA256); err == nil {
+			w.Header().Set("X-Amz-Checksum-Sha256", base64.StdEncoding.EncodeToString(sum))
+			w.Header().Set("X-Amz-Checksum-Type", "FULL_OBJECT")
+		}
+	}
 	w.WriteHeader(http.StatusOK)
+}
+
+// requestedSHA256 reports whether a put asked for a SHA256 checksum, either
+// by sending one or by naming the algorithm. S3 echoes the checksum only then.
+func requestedSHA256(r *http.Request) bool {
+	return r.Header.Get("X-Amz-Checksum-Sha256") != "" ||
+		strings.EqualFold(r.Header.Get("X-Amz-Sdk-Checksum-Algorithm"), "SHA256") ||
+		strings.EqualFold(r.Header.Get("X-Amz-Checksum-Algorithm"), "SHA256")
 }
 
 // checkSHA256 compares an x-amz-checksum-sha256 header with the body. It
