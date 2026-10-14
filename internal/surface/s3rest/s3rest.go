@@ -3,7 +3,10 @@
 package s3rest
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/xml"
 	"fmt"
@@ -309,16 +312,45 @@ func (h *handler) putObject(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, r, resource.Unimplemented("If-None-Match other than *"), r.URL.Path)
 		return
 	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, resource.MaxObjectBytes+1))
+	if err != nil {
+		writeErr(w, r, resource.Internal(err), r.URL.Path)
+		return
+	}
+	if code, message := checkSHA256(r.Header.Get("X-Amz-Checksum-Sha256"), body); code != "" {
+		writeXML(w, http.StatusBadRequest, errorXML{
+			Code: code, Message: message, Resource: r.URL.Path, RequestID: r.Header.Get("X-Request-Id"),
+		})
+		return
+	}
 	obj, err := h.svc.PutObject(r.Context(), c, resource.PutObjectRequest{
 		Bucket: bucket, Key: key, ContentType: r.Header.Get("Content-Type"), Size: r.ContentLength,
 		IfNoneMatch: ifNoneMatch == "*",
-	}, r.Body)
+	}, bytes.NewReader(body))
 	if err != nil {
 		writeErr(w, r, err, r.URL.Path)
 		return
 	}
 	w.Header().Set("ETag", obj.ETag)
 	w.WriteHeader(http.StatusOK)
+}
+
+// checkSHA256 compares an x-amz-checksum-sha256 header with the body. It
+// returns the S3 error code and message, or "" when the header is absent or
+// matches. RGW does not verify this header, so this is the only check.
+func checkSHA256(header string, body []byte) (code, message string) {
+	if header == "" {
+		return "", ""
+	}
+	want, err := base64.StdEncoding.DecodeString(header)
+	if err != nil || len(want) != sha256.Size {
+		return "InvalidRequest", "Value for x-amz-checksum-sha256 header is invalid."
+	}
+	got := sha256.Sum256(body)
+	if subtle.ConstantTimeCompare(want, got[:]) != 1 {
+		return "BadDigest", "The SHA256 you specified did not match the calculated checksum."
+	}
+	return "", ""
 }
 
 func (h *handler) getObject(w http.ResponseWriter, r *http.Request) {
