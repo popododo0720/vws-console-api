@@ -187,6 +187,22 @@ type attachVolumeXML struct {
 	Status     string   `xml:"status"`
 }
 
+type modifyVolumeXML struct {
+	XMLName      struct{}              `xml:"ModifyVolumeResponse"`
+	RequestID    string                `xml:"requestId"`
+	Modification volumeModificationXML `xml:"volumeModification"`
+}
+
+type volumeModificationXML struct {
+	VolumeID     string `xml:"volumeId"`
+	State        string `xml:"modificationState"`
+	TargetSize   int64  `xml:"targetSize"`
+	OriginalSize int64  `xml:"originalSize"`
+	TargetType   string `xml:"targetVolumeType"`
+	OriginalType string `xml:"originalVolumeType"`
+	Start        string `xml:"startTime"`
+}
+
 type deleteVolumeXML struct {
 	XMLName   struct{} `xml:"DeleteVolumeResponse"`
 	RequestID string   `xml:"requestId"`

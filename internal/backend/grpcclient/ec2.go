@@ -232,6 +232,38 @@ func (c computeClient) DeleteVolume(ctx context.Context, m backend.Mutation, req
 	return resource.Accepted[resource.Volume]{Operation: op, Items: []resource.Volume{vol}}, nil
 }
 
+// ModifyVolume grows a volume with UpdateVolume on spec.size_gib, the only
+// volume update vws-storage serves.
+func (c computeClient) ModifyVolume(ctx context.Context, m backend.Mutation, req resource.ModifyVolumeRequest) (resource.Accepted[resource.Volume], error) {
+	projectID := project(m.Account)
+	vol, err := c.getVolume(ctx, projectID, req.ID.String())
+	if err != nil {
+		return resource.Accepted[resource.Volume]{}, err
+	}
+	if req.SizeGiB < vol.SizeGiB {
+		return resource.Accepted[resource.Volume]{}, resource.Invalid("size", "a volume cannot shrink")
+	}
+	updated, err := c.volumes.UpdateVolume(ctx, &storagev1.UpdateVolumeRequest{
+		Volume: &storagev1.Volume{
+			Name: volumeName(projectID, req.ID.String()),
+			Spec: &storagev1.VolumeSpec{SizeGib: req.SizeGiB, Type: storageType(vol.Type)},
+		},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.size_gib"}},
+		RequestId:  requestUUID(m.Key, "modify-vol"),
+	})
+	if err := rpcErr(updated, err); err != nil {
+		return resource.Accepted[resource.Volume]{}, err
+	}
+	op, err := operationFrom(updated, resource.ServiceCompute)
+	if err != nil {
+		return resource.Accepted[resource.Volume]{}, err
+	}
+	vol.SizeGiB = req.SizeGiB
+	op.Action = resource.ActionModifyVolume
+	op.Targets = []resource.Ref{vol.ID.Ref()}
+	return resource.Accepted[resource.Volume]{Operation: op, Items: []resource.Volume{vol}}, nil
+}
+
 func (c computeClient) DescribeVolumes(ctx context.Context, s backend.Scope, q resource.VolumeQuery) (resource.Page[resource.Volume], error) {
 	projectID := project(s.Account)
 	if len(q.IDs) > 0 {

@@ -153,6 +153,10 @@ func (foreignCompute) AttachVolume(context.Context, backend.Mutation, resource.A
 	return resource.Accepted[resource.Volume]{}, errors.New("unused")
 }
 
+func (foreignCompute) ModifyVolume(context.Context, backend.Mutation, resource.ModifyVolumeRequest) (resource.Accepted[resource.Volume], error) {
+	return resource.Accepted[resource.Volume]{}, errors.New("unused")
+}
+
 func (foreignCompute) DeleteVolume(context.Context, backend.Mutation, resource.DeleteVolumeRequest) (resource.Accepted[resource.Volume], error) {
 	return resource.Accepted[resource.Volume]{}, errors.New("unused")
 }

@@ -93,6 +93,25 @@ func exerciseEC2(ctx context.Context, t *testing.T, set backend.Set, account res
 	if _, err := set.Compute.GetOperation(ctx, scope, extra.Operation.ID); err != nil {
 		t.Fatal(err)
 	}
+	grown, err := set.Compute.ModifyVolume(ctx, backend.Mutation{Scope: scope, Key: "k-grow", Fingerprint: "fp-grow"}, resource.ModifyVolumeRequest{
+		ID: extra.Items[0].ID, SizeGiB: 12,
+	})
+	if err != nil || grown.Items[0].SizeGiB != 12 || grown.Operation.Action != resource.ActionModifyVolume {
+		t.Fatalf("modify volume: %v %+v", err, grown)
+	}
+	if _, err := set.Compute.GetOperation(ctx, scope, grown.Operation.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := set.Compute.DescribeVolumes(ctx, scope, resource.VolumeQuery{
+		IDs: []resource.VolumeID{extra.Items[0].ID}, Page: resource.PageRequest{Size: 50},
+	}); err != nil || got.Items[0].SizeGiB != 12 {
+		t.Fatalf("size after modify: %v %+v", err, got.Items)
+	}
+	if _, err := set.Compute.ModifyVolume(ctx, backend.Mutation{Scope: scope, Key: "k-shrink", Fingerprint: "fp-shrink"}, resource.ModifyVolumeRequest{
+		ID: extra.Items[0].ID, SizeGiB: 4,
+	}); resource.CodeOf(err) != resource.CodeInvalidArgument {
+		t.Fatalf("shrink: %v", err)
+	}
 	deleted, err := set.Compute.DeleteVolume(ctx, backend.Mutation{Scope: scope, Key: "k-del-vol", Fingerprint: "fp-del-vol"}, resource.DeleteVolumeRequest{ID: extra.Items[0].ID})
 	if err != nil || deleted.Items[0].State != resource.VolumeDeleting {
 		t.Fatalf("delete volume: %v %+v", err, deleted.Items)

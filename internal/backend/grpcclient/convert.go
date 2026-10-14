@@ -106,7 +106,8 @@ func actionOf(resourceName string, verb commonv1.OperationVerb) (resource.Action
 		case containsSegment(resourceName, "securityGroups"):
 			return resource.ActionAuthorizeSecurityGroupIngress, nil
 		case containsSegment(resourceName, "volumes"):
-			return resource.ActionAttachVolume, nil
+			// Attach is an instance update; the only volume update is a resize.
+			return resource.ActionModifyVolume, nil
 		case containsSegment(resourceName, "addresses"):
 			return resource.ActionAssociateAddress, nil
 		default:

@@ -70,6 +70,15 @@ func (s *Service) DeleteVolume(ctx context.Context, c resource.Caller, token res
 	return mutate(ctx, s, c, token, req, s.backends.Compute.DeleteVolume)
 }
 
+// ModifyVolume accepts a size change and returns the operation.
+func (s *Service) ModifyVolume(ctx context.Context, c resource.Caller, token resource.ClientToken, req resource.ModifyVolumeRequest) (resource.Accepted[resource.Volume], error) {
+	token, err := fillToken(token)
+	if err != nil {
+		return resource.Accepted[resource.Volume]{}, err
+	}
+	return mutate(ctx, s, c, token, req, s.backends.Compute.ModifyVolume)
+}
+
 // DescribeVolumes lists volumes the caller owns.
 func (s *Service) DescribeVolumes(ctx context.Context, c resource.Caller, q resource.VolumeQuery) (resource.Page[resource.Volume], error) {
 	return readPage(ctx, c, q, s.backends.Compute.DescribeVolumes)

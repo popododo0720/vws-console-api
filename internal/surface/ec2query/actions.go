@@ -5,6 +5,7 @@ import (
 	"encoding/xml"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/popododo0720/vws-console-api/internal/resource"
 )
@@ -173,6 +174,48 @@ func (h *handler) deleteVolume(w http.ResponseWriter, r *http.Request, c resourc
 		return
 	}
 	writeXML(w, deleteVolumeXML{RequestID: requestID(r), Return: true})
+}
+
+// modifyVolume grows a volume. VolumeType, Iops and Throughput are not
+// accepted fields, so the request fails before reaching the backend.
+func (h *handler) modifyVolume(w http.ResponseWriter, r *http.Request, c resource.Caller) {
+	token, err := optionalClientToken(r)
+	if err != nil {
+		writeErr(w, r, err)
+		return
+	}
+	id, err := resource.Parse[resource.VolumeID](r.Form.Get("VolumeId"))
+	if err != nil {
+		writeErr(w, r, err)
+		return
+	}
+	size, err := strconv.ParseInt(r.Form.Get("Size"), 10, 64)
+	if err != nil {
+		writeErr(w, r, resource.Invalid("Size", "required"))
+		return
+	}
+	before, err := h.svc.DescribeVolumes(r.Context(), c, resource.VolumeQuery{IDs: []resource.VolumeID{id}})
+	if err != nil {
+		writeErr(w, r, err)
+		return
+	}
+	if len(before.Items) == 0 {
+		writeErr(w, r, resource.NotFound(resource.KindVolume, id.String()))
+		return
+	}
+	orig := before.Items[0]
+	acc, err := h.svc.ModifyVolume(r.Context(), c, token, resource.ModifyVolumeRequest{ID: id, SizeGiB: size})
+	if err != nil {
+		writeErr(w, r, err)
+		return
+	}
+	item := acc.Items[0]
+	writeXML(w, modifyVolumeXML{RequestID: requestID(r), Modification: volumeModificationXML{
+		VolumeID: item.ID.String(), State: "modifying",
+		TargetSize: item.SizeGiB, OriginalSize: orig.SizeGiB,
+		TargetType: string(item.Type), OriginalType: string(orig.Type),
+		Start: acc.Operation.CreateTime.UTC().Format(time.RFC3339),
+	}})
 }
 
 func (h *handler) createSecurityGroup(w http.ResponseWriter, r *http.Request, c resource.Caller) {
