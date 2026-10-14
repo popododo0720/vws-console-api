@@ -19,6 +19,7 @@ INCOMPLETE (nothing failed, something was skipped). The exit code is 1 on any
 failure, 3 on a skip under VWS_E2E_STRICT, and 0 otherwise.
 """
 import base64
+import datetime
 import hashlib
 import json
 import os
@@ -330,8 +331,10 @@ def vms():
             maps = inst.get("BlockDeviceMappings") or []
             check(inst.get("RootDeviceName") == "/dev/xvda" and inst.get("RootDeviceType") == "ebs", f"root {inst.get('RootDeviceName')}")
             check(len(maps) == 1 and maps[0]["DeviceName"] == "/dev/xvda" and maps[0]["Ebs"]["DeleteOnTermination"] is True, f"mappings {maps}")
+            check(isinstance(maps[0]["Ebs"].get("AttachTime"), datetime.datetime), f"mapping AttachTime {maps}")
             vol = ec2.describe_volumes(VolumeIds=[maps[0]["Ebs"]["VolumeId"]])["Volumes"][0]
             att = vol.get("Attachments") or []
+            check(att and isinstance(att[0].get("AttachTime"), datetime.datetime), f"attachment AttachTime {att}")
             check(att and att[0]["InstanceId"] == S["iid"] and att[0]["Device"] == "/dev/xvda" and att[0]["DeleteOnTermination"] is True, f"volume {vol}")
             check(any(v["VolumeId"] == vol["VolumeId"] for v in ec2.describe_volumes()["Volumes"]), "root volume not listed")
         step("DescribeInstances RootDeviceName/BlockDeviceMappings and DescribeVolumes root volume", root_device, "vm")

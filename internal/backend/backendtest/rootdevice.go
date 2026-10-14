@@ -39,6 +39,10 @@ func exerciseRootDevice(ctx context.Context, t *testing.T, set backend.Set, acco
 	if vol.InstanceID != inst.ID || vol.Device != resource.RootDeviceName || vol.State != resource.VolumeInUse || !vol.DeleteOnTermination {
 		t.Fatalf("root volume: %+v", vol)
 	}
+	// attachTime on the wire comes from these (#127 review): both must be set.
+	if inst.LaunchTime.IsZero() || vol.CreateTime.IsZero() {
+		t.Fatalf("attach time sources: launch %v create %v", inst.LaunchTime, vol.CreateTime)
+	}
 	all, err := set.Compute.DescribeVolumes(ctx, scope, resource.VolumeQuery{Page: resource.PageRequest{Size: 1000}})
 	if err != nil {
 		t.Fatal(err)

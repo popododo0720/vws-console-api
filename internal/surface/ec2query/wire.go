@@ -63,6 +63,7 @@ type blockItem struct {
 	EBS    struct {
 		VolumeID            string `xml:"volumeId"`
 		Status              string `xml:"status"`
+		AttachTime          string `xml:"attachTime,omitempty"`
 		DeleteOnTermination bool   `xml:"deleteOnTermination"`
 	} `xml:"ebs"`
 }
@@ -75,6 +76,8 @@ func blockSetOf(inst resource.Instance) *blockSet {
 	for _, b := range inst.BlockDevices {
 		item := blockItem{Device: b.Device}
 		item.EBS.VolumeID, item.EBS.Status, item.EBS.DeleteOnTermination = b.VolumeID.String(), "attached", b.DeleteOnTermination
+		// No backend records an attach time; the root volume is attached at launch.
+		item.EBS.AttachTime = awsTime(inst.LaunchTime)
 		out.Items = append(out.Items, item)
 	}
 	return out
@@ -235,6 +238,7 @@ type attachmentItem struct {
 	InstanceID string `xml:"instanceId"`
 	Device     string `xml:"device"`
 	Status     string `xml:"status"`
+	AttachTime string `xml:"attachTime,omitempty"`
 	// DeleteOnTermination is always written, as EC2 does.
 	DeleteOnTermination bool `xml:"deleteOnTermination"`
 }
@@ -548,6 +552,8 @@ func volumeXML(v resource.Volume) volumeItem {
 	if !v.InstanceID.IsZero() {
 		item.Attachments.Items = []attachmentItem{{
 			VolumeID: v.ID.String(), InstanceID: v.InstanceID.String(), Device: v.Device, Status: "attached",
+			// No backend records an attach time; the volume's creation time stands in.
+			AttachTime:          awsTime(v.CreateTime),
 			DeleteOnTermination: v.DeleteOnTermination,
 		}}
 	}
