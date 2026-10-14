@@ -4,6 +4,7 @@ Environment:
   VWS_E2E_BACKEND  fake (default) or grpc. Names the backend behind the entry points.
   VWS_E2E_EC2      EC2 Query endpoint. Default http://127.0.0.1:8081.
   VWS_E2E_S3       S3 endpoint. Default http://127.0.0.1:8082.
+  VWS_E2E_IAM      IAM and STS Query endpoint (one listener). Default http://127.0.0.1:8084.
   VWS_E2E_CAPS     Comma list of capabilities the backend has: vm, eip.
                    Default is vm,eip for fake and none for grpc.
 
@@ -37,6 +38,20 @@ ec2 = boto3.client(
 s3 = boto3.client(
     "s3", endpoint_url=os.environ.get("VWS_E2E_S3", "http://127.0.0.1:8082"),
     config=Config(retries={"total_max_attempts": 1}, s3={"addressing_style": "path"}), **KW)
+
+IAM_URL = os.environ.get("VWS_E2E_IAM", "http://127.0.0.1:8084")
+EC2_URL = os.environ.get("VWS_E2E_EC2", "http://127.0.0.1:8081")
+
+
+def client(service, key, secret, token=None, url=IAM_URL):
+    return boto3.client(
+        service, endpoint_url=url, region_name="vws-1", aws_access_key_id=key,
+        aws_secret_access_key=secret, aws_session_token=token,
+        config=Config(retries={"total_max_attempts": 1}))
+
+
+iam = client("iam", KW["aws_access_key_id"], KW["aws_secret_access_key"])
+sts = client("sts", KW["aws_access_key_id"], KW["aws_secret_access_key"])
 
 STRICT = os.environ.get("VWS_E2E_STRICT") == "1"
 results = {"ok": 0, "skipped": 0, "FAIL": 0}
@@ -433,6 +448,113 @@ def objects():
     step("S3 DeleteBucket", lambda: s3.delete_bucket(Bucket=b))
 
 
+def aws_error(code, call):
+    try:
+        call()
+    except Exception as exc:  # noqa: BLE001
+        got = getattr(exc, "response", {}).get("Error", {}).get("Code")
+        check(got == code, f"error {got}, want {code}: {exc}")
+        return
+    raise AssertionError(f"no error, want {code}")
+
+
+def identity():
+    """IAM users, groups, policies, keys and roles, then STS AssumeRole, with
+    the new keys used against EC2 to show Authorize is applied."""
+    me = step("STS GetCallerIdentity (root key)", lambda: sts.get_caller_identity())
+    if not me:
+        return
+    account = me["Account"]
+    step("STS GetCallerIdentity is the account root", lambda: check(me["Arn"] == f"arn:vws:iam::{account}:root", me["Arn"]))
+    describe = json.dumps({"Version": "2012-10-17", "Statement": [
+        {"Effect": "Allow", "Action": ["ec2:Describe*", "sts:AssumeRole", "sts:GetCallerIdentity"], "Resource": "*"}]})
+    step("IAM CreateUser", lambda: check(
+        iam.create_user(UserName="e2e-bob", Path="/e2e/")["User"]["Arn"] == f"arn:vws:iam::{account}:user/e2e/e2e-bob", "user arn"))
+    step("IAM CreateUser again is EntityAlreadyExists", lambda: aws_error(
+        "EntityAlreadyExists", lambda: iam.create_user(UserName="e2e-bob")))
+    step("IAM GetUser", lambda: check(iam.get_user(UserName="e2e-bob")["User"]["Path"] == "/e2e/", "path"))
+    step("IAM ListUsers PathPrefix", lambda: check(
+        [u["UserName"] for u in iam.list_users(PathPrefix="/e2e/")["Users"]] == ["e2e-bob"], "list"))
+    step("IAM GetUser missing is NoSuchEntity", lambda: aws_error("NoSuchEntity", lambda: iam.get_user(UserName="nobody")))
+    S["policy_arn"] = step("IAM CreatePolicy", lambda: iam.create_policy(
+        PolicyName="e2e-describe", PolicyDocument=describe)["Policy"]["Arn"])
+    step("IAM CreatePolicy malformed is MalformedPolicyDocument", lambda: aws_error(
+        "MalformedPolicyDocument", lambda: iam.create_policy(PolicyName="bad", PolicyDocument="{not json")))
+    step("IAM GetPolicyVersion returns the document", lambda: check(
+        iam.get_policy_version(PolicyArn=S["policy_arn"], VersionId="v1")["PolicyVersion"]["Document"]["Statement"][0]["Effect"] == "Allow",
+        "document"))
+    step("IAM CreateGroup", lambda: iam.create_group(GroupName="e2e-readers"))
+    step("IAM AttachGroupPolicy", lambda: iam.attach_group_policy(GroupName="e2e-readers", PolicyArn=S["policy_arn"]))
+    step("IAM AddUserToGroup", lambda: iam.add_user_to_group(GroupName="e2e-readers", UserName="e2e-bob"))
+    step("IAM GetGroup lists the member", lambda: check(
+        [u["UserName"] for u in iam.get_group(GroupName="e2e-readers")["Users"]] == ["e2e-bob"], "members"))
+    step("IAM ListGroupsForUser", lambda: check(
+        [g["GroupName"] for g in iam.list_groups_for_user(UserName="e2e-bob")["Groups"]] == ["e2e-readers"], "groups"))
+    step("IAM PutUserPolicy (inline deny)", lambda: iam.put_user_policy(
+        UserName="e2e-bob", PolicyName="no-volumes", PolicyDocument=json.dumps({"Version": "2012-10-17", "Statement": [
+            {"Effect": "Deny", "Action": "ec2:DescribeVolumes", "Resource": "*"}]})))
+    step("IAM ListUserPolicies", lambda: check(iam.list_user_policies(UserName="e2e-bob")["PolicyNames"] == ["no-volumes"], "inline"))
+    step("IAM GetUserPolicy returns the document", lambda: check(
+        iam.get_user_policy(UserName="e2e-bob", PolicyName="no-volumes")["PolicyDocument"]["Statement"][0]["Effect"] == "Deny", "document"))
+    key = step("IAM CreateAccessKey", lambda: iam.create_access_key(UserName="e2e-bob")["AccessKey"])
+    if not key:
+        return
+    step("IAM ListAccessKeys", lambda: check(
+        [k["AccessKeyId"] for k in iam.list_access_keys(UserName="e2e-bob")["AccessKeyMetadata"]] == [key["AccessKeyId"]], "keys"))
+    bob_ec2 = client("ec2", key["AccessKeyId"], key["SecretAccessKey"], url=EC2_URL)
+    bob_iam = client("iam", key["AccessKeyId"], key["SecretAccessKey"])
+    bob_sts = client("sts", key["AccessKeyId"], key["SecretAccessKey"])
+    step("new user key: allowed EC2 DescribeVpcs", lambda: bob_ec2.describe_vpcs())
+    step("new user key: EC2 CreateVpc is UnauthorizedOperation", lambda: aws_error(
+        "UnauthorizedOperation", lambda: bob_ec2.create_vpc(CidrBlock="10.42.0.0/16")))
+    step("new user key: inline Deny beats the group Allow", lambda: aws_error(
+        "UnauthorizedOperation", lambda: bob_ec2.describe_volumes()))
+    step("new user key: IAM ListUsers is AccessDenied", lambda: aws_error("AccessDenied", lambda: bob_iam.list_users()))
+    step("new user key: STS GetCallerIdentity", lambda: check(
+        bob_sts.get_caller_identity()["Arn"] == f"arn:vws:iam::{account}:user/e2e/e2e-bob", "bob arn"))
+    step("unknown key is InvalidClientTokenId", lambda: aws_error(
+        "InvalidClientTokenId", lambda: client("sts", "AKIANOSUCHKEY0000000", "x").get_caller_identity()))
+    trust = json.dumps({"Version": "2012-10-17", "Statement": [{"Effect": "Allow", "Action": "sts:AssumeRole",
+                        "Principal": {"AWS": f"arn:vws:iam::{account}:user/e2e/e2e-bob"}}]})
+    S["role_arn"] = step("IAM CreateRole", lambda: iam.create_role(
+        RoleName="e2e-ops", AssumeRolePolicyDocument=trust)["Role"]["Arn"])
+    step("IAM GetRole returns the trust policy", lambda: check(
+        iam.get_role(RoleName="e2e-ops")["Role"]["AssumeRolePolicyDocument"]["Statement"][0]["Action"] == "sts:AssumeRole", "trust"))
+    step("IAM PutRolePolicy", lambda: iam.put_role_policy(RoleName="e2e-ops", PolicyName="vpcs", PolicyDocument=json.dumps({
+        "Version": "2012-10-17", "Statement": [{"Effect": "Allow", "Action": ["ec2:CreateVpc", "ec2:DeleteVpc", "sts:GetCallerIdentity"], "Resource": "*"}]})))
+    creds = step("STS AssumeRole", lambda: bob_sts.assume_role(
+        RoleArn=S["role_arn"], RoleSessionName="e2e", DurationSeconds=900)["Credentials"])
+    if creds:
+        role_ec2 = client("ec2", creds["AccessKeyId"], creds["SecretAccessKey"], creds["SessionToken"], url=EC2_URL)
+        role_sts = client("sts", creds["AccessKeyId"], creds["SecretAccessKey"], creds["SessionToken"])
+        step("assumed role: STS GetCallerIdentity", lambda: check(
+            role_sts.get_caller_identity()["Arn"] == f"arn:vws:sts::{account}:assumed-role/e2e-ops/e2e", "role arn"))
+
+        def role_vpc():
+            vpc = role_ec2.create_vpc(CidrBlock="10.42.0.0/16")["Vpc"]["VpcId"]
+            role_ec2.delete_vpc(VpcId=vpc)
+        step("assumed role: EC2 CreateVpc and DeleteVpc", role_vpc)
+        step("assumed role without the session token is rejected", lambda: aws_error(
+            "AuthFailure", lambda: client("ec2", creds["AccessKeyId"], creds["SecretAccessKey"], url=EC2_URL).describe_vpcs()))
+    step("STS AssumeRole by a principal the trust policy does not name is AccessDenied", lambda: aws_error(
+        "AccessDenied", lambda: client("sts", creds["AccessKeyId"], creds["SecretAccessKey"], creds["SessionToken"]).assume_role(
+            RoleArn=S["role_arn"], RoleSessionName="again")) if creds else None)
+    step("IAM DeleteUser with keys is DeleteConflict", lambda: aws_error(
+        "DeleteConflict", lambda: iam.delete_user(UserName="e2e-bob")))
+    step("IAM DeleteRolePolicy", lambda: iam.delete_role_policy(RoleName="e2e-ops", PolicyName="vpcs"))
+    step("IAM DeleteRole", lambda: iam.delete_role(RoleName="e2e-ops"))
+    step("IAM DeleteAccessKey", lambda: iam.delete_access_key(UserName="e2e-bob", AccessKeyId=key["AccessKeyId"]))
+    step("deleted key is InvalidClientTokenId", lambda: aws_error("InvalidClientTokenId", lambda: bob_sts.get_caller_identity()))
+    step("IAM DeleteUserPolicy", lambda: iam.delete_user_policy(UserName="e2e-bob", PolicyName="no-volumes"))
+    step("IAM RemoveUserFromGroup", lambda: iam.remove_user_from_group(GroupName="e2e-readers", UserName="e2e-bob"))
+    step("IAM DeletePolicy while attached is DeleteConflict", lambda: aws_error(
+        "DeleteConflict", lambda: iam.delete_policy(PolicyArn=S["policy_arn"])))
+    step("IAM DetachGroupPolicy", lambda: iam.detach_group_policy(GroupName="e2e-readers", PolicyArn=S["policy_arn"]))
+    step("IAM DeletePolicy", lambda: iam.delete_policy(PolicyArn=S["policy_arn"]))
+    step("IAM DeleteGroup", lambda: iam.delete_group(GroupName="e2e-readers"))
+    step("IAM DeleteUser", lambda: iam.delete_user(UserName="e2e-bob"))
+
+
 def cleanup():
     if S.get("restored_snap"):
         step("DeleteSnapshot", lambda: ec2.delete_snapshot(SnapshotId=S["restored_snap"]))
@@ -451,6 +573,7 @@ if __name__ == "__main__":
     vms()
     addresses()
     objects()
+    identity()
     cleanup()
     print(f"ok={results['ok']} skipped={results['skipped']} FAIL={results['FAIL']}")
     if SKIPPED:
