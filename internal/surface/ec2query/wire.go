@@ -187,6 +187,12 @@ type attachVolumeXML struct {
 	Status     string   `xml:"status"`
 }
 
+type createTagsXML struct {
+	XMLName   struct{} `xml:"CreateTagsResponse"`
+	RequestID string   `xml:"requestId"`
+	Return    bool     `xml:"return"`
+}
+
 type deleteVolumeXML struct {
 	XMLName   struct{} `xml:"DeleteVolumeResponse"`
 	RequestID string   `xml:"requestId"`

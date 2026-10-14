@@ -70,6 +70,53 @@ func (c computeClient) TerminateInstances(ctx context.Context, m backend.Mutatio
 	return resource.Accepted[resource.InstanceStateChange]{Operation: op, Items: items}, nil
 }
 
+// CreateTags rewrites each instance's labels with the merged tags. Compute
+// serves a labels-only UpdateInstance, so power and spec do not change.
+func (c computeClient) CreateTags(ctx context.Context, m backend.Mutation, req resource.CreateTagsRequest) (resource.Accepted[resource.Instance], error) {
+	projectID := project(m.Account)
+	insts := make([]resource.Instance, 0, len(req.IDs))
+	for _, id := range req.IDs {
+		inst, err := c.getInstance(ctx, projectID, id.String())
+		if err != nil {
+			return resource.Accepted[resource.Instance]{}, err
+		}
+		if inst.Tags, err = resource.MergeTags(inst.Tags, req.Tags); err != nil {
+			return resource.Accepted[resource.Instance]{}, err
+		}
+		insts = append(insts, inst)
+	}
+	var op resource.Operation
+	targets := make([]resource.Ref, 0, len(insts))
+	for i, inst := range insts {
+		labels, err := withInternalLabels(inst.Tags, map[string]string{
+			labelAction:      resource.ActionCreateTags.String(),
+			labelFingerprint: clip(m.Fingerprint, 63),
+			labelImage:       inst.ImageID.String(),
+			labelReservation: inst.ReservationID.String(),
+		})
+		if err != nil {
+			return resource.Accepted[resource.Instance]{}, err
+		}
+		updated, err := c.instances.UpdateInstance(ctx, &computev1.UpdateInstanceRequest{
+			RequestId:  requestUUID(m.Key, "tags", hex.EncodeToString([]byte{byte(i)})),
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"labels"}},
+			Instance:   &computev1.Instance{Name: instanceName(projectID, inst.ID.String()), Labels: labels},
+		})
+		if err := rpcErr(updated, err); err != nil {
+			return resource.Accepted[resource.Instance]{}, err
+		}
+		if i == 0 {
+			if op, err = operationFrom(updated, resource.ServiceCompute); err != nil {
+				return resource.Accepted[resource.Instance]{}, err
+			}
+		}
+		targets = append(targets, inst.ID.Ref())
+	}
+	op.Action = resource.ActionCreateTags
+	op.Targets = targets
+	return resource.Accepted[resource.Instance]{Operation: op, Items: insts}, nil
+}
+
 func (c computeClient) changeInstances(ctx context.Context, m backend.Mutation, ids []resource.InstanceID, action resource.Action, power computev1.InstancePower) (resource.Accepted[resource.InstanceStateChange], error) {
 	projectID := project(m.Account)
 	prev := make([]resource.Instance, 0, len(ids))

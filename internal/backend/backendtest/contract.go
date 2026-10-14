@@ -97,6 +97,27 @@ func Run(t *testing.T, newSet Harness) {
 	if got := page.Items[0].Tags; got["Name"] != "web-1" || got["env"] != "dev" || len(got) != 2 {
 		t.Fatalf("tags %v, want Name=web-1 env=dev", got)
 	}
+	tagged, err := set.Compute.CreateTags(ctx, backend.Mutation{Scope: backend.Scope{Account: account}, Key: "k-tags", Fingerprint: "fp-tags"}, resource.CreateTagsRequest{
+		IDs: []resource.InstanceID{first.Items[0].ID}, Tags: map[string]string{"Name": "web-2", "Cost Center": "42"},
+	})
+	if err != nil || tagged.Operation.Action != resource.ActionCreateTags {
+		t.Fatalf("create tags: %v %+v", err, tagged)
+	}
+	if _, err := set.Compute.GetOperation(ctx, backend.Scope{Account: account}, tagged.Operation.ID); err != nil {
+		t.Fatal(err)
+	}
+	retagged, err := set.Compute.DescribeInstances(ctx, backend.Scope{Account: account}, resource.InstanceQuery{
+		IDs: []resource.InstanceID{first.Items[0].ID}, Page: resource.PageRequest{Size: 50},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := retagged.Items[0].Tags; got["Name"] != "web-2" || got["env"] != "dev" || got["Cost Center"] != "42" || len(got) != 3 {
+		t.Fatalf("tags after CreateTags %v", got)
+	}
+	if retagged.Items[0].State != resource.InstanceRunning {
+		t.Fatalf("CreateTags changed the state to %s", retagged.Items[0].State)
+	}
 	filtered, err := set.Compute.DescribeInstances(ctx, backend.Scope{Account: account}, resource.InstanceQuery{
 		IDs:    []resource.InstanceID{first.Items[0].ID},
 		States: []resource.InstanceState{resource.InstancePending},

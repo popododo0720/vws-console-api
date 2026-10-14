@@ -485,6 +485,9 @@ func (s *instanceSrv) UpdateInstance(ctx context.Context, req *computev1.UpdateI
 		volName, device, _ := dataVolume(spec)
 		return s.attachVolume(ctx, req, volName, device)
 	}
+	if paths := req.GetUpdateMask().GetPaths(); len(paths) == 1 && paths[0] == "labels" {
+		return s.retag(ctx, req)
+	}
 	power := req.GetInstance().GetSpec().GetPower()
 	switch power {
 	case computev1.InstancePower_INSTANCE_POWER_STOPPED:
@@ -528,11 +531,45 @@ func (s *instanceSrv) changePower(ctx context.Context, req *computev1.UpdateInst
 		resource.ActionTerminateInstances, resource.ActionCreateKeyPair,
 		resource.ActionDeleteKeyPair, resource.ActionDeleteSecurityGroup, resource.ActionDeleteSubnet,
 		resource.ActionAllocateAddress, resource.ActionReleaseAddress, resource.ActionCreateSnapshot, resource.ActionDeleteSnapshot,
-		resource.ActionAssociateAddress, resource.ActionDisassociateAddress:
+		resource.ActionAssociateAddress, resource.ActionDisassociateAddress, resource.ActionCreateTags:
 		return nil, toStatus(resource.Invalid("power", "unsupported"))
 	default:
 		return nil, toStatus(resource.Invalid("power", "unsupported"))
 	}
+	if err != nil {
+		return nil, toStatus(err)
+	}
+	if actionName := req.GetInstance().GetLabels()[labelAction]; actionName != "" {
+		s.w.rememberAction(id.String(), actionName)
+	}
+	return runningOp(projectID, acc.Operation, instanceName(projectID, id.String()), commonv1.OperationVerb_OPERATION_VERB_UPDATE, s.w.now)
+}
+
+// retag serves a labels-only update as CreateTags with the decoded tags.
+func (s *instanceSrv) retag(ctx context.Context, req *computev1.UpdateInstanceRequest) (*longrunningpb.Operation, error) {
+	projectID, err := projectOfName(req.GetInstance().GetName())
+	if err != nil {
+		return nil, toStatus(err)
+	}
+	account, err := accountOf(projectID)
+	if err != nil {
+		return nil, toStatus(err)
+	}
+	id, err := resource.Parse[resource.InstanceID](lastSegment(req.GetInstance().GetName()))
+	if err != nil {
+		return nil, toStatus(err)
+	}
+	fp, err := protoFingerprint(req)
+	if err != nil {
+		return nil, toStatus(err)
+	}
+	tags := userTags(req.GetInstance().GetLabels())
+	if len(tags) == 0 {
+		return nil, toStatus(resource.Invalid("labels", "no tags"))
+	}
+	acc, err := s.w.set.Compute.CreateTags(ctx, backend.Mutation{
+		Scope: backend.Scope{Account: account}, Key: req.GetRequestId(), Fingerprint: fp,
+	}, resource.CreateTagsRequest{IDs: []resource.InstanceID{id}, Tags: tags})
 	if err != nil {
 		return nil, toStatus(err)
 	}
@@ -1124,7 +1161,7 @@ func (s *opsSrv) GetOperation(ctx context.Context, req *longrunningpb.GetOperati
 
 func operationVerb(action resource.Action) commonv1.OperationVerb {
 	switch action {
-	case resource.ActionStopInstances, resource.ActionStartInstances, resource.ActionAttachVolume, resource.ActionAuthorizeSecurityGroupIngress, resource.ActionAssociateAddress, resource.ActionDisassociateAddress:
+	case resource.ActionStopInstances, resource.ActionStartInstances, resource.ActionAttachVolume, resource.ActionAuthorizeSecurityGroupIngress, resource.ActionAssociateAddress, resource.ActionDisassociateAddress, resource.ActionCreateTags:
 		return commonv1.OperationVerb_OPERATION_VERB_UPDATE
 	case resource.ActionTerminateInstances, resource.ActionDeleteVpc, resource.ActionDeleteVolume, resource.ActionDeleteKeyPair, resource.ActionDeleteSecurityGroup, resource.ActionDeleteSubnet, resource.ActionReleaseAddress, resource.ActionDeleteSnapshot:
 		return commonv1.OperationVerb_OPERATION_VERB_DELETE
