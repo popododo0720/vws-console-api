@@ -18,7 +18,7 @@ func TestEmptyListsAreArrays(t *testing.T) {
 		t.Fatal(err)
 	}
 	svc := cloud.New(cloud.Config{Backends: fake.New(fake.Options{}).Set()})
-	h := New(Config{Service: svc, Auth: BearerTokens{"tok": {Account: account, Subject: "t"}}})
+	h := New(rootConfig(svc, account))
 	for _, path := range []string{
 		"/api/v1/instances", "/api/v1/vpcs", "/api/v1/subnets", "/api/v1/volumes",
 		"/api/v1/key-pairs", "/api/v1/addresses", "/api/v1/snapshots", "/api/v1/buckets",

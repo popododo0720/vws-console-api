@@ -201,6 +201,36 @@ func iamActions() map[string]spec {
 			}
 			return nil, h.cfg.Admin.DeleteUser(c.r.Context(), c.caller.Account, c.form("UserName"))
 		}),
+		"CreateLoginProfile": admin([]string{"UserName", "Password", "PasswordResetRequired"}, userARN, func(h *handler, c *exchange) (any, error) {
+			if err := loginProfileInput(c); err != nil {
+				return nil, err
+			}
+			p, err := h.cfg.Admin.CreateLoginProfile(c.r.Context(), c.caller.Account, c.form("UserName"), c.form("Password"))
+			return struct {
+				LoginProfile loginProfileXML `xml:"LoginProfile"`
+			}{toLoginProfile(p)}, err
+		}),
+		"GetLoginProfile": admin([]string{"UserName"}, userARN, func(h *handler, c *exchange) (any, error) {
+			if err := required(c, "UserName"); err != nil {
+				return nil, err
+			}
+			p, err := h.cfg.Admin.GetLoginProfile(c.r.Context(), c.caller.Account, c.form("UserName"))
+			return struct {
+				LoginProfile loginProfileXML `xml:"LoginProfile"`
+			}{toLoginProfile(p)}, err
+		}),
+		"UpdateLoginProfile": admin([]string{"UserName", "Password", "PasswordResetRequired"}, userARN, func(h *handler, c *exchange) (any, error) {
+			if err := loginProfileInput(c); err != nil {
+				return nil, err
+			}
+			return nil, h.cfg.Admin.UpdateLoginProfile(c.r.Context(), c.caller.Account, c.form("UserName"), c.form("Password"))
+		}),
+		"DeleteLoginProfile": admin([]string{"UserName"}, userARN, func(h *handler, c *exchange) (any, error) {
+			if err := required(c, "UserName"); err != nil {
+				return nil, err
+			}
+			return nil, h.cfg.Admin.DeleteLoginProfile(c.r.Context(), c.caller.Account, c.form("UserName"))
+		}),
 		"CreateAccessKey": admin([]string{"UserName"}, userARN, func(h *handler, c *exchange) (any, error) {
 			n, err := requireUser(c)
 			if err != nil {
@@ -454,7 +484,7 @@ func stsActions() map[string]spec {
 					}
 					d = time.Duration(n) * time.Second
 				}
-				got, err := h.cfg.Admin.AssumeRole(c.r.Context(), iam.Principal{Account: c.caller.Account, ARN: c.caller.Principal, Root: c.caller.Root}, c.form("RoleArn"), c.form("RoleSessionName"), d)
+				got, err := h.cfg.Admin.AssumeRole(c.r.Context(), iam.Principal{Account: c.caller.Account, ARN: c.caller.Principal, Root: c.caller.Root, Ref: c.caller.Ref}, c.form("RoleArn"), c.form("RoleSessionName"), d)
 				if err != nil {
 					return nil, err
 				}
@@ -498,4 +528,16 @@ func xmlEscape(s string) string {
 		return ""
 	}
 	return b.String()
+}
+
+// loginProfileInput requires UserName and Password. PasswordResetRequired=true
+// needs the sign-in password change flow, which is not built yet.
+func loginProfileInput(c *exchange) error {
+	if err := required(c, "UserName", "Password"); err != nil {
+		return err
+	}
+	if v := c.form("PasswordResetRequired"); v != "" && v != "false" {
+		return resource.Invalid("PasswordResetRequired", "PasswordResetRequired=true is not supported yet")
+	}
+	return nil
 }

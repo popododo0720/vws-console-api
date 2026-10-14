@@ -46,9 +46,31 @@ action except `GetCallerIdentity` (as in AWS) is authorized as `iam:<Action>`
 or `sts:<Action>`; every request must be signed. `-iam=static` (the
 default) serves only `GetCallerIdentity` for the `-access-key` root key.
 `-iam=fake` adds users, groups, roles, managed and inline policies, access keys
-and `AssumeRole` in memory, lost on restart, until the vws-iam client lands
-(vws-proto#24). The root key keeps working in both modes, and keys created
+and `AssumeRole` in memory, lost on restart. The root key keeps working in every mode, and keys created
 there also sign EC2 and S3 calls.
+
+`-iam=grpc -iam-endpoint <host:port>` hands every other key to vws-iam
+(vws-proto v0.3.0, `vws.iam.v1`). `Authenticate` gets the canonical request,
+string to sign, signature and client address (`source_ip`), never a secret;
+`Authorize` gets the full principal vws-iam returned (it rechecks unique id
+and resource), the resource ARNs and the condition context, and only
+`DECISION_ALLOW` allows; an error denies. Console sign-in (`Login`,
+`ValidateSession`, `Logout`) goes to vws-iam too, with the client address the
+console resolved (see `-trusted-proxies`); the root user still signs in
+against `-root-password-file` locally. A bad password, unknown user or missing
+MFA code is the same `401` as in the other modes, `RESOURCE_EXHAUSTED` from
+vws-iam is `429`, and `UNAVAILABLE` or a transport failure is `503` with
+`Retry-After`. A sign-in vws-iam marks `password_reset_required` is refused
+(`403`) and its session revoked, because the console has no password-change
+flow yet. STS `AssumeRole` sends the caller in the request's `authentication`
+field: the caller's own SigV4 request, or its console session token; nothing
+goes in gRPC metadata. The static root key cannot assume a role (as in AWS).
+Each call has a 5 s timeout, or the request's deadline if earlier;
+`Authenticate`, `Authorize`, `ValidateSession` and `Logout` retry `UNAVAILABLE`
+up to 3 times with doubling backoff; `Login` and `AssumeRole` are never
+retried. The IAM management actions (users, groups, roles, policies, access
+keys, login profiles) are not mapped to vws-iam's services yet and answer
+`InvalidAction` in this mode.
 
 ```sh
 aws --endpoint-url http://127.0.0.1:8084 --region vws-1 iam create-user --user-name bob
@@ -65,6 +87,80 @@ Content-Type: application/json
 
 {"imageId":"ami-0123456789abcdef0","instanceType":"vws.small","subnetId":"subnet-0123456789abcdef0","count":1}
 ```
+
+Console sign-in needs `-iam fake` or `-iam grpc`. With the default
+`-iam static` it is off: the console takes only the bearer `-console-token`,
+`POST /api/v1/auth/login` and `POST /api/v1/auth/logout` answer `501`
+`{"error":{"code":"Unimplemented","message":"console sign-in requires -iam fake or grpc"}}`,
+session cookies are ignored, `-root-password-file` has no effect, and the
+process logs a `WARN` at start saying so. `GET /api/v1/auth/session` always
+carries `loginEnabled` so the UI can tell the modes apart:
+
+| mode | no credentials | bearer token | session cookie |
+| --- | --- | --- | --- |
+| `-iam static` | `200` `{"loginEnabled":false}` | `200` caller + `"loginEnabled":false` | ignored: as no credentials |
+| `-iam fake` / `grpc` | `401` (show the sign-in page) | `200` caller + `"loginEnabled":true` | `200` caller, `expiresAt`, `"loginEnabled":true` |
+
+In static mode the session route needs no credentials because the answer
+names nobody and there is nothing to sign in to; a bad bearer token is still
+`401`. The login response carries `"loginEnabled":true` too.
+
+With sign-in on: `POST /api/v1/auth/login` with
+`{"account","userName","password"}` (an IAM user's `CreateLoginProfile`
+password, or `root` with the password in `-root-password-file`, mounted from a
+Secret). It sets an HttpOnly, Secure, SameSite=Strict `vws_session` cookie
+(12 hours) and a `vws_csrf` cookie; every request other than GET/HEAD on a
+session must echo `vws_csrf` in `X-CSRF-Token`. Each console route is
+authorized as the matching IAM action (`ec2:DescribeVpcs`, `ec2:CreateVpc`,
+`s3:GetObject`, `vws:GetOperation`, ...), so a session only does what the
+user's policies allow. Every failure is the same `401`. Abuse limits: five
+wrong passwords in a row from one address lock that user from that address
+only (1 minute, doubling per further failure up to 1 hour, logged as
+`console sign-in locked out` without secrets), so nobody can lock root out
+from elsewhere; each address gets 10 sign-in attempts, refilling one every
+6 s (`429` with `Retry-After`); argon2id hashing runs in a bounded number of
+slots and a sign-in that cannot get one within 200 ms is `503` with
+`Retry-After`. Sign-in and every state-changing cookie request must be
+`Content-Type: application/json` (else `415`) and carry an `Origin` that is
+the console's own host or one listed in `-console-origins` (else `403`). `GET /api/v1/auth/session` names
+the caller; `POST /api/v1/auth/logout` ends the session. The bearer
+`-console-token` still acts as the account root until it is retired.
+
+### Behind a proxy: `-trusted-proxies`
+
+Sign-in rate limits, per user+address lockout and the `source_ip` in sign-in
+logs key on the client address. By default that is the TCP peer
+(`RemoteAddr`) and `X-Forwarded-For` is ignored. Behind an L7 proxy or
+ingress every user would then share the proxy's address, making the limit
+global and letting anyone lock root out, so list the proxies' CIDRs:
+
+    -trusted-proxies 10.0.0.0/8,fd00::/8
+
+Only when the TCP peer is inside one of them is `X-Forwarded-For` read (all
+header lines, in order), walked right to left, and the first address that is
+not a trusted proxy taken as the client. Entries left of it are written by
+the client and never used, so a forged leftmost entry changes nothing, and a
+request that reaches the console directly from an untrusted address cannot
+set its own client address at all. If every entry is trusted, the leftmost
+is used (an internal client); if the header is missing or an entry walked is
+not an IP, the TCP peer is used. List only your proxy hops (e.g. the ingress
+controller pods' range), make the proxy append to `X-Forwarded-For`, and do
+not expose the console port past the proxy. A bad CIDR (or one with host
+bits set) stops startup. `Origin` checks compare against the `Host` header
+and `-console-origins`, not the client address, so they are unaffected.
+
+Console sign-in limits for now:
+
+- **Run one replica.** Console sessions (and `-iam=fake` users) live in the
+  process's memory, so a second replica would not know a session the first
+  one issued, and a restart signs everyone out. Keep `replicas: 1` until
+  vws-iam holds sessions.
+- **No MFA yet.** Users have no MFA devices until vws-iam#6, so a login that
+  sends `mfaCode` fails.
+- **No forced password change.** `CreateLoginProfile`/`UpdateLoginProfile`
+  reject `PasswordResetRequired=true` until a change-password flow exists.
+- **`-console-token` stays** as the account root until vws-console signs in
+  with cookies; it is removed after that switch.
 
 The subnet must already exist and belong to the caller. The response is `202`
 with an `operation` and the instances. Poll `GET /api/v1/operations/{id}`.

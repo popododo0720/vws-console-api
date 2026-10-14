@@ -25,6 +25,7 @@ import json
 import os
 import sys
 import time
+import urllib.error
 import urllib.request
 
 import boto3
@@ -681,6 +682,130 @@ def identity():
     step("IAM DeleteUser", lambda: iam.delete_user(UserName="e2e-bob"))
 
 
+CONSOLE_URL = os.environ.get("VWS_E2E_CONSOLE", "http://127.0.0.1:8080")
+
+
+def console_call(method, path, body=None, cookies=None, headers=None):
+    """One console request. Returns (status, json body or None, Set-Cookie headers)."""
+    h = {}
+    data = None
+    if method not in ("GET", "HEAD"):
+        # A browser sends its Origin; the console only takes JSON writes.
+        h["Origin"] = CONSOLE_URL
+        h["Content-Type"] = "application/json"
+        data = json.dumps(body if body is not None else {}).encode()
+    h.update(headers or {})
+    if cookies:
+        h["Cookie"] = "; ".join(f"{k}={v}" for k, v in cookies.items())
+    req = urllib.request.Request(CONSOLE_URL + path, data=data, method=method, headers=h)
+    try:
+        with urllib.request.urlopen(req, timeout=10) as res:
+            raw = res.read()
+            return res.status, (json.loads(raw) if raw else None), res.headers.get_all("Set-Cookie") or []
+    except urllib.error.HTTPError as e:
+        raw = e.read()
+        return e.code, (json.loads(raw) if raw else None), e.headers.get_all("Set-Cookie") or []
+
+
+def console_login():
+    """Console sign-in with an IAM user's password: an HttpOnly session cookie,
+    CSRF on writes, the user's policies on every request, and logout."""
+    me = sts.get_caller_identity()
+    account = me["Account"]
+    if not step("IAM CreateUser e2e-carol", lambda: iam.create_user(UserName="e2e-carol")):
+        return
+    step("IAM CreateLoginProfile", lambda: iam.create_login_profile(UserName="e2e-carol", Password="e2e carol pass 1"))
+    step("IAM CreateLoginProfile weak password is PasswordPolicyViolation", lambda: aws_error(
+        "PasswordPolicyViolation", lambda: iam.update_login_profile(UserName="e2e-carol", Password="short")))
+    step("IAM GetLoginProfile", lambda: check(
+        iam.get_login_profile(UserName="e2e-carol")["LoginProfile"]["UserName"] == "e2e-carol", "profile"))
+
+    def expect(want, got):
+        check(got[0] == want, f"status {got[0]} {got[1]}")
+        return got
+    creds = {"account": account, "userName": "e2e-carol", "password": "e2e carol pass 1"}
+    step("console login wrong password is 401", lambda: expect(401, console_call(
+        "POST", "/api/v1/auth/login", dict(creds, password="nope nope nope"))))
+    step("console login unknown user is the same 401", lambda: expect(401, console_call(
+        "POST", "/api/v1/auth/login", dict(creds, userName="e2e-nobody"))))
+    step("console login from a foreign Origin is 403", lambda: expect(403, console_call(
+        "POST", "/api/v1/auth/login", creds, headers={"Origin": "https://evil.example"})))
+    step("console login as a form is 415", lambda: expect(415, console_call(
+        "POST", "/api/v1/auth/login", creds, headers={"Content-Type": "application/x-www-form-urlencoded"})))
+    got = step("console login", lambda: expect(200, console_call("POST", "/api/v1/auth/login", creds)))
+    if not got:
+        return
+    _, body, set_cookies = got
+    jar = {}
+    for raw in set_cookies:
+        name, _, rest = raw.partition("=")
+        jar[name] = rest.split(";", 1)[0]
+    session_cookie = next((c for c in set_cookies if c.startswith("vws_session=")), "")
+    step("session cookie is HttpOnly, Secure, SameSite=Strict", lambda: check(
+        all(a in session_cookie for a in ("HttpOnly", "Secure", "SameSite=Strict")), session_cookie))
+    step("login body names the user and hides the token", lambda: check(
+        body["principal"] == f"arn:vws:iam::{account}:user/e2e-carol" and jar["vws_session"] not in json.dumps(body), body))
+    step("GET /api/v1/auth/session", lambda: check(expect(200, console_call(
+        "GET", "/api/v1/auth/session", cookies=jar))[1]["principal"].endswith(":user/e2e-carol"), "principal"))
+    step("session says loginEnabled true with IAM", lambda: check(console_call(
+        "GET", "/api/v1/auth/session", cookies=jar)[1]["loginEnabled"] is True, "loginEnabled"))
+    step("signed-out session is 401 with IAM", lambda: expect(401, console_call("GET", "/api/v1/auth/session")))
+    step("no policy: GET /api/v1/vpcs is 403", lambda: expect(403, console_call("GET", "/api/v1/vpcs", cookies=jar)))
+    step("IAM PutUserPolicy ec2:Describe*", lambda: iam.put_user_policy(
+        UserName="e2e-carol", PolicyName="read", PolicyDocument=json.dumps({"Version": "2012-10-17", "Statement": [
+            {"Effect": "Allow", "Action": "ec2:Describe*", "Resource": "*"}]})))
+    step("with the policy: GET /api/v1/vpcs is 200", lambda: expect(200, console_call("GET", "/api/v1/vpcs", cookies=jar)))
+    write = {"Idempotency-Key": "e2e-login-vpc-1"}
+    step("POST without the CSRF header is 403", lambda: expect(403, console_call(
+        "POST", "/api/v1/vpcs", {"cidrBlock": "10.43.0.0/16"}, cookies=jar, headers=write)))
+    step("POST with CSRF but no ec2:CreateVpc is 403", lambda: expect(403, console_call(
+        "POST", "/api/v1/vpcs", {"cidrBlock": "10.43.0.0/16"}, cookies=jar, headers=dict(write, **{"X-CSRF-Token": jar["vws_csrf"]}))))
+    step("cookie write from a foreign Origin is 403", lambda: expect(403, console_call(
+        "POST", "/api/v1/vpcs", {"cidrBlock": "10.43.0.0/16"}, cookies=jar,
+        headers=dict(write, **{"X-CSRF-Token": jar["vws_csrf"], "Origin": "https://evil.example"}))))
+    step("console logout", lambda: expect(204, console_call(
+        "POST", "/api/v1/auth/logout", cookies=jar, headers={"X-CSRF-Token": jar["vws_csrf"]})))
+    step("after logout the session is 401", lambda: expect(401, console_call("GET", "/api/v1/vpcs", cookies=jar)))
+    step("bearer console token still works", lambda: console_get("/api/v1/vpcs"))
+    step("IAM DeleteUser with a login profile is DeleteConflict", lambda: aws_error(
+        "DeleteConflict", lambda: iam.delete_user(UserName="e2e-carol")))
+    step("IAM DeleteUserPolicy (carol)", lambda: iam.delete_user_policy(UserName="e2e-carol", PolicyName="read"))
+    step("IAM DeleteLoginProfile", lambda: iam.delete_login_profile(UserName="e2e-carol"))
+    step("IAM DeleteUser e2e-carol", lambda: iam.delete_user(UserName="e2e-carol"))
+
+
+STATIC_CONSOLE_URL = os.environ.get("VWS_E2E_STATIC_CONSOLE", "")
+
+
+def expect_status(want, got):
+    check(got[0] == want, f"status {got[0]} {got[1]}")
+    return got
+
+
+def console_static():
+    """A second process on -iam static (the default install): sign-in is off,
+    the session route says so without credentials, and the bearer token works.
+    Runs only when VWS_E2E_STATIC_CONSOLE names that process's console."""
+    if not STATIC_CONSOLE_URL:
+        return
+    global CONSOLE_URL
+    saved, CONSOLE_URL = CONSOLE_URL, STATIC_CONSOLE_URL
+    try:
+        step("static: anonymous session is exactly {loginEnabled:false}", lambda: check(
+            expect_status(200, console_call("GET", "/api/v1/auth/session"))[1] == {"loginEnabled": False}, "body"))
+        step("static: bearer session is root with loginEnabled false", lambda: check(
+            (lambda b: b["loginEnabled"] is False and b["root"] is True)(expect_status(200, console_call(
+                "GET", "/api/v1/auth/session", headers={"Authorization": "Bearer " + os.environ.get("VWS_E2E_CONSOLE_TOKEN", "dev-token")}))[1]), "body"))
+        for path in ("/api/v1/auth/login", "/api/v1/auth/logout"):
+            step(f"static: POST {path} is 501 Unimplemented", lambda path=path: check(
+                expect_status(501, console_call("POST", path, {"account": "123456789012", "userName": "root", "password": "x" * 12}))[1]["error"]["code"]
+                == "Unimplemented", "code"))
+        step("static: bearer GET /api/v1/vpcs is 200", lambda: expect_status(200, console_call(
+            "GET", "/api/v1/vpcs", headers={"Authorization": "Bearer " + os.environ.get("VWS_E2E_CONSOLE_TOKEN", "dev-token")})))
+    finally:
+        CONSOLE_URL = saved
+
+
 def cleanup():
     if S.get("restored_snap"):
         step("DeleteSnapshot", lambda: ec2.delete_snapshot(SnapshotId=S["restored_snap"]))
@@ -701,6 +826,8 @@ if __name__ == "__main__":
     addresses()
     objects()
     identity()
+    console_login()
+    console_static()
     cleanup()
     print(f"ok={results['ok']} skipped={results['skipped']} FAIL={results['FAIL']}")
     if SKIPPED:

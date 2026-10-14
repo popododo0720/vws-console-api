@@ -18,7 +18,7 @@ func TestBatchInstanceActions(t *testing.T) {
 		t.Fatal(err)
 	}
 	svc := cloud.New(cloud.Config{Backends: fake.New(fake.Options{}).Set()})
-	h := New(Config{Service: svc, Auth: BearerTokens{"tok": {Account: account, Subject: "t"}}})
+	h := New(rootConfig(svc, account))
 	do := func(path, body, key string) (int, []map[string]any) {
 		t.Helper()
 		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, path, strings.NewReader(body))

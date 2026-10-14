@@ -16,6 +16,7 @@ import (
 	"github.com/popododo0720/vws-console-api/internal/backend"
 	"github.com/popododo0720/vws-console-api/internal/backend/fake"
 	"github.com/popododo0720/vws-console-api/internal/backend/grpcclient"
+	"github.com/popododo0720/vws-console-api/internal/backend/grpcclient/iamclient"
 	"github.com/popododo0720/vws-console-api/internal/cloud"
 	"github.com/popododo0720/vws-console-api/internal/iam"
 	"github.com/popododo0720/vws-console-api/internal/resource"
@@ -54,8 +55,13 @@ func run(ctx context.Context, args []string) (err error) {
 	storageAddr := fs.String("storage-addr", "127.0.0.1:19002", "storage gRPC address")
 	networkAddr := fs.String("network-addr", "127.0.0.1:19003", "network gRPC address")
 	iamMode := fs.String("iam", "static", "static: only the -access-key root key, no IAM/STS management; "+
-		"fake: in-memory IAM users, groups, roles, policies and STS sessions, lost on restart, until the vws-iam client lands (vws-proto#24)")
+		"fake: in-memory IAM users, groups, roles, policies and STS sessions, lost on restart; "+
+		"grpc: vws-iam at -iam-endpoint authenticates keys, authorizes requests and serves console sign-in and STS AssumeRole")
+	iamEndpoint := fs.String("iam-endpoint", "", "vws-iam gRPC address for -iam=grpc, such as vws-iam.vws-system:9095")
 	iamAddr := fs.String("iam-addr", "127.0.0.1:8084", "IAM and STS Query listen address")
+	consoleOrigins := fs.String("console-origins", "", "comma-separated browser origins allowed to sign in and send cookie writes besides the console's own host, such as https://console.vws.example")
+	trustedProxies := fs.String("trusted-proxies", "", "comma-separated CIDRs of L7 proxies in front of the console whose X-Forwarded-For is trusted for the sign-in client address; empty uses the TCP peer")
+	rootPasswordFile := fs.String("root-password-file", "", "file holding the account root's console password (mount it from a Secret); empty disables root console sign-in; no effect with -iam static, where console sign-in is off")
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("flags: %w", err)
 	}
@@ -66,6 +72,10 @@ func run(ctx context.Context, args []string) (err error) {
 		}
 	}
 
+	trusted, err := console.ParseTrustedProxies(*trustedProxies)
+	if err != nil {
+		return fmt.Errorf("-trusted-proxies: %w", err)
+	}
 	account, err := resource.Parse[resource.AccountID](*accountRaw)
 	if err != nil {
 		return err
@@ -93,20 +103,38 @@ func run(ctx context.Context, args []string) (err error) {
 	}
 
 	svc := cloud.New(cloud.Config{Backends: set, Audit: logger})
-	// The static key is the account root. Once the vws/iam/v1 client exists
-	// (vws-proto#24) it goes behind iam.WithRoot.
+	// The static key is the account root; with -iam=fake or -iam=grpc it
+	// sits in front of the IAM client through iam.WithRoot.
 	root := iam.NewStatic(*accessKey, *secret, account)
+	root.SetLogger(logger)
+	if *rootPasswordFile != "" {
+		if err := setRootPassword(ctx, root, *rootPasswordFile); err != nil {
+			return err
+		}
+	}
 	var auth iam.Client = root
 	var admin iam.Admin
 	switch *iamMode {
 	case "static":
 	case "fake":
 		fakeIAM := iam.NewFake()
+		fakeIAM.SetLogger(logger)
 		auth, admin = iam.WithRoot(root, fakeIAM), fakeIAM
 		logger.WarnContext(ctx, "in-memory IAM: users, keys and roles are lost on restart", slog.String("iam", *iamMode))
+	case "grpc":
+		if *iamEndpoint == "" {
+			return errors.New("-iam=grpc needs -iam-endpoint")
+		}
+		remote, dialErr := iamclient.Dial(*iamEndpoint)
+		if dialErr != nil {
+			return dialErr
+		}
+		defer func() { err = errors.Join(err, remote.Close()) }()
+		auth, admin = iam.WithRoot(root, remote), iamclient.STSAdmin{Client: remote}
 	default:
 		return fmt.Errorf("unknown -iam %q", *iamMode)
 	}
+	warnSignIn(ctx, logger, *iamMode, *rootPasswordFile)
 	authn := iam.Authenticator(auth)
 	verifier := func(s sigv4.Service) *sigv4.Verifier {
 		return sigv4.NewVerifier(sigv4.Verifier{Service: s, Region: resource.RegionName, Auth: authn})
@@ -117,8 +145,13 @@ func run(ctx context.Context, args []string) (err error) {
 	defer stop()
 	return server.Serve(ctx, server.Options{Logger: logger, OpsAddr: *opsAddr, Surfaces: []server.Surface{
 		{Name: "console", Addr: *consoleAddr, Handler: console.New(console.Config{
-			Service: svc,
-			Auth:    console.BearerTokens{*consoleToken: caller},
+			Service:        svc,
+			Auth:           console.BearerTokens{*consoleToken: caller},
+			IAM:            auth,
+			Logger:         logger,
+			Origins:        splitList(*consoleOrigins),
+			TrustedProxies: trusted,
+			LoginDisabled:  !signInEnabled(*iamMode),
 		})},
 		{Name: "ec2", Addr: *ec2Addr, Handler: ec2query.New(ec2query.Config{Service: svc, Verifier: ec2, Authorizer: auth})},
 		{Name: "s3", Addr: *s3Addr, Handler: s3rest.New(s3rest.Config{Service: svc, Verifier: s3, Authorizer: auth})},
@@ -126,6 +159,31 @@ func run(ctx context.Context, args []string) (err error) {
 			Admin: admin, Authorizer: auth, IAM: verifier(sigv4.ServiceIAM), STS: verifier(sigv4.ServiceSTS),
 		})},
 	}})
+}
+
+// splitList splits a comma-separated flag, dropping empty items.
+func splitList(raw string) []string {
+	var out []string
+	for _, v := range strings.Split(raw, ",") {
+		if v = strings.TrimSpace(v); v != "" {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+// setRootPassword reads the root console password from path. One trailing
+// newline is dropped, as Secret files and echo leave one.
+func setRootPassword(ctx context.Context, root *iam.Static, path string) error {
+	raw, err := os.ReadFile(path) //nolint:gosec // an operator-chosen path, read once at start.
+	if err != nil {
+		return fmt.Errorf("-root-password-file: %w", err)
+	}
+	pw := strings.TrimSuffix(strings.TrimSuffix(string(raw), "\n"), "\r")
+	if err := root.SetPassword(ctx, pw); err != nil {
+		return fmt.Errorf("-root-password-file %s: %w", path, err)
+	}
+	return nil
 }
 
 // requireExplicit rejects a run that would fall back to a built-in development
@@ -144,4 +202,22 @@ func requireExplicit(fs *flag.FlagSet, names ...string) error {
 		return fmt.Errorf("-backend=grpc needs explicit %s; the defaults are public development credentials", strings.Join(missing, ", "))
 	}
 	return nil
+}
+
+// signInEnabled reports whether -iam serves console sign-in. Static has only
+// the access key and the bearer console token: login is off even with
+// -root-password-file, so the default install never takes a password.
+func signInEnabled(iamMode string) bool { return iamMode == "fake" || iamMode == "grpc" }
+
+// warnSignIn logs at start when console sign-in is off.
+func warnSignIn(ctx context.Context, logger *slog.Logger, iamMode, rootPasswordFile string) {
+	if signInEnabled(iamMode) {
+		return
+	}
+	logger.WarnContext(ctx, "console sign-in disabled: the console accepts only the bearer -console-token; use -iam fake or grpc for sign-in",
+		slog.String("iam", iamMode))
+	if rootPasswordFile != "" {
+		logger.WarnContext(ctx, "-root-password-file has no effect with -iam static: console sign-in is disabled",
+			slog.String("iam", iamMode))
+	}
 }

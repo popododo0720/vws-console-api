@@ -36,6 +36,12 @@ const (
 // Nodes reconcile spec. Mutations follow vws.common.v1.OperationMetadata.
 // Delete does not delete volumes, key pairs, subnets, or security groups.
 // Delete is rejected with DEPENDENCY_MISSING while an Address association names this instance.
+// Delete stays RUNNING until ReportInstanceStatus removes the row:
+// delete_time is set, observed.generation equals the instance generation,
+// and observed.state is DELETING.
+// UpdateInstance with allow_missing creates through the CreateInstance rules.
+// An update that changes or removes a network interface device_name named by
+// an Address association returns INVALID_ARGUMENT / INVALID_SPEC and writes nothing.
 type InstanceServiceClient interface {
 	// AIP-131: the Get response is the resource.
 	// buf:lint:ignore RPC_RESPONSE_STANDARD_NAME
@@ -132,6 +138,12 @@ func (c *instanceServiceClient) ReportInstanceStatus(ctx context.Context, in *Re
 // Nodes reconcile spec. Mutations follow vws.common.v1.OperationMetadata.
 // Delete does not delete volumes, key pairs, subnets, or security groups.
 // Delete is rejected with DEPENDENCY_MISSING while an Address association names this instance.
+// Delete stays RUNNING until ReportInstanceStatus removes the row:
+// delete_time is set, observed.generation equals the instance generation,
+// and observed.state is DELETING.
+// UpdateInstance with allow_missing creates through the CreateInstance rules.
+// An update that changes or removes a network interface device_name named by
+// an Address association returns INVALID_ARGUMENT / INVALID_SPEC and writes nothing.
 type InstanceServiceServer interface {
 	// AIP-131: the Get response is the resource.
 	// buf:lint:ignore RPC_RESPONSE_STANDARD_NAME

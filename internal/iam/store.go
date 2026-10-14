@@ -52,6 +52,7 @@ type userRec struct {
 	holder
 	groups map[string]bool
 	keys   map[string]bool
+	login  *loginRec
 }
 
 type groupRec struct {
@@ -183,6 +184,9 @@ func (f *Fake) CreateUser(_ context.Context, a resource.AccountID, name, path st
 	if err := checkName(entityName, "userName", name); err != nil {
 		return User{}, err
 	}
+	if strings.EqualFold(name, RootUserName) {
+		return User{}, resource.Invalid("userName", "the user name "+RootUserName+" is reserved for the account root")
+	}
 	path, err := normPath(path)
 	if err != nil {
 		return User{}, err
@@ -240,8 +244,8 @@ func (f *Fake) DeleteUser(_ context.Context, a resource.AccountID, name string) 
 	if u == nil {
 		return notFound("user", name)
 	}
-	if len(u.keys) > 0 || len(u.attached) > 0 || len(u.inline) > 0 || len(u.groups) > 0 {
-		return conflict("Cannot delete entity, must delete access keys, policies and group memberships first.")
+	if len(u.keys) > 0 || len(u.attached) > 0 || len(u.inline) > 0 || len(u.groups) > 0 || u.login != nil {
+		return conflict("Cannot delete entity, must delete login profile, access keys, policies and group memberships first.")
 	}
 	delete(st.users, name)
 	return nil

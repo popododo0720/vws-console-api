@@ -20,6 +20,12 @@ option java_package = "dev.vws.compute.v1";
 // Nodes reconcile spec. Mutations follow vws.common.v1.OperationMetadata.
 // Delete does not delete volumes, key pairs, subnets, or security groups.
 // Delete is rejected with DEPENDENCY_MISSING while an Address association names this instance.
+// Delete stays RUNNING until ReportInstanceStatus removes the row:
+// delete_time is set, observed.generation equals the instance generation,
+// and observed.state is DELETING.
+// UpdateInstance with allow_missing creates through the CreateInstance rules.
+// An update that changes or removes a network interface device_name named by
+// an Address association returns INVALID_ARGUMENT / INVALID_SPEC and writes nothing.
 service InstanceService {
   // AIP-131: the Get response is the resource.
   // buf:lint:ignore RPC_RESPONSE_STANDARD_NAME
@@ -114,7 +120,7 @@ message Instance {
 // - each security group belongs to that subnet's VPC
 // - key_pair, when set, is in the region that contains the instance zone
 message InstanceSpec {
-  // Catalog name such as "n1.medium". Grammar: [a-z]([a-z0-9.-]{0,61}[a-z0-9])?
+  // Catalog name: vws.small, vws.medium, vws.large, or vws.xlarge. Grammar: [a-z]([a-z0-9.-]{0,61}[a-z0-9])?
   string machine_type = 1 [(google.api.field_behavior) = REQUIRED];
   // RUNNING or STOPPED. The node starts or stops the machine to match.
   InstancePower power = 2 [(google.api.field_behavior) = REQUIRED];
@@ -153,6 +159,9 @@ message InstanceStatus {
   vws.common.v1.ObservedState observed = 1;
   InstancePower power = 2;
   repeated ObservedNetworkInterface network_interfaces = 3;
+  // Placement moved to the Kubernetes scheduler. The field is removed.
+  reserved 4;
+  reserved "assigned_node";
 }
 
 message ObservedNetworkInterface {
