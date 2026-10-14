@@ -5,6 +5,7 @@ import (
 	"encoding/xml"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/popododo0720/vws-console-api/internal/resource"
@@ -396,4 +397,45 @@ func portValue(raw string) (int, error) {
 		return 0, resource.Invalid("FromPort", "malformed")
 	}
 	return n, nil
+}
+
+// createTags tags instances. Other resource kinds fail with
+// InvalidParameterValue: only the compute backend stores tags today.
+func (h *handler) createTags(w http.ResponseWriter, r *http.Request, c resource.Caller) {
+	token, err := optionalClientToken(r)
+	if err != nil {
+		writeErr(w, r, err)
+		return
+	}
+	var ids []resource.InstanceID
+	for _, raw := range indexedStrings(r, "ResourceId") {
+		if !strings.HasPrefix(raw, "i-") {
+			writeErr(w, r, resource.Invalid("ResourceId", "only instances can be tagged"))
+			return
+		}
+		id, err := resource.Parse[resource.InstanceID](raw)
+		if err != nil {
+			writeErr(w, r, err)
+			return
+		}
+		ids = append(ids, id)
+	}
+	tags := map[string]string{}
+	for i := 1; i <= 50; i++ {
+		prefix := "Tag." + strconv.Itoa(i) + "."
+		k, v := r.Form.Get(prefix+"Key"), r.Form.Get(prefix+"Value")
+		if k == "" && v == "" {
+			continue
+		}
+		if k == "" {
+			writeErr(w, r, resource.Invalid(prefix+"Key", "required"))
+			return
+		}
+		tags[k] = v
+	}
+	if _, err := h.svc.CreateTags(r.Context(), c, token, resource.CreateTagsRequest{IDs: ids, Tags: tags}); err != nil {
+		writeErr(w, r, err)
+		return
+	}
+	writeXML(w, createTagsXML{RequestID: requestID(r), Return: true})
 }

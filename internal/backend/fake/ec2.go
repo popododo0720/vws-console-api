@@ -25,6 +25,45 @@ func (c compute) TerminateInstances(ctx context.Context, m backend.Mutation, req
 	return c.changeInstances(ctx, m, resource.ActionTerminateInstances, req.IDs)
 }
 
+func (c compute) CreateTags(ctx context.Context, m backend.Mutation, req resource.CreateTagsRequest) (resource.Accepted[resource.Instance], error) {
+	if err := ctx.Err(); err != nil {
+		return resource.Accepted[resource.Instance]{}, err
+	}
+	c.w.mu.Lock()
+	defer c.w.mu.Unlock()
+	c.w.settle(c.w.now())
+	if acc, ok, err := replay[resource.Accepted[resource.Instance]](c.w, m.Key, m.Fingerprint); err != nil || ok {
+		return acc, err
+	}
+	merged := make([]map[string]string, 0, len(req.IDs))
+	targets := make([]resource.Ref, 0, len(req.IDs))
+	for _, id := range req.IDs {
+		inst, ok := c.w.inst[id]
+		if !ok || inst.OwnerID != m.Account {
+			return resource.Accepted[resource.Instance]{}, resource.NotFound(resource.KindInstance, id.String())
+		}
+		tags, err := resource.MergeTags(inst.Tags, req.Tags)
+		if err != nil {
+			return resource.Accepted[resource.Instance]{}, err
+		}
+		merged = append(merged, tags)
+		targets = append(targets, id.Ref())
+	}
+	op, err := c.w.newOp(m.Account, resource.ServiceCompute, resource.ActionCreateTags, targets, func(time.Time) {})
+	if err != nil {
+		return resource.Accepted[resource.Instance]{}, err
+	}
+	items := make([]resource.Instance, 0, len(req.IDs))
+	for i, id := range req.IDs {
+		inst := c.w.inst[id]
+		inst.Tags = merged[i]
+		items = append(items, *inst)
+	}
+	acc := resource.Accepted[resource.Instance]{Operation: op, Items: items}
+	c.w.finish(m.Key, m.Fingerprint, acc)
+	return acc, nil
+}
+
 func (c compute) changeInstances(ctx context.Context, m backend.Mutation, action resource.Action, ids []resource.InstanceID) (resource.Accepted[resource.InstanceStateChange], error) {
 	if err := ctx.Err(); err != nil {
 		return resource.Accepted[resource.InstanceStateChange]{}, err

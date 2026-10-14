@@ -95,6 +95,8 @@ func (h *handler) serve(w http.ResponseWriter, r *http.Request) {
 		h.deleteVolume(w, r, caller)
 	case resource.ActionModifyVolume.String():
 		h.modifyVolume(w, r, caller)
+	case resource.ActionCreateTags.String():
+		h.createTags(w, r, caller)
 	case resource.ActionCreateSecurityGroup.String():
 		h.createSecurityGroup(w, r, caller)
 	case resource.ActionAuthorizeSecurityGroupIngress.String():
@@ -492,6 +494,8 @@ func rejectUnknown(r *http.Request, action string) error {
 		allow = allowDeleteVolume
 	case resource.ActionModifyVolume.String():
 		allow = allowModifyVolume
+	case resource.ActionCreateTags.String():
+		allow = allowCreateTags
 	case resource.ActionCreateSecurityGroup.String():
 		allow = allowCreateGroup
 	case resource.ActionAuthorizeSecurityGroupIngress.String():
@@ -592,6 +596,18 @@ func allowDeleteVolume(key string) bool {
 
 func allowModifyVolume(key string) bool {
 	return key == "Action" || key == "Version" || key == "ClientToken" || key == "VolumeId" || key == "Size"
+}
+
+func allowCreateTags(key string) bool {
+	if key == "Action" || key == "Version" || key == "ClientToken" || indexed(key, "ResourceId", 20) {
+		return true
+	}
+	rest, ok := strings.CutPrefix(key, "Tag.")
+	if !ok {
+		return false
+	}
+	n, field, ok := strings.Cut(rest, ".")
+	return ok && (field == "Key" || field == "Value") && inRange(n, 50)
 }
 
 func allowCreateGroup(key string) bool {

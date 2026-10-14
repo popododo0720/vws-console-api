@@ -35,6 +35,7 @@ const (
 	ActionAssociateAddress
 	ActionDisassociateAddress
 	ActionModifyVolume
+	ActionCreateTags
 )
 
 // String returns the wire name. An unknown action returns "".
@@ -86,6 +87,8 @@ func (a Action) String() string {
 		return "DisassociateAddress"
 	case ActionModifyVolume:
 		return "ModifyVolume"
+	case ActionCreateTags:
+		return "CreateTags"
 	case actionNone:
 		return ""
 	default:

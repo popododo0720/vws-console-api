@@ -157,6 +157,10 @@ func (foreignCompute) ModifyVolume(context.Context, backend.Mutation, resource.M
 	return resource.Accepted[resource.Volume]{}, errors.New("unused")
 }
 
+func (foreignCompute) CreateTags(context.Context, backend.Mutation, resource.CreateTagsRequest) (resource.Accepted[resource.Instance], error) {
+	return resource.Accepted[resource.Instance]{}, errors.New("unused")
+}
+
 func (foreignCompute) DeleteVolume(context.Context, backend.Mutation, resource.DeleteVolumeRequest) (resource.Accepted[resource.Volume], error) {
 	return resource.Accepted[resource.Volume]{}, errors.New("unused")
 }
