@@ -90,17 +90,21 @@ func (c computeClient) changeInstances(ctx context.Context, m backend.Mutation, 
 		if err != nil {
 			return resource.Accepted[resource.InstanceStateChange]{}, err
 		}
+		labels, err := withInternalLabels(inst.Tags, map[string]string{
+			labelAction:      action.String(),
+			labelFingerprint: clip(m.Fingerprint, 63),
+			labelImage:       inst.ImageID.String(),
+			labelReservation: inst.ReservationID.String(),
+		})
+		if err != nil {
+			return resource.Accepted[resource.InstanceStateChange]{}, err
+		}
 		updated, err := c.instances.UpdateInstance(ctx, &computev1.UpdateInstanceRequest{
 			RequestId:  requestUUID(m.Key, action.String(), hex.EncodeToString([]byte{byte(i)})),
 			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.power", "labels"}},
 			Instance: &computev1.Instance{
-				Name: instanceName(projectID, inst.ID.String()),
-				Labels: withInternalLabels(inst.Tags, map[string]string{
-					labelAction:      action.String(),
-					labelFingerprint: clip(m.Fingerprint, 63),
-					labelImage:       inst.ImageID.String(),
-					labelReservation: inst.ReservationID.String(),
-				}),
+				Name:   instanceName(projectID, inst.ID.String()),
+				Labels: labels,
 				Spec: &computev1.InstanceSpec{
 					MachineType: inst.InstanceType,
 					Power:       power,

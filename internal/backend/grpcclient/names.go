@@ -3,11 +3,14 @@ package grpcclient
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net"
 	"net/url"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/popododo0720/vws-console-api/internal/resource"
 )
@@ -300,11 +303,32 @@ func labelName(labels map[string]string) string {
 	return b.String()
 }
 
+// Tags that are valid labels are stored as plain labels, so compute can
+// filter on them. Every other tag (uppercase or punctuation in the key, a
+// "vws-" key, or a value over 63 bytes) goes into one JSON object split across
+// labels vws-tags-00, vws-tags-01, ... in order. JSON never holds a control
+// character, so each chunk is a valid label value.
+const (
+	labelTagChunk  = "vws-tags-"
+	labelMax       = 64
+	labelValueMax  = 63
+	labelReserve   = 6 // internal labels any update may add
+	tagChunkDigits = 2
+)
+
 func userTags(labels map[string]string) map[string]string {
 	if len(labels) == 0 {
 		return nil
 	}
 	out := map[string]string{}
+	var blob strings.Builder
+	for i := 0; ; i++ {
+		part, ok := labels[tagChunkKey(i)]
+		if !ok {
+			break
+		}
+		blob.WriteString(part)
+	}
 	for key, value := range labels {
 		if key == labelNameTag {
 			out[nameTag] = value
@@ -315,25 +339,72 @@ func userTags(labels map[string]string) map[string]string {
 		}
 		out[key] = value
 	}
+	if blob.Len() > 0 {
+		var packed map[string]string
+		if err := json.Unmarshal([]byte(blob.String()), &packed); err == nil {
+			maps.Copy(out, packed)
+		}
+	}
 	if len(out) == 0 {
 		return nil
 	}
 	return out
 }
 
-func withInternalLabels(tags map[string]string, extra map[string]string) map[string]string {
+func tagChunkKey(i int) string {
+	return fmt.Sprintf("%s%0*d", labelTagChunk, tagChunkDigits, i)
+}
+
+// withInternalLabels returns extra plus the encoded tags. It fails only when
+// the tags cannot fit in the labels compute allows.
+func withInternalLabels(tags map[string]string, extra map[string]string) (map[string]string, error) {
 	out := map[string]string{}
-	for key, value := range extra {
-		out[key] = value
-	}
+	maps.Copy(out, extra)
+	packed := map[string]string{}
 	for key, value := range tags {
-		if key == nameTag && labelOK("name", value) {
-			out[labelNameTag] = value
-			continue
-		}
 		if labelOK(key, value) {
 			out[key] = value
+			continue
+		}
+		packed[key] = value
+	}
+	if len(packed) > 0 {
+		raw, err := json.Marshal(packed)
+		if err != nil {
+			return nil, resource.Internal(err)
+		}
+		chunks := splitUTF8(string(raw), labelValueMax)
+		if len(chunks) >= 100 {
+			return nil, tagCapacityErr()
+		}
+		for i, c := range chunks {
+			out[tagChunkKey(i)] = c
 		}
 	}
-	return out
+	reserve := labelReserve
+	if len(extra) > reserve {
+		reserve = len(extra)
+	}
+	if len(out)-len(extra)+reserve > labelMax {
+		return nil, tagCapacityErr()
+	}
+	return out, nil
+}
+
+func tagCapacityErr() error {
+	return resource.Invalid("TagSpecification", "tags exceed what the compute backend can store (64 labels of 63 bytes)")
+}
+
+// splitUTF8 cuts s into pieces of at most n bytes without splitting a rune.
+func splitUTF8(s string, n int) []string {
+	var out []string
+	for len(s) > n {
+		cut := n
+		for cut > 0 && !utf8.RuneStart(s[cut]) {
+			cut--
+		}
+		out = append(out, s[:cut])
+		s = s[cut:]
+	}
+	return append(out, s)
 }

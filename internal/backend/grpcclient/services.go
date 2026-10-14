@@ -67,12 +67,15 @@ func (c computeClient) RunInstances(ctx context.Context, m backend.Mutation, req
 			return resource.Accepted[resource.Instance]{}, err
 		}
 		instID := derivedID("i-", m.Key, "inst", strconv.Itoa(i))
-		labels := withInternalLabels(req.Tags, map[string]string{
+		labels, err := withInternalLabels(req.Tags, map[string]string{
 			labelFingerprint: clip(m.Fingerprint, 63),
 			labelImage:       req.ImageID.String(),
 			labelLaunch:      clip(m.Key, 32),
 			labelReservation: reservation,
 		})
+		if err != nil {
+			return resource.Accepted[resource.Instance]{}, err
+		}
 		created, err := c.instances.CreateInstance(ctx, &computev1.CreateInstanceRequest{
 			Parent:     instanceParent(projectID),
 			InstanceId: instID,
@@ -156,17 +159,21 @@ func (c computeClient) StopInstances(ctx context.Context, m backend.Mutation, re
 		if err != nil {
 			return resource.Accepted[resource.InstanceStateChange]{}, err
 		}
+		labels, err := withInternalLabels(inst.Tags, map[string]string{
+			labelAction:      resource.ActionStopInstances.String(),
+			labelFingerprint: clip(m.Fingerprint, 63),
+			labelImage:       inst.ImageID.String(),
+			labelReservation: inst.ReservationID.String(),
+		})
+		if err != nil {
+			return resource.Accepted[resource.InstanceStateChange]{}, err
+		}
 		updated, err := c.instances.UpdateInstance(ctx, &computev1.UpdateInstanceRequest{
 			RequestId:  requestUUID(m.Key, "stop", strconv.Itoa(i)),
 			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.power", "labels"}},
 			Instance: &computev1.Instance{
-				Name: instanceName(projectID, inst.ID.String()),
-				Labels: withInternalLabels(inst.Tags, map[string]string{
-					labelAction:      resource.ActionStopInstances.String(),
-					labelFingerprint: clip(m.Fingerprint, 63),
-					labelImage:       inst.ImageID.String(),
-					labelReservation: inst.ReservationID.String(),
-				}),
+				Name:   instanceName(projectID, inst.ID.String()),
+				Labels: labels,
 				Spec: &computev1.InstanceSpec{
 					MachineType: inst.InstanceType,
 					Power:       computev1.InstancePower_INSTANCE_POWER_STOPPED,
