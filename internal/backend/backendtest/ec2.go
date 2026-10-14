@@ -248,15 +248,15 @@ func exerciseEC2(ctx context.Context, t *testing.T, set backend.Set, account res
 	}
 
 	keyM := backend.Mutation{Scope: scope, Key: "k-key", Fingerprint: "fp-key"}
-	key, err := set.Compute.CreateKeyPair(ctx, keyM, resource.CreateKeyPairRequest{Name: "admin"})
+	key, err := set.Compute.CreateKeyPair(ctx, keyM, resource.CreateKeyPairRequest{Name: "admin", Type: resource.KeyTypeEd25519})
 	if err != nil || key.Items[0].Name != "admin" || key.Items[0].Material == "" || key.Items[0].Fingerprint == "" {
 		t.Fatalf("key: %v %+v", err, key.Items)
 	}
-	againKey, err := set.Compute.CreateKeyPair(ctx, keyM, resource.CreateKeyPairRequest{Name: "admin"})
+	againKey, err := set.Compute.CreateKeyPair(ctx, keyM, resource.CreateKeyPairRequest{Name: "admin", Type: resource.KeyTypeEd25519})
 	if err != nil || againKey.Items[0].Material != key.Items[0].Material || againKey.Items[0].ID != key.Items[0].ID {
 		t.Fatal("key retry")
 	}
-	if _, err := set.Compute.CreateKeyPair(ctx, backend.Mutation{Scope: scope, Key: "k-key-2", Fingerprint: "fp-key-2"}, resource.CreateKeyPairRequest{Name: "admin"}); resource.CodeOf(err) != resource.CodeAlreadyExists {
+	if _, err := set.Compute.CreateKeyPair(ctx, backend.Mutation{Scope: scope, Key: "k-key-2", Fingerprint: "fp-key-2"}, resource.CreateKeyPairRequest{Name: "admin", Type: resource.KeyTypeEd25519}); resource.CodeOf(err) != resource.CodeAlreadyExists {
 		t.Fatalf("duplicate key: %v", err)
 	}
 

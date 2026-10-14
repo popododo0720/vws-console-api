@@ -195,6 +195,51 @@ def not_found():
         step(f"{name} missing is {code}", lambda code=code, call=call: ec2_error(code, call))
 
 
+def key_launch():
+    """#128: key formats, ImportKeyPair, and a launch with KeyName and UserData."""
+    def made(key_type, header):
+        mat = ec2.create_key_pair(KeyName=f"e2e-{key_type}", KeyType=key_type)["KeyMaterial"]
+        check(mat.startswith(header), f"{key_type} material starts {mat[:40]!r}")
+    step("CreateKeyPair KeyType=rsa is PKCS#1 PEM", lambda: made("rsa", "-----BEGIN RSA PRIVATE KEY-----"))
+    step("CreateKeyPair KeyType=ed25519 is OpenSSH", lambda: made("ed25519", "-----BEGIN OPENSSH PRIVATE KEY-----"))
+    pub = b"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIG417cXtz5jVkH8Cu0D4exQ0iqZ8aXluTLeM0PhuoDH1 e2e@vws\n"
+    step("ImportKeyPair", lambda: check(
+        ec2.import_key_pair(KeyName="e2e-import", PublicKeyMaterial=pub)["KeyName"] == "e2e-import", "import"))
+    step("DescribeKeyPairs KeyType of an imported key", lambda: check(
+        ec2.describe_key_pairs(KeyNames=["e2e-import"])["KeyPairs"][0].get("KeyType") == "ed25519", "key type"))
+    user_data = "#cloud-config\nruncmd:\n  - echo vws > /tmp/vws-user-data\n"
+
+    def launch():
+        return ec2.run_instances(
+            ImageId="ami-0123456789abcdef0", InstanceType="t3.micro", MinCount=1, MaxCount=1,
+            SubnetId=S["subnet"], ClientToken="tok-key", KeyName="e2e-import", UserData=user_data,
+        )["Instances"][0]
+    inst = step("RunInstances KeyName and UserData", launch, "vm")
+    if inst:
+        iid = inst["InstanceId"]
+        step("RunInstances returns KeyName", lambda: check(inst.get("KeyName") == "e2e-import", f"{inst.get('KeyName')}"), "vm")
+        step("DescribeInstances returns KeyName", lambda: check(
+            ec2.describe_instances(InstanceIds=[iid])["Reservations"][0]["Instances"][0].get("KeyName") == "e2e-import", "keyName"), "vm")
+        step("DescribeInstanceAttribute userData", lambda: check(base64.b64decode(
+            ec2.describe_instance_attribute(InstanceId=iid, Attribute="userData")["UserData"]["Value"]).decode() == user_data, "userData"), "vm")
+        step("RunInstances unknown KeyName is InvalidKeyPair.NotFound", lambda: ec2_error("InvalidKeyPair.NotFound", lambda: ec2.run_instances(
+            ImageId="ami-0123456789abcdef0", InstanceType="t3.micro", MinCount=1, MaxCount=1,
+            SubnetId=S["subnet"], ClientToken="tok-nokey", KeyName="e2e-missing")), "vm")
+        step("TerminateInstances keyed instance", lambda: ec2.terminate_instances(InstanceIds=[iid]), "vm")
+
+    def delete_key(name):
+        deadline = time.monotonic() + WAIT_TIMEOUT
+        while True:
+            try:
+                return ec2.delete_key_pair(KeyName=name)
+            except Exception:  # noqa: BLE001 - compute keeps the key while a terminating instance names it
+                if time.monotonic() >= deadline:
+                    raise
+                time.sleep(2)
+    for name in ("e2e-rsa", "e2e-ed25519", "e2e-import"):
+        step(f"DeleteKeyPair {name}", lambda name=name: delete_key(name))
+
+
 def vms():
     S["iid"] = step("RunInstances", lambda: run_instance("tok-1"), "vm")
 
@@ -573,6 +618,7 @@ if __name__ == "__main__":
     network_tags()
     not_found()
     vms()
+    key_launch()
     addresses()
     objects()
     identity()

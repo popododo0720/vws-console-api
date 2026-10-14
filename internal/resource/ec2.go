@@ -364,6 +364,15 @@ func (q ImageQuery) Normalize() (ImageQuery, error) {
 	return q, nil
 }
 
+// KeyType is an EC2 key pair type.
+type KeyType string
+
+// The key types EC2 offers. CreateKeyPair defaults to RSA.
+const (
+	KeyTypeRSA     KeyType = "rsa"
+	KeyTypeEd25519 KeyType = "ed25519"
+)
+
 // KeyPair is an SSH key. Material is set only on the create that minted it.
 type KeyPair struct {
 	ID          KeyPairID `json:"keyPairId"`
@@ -371,6 +380,7 @@ type KeyPair struct {
 	Name        string    `json:"keyName"`
 	Fingerprint string    `json:"keyFingerprint"`
 	Material    string    `json:"keyMaterial,omitempty"`
+	Type        KeyType   `json:"keyType,omitempty"`
 }
 
 // Owner returns the account that owns the key pair.
@@ -379,18 +389,33 @@ func (k KeyPair) Owner() AccountID { return k.OwnerID }
 // Identity returns the key pair id.
 func (k KeyPair) Identity() string { return k.ID.String() }
 
-// CreateKeyPairRequest mints a key pair.
+// CreateKeyPairRequest mints a key pair of Type, or imports PublicKey when it
+// is set. An imported key has no private key to return.
 type CreateKeyPairRequest struct {
-	Name string `json:"keyName"`
+	Name      string  `json:"keyName"`
+	Type      KeyType `json:"keyType,omitempty"`
+	PublicKey string  `json:"publicKeyMaterial,omitempty"`
 }
 
 // Action returns CreateKeyPair.
 func (CreateKeyPairRequest) Action() Action { return ActionCreateKeyPair }
 
-// Normalize checks the name.
+// Normalize checks the name and the type. The backend parses PublicKey,
+// and an import takes its type from the key.
 func (r CreateKeyPairRequest) Normalize() (CreateKeyPairRequest, error) {
 	if r.Name == "" || len(r.Name) > 255 {
 		return CreateKeyPairRequest{}, Invalid("keyName", "malformed")
+	}
+	if r.PublicKey != "" {
+		r.Type = ""
+		return r, nil
+	}
+	switch r.Type {
+	case "":
+		r.Type = KeyTypeRSA
+	case KeyTypeRSA, KeyTypeEd25519:
+	default:
+		return CreateKeyPairRequest{}, Invalid("keyType", "must be rsa or ed25519")
 	}
 	return r, nil
 }

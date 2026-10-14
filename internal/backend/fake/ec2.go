@@ -2,16 +2,11 @@ package fake
 
 import (
 	"context"
-	"crypto/ed25519"
-	"crypto/sha256"
-	"crypto/x509"
-	"encoding/hex"
-	"encoding/pem"
 	"errors"
-	"fmt"
-	"io"
 	"net"
 	"time"
+
+	"github.com/popododo0720/vws-console-api/internal/sshkey"
 
 	"github.com/popododo0720/vws-console-api/internal/backend"
 	"github.com/popododo0720/vws-console-api/internal/resource"
@@ -342,12 +337,19 @@ func (c compute) CreateKeyPair(ctx context.Context, m backend.Mutation, req reso
 	if _, exists := c.w.key[id]; exists {
 		return resource.Accepted[resource.KeyPair]{}, resource.Internal(errors.New("identifier collision"))
 	}
-	material, fingerprint, err := keyMaterial(c.w.entropy)
-	if err != nil {
-		return resource.Accepted[resource.KeyPair]{}, resource.Internal(err)
-	}
-	key := resource.KeyPair{
-		ID: id, OwnerID: m.Account, Name: req.Name, Fingerprint: fingerprint, Material: material,
+	key := resource.KeyPair{ID: id, OwnerID: m.Account, Name: req.Name, Type: req.Type}
+	if req.PublicKey != "" {
+		pub, err := sshkey.ParsePublic(req.PublicKey)
+		if err != nil {
+			return resource.Accepted[resource.KeyPair]{}, resource.Invalid("publicKeyMaterial", err.Error())
+		}
+		key.Fingerprint, key.Type = pub.Fingerprint, pub.Type
+	} else {
+		pair, err := sshkey.Generate(req.Type, c.w.entropy)
+		if err != nil {
+			return resource.Accepted[resource.KeyPair]{}, resource.Internal(err)
+		}
+		key.Fingerprint, key.Material = pair.Fingerprint, pair.Private
 	}
 	op, err := c.w.newOp(m.Account, resource.ServiceCompute, resource.ActionCreateKeyPair, []resource.Ref{id.Ref()}, func(time.Time) {})
 	if err != nil {
@@ -572,22 +574,4 @@ func cidrInside(child, parent string) bool {
 	childOnes, childBits := childNet.Mask.Size()
 	parentOnes, parentBits := parentNet.Mask.Size()
 	return childBits == 32 && parentBits == 32 && childOnes > parentOnes
-}
-
-func keyMaterial(entropy io.Reader) (string, string, error) {
-	_, priv, err := ed25519.GenerateKey(entropy)
-	if err != nil {
-		return "", "", fmt.Errorf("generate key pair: %w", err)
-	}
-	der, err := x509.MarshalPKCS8PrivateKey(priv)
-	if err != nil {
-		return "", "", fmt.Errorf("encode private key: %w", err)
-	}
-	block := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})
-	pub, ok := priv.Public().(ed25519.PublicKey)
-	if !ok {
-		return "", "", errors.New("ed25519 public key")
-	}
-	sum := sha256.Sum256(pub)
-	return string(block), hex.EncodeToString(sum[:]), nil
 }

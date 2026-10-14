@@ -358,7 +358,13 @@ func (h *handler) createKeyPair(w http.ResponseWriter, r *http.Request, c resour
 		writeErr(w, r, err)
 		return
 	}
-	acc, err := h.svc.CreateKeyPair(r.Context(), c, token, resource.CreateKeyPairRequest{Name: r.Form.Get("KeyName")})
+	if f := r.Form.Get("KeyFormat"); f != "" && f != "pem" {
+		writeErr(w, r, resource.Invalid("KeyFormat", "only pem is supported"))
+		return
+	}
+	acc, err := h.svc.CreateKeyPair(r.Context(), c, token, resource.CreateKeyPairRequest{
+		Name: r.Form.Get("KeyName"), Type: resource.KeyType(r.Form.Get("KeyType")),
+	})
 	if err != nil {
 		writeErr(w, r, err)
 		return

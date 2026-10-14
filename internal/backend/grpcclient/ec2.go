@@ -2,13 +2,9 @@ package grpcclient
 
 import (
 	"context"
-	"crypto/ed25519"
 	"crypto/sha256"
-	"crypto/x509"
-	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
-	"encoding/pem"
 	"errors"
 
 	longrunningpb "cloud.google.com/go/longrunning/autogen/longrunningpb"
@@ -22,6 +18,7 @@ import (
 
 	"github.com/popododo0720/vws-console-api/internal/backend"
 	"github.com/popododo0720/vws-console-api/internal/resource"
+	"github.com/popododo0720/vws-console-api/internal/sshkey"
 )
 
 func (c computeClient) StartInstances(ctx context.Context, m backend.Mutation, req resource.StartInstancesRequest) (resource.Accepted[resource.InstanceStateChange], error) {
@@ -374,9 +371,19 @@ func (c computeClient) DescribeImages(ctx context.Context, s backend.Scope, q re
 }
 
 func (c computeClient) CreateKeyPair(ctx context.Context, m backend.Mutation, req resource.CreateKeyPairRequest) (resource.Accepted[resource.KeyPair], error) {
-	privateKey, fingerprint, publicLine, err := derivedKey(m.Key, "key-seed")
-	if err != nil {
-		return resource.Accepted[resource.KeyPair]{}, err
+	var pair sshkey.Pair
+	if req.PublicKey != "" {
+		pub, err := sshkey.ParsePublic(req.PublicKey)
+		if err != nil {
+			return resource.Accepted[resource.KeyPair]{}, resource.Invalid("publicKeyMaterial", err.Error())
+		}
+		pair = sshkey.Pair{Public: pub.Line, Fingerprint: pub.Fingerprint}
+		req.Type = pub.Type
+	} else {
+		var err error
+		if pair, err = derivedKey(req.Type, m.Key, "key-seed"); err != nil {
+			return resource.Accepted[resource.KeyPair]{}, err
+		}
 	}
 	projectID := project(m.Account)
 	labels := nameLabels(req.Name)
@@ -387,7 +394,7 @@ func (c computeClient) CreateKeyPair(ctx context.Context, m backend.Mutation, re
 		RequestId: requestUUID(m.Key, "key"),
 		KeyPair: &computev1.KeyPair{
 			Labels: labels,
-			Spec:   &computev1.KeyPairSpec{PublicKey: publicLine},
+			Spec:   &computev1.KeyPairSpec{PublicKey: pair.Public},
 		},
 	})
 	if err := rpcErr(created, err); err != nil {
@@ -410,7 +417,7 @@ func (c computeClient) CreateKeyPair(ctx context.Context, m backend.Mutation, re
 		return resource.Accepted[resource.KeyPair]{}, err
 	}
 	key := resource.KeyPair{
-		ID: id, OwnerID: owner, Name: req.Name, Fingerprint: fingerprint, Material: privateKey,
+		ID: id, OwnerID: owner, Name: req.Name, Fingerprint: pair.Fingerprint, Material: pair.Private, Type: req.Type,
 	}
 	op.Action = resource.ActionCreateKeyPair
 	op.Targets = []resource.Ref{id.Ref()}
@@ -956,31 +963,36 @@ func protocolName(p networkv1.Protocol) string {
 
 // derivedKey's domain is "key-seed". The key id and the request id use a
 // different domain, so neither published value is the private key.
-func derivedKey(parts ...string) (string, string, string, error) {
-	sum := hashParts(parts...)
-	priv := ed25519.NewKeyFromSeed(sum[:ed25519.SeedSize])
-	der, err := x509.MarshalPKCS8PrivateKey(priv)
+// derivedKey makes the key pair a create with this mutation key returns. A
+// retry derives the same key, so compute sees the same public key and the
+// caller gets back the private key it got the first time.
+func derivedKey(typ resource.KeyType, parts ...string) (sshkey.Pair, error) {
+	pair, err := sshkey.Generate(typ, &seedStream{seed: hashParts(parts...)})
 	if err != nil {
-		return "", "", "", resource.Internal(err)
+		return sshkey.Pair{}, resource.Internal(err)
 	}
-	block := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})
-	pub, ok := priv.Public().(ed25519.PublicKey)
-	if !ok {
-		return "", "", "", resource.Internal(errors.New("ed25519 public key"))
-	}
-	fp := sha256.Sum256(pub)
-	return string(block), hex.EncodeToString(fp[:]), sshEd25519(pub), nil
+	return pair, nil
 }
 
-func sshEd25519(pub ed25519.PublicKey) string {
-	payload := sshString("ssh-ed25519") + sshString(string(pub))
-	return "ssh-ed25519 " + base64.StdEncoding.EncodeToString([]byte(payload))
+// seedStream is SHA-256 in counter mode over seed.
+type seedStream struct {
+	seed [32]byte
+	n    uint64
+	buf  []byte
 }
 
-func sshString(s string) string {
-	var size [4]byte
-	binary.BigEndian.PutUint32(size[:], uint32(len(s)))
-	return string(size[:]) + s
+func (s *seedStream) Read(p []byte) (int, error) {
+	for len(s.buf) < len(p) {
+		var block [40]byte
+		copy(block[:], s.seed[:])
+		binary.BigEndian.PutUint64(block[32:], s.n)
+		s.n++
+		sum := sha256.Sum256(block[:])
+		s.buf = append(s.buf, sum[:]...)
+	}
+	n := copy(p, s.buf)
+	s.buf = s.buf[n:]
+	return n, nil
 }
 
 // storageType maps an EC2 volume type to the storage tier. The storage proto

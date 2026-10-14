@@ -147,7 +147,7 @@ type loopWorld struct {
 	inst      map[string]instSnap
 	sub       map[string]subSnap
 	groups    map[string]resource.SecurityGroup
-	keyFP     map[string]string
+	keyLine   map[string]string
 	opLaunch  map[string]string
 	actions   map[string]string
 	boots     map[string]*storagev1.Volume
@@ -174,7 +174,7 @@ func newLoopWorld(set backend.Set, now time.Time) *loopWorld {
 		vpcCIDR: map[string]string{}, subnetVPC: map[string]string{},
 		inst: map[string]instSnap{}, sub: map[string]subSnap{},
 		groups:   map[string]resource.SecurityGroup{},
-		keyFP:    map[string]string{},
+		keyLine:  map[string]string{},
 		opLaunch: map[string]string{},
 		actions:  map[string]string{},
 		boots:    map[string]*storagev1.Volume{},
@@ -457,11 +457,25 @@ func (s *instanceSrv) CreateInstance(ctx context.Context, req *computev1.CreateI
 	if err != nil {
 		return nil, toStatus(err)
 	}
+	keyName := ""
+	if ref := spec.GetKeyPair(); ref != "" {
+		keyID, err := resource.Parse[resource.KeyPairID](lastSegment(ref))
+		if err != nil {
+			return nil, toStatus(err)
+		}
+		keys, err := s.w.set.Compute.DescribeKeyPairs(ctx, backend.Scope{Account: account}, resource.KeyPairQuery{
+			IDs: []resource.KeyPairID{keyID}, Page: resource.PageRequest{Size: 1},
+		})
+		if err != nil {
+			return nil, toStatus(err)
+		}
+		keyName = keys.Items[0].Name
+	}
 	acc, err := s.w.set.Compute.RunInstances(ctx, backend.Mutation{
 		Scope: backend.Scope{Account: account}, Key: req.GetRequestId(), Fingerprint: fp,
 	}, resource.RunInstancesRequest{
 		ImageID: img, InstanceType: spec.GetMachineType(), SubnetID: subID, Count: 1,
-		Tags: userTags(req.GetInstance().GetLabels()),
+		Tags: userTags(req.GetInstance().GetLabels()), KeyName: keyName, UserData: spec.GetUserData(),
 	})
 	if err != nil {
 		return nil, toStatus(err)

@@ -2,12 +2,7 @@ package grpcclient
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/base64"
-	"encoding/binary"
-	"encoding/hex"
 	"errors"
-	"strings"
 
 	longrunningpb "cloud.google.com/go/longrunning/autogen/longrunningpb"
 	commonv1 "github.com/popododo0720/vws-proto/gen/go/vws/common/v1"
@@ -33,7 +28,7 @@ func (s *keySrv) GetKeyPair(ctx context.Context, req *computev1.GetKeyPairReques
 	if len(page.Items) == 0 {
 		return nil, toStatus(resource.NotFound(resource.KindKeyPair, id.String()))
 	}
-	return keyProto(s.w.withKeyFP(page.Items[0]), projectID), nil
+	return keyProto(page.Items[0], projectID, s.w.keyLineOf(page.Items[0].ID.String())), nil
 }
 
 func (s *keySrv) ListKeyPairs(ctx context.Context, req *computev1.ListKeyPairsRequest) (*computev1.ListKeyPairsResponse, error) {
@@ -49,7 +44,7 @@ func (s *keySrv) ListKeyPairs(ctx context.Context, req *computev1.ListKeyPairsRe
 	}
 	items := make([]*computev1.KeyPair, 0, len(page.Items))
 	for _, key := range page.Items {
-		items = append(items, keyProto(s.w.withKeyFP(key), projectID))
+		items = append(items, keyProto(key, projectID, s.w.keyLineOf(key.ID.String())))
 	}
 	return &computev1.ListKeyPairsResponse{KeyPairs: items, NextPageToken: page.NextToken}, nil
 }
@@ -331,41 +326,16 @@ func (s *snapshotSrv) DeleteSnapshot(ctx context.Context, req *storagev1.DeleteS
 	return runningOp(projectID, acc.Operation, snapshotName(projectID, id.String()), commonv1.OperationVerb_OPERATION_VERB_DELETE, s.w.now)
 }
 
-func (w *loopWorld) rememberKeyFP(id, fp string) {
+func (w *loopWorld) rememberKeyLine(id, line string) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	w.keyFP[id] = fp
+	w.keyLine[id] = line
 }
 
-func (w *loopWorld) withKeyFP(key resource.KeyPair) resource.KeyPair {
+func (w *loopWorld) keyLineOf(id string) string {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if fp, ok := w.keyFP[key.ID.String()]; ok {
-		key.Fingerprint = fp
-	}
-	return key
-}
-
-func fingerprintOfPublicLine(line string) (string, bool) {
-	rest, ok := strings.CutPrefix(line, "ssh-ed25519 ")
-	if !ok {
-		return "", false
-	}
-	raw, err := base64.StdEncoding.DecodeString(rest)
-	if err != nil || len(raw) < 8 {
-		return "", false
-	}
-	kindLen := int(binary.BigEndian.Uint32(raw[:4]))
-	if kindLen < 0 || 4+kindLen+4 > len(raw) {
-		return "", false
-	}
-	body := raw[4+kindLen:]
-	pubLen := int(binary.BigEndian.Uint32(body[:4]))
-	if pubLen < 0 || 4+pubLen > len(body) {
-		return "", false
-	}
-	sum := sha256.Sum256(body[4 : 4+pubLen])
-	return hex.EncodeToString(sum[:]), true
+	return w.keyLine[id]
 }
 
 func (w *loopWorld) groupsIn(vpcID string) []resource.SecurityGroup {
@@ -435,10 +405,11 @@ type encodingText interface {
 	UnmarshalText([]byte) error
 }
 
-func keyProto(key resource.KeyPair, projectID string) *computev1.KeyPair {
+func keyProto(key resource.KeyPair, projectID, line string) *computev1.KeyPair {
 	return &computev1.KeyPair{
 		Name:   keyPairName(projectID, key.ID.String()),
 		Labels: nameLabels(key.Name),
+		Spec:   &computev1.KeyPairSpec{PublicKey: line},
 		Status: &computev1.KeyPairStatus{
 			Observed:          &commonv1.ObservedState{State: commonv1.ReconciliationState_RECONCILIATION_STATE_READY},
 			FingerprintSha256: key.Fingerprint,

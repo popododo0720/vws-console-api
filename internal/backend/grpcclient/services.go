@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"io"
+	"slices"
 	"strconv"
 	"time"
 
@@ -51,6 +52,14 @@ func (c computeClient) RunInstances(ctx context.Context, m backend.Mutation, req
 	if err != nil {
 		return resource.Accepted[resource.Instance]{}, err
 	}
+	keyPair := ""
+	if req.KeyName != "" {
+		key, err := c.findKey(ctx, projectID, resource.DeleteKeyPairRequest{Name: req.KeyName})
+		if err != nil {
+			return resource.Accepted[resource.Instance]{}, err
+		}
+		keyPair = keyPairName(projectID, key.ID.String())
+	}
 	items := make([]resource.Instance, 0, req.Count)
 	var op resource.Operation
 	// One launch is one reservation. A retry with the same key derives the same id.
@@ -85,6 +94,8 @@ func (c computeClient) RunInstances(ctx context.Context, m backend.Mutation, req
 				Spec: &computev1.InstanceSpec{
 					MachineType: req.InstanceType,
 					Power:       computev1.InstancePower_INSTANCE_POWER_RUNNING,
+					KeyPair:     keyPair,
+					UserData:    req.UserData,
 					NetworkInterfaces: []*computev1.NetworkInterface{{
 						DeviceName: "nic0",
 						Subnet:     subnet,
@@ -112,6 +123,7 @@ func (c computeClient) RunInstances(ctx context.Context, m backend.Mutation, req
 		if err != nil {
 			return resource.Accepted[resource.Instance]{}, err
 		}
+		inst.KeyName = req.KeyName
 		items = append(items, inst)
 		if i == 0 {
 			op, err = operationFrom(created, resource.ServiceCompute)
@@ -215,7 +227,11 @@ func (c computeClient) DescribeInstances(ctx context.Context, s backend.Scope, q
 		if !stateWanted(inst.State, q.States) {
 			return resource.Page[resource.Instance]{}, nil
 		}
-		return pageInstances([]resource.Instance{inst}, q.Page)
+		items := []resource.Instance{inst}
+		if err := c.nameKeys(ctx, projectID, items); err != nil {
+			return resource.Page[resource.Instance]{}, err
+		}
+		return pageInstances(items, q.Page)
 	}
 	if len(q.IDs) > 1 {
 		items := make([]resource.Instance, 0, len(q.IDs))
@@ -230,6 +246,9 @@ func (c computeClient) DescribeInstances(ctx context.Context, s backend.Scope, q
 			if stateWanted(inst.State, q.States) {
 				items = append(items, inst)
 			}
+		}
+		if err := c.nameKeys(ctx, projectID, items); err != nil {
+			return resource.Page[resource.Instance]{}, err
 		}
 		return pageInstances(items, q.Page)
 	}
@@ -251,7 +270,33 @@ func (c computeClient) DescribeInstances(ctx context.Context, s backend.Scope, q
 			items = append(items, inst)
 		}
 	}
+	if err := c.nameKeys(ctx, projectID, items); err != nil {
+		return resource.Page[resource.Instance]{}, err
+	}
 	return resource.Page[resource.Instance]{Items: items, NextToken: out.GetNextPageToken()}, nil
+}
+
+// nameKeys fills KeyName from the key pair each instance spec names. Compute
+// refuses to delete a key pair an instance names, so the key is there to read.
+// It lists key pairs only when some instance has one.
+func (c computeClient) nameKeys(ctx context.Context, projectID string, items []resource.Instance) error {
+	if !slices.ContainsFunc(items, func(i resource.Instance) bool { return !i.KeyPairID.IsZero() }) {
+		return nil
+	}
+	keys, err := c.listKeys(ctx, projectID)
+	if err != nil {
+		return err
+	}
+	names := make(map[resource.KeyPairID]string, len(keys))
+	for _, key := range keys {
+		names[key.ID] = key.Name
+	}
+	for i := range items {
+		if !items[i].KeyPairID.IsZero() {
+			items[i].KeyName = names[items[i].KeyPairID]
+		}
+	}
+	return nil
 }
 
 func (c computeClient) GetOperation(ctx context.Context, s backend.Scope, id resource.OperationID) (resource.Operation, error) {
