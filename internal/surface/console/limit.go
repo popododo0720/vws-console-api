@@ -1,11 +1,14 @@
 package console
 
 import (
+	"fmt"
 	"mime"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -73,11 +76,91 @@ func (l *limiter) prune(now time.Time) {
 	}
 }
 
-func clientIP(r *http.Request) string {
-	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
-		return host
+// ParseTrustedProxies parses -trusted-proxies: a comma-separated list of
+// CIDRs (a bare address means a single host). Empty yields nil.
+func ParseTrustedProxies(list string) ([]netip.Prefix, error) {
+	if strings.TrimSpace(list) == "" {
+		return nil, nil
 	}
-	return r.RemoteAddr
+	var out []netip.Prefix
+	for _, raw := range strings.Split(list, ",") {
+		raw = strings.TrimSpace(raw)
+		var p netip.Prefix
+		var err error
+		if strings.Contains(raw, "/") {
+			p, err = netip.ParsePrefix(raw)
+			if err == nil && p != p.Masked() {
+				err = fmt.Errorf("host bits set, did you mean %s", p.Masked())
+			}
+		} else {
+			var a netip.Addr
+			a, err = netip.ParseAddr(raw)
+			p = netip.PrefixFrom(a, a.BitLen())
+		}
+		if err != nil {
+			return nil, fmt.Errorf("trusted proxy %q: %w", raw, err)
+		}
+		out = append(out, p)
+	}
+	return out, nil
+}
+
+// clientIP is the address sign-in limits, lockout and logs key on. It is
+// the TCP peer unless that peer is a trusted proxy; then X-Forwarded-For
+// (every header line, in order) is walked right to left and the first
+// untrusted entry is the client. Entries left of it are client-controlled
+// and never read. If every entry is trusted the leftmost is used (an
+// internal client); if the header is missing or any entry walked is not an
+// IP the peer address is used.
+func (h *handler) clientIP(r *http.Request) string {
+	peer := r.RemoteAddr
+	if host, _, err := net.SplitHostPort(peer); err == nil {
+		peer = host
+	}
+	addr, err := netip.ParseAddr(peer)
+	if err != nil || !h.isTrusted(addr) {
+		return peer
+	}
+	var hops []string
+	for _, line := range r.Header.Values("X-Forwarded-For") {
+		hops = append(hops, strings.Split(line, ",")...)
+	}
+	var last netip.Addr
+	for i := len(hops) - 1; i >= 0; i-- {
+		a, ok := parseHop(hops[i])
+		if !ok {
+			return peer
+		}
+		if !h.isTrusted(a) {
+			return a.String()
+		}
+		last = a
+	}
+	if last.IsValid() {
+		return last.String()
+	}
+	return peer
+}
+
+func (h *handler) isTrusted(a netip.Addr) bool {
+	a = a.Unmap()
+	for _, p := range h.trusted {
+		if p.Contains(a) {
+			return true
+		}
+	}
+	return false
+}
+
+func parseHop(s string) (netip.Addr, bool) {
+	s = strings.TrimSpace(s)
+	if a, err := netip.ParseAddr(s); err == nil {
+		return a.Unmap().WithZone(""), true
+	}
+	if ap, err := netip.ParseAddrPort(s); err == nil {
+		return ap.Addr().Unmap().WithZone(""), true
+	}
+	return netip.Addr{}, false
 }
 
 func retryAfter(w http.ResponseWriter, d time.Duration) {

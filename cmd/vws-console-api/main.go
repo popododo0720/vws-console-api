@@ -57,6 +57,7 @@ func run(ctx context.Context, args []string) (err error) {
 		"fake: in-memory IAM users, groups, roles, policies and STS sessions, lost on restart, until the vws-iam client lands (vws-proto#24)")
 	iamAddr := fs.String("iam-addr", "127.0.0.1:8084", "IAM and STS Query listen address")
 	consoleOrigins := fs.String("console-origins", "", "comma-separated browser origins allowed to sign in and send cookie writes besides the console's own host, such as https://console.vws.example")
+	trustedProxies := fs.String("trusted-proxies", "", "comma-separated CIDRs of L7 proxies in front of the console whose X-Forwarded-For is trusted for the sign-in client address; empty uses the TCP peer")
 	rootPasswordFile := fs.String("root-password-file", "", "file holding the account root's console password (mount it from a Secret); empty disables root console sign-in")
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("flags: %w", err)
@@ -68,6 +69,10 @@ func run(ctx context.Context, args []string) (err error) {
 		}
 	}
 
+	trusted, err := console.ParseTrustedProxies(*trustedProxies)
+	if err != nil {
+		return fmt.Errorf("-trusted-proxies: %w", err)
+	}
 	account, err := resource.Parse[resource.AccountID](*accountRaw)
 	if err != nil {
 		return err
@@ -126,11 +131,12 @@ func run(ctx context.Context, args []string) (err error) {
 	defer stop()
 	return server.Serve(ctx, server.Options{Logger: logger, OpsAddr: *opsAddr, Surfaces: []server.Surface{
 		{Name: "console", Addr: *consoleAddr, Handler: console.New(console.Config{
-			Service: svc,
-			Auth:    console.BearerTokens{*consoleToken: caller},
-			IAM:     auth,
-			Logger:  logger,
-			Origins: splitList(*consoleOrigins),
+			Service:        svc,
+			Auth:           console.BearerTokens{*consoleToken: caller},
+			IAM:            auth,
+			Logger:         logger,
+			Origins:        splitList(*consoleOrigins),
+			TrustedProxies: trusted,
 		})},
 		{Name: "ec2", Addr: *ec2Addr, Handler: ec2query.New(ec2query.Config{Service: svc, Verifier: ec2, Authorizer: auth})},
 		{Name: "s3", Addr: *s3Addr, Handler: s3rest.New(s3rest.Config{Service: svc, Verifier: s3, Authorizer: auth})},

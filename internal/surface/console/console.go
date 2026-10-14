@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/netip"
 	"strconv"
 	"time"
 
@@ -48,6 +49,10 @@ type Config struct {
 	// Origins are browser origins allowed besides the console's own host,
 	// such as https://console.vws.example.
 	Origins []string
+	// TrustedProxies are the peers whose X-Forwarded-For is believed when
+	// resolving the client address for sign-in limits and logs. Empty means
+	// the TCP peer is the client.
+	TrustedProxies []netip.Prefix
 	// Now is the clock for sign-in rate limits. Nil uses time.Now.
 	Now func() time.Time
 }
@@ -62,7 +67,7 @@ func New(cfg Config) http.Handler {
 	if now == nil {
 		now = time.Now
 	}
-	h := &handler{svc: cfg.Service, auth: cfg.Auth, iam: cfg.IAM, log: log, mux: http.NewServeMux(), origins: cfg.Origins, now: now, logins: newLimiter()}
+	h := &handler{svc: cfg.Service, auth: cfg.Auth, iam: cfg.IAM, log: log, mux: http.NewServeMux(), origins: cfg.Origins, trusted: cfg.TrustedProxies, now: now, logins: newLimiter()}
 	h.routes(h.mux)
 	return http.HandlerFunc(h.gate)
 }
@@ -116,6 +121,7 @@ type handler struct {
 	mux      *http.ServeMux
 	patterns []string
 	origins  []string
+	trusted  []netip.Prefix
 	now      func() time.Time
 	logins   *limiter
 }

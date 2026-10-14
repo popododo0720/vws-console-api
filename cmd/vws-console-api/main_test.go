@@ -85,3 +85,10 @@ func TestRootPasswordFileIsValidated(t *testing.T) {
 		t.Errorf("the trailing newline was not dropped: %v", err)
 	}
 }
+
+func TestBadTrustedProxiesIsRejected(t *testing.T) {
+	err := run(t.Context(), []string{"-trusted-proxies=10.0.0.0/33", "-ops-addr="})
+	if err == nil || !strings.Contains(err.Error(), "-trusted-proxies") || !strings.Contains(err.Error(), "10.0.0.0/33") {
+		t.Fatalf("err %v", err)
+	}
+}

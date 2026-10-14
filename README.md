@@ -87,6 +87,29 @@ the console's own host or one listed in `-console-origins` (else `403`). `GET /a
 the caller; `POST /api/v1/auth/logout` ends the session. The bearer
 `-console-token` still acts as the account root until it is retired.
 
+### Behind a proxy: `-trusted-proxies`
+
+Sign-in rate limits, per user+address lockout and the `source_ip` in sign-in
+logs key on the client address. By default that is the TCP peer
+(`RemoteAddr`) and `X-Forwarded-For` is ignored. Behind an L7 proxy or
+ingress every user would then share the proxy's address, making the limit
+global and letting anyone lock root out, so list the proxies' CIDRs:
+
+    -trusted-proxies 10.0.0.0/8,fd00::/8
+
+Only when the TCP peer is inside one of them is `X-Forwarded-For` read (all
+header lines, in order), walked right to left, and the first address that is
+not a trusted proxy taken as the client. Entries left of it are written by
+the client and never used, so a forged leftmost entry changes nothing, and a
+request that reaches the console directly from an untrusted address cannot
+set its own client address at all. If every entry is trusted, the leftmost
+is used (an internal client); if the header is missing or an entry walked is
+not an IP, the TCP peer is used. List only your proxy hops (e.g. the ingress
+controller pods' range), make the proxy append to `X-Forwarded-For`, and do
+not expose the console port past the proxy. A bad CIDR (or one with host
+bits set) stops startup. `Origin` checks compare against the `Host` header
+and `-console-origins`, not the client address, so they are unaffected.
+
 Console sign-in limits for now:
 
 - **Run one replica.** Console sessions (and `-iam=fake` users) live in the

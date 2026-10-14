@@ -9,7 +9,6 @@ import (
 	"errors"
 	"io"
 	"log/slog"
-	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -212,8 +211,9 @@ func (h *handler) login(w http.ResponseWriter, r *http.Request) {
 	if !h.browserWriteOK(w, r) {
 		return
 	}
-	if ok, wait := h.logins.take(clientIP(r), h.now()); !ok {
-		h.log.WarnContext(r.Context(), "console sign-in rate limited", slog.String("source_ip", clientIP(r)))
+	ip := h.clientIP(r)
+	if ok, wait := h.logins.take(ip, h.now()); !ok {
+		h.log.WarnContext(r.Context(), "console sign-in rate limited", slog.String("source_ip", ip))
 		retryAfter(w, wait)
 		writeErr(w, r, &resource.Error{Code: resource.CodeResourceExhausted, Message: "too many sign-in attempts; retry later"})
 		return
@@ -229,10 +229,6 @@ func (h *handler) login(w http.ResponseWriter, r *http.Request) {
 	if err != nil || in.UserName == "" || in.Password == "" || len(in.UserName) > 64 {
 		writeErr(w, r, resource.Invalid("body", "account, userName and password are required"))
 		return
-	}
-	ip := r.RemoteAddr
-	if host, _, err := net.SplitHostPort(ip); err == nil {
-		ip = host
 	}
 	s, err := h.iam.Login(r.Context(), iam.LoginRequest{Account: account, UserName: in.UserName, Password: in.Password, MFACode: in.MFACode, SourceIP: ip})
 	log := h.log.With(slog.String("account", account.String()), slog.String("user", in.UserName), slog.String("source_ip", ip))
