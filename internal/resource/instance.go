@@ -209,6 +209,24 @@ func (q InstanceQuery) Normalize() (InstanceQuery, error) {
 	return q, nil
 }
 
+// InstanceType is one machine type vws-compute runs.
+type InstanceType struct {
+	Name      string `json:"instanceType"`
+	VCPUs     int    `json:"vcpus"`
+	MemoryMiB int    `json:"memoryMiB"`
+}
+
+// InstanceTypes is the vws-compute machine catalog, smallest first.
+// vws-compute has no RPC that lists it; keep it in step with vwsInstanceType.
+func InstanceTypes() []InstanceType {
+	return []InstanceType{
+		{Name: "vws.small", VCPUs: 1, MemoryMiB: 1024},
+		{Name: "vws.medium", VCPUs: 2, MemoryMiB: 4096},
+		{Name: "vws.large", VCPUs: 4, MemoryMiB: 8192},
+		{Name: "vws.xlarge", VCPUs: 8, MemoryMiB: 16384},
+	}
+}
+
 // vwsInstanceType maps an EC2 instance type to the vws-compute machine type
 // nearest by vCPU and memory. vws-compute accepts only vws.small (1 vCPU,
 // 1 GiB), vws.medium (2, 4 GiB), vws.large (4, 8 GiB), and vws.xlarge
