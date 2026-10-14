@@ -205,7 +205,7 @@ func (x *Instance) GetDeleteTime() *timestamppb.Timestamp {
 // - key_pair, when set, is in the region that contains the instance zone
 type InstanceSpec struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Catalog name such as "n1.medium". Grammar: [a-z]([a-z0-9.-]{0,61}[a-z0-9])?
+	// Catalog name: vws.small, vws.medium, vws.large, or vws.xlarge. Grammar: [a-z]([a-z0-9.-]{0,61}[a-z0-9])?
 	MachineType string `protobuf:"bytes,1,opt,name=machine_type,json=machineType,proto3" json:"machine_type,omitempty"`
 	// RUNNING or STOPPED. The node starts or stops the machine to match.
 	Power InstancePower `protobuf:"varint,2,opt,name=power,proto3,enum=vws.compute.v1.InstancePower" json:"power,omitempty"`
@@ -1085,11 +1085,11 @@ const file_vws_compute_v1_instance_proto_rawDesc = "" +
 	"\x12vws.storage/VolumeR\x06volume\x12$\n" +
 	"\vdevice_name\x18\x02 \x01(\tB\x03\xe0A\x02R\n" +
 	"deviceName\x12\x12\n" +
-	"\x04boot\x18\x03 \x01(\bR\x04boot\"\xd8\x01\n" +
+	"\x04boot\x18\x03 \x01(\bR\x04boot\"\xed\x01\n" +
 	"\x0eInstanceStatus\x128\n" +
 	"\bobserved\x18\x01 \x01(\v2\x1c.vws.common.v1.ObservedStateR\bobserved\x123\n" +
 	"\x05power\x18\x02 \x01(\x0e2\x1d.vws.compute.v1.InstancePowerR\x05power\x12W\n" +
-	"\x12network_interfaces\x18\x03 \x03(\v2(.vws.compute.v1.ObservedNetworkInterfaceR\x11networkInterfaces\"\x97\x01\n" +
+	"\x12network_interfaces\x18\x03 \x03(\v2(.vws.compute.v1.ObservedNetworkInterfaceR\x11networkInterfacesJ\x04\b\x04\x10\x05R\rassigned_node\"\x97\x01\n" +
 	"\x18ObservedNetworkInterface\x12\x1f\n" +
 	"\vdevice_name\x18\x01 \x01(\tR\n" +
 	"deviceName\x12\x16\n" +

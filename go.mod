@@ -6,7 +6,7 @@ toolchain go1.26.9
 
 require (
 	cloud.google.com/go/longrunning v1.3.0
-	github.com/popododo0720/vws-proto v0.0.0
+	github.com/popododo0720/vws-proto v0.3.0
 	golang.org/x/crypto v0.57.0
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260928230214-8a89bd6388cc
 	google.golang.org/grpc v1.84.0
