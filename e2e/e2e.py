@@ -88,7 +88,9 @@ def wait_state(iid, want, timeout=WAIT_TIMEOUT):
 def run_instance(token):
     return ec2.run_instances(
         ImageId="ami-0123456789abcdef0", InstanceType="t3.micro", MinCount=1, MaxCount=1,
-        SubnetId=S["subnet"], ClientToken=token)["Instances"][0]["InstanceId"]
+        SubnetId=S["subnet"], ClientToken=token,
+        TagSpecifications=[{"ResourceType": "instance", "Tags": [{"Key": "Name", "Value": "e2e-web"}]}],
+    )["Instances"][0]["InstanceId"]
 
 
 def network():
@@ -169,6 +171,12 @@ def vms():
     if S["iid"]:
         step("RunInstances same token", same_instance, "vm")
         step("DescribeInstances", lambda: check(ec2.describe_instances()["Reservations"], "no reservation"), "vm")
+
+        def described_tags():
+            res = ec2.describe_instances(InstanceIds=[S["iid"]])["Reservations"][0]
+            tags = {t["Key"]: t["Value"] for t in res["Instances"][0].get("Tags", [])}
+            check(tags.get("Name") == "e2e-web" and res.get("OwnerId"), f"reservation {res}")
+        step("DescribeInstances returns the Name tag and OwnerId", described_tags, "vm")
         step("wait for running after RunInstances", lambda: wait_state(S["iid"], "running"), "vm")
         step("StopInstances without ClientToken", lambda: check(
             ec2.stop_instances(InstanceIds=[S["iid"]])["StoppingInstances"], "empty"), "vm")
