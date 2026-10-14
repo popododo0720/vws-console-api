@@ -225,6 +225,24 @@ def objects():
     step("S3 Overwrite", lambda: s3.put_object(Bucket=b, Key="a/k", Body=b"world!"))
     step("S3 GetObject after overwrite", lambda: get("a/k", b"world!"))
 
+    def checksum_mode(op, call):
+        # Raw header instead of ChecksumMode=, and the raw response header
+        # instead of ChecksumSHA256, so older botocore releases work too.
+        def add(request, **_):
+            # Newer botocore already sets it on GetObject; headers append.
+            del request.headers["x-amz-checksum-mode"]
+            request.headers["x-amz-checksum-mode"] = "ENABLED"
+        event = f"before-sign.s3.{op}"
+        s3.meta.events.register_first(event, add)
+        try:
+            got = call(Bucket=b, Key="a/k")["ResponseMetadata"]["HTTPHeaders"]
+        finally:
+            s3.meta.events.unregister(event, add)
+        want = "cR6WCTOekrA93AohGCfbpCHzj57YudgG4f/djBX/oD0="  # base64(sha256(b"world!"))
+        check(got.get("x-amz-checksum-sha256") == want, f"x-amz-checksum-sha256 {got.get('x-amz-checksum-sha256')!r} != {want!r}")
+    step("S3 HeadObject x-amz-checksum-mode ENABLED returns SHA-256", lambda: checksum_mode("HeadObject", s3.head_object))
+    step("S3 GetObject x-amz-checksum-mode ENABLED returns SHA-256", lambda: checksum_mode("GetObject", s3.get_object))
+
     def missing(code, status, call):
         try:
             call()

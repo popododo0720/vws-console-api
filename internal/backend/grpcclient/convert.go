@@ -487,7 +487,7 @@ func objectProto(o resource.Object, projectID string) *storagev1.Object {
 	out := &storagev1.Object{
 		Name: objectName(projectID, o.Bucket.String(), o.Key.String()),
 		Etag: o.ETag,
-		Spec: &storagev1.ObjectSpec{ContentType: o.ContentType},
+		Spec: &storagev1.ObjectSpec{ContentType: o.ContentType, Sha256: o.SHA256},
 		Status: &storagev1.ObjectStatus{
 			Md5:       strings.Trim(o.ETag, `"`),
 			Observed:  &commonv1.ObservedState{State: commonv1.ReconciliationState_RECONCILIATION_STATE_READY},
@@ -544,7 +544,7 @@ func objectModel(in *storagev1.Object) (resource.Object, error) {
 	return resource.Object{
 		Bucket: bucket, Key: key, OwnerID: owner,
 		Size: in.GetStatus().GetSizeBytes(), ETag: s3ETag(in.GetStatus().GetMd5()), ContentType: in.GetSpec().GetContentType(),
-		LastModified: modified,
+		LastModified: modified, SHA256: in.GetSpec().GetSha256(),
 	}, nil
 }
 
