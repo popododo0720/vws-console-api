@@ -278,6 +278,24 @@ type Page[T any] struct {
 	NextToken string `json:"nextPageToken,omitempty"`
 }
 
+// MarshalJSON writes an empty page as "items":[] rather than null.
+func (p Page[T]) MarshalJSON() ([]byte, error) {
+	type wire Page[T]
+	if p.Items == nil {
+		p.Items = []T{}
+	}
+	return marshalJSON(wire(p))
+}
+
+// MarshalJSON writes no items as "items":[] rather than null.
+func (a Accepted[T]) MarshalJSON() ([]byte, error) {
+	type wire Accepted[T]
+	if a.Items == nil {
+		a.Items = []T{}
+	}
+	return marshalJSON(wire(a))
+}
+
 // PageRequest is a normalized page size and token.
 type PageRequest struct {
 	Size  int    `json:"pageSize,omitempty"`
