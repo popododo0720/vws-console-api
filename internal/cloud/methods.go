@@ -147,7 +147,14 @@ func (s *Service) DescribeSnapshots(ctx context.Context, c resource.Caller, q re
 
 // DescribeInstances lists instances the caller owns.
 func (s *Service) DescribeInstances(ctx context.Context, c resource.Caller, q resource.InstanceQuery) (resource.Page[resource.Instance], error) {
-	return readPage(ctx, c, q, s.backends.Compute.DescribeInstances)
+	page, err := readPage(ctx, c, q, s.backends.Compute.DescribeInstances)
+	if err != nil || len(page.Items) == 0 {
+		return page, err
+	}
+	if err := s.fillPublicIPs(ctx, c, page.Items); err != nil {
+		return resource.Page[resource.Instance]{}, err
+	}
+	return page, nil
 }
 
 // GetComputeOperation reads an operation the compute service owns.

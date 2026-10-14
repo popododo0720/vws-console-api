@@ -272,9 +272,20 @@ def associate():
         got = ec2.describe_addresses(AllocationIds=[alloc])["Addresses"][0]
         check(got.get("InstanceId") == S["iid"] and got.get("AssociationId") == S["assoc"], f"address {got}")
     step("DescribeAddresses shows the association", described, need)
+
+    def instance_public_ip():
+        ip = ec2.describe_addresses(AllocationIds=[alloc])["Addresses"][0]["PublicIp"]
+        inst = ec2.describe_instances(InstanceIds=[S["iid"]])["Reservations"][0]["Instances"][0]
+        nic = (inst.get("NetworkInterfaces") or [{}])[0]
+        check(inst.get("PublicIpAddress") == ip and nic.get("Association", {}).get("PublicIp") == ip, f"instance {inst}")
+        check(console_get(f"/api/v1/instances/{S['iid']}").get("publicIpAddress") == ip, "console publicIpAddress")
+    step("DescribeInstances and the console show the elastic IP", instance_public_ip, need)
     step("DisassociateAddress", lambda: ec2.disassociate_address(AssociationId=S["assoc"]), need)
     step("DescribeAddresses after DisassociateAddress", lambda: check(
         "InstanceId" not in ec2.describe_addresses(AllocationIds=[alloc])["Addresses"][0], "still associated"), need)
+    step("DescribeInstances has no public IP after DisassociateAddress", lambda: check(
+        "PublicIpAddress" not in ec2.describe_instances(InstanceIds=[S["iid"]])["Reservations"][0]["Instances"][0],
+        "public ip kept"), need)
     step("DisassociateAddress again is InvalidAssociationID.NotFound", lambda: ec2_error(
         "InvalidAssociationID.NotFound", lambda: ec2.disassociate_address(AssociationId=S["assoc"])), need)
     step("ReleaseAddress after DisassociateAddress", lambda: ec2.release_address(AllocationId=alloc), need)

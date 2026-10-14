@@ -95,18 +95,22 @@ func (s InstanceState) EC2Code() int {
 
 // Instance is a virtual machine.
 type Instance struct {
-	ID            InstanceID        `json:"instanceId"`
-	ReservationID ReservationID     `json:"reservationId"`
-	OwnerID       AccountID         `json:"ownerId"`
-	State         InstanceState     `json:"state"`
-	ImageID       ImageID           `json:"imageId"`
-	InstanceType  string            `json:"instanceType"`
-	SubnetID      SubnetID          `json:"subnetId"`
-	VpcID         VpcID             `json:"vpcId,omitzero"`
-	Zone          string            `json:"availabilityZone"`
-	LaunchTime    time.Time         `json:"launchTime,omitzero"`
-	PrivateIP     string            `json:"privateIpAddress,omitempty"`
-	Tags          map[string]string `json:"tags,omitempty"`
+	ID            InstanceID    `json:"instanceId"`
+	ReservationID ReservationID `json:"reservationId"`
+	OwnerID       AccountID     `json:"ownerId"`
+	State         InstanceState `json:"state"`
+	ImageID       ImageID       `json:"imageId"`
+	InstanceType  string        `json:"instanceType"`
+	SubnetID      SubnetID      `json:"subnetId"`
+	VpcID         VpcID         `json:"vpcId,omitzero"`
+	Zone          string        `json:"availabilityZone"`
+	LaunchTime    time.Time     `json:"launchTime,omitzero"`
+	// PublicIP and PublicIPAllocationID come from the elastic IP associated
+	// with the instance. Both are empty when there is none.
+	PublicIP             string            `json:"publicIpAddress,omitempty"`
+	PublicIPAllocationID AddressID         `json:"publicIpAllocationId,omitzero"`
+	PrivateIP            string            `json:"privateIpAddress,omitempty"`
+	Tags                 map[string]string `json:"tags,omitempty"`
 }
 
 // Owner returns the account that owns the instance.
