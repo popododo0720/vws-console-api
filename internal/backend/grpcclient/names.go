@@ -19,7 +19,13 @@ const (
 	labelAction      = "vws-action"
 	labelReservation = "vws-reservation"
 	labelLaunch      = "vws-launch"
+	// labelNameTag carries the EC2 Name tag. Label keys are lowercase, so the
+	// key "Name" cannot be stored as is.
+	labelNameTag = "vws-name"
 )
+
+// nameTag is the EC2 tag the console shows as the resource name.
+const nameTag = "Name"
 
 const labelPrefix = "vws-"
 
@@ -300,6 +306,10 @@ func userTags(labels map[string]string) map[string]string {
 	}
 	out := map[string]string{}
 	for key, value := range labels {
+		if key == labelNameTag {
+			out[nameTag] = value
+			continue
+		}
 		if strings.HasPrefix(key, labelPrefix) {
 			continue
 		}
@@ -317,6 +327,10 @@ func withInternalLabels(tags map[string]string, extra map[string]string) map[str
 		out[key] = value
 	}
 	for key, value := range tags {
+		if key == nameTag && labelOK("name", value) {
+			out[labelNameTag] = value
+			continue
+		}
 		if labelOK(key, value) {
 			out[key] = value
 		}
