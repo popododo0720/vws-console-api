@@ -42,10 +42,33 @@ type instanceItem struct {
 	SubnetID     string   `xml:"subnetId"`
 	VpcID        string   `xml:"vpcId,omitempty"`
 	LaunchTime   string   `xml:"launchTime,omitempty"`
+	PublicIP     string   `xml:"ipAddress,omitempty"`
+	NICs         *nicSet  `xml:"networkInterfaceSet,omitempty"`
 	Zone         string   `xml:"placement>availabilityZone"`
 	PrivateIP    string   `xml:"privateIpAddress,omitempty"`
 	State        stateXML `xml:"instanceState"`
 	Tags         *tagSet  `xml:"tagSet,omitempty"`
+}
+
+type nicSet struct {
+	Items []nicItem `xml:"item"`
+}
+
+// nicItem is the instance's one network interface. VWS has no separate
+// interface id, so only the fields the console reads are set.
+type nicItem struct {
+	SubnetID    string          `xml:"subnetId,omitempty"`
+	VpcID       string          `xml:"vpcId,omitempty"`
+	OwnerID     string          `xml:"ownerId,omitempty"`
+	PrivateIP   string          `xml:"privateIpAddress,omitempty"`
+	Association *nicAssociation `xml:"association,omitempty"`
+}
+
+type nicAssociation struct {
+	PublicIP      string `xml:"publicIp"`
+	IPOwnerID     string `xml:"ipOwnerId,omitempty"`
+	AllocationID  string `xml:"allocationId,omitempty"`
+	AssociationID string `xml:"associationId,omitempty"`
 }
 
 type tagSet struct {
@@ -427,6 +450,8 @@ func instanceItems(items []resource.Instance) instanceSet {
 			PrivateIP:    inst.PrivateIP,
 			VpcID:        inst.VpcID.String(),
 			LaunchTime:   launchTimeXML(inst.LaunchTime),
+			PublicIP:     inst.PublicIP,
+			NICs:         nicSetOf(inst),
 			State:        stateXMLOf(inst.State),
 			Tags:         tagSetOf(inst.Tags),
 		})
@@ -535,4 +560,20 @@ func launchTimeXML(t time.Time) string {
 		return ""
 	}
 	return t.UTC().Format("2006-01-02T15:04:05.000Z")
+}
+
+// nicSetOf is the instance's network interface with its elastic IP, if any.
+func nicSetOf(inst resource.Instance) *nicSet {
+	nic := nicItem{
+		SubnetID: inst.SubnetID.String(), VpcID: inst.VpcID.String(),
+		OwnerID: inst.OwnerID.String(), PrivateIP: inst.PrivateIP,
+	}
+	if inst.PublicIP != "" {
+		nic.Association = &nicAssociation{
+			PublicIP: inst.PublicIP, IPOwnerID: inst.OwnerID.String(),
+			AllocationID:  inst.PublicIPAllocationID.String(),
+			AssociationID: resource.AssociationID(inst.PublicIPAllocationID),
+		}
+	}
+	return &nicSet{Items: []nicItem{nic}}
 }
