@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"maps"
 	"strings"
 	"testing"
 
@@ -45,6 +46,7 @@ func Run(t *testing.T, newSet Harness) {
 	if _, err := set.Network.GetOperation(ctx, backend.Scope{Account: account}, created.Operation.ID); err != nil {
 		t.Fatal(err)
 	}
+	networkTags(t, set, account)
 	req := resource.RunInstancesRequest{
 		ImageID: img, InstanceType: "vws.small", SubnetID: created.Items[0].ID, Count: 1,
 		Tags: map[string]string{"Name": "web-1", "env": "dev"},
@@ -303,4 +305,66 @@ func Run(t *testing.T, newSet Harness) {
 	}
 	exerciseObjectList(ctx, t, set, account, other)
 	exerciseEC2(ctx, t, set, account, first.Items[0].ID)
+}
+
+// networkTags checks that VPC and subnet tags survive create, describe, and a
+// CreateTags merge, including tags that are not valid backend labels.
+func networkTags(t *testing.T, set backend.Set, account resource.AccountID) {
+	t.Helper()
+	ctx := context.Background()
+	scope := backend.Scope{Account: account}
+	odd := map[string]string{"Name": "net-1", "Cost Center": "42", "env": "dev"}
+	vpc, err := set.Network.CreateVpc(ctx, backend.Mutation{Scope: scope, Key: "k-tvpc", Fingerprint: "fp-tvpc"},
+		resource.CreateVpcRequest{Cidr: "10.40.0.0/16", Tags: odd})
+	if err != nil {
+		t.Fatal(err)
+	}
+	vpcID := vpc.Items[0].ID
+	sub, err := set.Network.CreateSubnet(ctx, backend.Mutation{Scope: scope, Key: "k-tsub", Fingerprint: "fp-tsub"},
+		resource.CreateSubnetRequest{Cidr: "10.40.1.0/24", VpcID: vpcID, Tags: odd})
+	if err != nil {
+		t.Fatal(err)
+	}
+	subID := sub.Items[0].ID
+	vpcTags := func() map[string]string {
+		page, err := set.Network.DescribeVpcs(ctx, scope, resource.VpcQuery{IDs: []resource.VpcID{vpcID}, Page: resource.PageRequest{Size: 5}})
+		if err != nil || len(page.Items) != 1 {
+			t.Fatalf("describe vpc: %v %+v", err, page.Items)
+		}
+		return page.Items[0].Tags
+	}
+	subTags := func() map[string]string {
+		page, err := set.Network.DescribeSubnets(ctx, scope, resource.SubnetQuery{IDs: []resource.SubnetID{subID}, Page: resource.PageRequest{Size: 5}})
+		if err != nil || len(page.Items) != 1 {
+			t.Fatalf("describe subnet: %v %+v", err, page.Items)
+		}
+		return page.Items[0].Tags
+	}
+	if got := vpcTags(); !maps.Equal(got, odd) {
+		t.Fatalf("vpc tags %v", got)
+	}
+	if got := subTags(); !maps.Equal(got, odd) {
+		t.Fatalf("subnet tags %v", got)
+	}
+	add := map[string]string{"Name": "net-2", "Owner Team": "SRE"}
+	want := map[string]string{"Name": "net-2", "Cost Center": "42", "env": "dev", "Owner Team": "SRE"}
+	tv, err := set.Network.TagVpcs(ctx, backend.Mutation{Scope: scope, Key: "k-tagvpc", Fingerprint: "fp-tagvpc"},
+		resource.TagVpcsRequest{IDs: []resource.VpcID{vpcID}, Tags: add})
+	if err != nil || tv.Operation.Action != resource.ActionCreateTags {
+		t.Fatalf("TagVpcs: %v %+v", err, tv.Operation)
+	}
+	ts, err := set.Network.TagSubnets(ctx, backend.Mutation{Scope: scope, Key: "k-tagsub", Fingerprint: "fp-tagsub"},
+		resource.TagSubnetsRequest{IDs: []resource.SubnetID{subID}, Tags: add})
+	if err != nil || ts.Operation.Action != resource.ActionCreateTags {
+		t.Fatalf("TagSubnets: %v %+v", err, ts.Operation)
+	}
+	if got := vpcTags(); !maps.Equal(got, want) {
+		t.Fatalf("vpc tags after CreateTags %v", got)
+	}
+	if got := subTags(); !maps.Equal(got, want) {
+		t.Fatalf("subnet tags after CreateTags %v", got)
+	}
+	if op, err := set.Network.GetOperation(ctx, scope, tv.Operation.ID); err != nil || op.Action != resource.ActionCreateTags {
+		t.Fatalf("tag operation: %v %+v", err, op)
+	}
 }

@@ -14,7 +14,8 @@ type Vpc struct {
 	Cidr    string    `json:"cidrBlock"`
 	State   string    `json:"state"`
 	// IsDefault is always false: VWS has no default VPC.
-	IsDefault bool `json:"isDefault"`
+	IsDefault bool              `json:"isDefault"`
+	Tags      map[string]string `json:"tags,omitempty"`
 }
 
 // Owner returns the account that owns the VPC.
@@ -25,7 +26,8 @@ func (v Vpc) Identity() string { return v.ID.String() }
 
 // CreateVpcRequest allocates a VPC.
 type CreateVpcRequest struct {
-	Cidr string `json:"cidrBlock"`
+	Cidr string            `json:"cidrBlock"`
+	Tags map[string]string `json:"tags,omitempty"`
 }
 
 // Action returns CreateVpc.
@@ -38,6 +40,9 @@ func (r CreateVpcRequest) Normalize() (CreateVpcRequest, error) {
 		return CreateVpcRequest{}, err
 	}
 	r.Cidr = cidr
+	if err := validTags(r.Tags); err != nil {
+		return CreateVpcRequest{}, err
+	}
 	return r, nil
 }
 

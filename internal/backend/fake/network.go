@@ -52,6 +52,7 @@ func (n network) CreateSubnet(ctx context.Context, m backend.Mutation, req resou
 		Cidr:    req.Cidr,
 		State:   resource.SubnetPending,
 		Zone:    resource.ZoneName,
+		Tags:    copyTags(req.Tags),
 	}
 	op, err := n.w.newOp(m.Account, resource.ServiceNetwork, resource.ActionCreateSubnet, []resource.Ref{id.Ref()}, func(time.Time) {
 		if cur := n.w.sub[id]; cur != nil && cur.State == resource.SubnetPending {
@@ -62,6 +63,7 @@ func (n network) CreateSubnet(ctx context.Context, m backend.Mutation, req resou
 		return resource.Accepted[resource.Subnet]{}, err
 	}
 	stored := sub
+	stored.Tags = copyTags(sub.Tags)
 	n.w.sub[id] = &stored
 	acc := resource.Accepted[resource.Subnet]{Operation: op, Items: []resource.Subnet{sub}}
 	n.w.finish(m.Key, m.Fingerprint, acc)

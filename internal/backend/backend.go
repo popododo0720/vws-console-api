@@ -81,6 +81,8 @@ type Network interface {
 	CreateVpc(ctx context.Context, m Mutation, req resource.CreateVpcRequest) (resource.Accepted[resource.Vpc], error)
 	DeleteVpc(ctx context.Context, m Mutation, req resource.DeleteVpcRequest) (resource.Accepted[resource.Vpc], error)
 	DescribeVpcs(ctx context.Context, s Scope, q resource.VpcQuery) (resource.Page[resource.Vpc], error)
+	TagVpcs(ctx context.Context, m Mutation, req resource.TagVpcsRequest) (resource.Accepted[resource.Vpc], error)
+	TagSubnets(ctx context.Context, m Mutation, req resource.TagSubnetsRequest) (resource.Accepted[resource.Subnet], error)
 	CreateSecurityGroup(ctx context.Context, m Mutation, req resource.CreateSecurityGroupRequest) (resource.Accepted[resource.SecurityGroup], error)
 	DeleteSecurityGroup(ctx context.Context, m Mutation, req resource.DeleteSecurityGroupRequest) (resource.Accepted[resource.SecurityGroup], error)
 	DescribeSecurityGroups(ctx context.Context, s Scope, q resource.SecurityGroupQuery) (resource.Page[resource.SecurityGroup], error)

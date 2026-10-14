@@ -2,6 +2,8 @@ package ec2query
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/xml"
 	"net/http"
 	"strconv"
@@ -21,7 +23,12 @@ func (h *handler) createVpc(w http.ResponseWriter, r *http.Request, c resource.C
 		writeErr(w, r, resource.Invalid("InstanceTenancy", "unsupported"))
 		return
 	}
-	acc, err := h.svc.CreateVpc(r.Context(), c, token, resource.CreateVpcRequest{Cidr: r.Form.Get("CidrBlock")})
+	tags, err := tagSpecificationsFor(r, "vpc")
+	if err != nil {
+		writeErr(w, r, err)
+		return
+	}
+	acc, err := h.svc.CreateVpc(r.Context(), c, token, resource.CreateVpcRequest{Cidr: r.Form.Get("CidrBlock"), Tags: tags})
 	if err != nil {
 		writeErr(w, r, err)
 		return
@@ -399,26 +406,52 @@ func portValue(raw string) (int, error) {
 	return n, nil
 }
 
-// createTags tags instances. Other resource kinds fail with
-// InvalidParameterValue: only the compute backend stores tags today.
+// createTags tags instances, VPCs and subnets, which may be mixed in one call.
+// Other resource kinds fail with InvalidParameterValue. Each kind is its own
+// backend mutation; with a ClientToken and more than one kind, each kind gets
+// a token derived from the caller's, so a retry replays every part.
 func (h *handler) createTags(w http.ResponseWriter, r *http.Request, c resource.Caller) {
 	token, err := optionalClientToken(r)
 	if err != nil {
 		writeErr(w, r, err)
 		return
 	}
-	var ids []resource.InstanceID
+	var (
+		insts []resource.InstanceID
+		vpcs  []resource.VpcID
+		subs  []resource.SubnetID
+	)
 	for _, raw := range indexedStrings(r, "ResourceId") {
-		if !strings.HasPrefix(raw, "i-") {
-			writeErr(w, r, resource.Invalid("ResourceId", "only instances can be tagged"))
+		switch {
+		case strings.HasPrefix(raw, "i-"):
+			id, err := resource.Parse[resource.InstanceID](raw)
+			if err != nil {
+				writeErr(w, r, err)
+				return
+			}
+			insts = append(insts, id)
+		case strings.HasPrefix(raw, "vpc-"):
+			id, err := resource.Parse[resource.VpcID](raw)
+			if err != nil {
+				writeErr(w, r, err)
+				return
+			}
+			vpcs = append(vpcs, id)
+		case strings.HasPrefix(raw, "subnet-"):
+			id, err := resource.Parse[resource.SubnetID](raw)
+			if err != nil {
+				writeErr(w, r, err)
+				return
+			}
+			subs = append(subs, id)
+		default:
+			writeErr(w, r, resource.Invalid("ResourceId", "only instances, VPCs and subnets can be tagged"))
 			return
 		}
-		id, err := resource.Parse[resource.InstanceID](raw)
-		if err != nil {
-			writeErr(w, r, err)
-			return
-		}
-		ids = append(ids, id)
+	}
+	if len(insts)+len(vpcs)+len(subs) == 0 {
+		writeErr(w, r, resource.Invalid("ResourceId", "required"))
+		return
 	}
 	tags := map[string]string{}
 	for i := 1; i <= 50; i++ {
@@ -433,9 +466,57 @@ func (h *handler) createTags(w http.ResponseWriter, r *http.Request, c resource.
 		}
 		tags[k] = v
 	}
-	if _, err := h.svc.CreateTags(r.Context(), c, token, resource.CreateTagsRequest{IDs: ids, Tags: tags}); err != nil {
-		writeErr(w, r, err)
-		return
+	kinds := 0
+	for _, n := range []int{len(insts), len(vpcs), len(subs)} {
+		if n > 0 {
+			kinds++
+		}
+	}
+	part := func(kind string) (resource.ClientToken, error) {
+		if token.IsZero() || kinds == 1 {
+			return token, nil
+		}
+		return derivedToken(token, kind)
+	}
+	if len(insts) > 0 {
+		t, err := part("instance")
+		if err == nil {
+			_, err = h.svc.CreateTags(r.Context(), c, t, resource.CreateTagsRequest{IDs: insts, Tags: tags})
+		}
+		if err != nil {
+			writeErr(w, r, err)
+			return
+		}
+	}
+	if len(vpcs) > 0 {
+		t, err := part("vpc")
+		if err == nil {
+			_, err = h.svc.TagVpcs(r.Context(), c, t, resource.TagVpcsRequest{IDs: vpcs, Tags: tags})
+		}
+		if err != nil {
+			writeErr(w, r, err)
+			return
+		}
+	}
+	if len(subs) > 0 {
+		t, err := part("subnet")
+		if err == nil {
+			_, err = h.svc.TagSubnets(r.Context(), c, t, resource.TagSubnetsRequest{IDs: subs, Tags: tags})
+		}
+		if err != nil {
+			writeErr(w, r, err)
+			return
+		}
 	}
 	writeXML(w, createTagsXML{RequestID: requestID(r), Return: true})
+}
+
+// derivedToken is a client token for one part of a request that fans out.
+func derivedToken(token resource.ClientToken, part string) (resource.ClientToken, error) {
+	sum := sha256.Sum256([]byte(token.String() + "\x00" + part))
+	out, err := resource.Parse[resource.ClientToken]("t-" + hex.EncodeToString(sum[:16]))
+	if err != nil {
+		return resource.ClientToken{}, resource.Internal(err)
+	}
+	return out, nil
 }

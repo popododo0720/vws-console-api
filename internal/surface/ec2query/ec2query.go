@@ -230,7 +230,12 @@ func (h *handler) createSubnet(w http.ResponseWriter, r *http.Request, c resourc
 			return
 		}
 	}
-	acc, err := h.svc.CreateSubnet(r.Context(), c, token, resource.CreateSubnetRequest{Cidr: r.Form.Get("CidrBlock"), VpcID: vpc, Zone: r.Form.Get("AvailabilityZone")})
+	tags, err := tagSpecificationsFor(r, "subnet")
+	if err != nil {
+		writeErr(w, r, err)
+		return
+	}
+	acc, err := h.svc.CreateSubnet(r.Context(), c, token, resource.CreateSubnetRequest{Cidr: r.Form.Get("CidrBlock"), VpcID: vpc, Zone: r.Form.Get("AvailabilityZone"), Tags: tags})
 	if err != nil {
 		writeErr(w, r, err)
 		return
@@ -383,6 +388,18 @@ func tagSpecifications(r *http.Request) (map[string]string, error) {
 		return nil, nil //nolint:nilnil // A nil map means the request has no tags.
 	}
 	return out, nil
+}
+
+// tagSpecificationsFor reads TagSpecification.N for an action that creates
+// one kind of resource. AWS rejects a specification for any other kind.
+func tagSpecificationsFor(r *http.Request, kind string) (map[string]string, error) {
+	for i := 1; i <= 5; i++ {
+		field := "TagSpecification." + strconv.Itoa(i) + ".ResourceType"
+		if got := r.Form.Get(field); got != "" && got != kind {
+			return nil, resource.Invalid(field, "must be "+kind)
+		}
+	}
+	return tagSpecifications(r)
 }
 
 func instanceQuery(r *http.Request) (resource.InstanceQuery, error) {
@@ -571,11 +588,11 @@ func allowStop(key string) bool {
 }
 
 func allowSubnet(key string) bool {
-	return key == "Action" || key == "Version" || key == "ClientToken" || key == "CidrBlock" || key == "VpcId" || key == "AvailabilityZone"
+	return key == "Action" || key == "Version" || key == "ClientToken" || key == "CidrBlock" || key == "VpcId" || key == "AvailabilityZone" || tagSpecField(key)
 }
 
 func allowCreateVpc(key string) bool {
-	return key == "Action" || key == "Version" || key == "ClientToken" || key == "CidrBlock" || key == "InstanceTenancy"
+	return key == "Action" || key == "Version" || key == "ClientToken" || key == "CidrBlock" || key == "InstanceTenancy" || tagSpecField(key)
 }
 
 func allowDeleteVpc(key string) bool {

@@ -62,7 +62,8 @@ type Subnet struct {
 	Zone    string      `json:"availabilityZone"`
 	// MapPublicIPOnLaunch is always false: VWS assigns public addresses only
 	// through AssociateAddress.
-	MapPublicIPOnLaunch bool `json:"mapPublicIpOnLaunch"`
+	MapPublicIPOnLaunch bool              `json:"mapPublicIpOnLaunch"`
+	Tags                map[string]string `json:"tags,omitempty"`
 }
 
 // Owner returns the account that owns the subnet.
@@ -73,9 +74,10 @@ func (s Subnet) Identity() string { return s.ID.String() }
 
 // CreateSubnetRequest allocates a subnet.
 type CreateSubnetRequest struct {
-	Cidr  string `json:"cidrBlock"`
-	VpcID VpcID  `json:"vpcId,omitzero"`
-	Zone  string `json:"availabilityZone,omitempty"`
+	Cidr  string            `json:"cidrBlock"`
+	VpcID VpcID             `json:"vpcId,omitzero"`
+	Zone  string            `json:"availabilityZone,omitempty"`
+	Tags  map[string]string `json:"tags,omitempty"`
 }
 
 // Action returns CreateSubnet.
@@ -94,6 +96,9 @@ func (r CreateSubnetRequest) Normalize() (CreateSubnetRequest, error) {
 	}
 	if r.Zone != ZoneName {
 		return CreateSubnetRequest{}, Invalid("availabilityZone", "unsupported")
+	}
+	if err := validTags(r.Tags); err != nil {
+		return CreateSubnetRequest{}, err
 	}
 	return r, nil
 }

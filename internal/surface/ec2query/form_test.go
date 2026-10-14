@@ -50,19 +50,23 @@ func TestUnreadQueryFieldsAreRejected(t *testing.T) {
 	vpc.Set("Action", "CreateVpc")
 	vpc.Set("Version", Version)
 	vpc.Set("CidrBlock", "10.1.0.0/16")
-	vpc.Set("TagSpecification.1.ResourceType", "vpc")
-	vpc.Set("TagSpecification.1.Tag.1.Key", "Name")
-	vpc.Set("TagSpecification.1.Tag.1.Value", "web")
+	vpc.Set("AmazonProvidedIpv6CidrBlock", "true")
 	res := signed(t, h, cred, now, vpc.Encode())
 	if res.Code != http.StatusBadRequest || !strings.Contains(res.Body.String(), "InvalidParameterValue") {
-		t.Fatalf("tag spec %d %s", res.Code, res.Body)
+		t.Fatalf("ipv6 %d %s", res.Code, res.Body)
 	}
-	vpc.Del("TagSpecification.1.ResourceType")
-	vpc.Del("TagSpecification.1.Tag.1.Key")
-	vpc.Del("TagSpecification.1.Tag.1.Value")
+	vpc.Del("AmazonProvidedIpv6CidrBlock")
+	vpc.Set("TagSpecification.1.ResourceType", "subnet")
+	vpc.Set("TagSpecification.1.Tag.1.Key", "Name")
+	vpc.Set("TagSpecification.1.Tag.1.Value", "web")
 	res = signed(t, h, cred, now, vpc.Encode())
-	if res.Code != http.StatusOK {
-		t.Fatalf("vpc without tags %d %s", res.Code, res.Body)
+	if res.Code != http.StatusBadRequest || !strings.Contains(res.Body.String(), "must be vpc") {
+		t.Fatalf("tag spec for another kind %d %s", res.Code, res.Body)
+	}
+	vpc.Set("TagSpecification.1.ResourceType", "vpc")
+	res = signed(t, h, cred, now, vpc.Encode())
+	if res.Code != http.StatusOK || !strings.Contains(res.Body.String(), "<tagSet><item><key>Name</key><value>web</value>") {
+		t.Fatalf("vpc with tags %d %s", res.Code, res.Body)
 	}
 	auth := url.Values{}
 	auth.Set("Action", "AuthorizeSecurityGroupIngress")
