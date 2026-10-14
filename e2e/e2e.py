@@ -17,6 +17,8 @@ is not a pass. The run ends with a banner and a status line: PASS, FAIL, or
 INCOMPLETE (nothing failed, something was skipped). The exit code is 1 on any
 failure, 3 on a skip under VWS_E2E_STRICT, and 0 otherwise.
 """
+import base64
+import hashlib
 import os
 import sys
 import time
@@ -289,6 +291,25 @@ def objects():
         step(f"S3 PutObject If-None-Match * existing key ({body!r}) is 412", lambda body=body: missing(
             "PreconditionFailed", 412, lambda: put_once(body)))
     step("S3 GetObject after refused put", lambda: get("once", b"1"))
+
+    def put_sha256(key, body, checksum):
+        # Raw header, like put_once: ChecksumSHA256= needs a botocore that
+        # knows flexible checksums, and newer ones also add their own CRC32.
+        def add(request, **_):
+            request.headers["x-amz-checksum-sha256"] = checksum
+        s3.meta.events.register_first("before-sign.s3.PutObject", add)
+        try:
+            return s3.put_object(Bucket=b, Key=key, Body=body)
+        finally:
+            s3.meta.events.unregister("before-sign.s3.PutObject", add)
+    hello_sha256 = base64.b64encode(hashlib.sha256(b"hello").digest()).decode()
+    empty_sha256 = base64.b64encode(hashlib.sha256(b"").digest()).decode()
+    step("S3 PutObject wrong x-amz-checksum-sha256 is BadDigest", lambda: missing(
+        "BadDigest", 400, lambda: put_sha256("bad", b"hello", empty_sha256)))
+    step("S3 GetObject after BadDigest is NoSuchKey", lambda: missing(
+        "NoSuchKey", 404, lambda: s3.get_object(Bucket=b, Key="bad")))
+    step("S3 PutObject matching x-amz-checksum-sha256", lambda: put_sha256("sha", b"hello", hello_sha256))
+    step("S3 DeleteObject sha", lambda: s3.delete_object(Bucket=b, Key="sha"))
     step("S3 DeleteObject once", lambda: s3.delete_object(Bucket=b, Key="once"))
     step("S3 DeleteObject", lambda: s3.delete_object(Bucket=b, Key="top"))
     for key in ("a/k", "a/j"):
