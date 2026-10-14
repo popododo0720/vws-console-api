@@ -47,6 +47,9 @@ func New(cfg Config) http.Handler {
 		mux.HandleFunc(method+" "+pattern, handle)
 	}
 	mux.HandleFunc("GET /api/v1/instances", h.listInstances)
+	mux.HandleFunc("POST /api/v1/instances/stop", h.stopInstances)
+	mux.HandleFunc("POST /api/v1/instances/start", h.startInstances)
+	mux.HandleFunc("POST /api/v1/instances/terminate", h.terminateInstances)
 	mux.HandleFunc("GET /api/v1/instances/{id}", h.getInstance)
 	mux.HandleFunc("GET /api/v1/operations/{id}", h.getOperation)
 	mux.HandleFunc("GET /api/v1/subnets", h.listSubnets)
@@ -562,4 +565,61 @@ func statusOf(c resource.Code) int {
 	default:
 		return http.StatusInternalServerError
 	}
+}
+
+// The batch routes take {"instanceIds":[...]} and act on all of them in one
+// operation, as StopInstances, StartInstances and TerminateInstances do.
+
+func (h *handler) stopInstances(w http.ResponseWriter, r *http.Request) {
+	c, token, ok := h.begin(w, r)
+	if !ok {
+		return
+	}
+	var req resource.StopInstancesRequest
+	if err := decode(w, r, &req); err != nil {
+		writeErr(w, r, err)
+		return
+	}
+	acc, err := h.svc.StopInstances(r.Context(), c, token, req)
+	if err != nil {
+		writeErr(w, r, err)
+		return
+	}
+	writeAccepted(w, acc)
+}
+
+func (h *handler) startInstances(w http.ResponseWriter, r *http.Request) {
+	c, token, ok := h.begin(w, r)
+	if !ok {
+		return
+	}
+	var req resource.StartInstancesRequest
+	if err := decode(w, r, &req); err != nil {
+		writeErr(w, r, err)
+		return
+	}
+	acc, err := h.svc.StartInstances(r.Context(), c, token, req)
+	if err != nil {
+		writeErr(w, r, err)
+		return
+	}
+	writeAccepted(w, acc)
+}
+
+func (h *handler) terminateInstances(w http.ResponseWriter, r *http.Request) {
+	c, token, ok := h.begin(w, r)
+	if !ok {
+		return
+	}
+	var req resource.TerminateInstancesRequest
+	if err := decode(w, r, &req); err != nil {
+		writeErr(w, r, err)
+		return
+	}
+	acc, err := h.svc.TerminateInstances(r.Context(), c, token, req)
+	if err != nil {
+		writeErr(w, r, err)
+		return
+	}
+	writeAccepted(w, acc)
 }
