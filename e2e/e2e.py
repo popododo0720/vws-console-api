@@ -19,9 +19,11 @@ failure, 3 on a skip under VWS_E2E_STRICT, and 0 otherwise.
 """
 import base64
 import hashlib
+import json
 import os
 import sys
 import time
+import urllib.request
 
 import boto3
 from botocore.config import Config
@@ -177,6 +179,7 @@ def vms():
             tags = {t["Key"]: t["Value"] for t in res["Instances"][0].get("Tags", [])}
             check(tags.get("Name") == "e2e-web" and res.get("OwnerId"), f"reservation {res}")
         step("DescribeInstances returns the Name tag and OwnerId", described_tags, "vm")
+        tagged()
         step("wait for running after RunInstances", lambda: wait_state(S["iid"], "running"), "vm")
         step("DescribeInstances instance-state-name with two values", lambda: check(any(
             i["InstanceId"] == S["iid"] for r in ec2.describe_instances(Filters=[
@@ -191,6 +194,43 @@ def vms():
         step("TerminateInstances", lambda: ec2.terminate_instances(InstanceIds=[S["iid"]]), "vm")
     else:
         step("RunInstances follow-ups", lambda: None, "vm")
+
+
+ODD_TAGS = {
+    "Name": "e2e tagged", "Owner Team": "Platform / SRE: a=b, c+d @x", "vws-looks-internal": "v",
+    "K" * 128: "max key", "long": "v" * 256, "유니코드": "값" * 85, "empty": "", "env": "dev",
+}
+
+
+def console_get(path):
+    req = urllib.request.Request(
+        os.environ.get("VWS_E2E_CONSOLE", "http://127.0.0.1:8080") + path,
+        headers={"Authorization": "Bearer " + os.environ.get("VWS_E2E_CONSOLE_TOKEN", "dev-token")})
+    with urllib.request.urlopen(req, timeout=10) as res:
+        return json.load(res)
+
+
+def tagged():
+    """Any valid AWS tag round-trips exactly, including through a stop that rewrites labels."""
+    iid = step("RunInstances with tags labels cannot hold", lambda: ec2.run_instances(
+        ImageId="ami-0123456789abcdef0", InstanceType="t3.micro", MinCount=1, MaxCount=1,
+        SubnetId=S["subnet"], ClientToken="tok-tags",
+        TagSpecifications=[{"ResourceType": "instance", "Tags": [
+            {"Key": k, "Value": v} for k, v in ODD_TAGS.items()]}])["Instances"][0]["InstanceId"], "vm")
+    if not iid:
+        return
+
+    def ec2_tags():
+        got = ec2.describe_instances(InstanceIds=[iid])["Reservations"][0]["Instances"][0].get("Tags", [])
+        return {t["Key"]: t["Value"] for t in got}
+    step("DescribeInstances returns the tags exactly", lambda: check(ec2_tags() == ODD_TAGS, f"{ec2_tags()}"), "vm")
+    step("console GET /api/v1/instances returns the tags exactly", lambda: check(
+        console_get("/api/v1/instances/" + iid)["tags"] == ODD_TAGS, "tags differ"), "vm")
+    step("wait for running (tagged)", lambda: wait_state(iid, "running"), "vm")
+    step("StopInstances (tagged)", lambda: ec2.stop_instances(InstanceIds=[iid]), "vm")
+    step("wait for stopped (tagged)", lambda: wait_state(iid, "stopped"), "vm")
+    step("tags survive StopInstances", lambda: check(ec2_tags() == ODD_TAGS, f"{ec2_tags()}"), "vm")
+    step("TerminateInstances (tagged)", lambda: ec2.terminate_instances(InstanceIds=[iid]), "vm")
 
 
 def associate():
