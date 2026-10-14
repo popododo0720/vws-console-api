@@ -177,7 +177,7 @@ func (h *handler) authenticate(r *http.Request) (resource.Caller, error) {
 			return resource.Caller{}, resource.Denied("missing or invalid csrf token")
 		}
 	}
-	return resource.Caller{Account: s.Principal.Account, Subject: "session", Principal: s.Principal.ARN, Root: s.Principal.Root}, nil
+	return resource.Caller{Account: s.Principal.Account, Subject: "session", Principal: s.Principal.ARN, Root: s.Principal.Root, Ref: s.Principal.Ref}, nil
 }
 
 func sessionErr(err error) error {

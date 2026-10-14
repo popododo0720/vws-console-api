@@ -101,3 +101,14 @@ func (t *sessionTable) close(token string) {
 	defer t.mu.Unlock()
 	delete(t.byID, tokenID(token))
 }
+
+// LoginFailed is the one uniform sign-in failure, for Sessions backed by
+// vws-iam: it never says which part was wrong or whether the user exists.
+func LoginFailed() error { return errLogin() }
+
+// SessionInvalid is the failure for an expired, revoked or unknown session.
+func SessionInvalid() error { return errSession() }
+
+// Busy is the refusal when sign-in is overloaded; IsBusy reports it, and the
+// surface answers 503 with Retry-After.
+func Busy() error { return busy() }

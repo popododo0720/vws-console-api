@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"slices"
 	"strings"
@@ -52,6 +53,7 @@ type AuthRequest struct {
 	StringToSign     string
 	Signature        string // lowercase hex
 	SessionToken     string // X-Amz-Security-Token, empty for long-term keys
+	SourceIP         string // client address, for aws:SourceIp and audit
 }
 
 // Identity is who a verified signature belongs to.
@@ -59,6 +61,7 @@ type Identity struct {
 	Account   resource.AccountID
 	Principal string
 	Root      bool
+	Ref       resource.PrincipalRef
 }
 
 // ErrUnknownKey is what an Authenticator returns for an access key it does
@@ -203,6 +206,7 @@ func (v *Verifier) Verify(r *http.Request) (resource.Caller, error) {
 			StringToSign:     "AWS4-HMAC-SHA256\n" + amzDate + "\n" + strings.Join(parts[1:], "/") + "\n" + hexSHA256([]byte(canon)),
 			Signature:        strings.ToLower(auth.signature),
 			SessionToken:     r.Header.Get("X-Amz-Security-Token"),
+			SourceIP:         sourceIP(r),
 		})
 	}
 	// A stated payload hash is part of the signature, so the signer is checked
@@ -251,7 +255,16 @@ func (v *Verifier) authenticate(r *http.Request, req AuthRequest) (resource.Call
 	if id.Account.IsZero() {
 		return resource.Caller{}, unknownKey()
 	}
-	return resource.Caller{Account: id.Account, Subject: req.AccessKeyID, Principal: id.Principal, Root: id.Root}, nil
+	return resource.Caller{Account: id.Account, Subject: req.AccessKeyID, Principal: id.Principal, Root: id.Root, Ref: id.Ref}, nil
+}
+
+// sourceIP is the peer address. X-Forwarded-For is not trusted: console-api
+// is reached directly inside the cluster.
+func sourceIP(r *http.Request) string {
+	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+		return host
+	}
+	return r.RemoteAddr
 }
 
 func unknownKey() *resource.Error {

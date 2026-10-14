@@ -2,8 +2,8 @@
 // checks a SigV4 signature and names the principal, and Authorize decides one
 // action on one resource. Access-key secrets stay inside the authenticator;
 // console-api never fetches them. Static serves the bootstrap root key, Fake
-// is an in-memory stand-in until the vws/iam/v1 gRPC client lands
-// (vws-proto#24), and WithRoot composes them.
+// is an in-memory stand-in (-iam=fake), the vws/iam/v1 gRPC client is
+// backend/grpcclient/iamclient (-iam=grpc), and WithRoot composes them.
 package iam
 
 import (
@@ -23,6 +23,7 @@ type Principal struct {
 	Account resource.AccountID
 	ARN     string
 	Root    bool
+	Ref     resource.PrincipalRef
 }
 
 // Key is an access key as an authenticator holds it. SessionToken and
@@ -46,7 +47,9 @@ type Request struct {
 // Decision is the answer. Reason is for logs, not for the wire.
 type Decision struct {
 	Allowed bool
-	Reason  string
+	// Explicit marks a deny by a Deny statement, as opposed to no Allow.
+	Explicit bool
+	Reason   string
 }
 
 // Client is the part of vws-iam AuthService console-api calls on every
@@ -80,7 +83,7 @@ func (a authenticator) Authenticate(ctx context.Context, req sigv4.AuthRequest) 
 	if err != nil {
 		return sigv4.Identity{}, err
 	}
-	return sigv4.Identity{Account: p.Account, Principal: p.ARN, Root: p.Root}, nil
+	return sigv4.Identity{Account: p.Account, Principal: p.ARN, Root: p.Root, Ref: p.Ref}, nil
 }
 
 // verifyKey is the local check Static and Fake share: session token and
@@ -102,7 +105,7 @@ func Check(ctx context.Context, a Authorizer, c resource.Caller, action, arn str
 		return resource.Denied("no authorizer configured")
 	}
 	d, err := a.Authorize(ctx, Request{
-		Principal: Principal{Account: c.Account, ARN: c.Principal, Root: c.Root},
+		Principal: Principal{Account: c.Account, ARN: c.Principal, Root: c.Root, Ref: c.Ref},
 		Action:    action, Resource: arn,
 	})
 	if err != nil {

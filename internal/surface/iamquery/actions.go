@@ -484,7 +484,7 @@ func stsActions() map[string]spec {
 					}
 					d = time.Duration(n) * time.Second
 				}
-				got, err := h.cfg.Admin.AssumeRole(c.r.Context(), iam.Principal{Account: c.caller.Account, ARN: c.caller.Principal, Root: c.caller.Root}, c.form("RoleArn"), c.form("RoleSessionName"), d)
+				got, err := h.cfg.Admin.AssumeRole(c.r.Context(), iam.Principal{Account: c.caller.Account, ARN: c.caller.Principal, Root: c.caller.Root, Ref: c.caller.Ref}, c.form("RoleArn"), c.form("RoleSessionName"), d)
 				if err != nil {
 					return nil, err
 				}

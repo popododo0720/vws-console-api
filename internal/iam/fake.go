@@ -30,8 +30,7 @@ type Statement struct {
 // Fake is an in-memory IAM: users, groups, roles, policies, access keys and
 // STS sessions per account (store.go), plus raw statements per principal ARN
 // for tests. Policies evaluate as explicit deny, then allow, then implicit
-// deny. It stands in for the vws-iam gRPC client until vws-proto#24, and
-// nothing in it survives a restart.
+// deny. It stands in for vws-iam (-iam=fake), and nothing in it survives a restart.
 type Fake struct {
 	// Now is the clock for creation times and session expiry. Nil uses time.Now.
 	Now      func() time.Time

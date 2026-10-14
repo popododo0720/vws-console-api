@@ -92,3 +92,10 @@ func TestBadTrustedProxiesIsRejected(t *testing.T) {
 		t.Fatalf("err %v", err)
 	}
 }
+
+func TestGRPCIAMNeedsAnEndpoint(t *testing.T) {
+	err := run(t.Context(), []string{"-iam=grpc", "-ops-addr="})
+	if err == nil || !strings.Contains(err.Error(), "-iam-endpoint") {
+		t.Fatalf("err %v", err)
+	}
+}

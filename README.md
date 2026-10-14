@@ -46,9 +46,31 @@ action except `GetCallerIdentity` (as in AWS) is authorized as `iam:<Action>`
 or `sts:<Action>`; every request must be signed. `-iam=static` (the
 default) serves only `GetCallerIdentity` for the `-access-key` root key.
 `-iam=fake` adds users, groups, roles, managed and inline policies, access keys
-and `AssumeRole` in memory, lost on restart, until the vws-iam client lands
-(vws-proto#24). The root key keeps working in both modes, and keys created
+and `AssumeRole` in memory, lost on restart. The root key keeps working in every mode, and keys created
 there also sign EC2 and S3 calls.
+
+`-iam=grpc -iam-endpoint <host:port>` hands every other key to vws-iam
+(vws-proto v0.3.0, `vws.iam.v1`). `Authenticate` gets the canonical request,
+string to sign, signature and client address (`source_ip`), never a secret;
+`Authorize` gets the full principal vws-iam returned (it rechecks unique id
+and resource), the resource ARNs and the condition context, and only
+`DECISION_ALLOW` allows; an error denies. Console sign-in (`Login`,
+`ValidateSession`, `Logout`) goes to vws-iam too, with the client address the
+console resolved (see `-trusted-proxies`); the root user still signs in
+against `-root-password-file` locally. A bad password, unknown user or missing
+MFA code is the same `401` as in the other modes, `RESOURCE_EXHAUSTED` from
+vws-iam is `429`, and `UNAVAILABLE` or a transport failure is `503` with
+`Retry-After`. A sign-in vws-iam marks `password_reset_required` is refused
+(`403`) and its session revoked, because the console has no password-change
+flow yet. STS `AssumeRole` sends the caller in the request's `authentication`
+field: the caller's own SigV4 request, or its console session token; nothing
+goes in gRPC metadata. The static root key cannot assume a role (as in AWS).
+Each call has a 5 s timeout, or the request's deadline if earlier;
+`Authenticate`, `Authorize`, `ValidateSession` and `Logout` retry `UNAVAILABLE`
+up to 3 times with doubling backoff; `Login` and `AssumeRole` are never
+retried. The IAM management actions (users, groups, roles, policies, access
+keys, login profiles) are not mapped to vws-iam's services yet and answer
+`InvalidAction` in this mode.
 
 ```sh
 aws --endpoint-url http://127.0.0.1:8084 --region vws-1 iam create-user --user-name bob
