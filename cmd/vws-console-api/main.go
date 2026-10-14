@@ -16,6 +16,7 @@ import (
 	"github.com/popododo0720/vws-console-api/internal/backend"
 	"github.com/popododo0720/vws-console-api/internal/backend/fake"
 	"github.com/popododo0720/vws-console-api/internal/backend/grpcclient"
+	"github.com/popododo0720/vws-console-api/internal/backend/grpcclient/iamclient"
 	"github.com/popododo0720/vws-console-api/internal/cloud"
 	"github.com/popododo0720/vws-console-api/internal/iam"
 	"github.com/popododo0720/vws-console-api/internal/resource"
@@ -54,7 +55,9 @@ func run(ctx context.Context, args []string) (err error) {
 	storageAddr := fs.String("storage-addr", "127.0.0.1:19002", "storage gRPC address")
 	networkAddr := fs.String("network-addr", "127.0.0.1:19003", "network gRPC address")
 	iamMode := fs.String("iam", "static", "static: only the -access-key root key, no IAM/STS management; "+
-		"fake: in-memory IAM users, groups, roles, policies and STS sessions, lost on restart, until the vws-iam client lands (vws-proto#24)")
+		"fake: in-memory IAM users, groups, roles, policies and STS sessions, lost on restart; "+
+		"grpc: vws-iam at -iam-endpoint authenticates keys, authorizes requests and serves console sign-in and STS AssumeRole")
+	iamEndpoint := fs.String("iam-endpoint", "", "vws-iam gRPC address for -iam=grpc, such as vws-iam.vws-system:9095")
 	iamAddr := fs.String("iam-addr", "127.0.0.1:8084", "IAM and STS Query listen address")
 	consoleOrigins := fs.String("console-origins", "", "comma-separated browser origins allowed to sign in and send cookie writes besides the console's own host, such as https://console.vws.example")
 	trustedProxies := fs.String("trusted-proxies", "", "comma-separated CIDRs of L7 proxies in front of the console whose X-Forwarded-For is trusted for the sign-in client address; empty uses the TCP peer")
@@ -100,8 +103,8 @@ func run(ctx context.Context, args []string) (err error) {
 	}
 
 	svc := cloud.New(cloud.Config{Backends: set, Audit: logger})
-	// The static key is the account root. Once the vws/iam/v1 client exists
-	// (vws-proto#24) it goes behind iam.WithRoot.
+	// The static key is the account root; with -iam=fake or -iam=grpc it
+	// sits in front of the IAM client through iam.WithRoot.
 	root := iam.NewStatic(*accessKey, *secret, account)
 	root.SetLogger(logger)
 	if *rootPasswordFile != "" {
@@ -118,6 +121,16 @@ func run(ctx context.Context, args []string) (err error) {
 		fakeIAM.SetLogger(logger)
 		auth, admin = iam.WithRoot(root, fakeIAM), fakeIAM
 		logger.WarnContext(ctx, "in-memory IAM: users, keys and roles are lost on restart", slog.String("iam", *iamMode))
+	case "grpc":
+		if *iamEndpoint == "" {
+			return errors.New("-iam=grpc needs -iam-endpoint")
+		}
+		remote, dialErr := iamclient.Dial(*iamEndpoint)
+		if dialErr != nil {
+			return dialErr
+		}
+		defer func() { err = errors.Join(err, remote.Close()) }()
+		auth, admin = iam.WithRoot(root, remote), iamclient.STSAdmin{Client: remote}
 	default:
 		return fmt.Errorf("unknown -iam %q", *iamMode)
 	}
