@@ -3,6 +3,7 @@ package iam
 import (
 	"context"
 	"crypto/subtle"
+	"sync"
 	"time"
 
 	"github.com/popododo0720/vws-console-api/internal/resource"
@@ -13,7 +14,12 @@ import (
 // -access-key/-secret pair from vws-console-api-credentials, kept so existing
 // clients keep working while vws-iam takes over every other key.
 type Static struct {
-	key Key
+	key      Key
+	mu       sync.Mutex
+	password string // argon2id hash; empty disables root sign-in
+	lock     lockout
+	sessions *sessionTable
+	dummy    func() string
 }
 
 // NewStatic returns the root credential for accessKey.
@@ -21,7 +27,7 @@ func NewStatic(accessKey, secret string, account resource.AccountID) *Static {
 	return &Static{key: Key{
 		AccessKey: accessKey, Secret: secret,
 		Principal: Principal{Account: account, ARN: RootARN(account), Root: true},
-	}}
+	}, sessions: newSessionTable(), dummy: sync.OnceValue(newDummyHash)}
 }
 
 // Authenticate verifies a signature made with its own key, locally, with the

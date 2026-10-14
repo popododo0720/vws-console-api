@@ -66,6 +66,19 @@ Content-Type: application/json
 {"imageId":"ami-0123456789abcdef0","instanceType":"vws.small","subnetId":"subnet-0123456789abcdef0","count":1}
 ```
 
+Console sign-in: `POST /api/v1/auth/login` with
+`{"account","userName","password"}` (an IAM user's `CreateLoginProfile`
+password, or `root` with the password in `-root-password-file`, mounted from a
+Secret). It sets an HttpOnly, Secure, SameSite=Strict `vws_session` cookie
+(12 hours) and a `vws_csrf` cookie; every request other than GET/HEAD on a
+session must echo `vws_csrf` in `X-CSRF-Token`. Each console route is
+authorized as the matching IAM action (`ec2:DescribeVpcs`, `ec2:CreateVpc`,
+`s3:GetObject`, `vws:GetOperation`, ...), so a session only does what the
+user's policies allow. Five wrong passwords in a row lock the user for 15
+minutes, and every failure is the same `401`. `GET /api/v1/auth/session` names
+the caller; `POST /api/v1/auth/logout` ends the session. The bearer
+`-console-token` still acts as the account root until it is retired.
+
 The subnet must already exist and belong to the caller. The response is `202`
 with an `operation` and the instances. Poll `GET /api/v1/operations/{id}`.
 `GET /api/v1/buckets/{name}/objects/{key}` returns the object metadata and the

@@ -18,7 +18,7 @@ func TestVpcAndVolumeDetail(t *testing.T) {
 		t.Fatal(err)
 	}
 	svc := cloud.New(cloud.Config{Backends: fake.New(fake.Options{}).Set()})
-	h := New(Config{Service: svc, Auth: BearerTokens{"tok": {Account: account, Subject: "t"}}})
+	h := New(rootConfig(svc, account))
 	do := func(method, path, body, key string) *httptest.ResponseRecorder {
 		t.Helper()
 		req := httptest.NewRequestWithContext(t.Context(), method, path, strings.NewReader(body))

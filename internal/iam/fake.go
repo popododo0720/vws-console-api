@@ -39,11 +39,15 @@ type Fake struct {
 	keys     map[string]Key
 	stmts    map[string][]Statement
 	accounts map[resource.AccountID]*store
+	sessions *sessionTable
+	lockouts map[string]*lockout
+	dummy    func() string
 }
 
 // NewFake returns an empty fake.
 func NewFake() *Fake {
-	return &Fake{keys: map[string]Key{}, stmts: map[string][]Statement{}, accounts: map[resource.AccountID]*store{}}
+	return &Fake{keys: map[string]Key{}, stmts: map[string][]Statement{}, accounts: map[resource.AccountID]*store{},
+		sessions: newSessionTable(), lockouts: map[string]*lockout{}, dummy: sync.OnceValue(newDummyHash)}
 }
 
 func (f *Fake) now() time.Time {

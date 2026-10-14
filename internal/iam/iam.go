@@ -52,9 +52,12 @@ type Decision struct {
 // Client is the part of vws-iam AuthService console-api calls on every
 // request. Authenticate returns ErrUnknownKey for a key it does not hold and
 // an Unauthenticated *resource.Error for a bad signature or session token.
+//
+// The Sessions half serves console sign-in (vws-iam AuthService.Login).
 type Client interface {
 	Authenticate(ctx context.Context, req sigv4.AuthRequest) (Principal, error)
 	Authorize(ctx context.Context, req Request) (Decision, error)
+	Sessions
 }
 
 // Authorizer is the per-request half of Client.

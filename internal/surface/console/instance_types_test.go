@@ -17,7 +17,7 @@ func TestInstanceTypesListTheLaunchCatalog(t *testing.T) {
 		t.Fatal(err)
 	}
 	svc := cloud.New(cloud.Config{Backends: fake.New(fake.Options{}).Set()})
-	h := New(Config{Service: svc, Auth: BearerTokens{"tok": {Account: account, Subject: "t"}}})
+	h := New(rootConfig(svc, account))
 	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v1/instance-types", nil)
 	req.Header.Set("Authorization", "Bearer tok")
 	rec := httptest.NewRecorder()

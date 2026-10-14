@@ -24,13 +24,13 @@ import (
 func TestConsoleAndQueryLaunchTheSameInstance(t *testing.T) {
 	now := time.Date(2026, 10, 9, 10, 0, 0, 0, time.UTC)
 	account := mustParse[resource.AccountID](t, "123456789012")
-	caller := resource.Caller{Account: account, Subject: "console"}
+	caller := resource.Caller{Account: account, Subject: "console", Principal: iam.RootARN(account), Root: true}
 	world := fake.New(fake.Options{
 		Now:     func() time.Time { return now },
 		Entropy: bytes.NewReader(bytes.Repeat([]byte{0x33}, 1<<12)),
 	})
 	svc := cloud.New(cloud.Config{Backends: world.Set()})
-	ui := console.New(console.Config{Service: svc, Auth: console.BearerTokens{"tok-console": caller}})
+	ui := console.New(console.Config{Service: svc, IAM: iam.NewStatic("AKIDEXAMPLE", "secret", account), Auth: console.BearerTokens{"tok-console": caller}})
 	cred := sigv4.Credential{AccessKey: "AKIDEXAMPLE", Secret: "secret", Account: account}
 	query := ec2query.New(ec2query.Config{Service: svc, Authorizer: iam.NewStatic(cred.AccessKey, cred.Secret, cred.Account), Verifier: verifier(cred, sigv4.ServiceEC2, now)})
 
@@ -110,10 +110,10 @@ func TestConsoleAndQueryLaunchTheSameInstance(t *testing.T) {
 func TestConsoleAndQueryShareAVpc(t *testing.T) {
 	now := time.Date(2026, 10, 9, 10, 0, 0, 0, time.UTC)
 	account := mustParse[resource.AccountID](t, "123456789012")
-	caller := resource.Caller{Account: account, Subject: "console"}
+	caller := resource.Caller{Account: account, Subject: "console", Principal: iam.RootARN(account), Root: true}
 	world := fake.New(fake.Options{Now: func() time.Time { return now }})
 	svc := cloud.New(cloud.Config{Backends: world.Set()})
-	ui := console.New(console.Config{Service: svc, Auth: console.BearerTokens{"tok-console": caller}})
+	ui := console.New(console.Config{Service: svc, IAM: iam.NewStatic("AKIDEXAMPLE", "secret", account), Auth: console.BearerTokens{"tok-console": caller}})
 	cred := sigv4.Credential{AccessKey: "AKIDEXAMPLE", Secret: "secret", Account: account}
 	query := ec2query.New(ec2query.Config{Service: svc, Authorizer: iam.NewStatic(cred.AccessKey, cred.Secret, cred.Account), Verifier: verifier(cred, sigv4.ServiceEC2, now)})
 
@@ -155,10 +155,10 @@ func TestConsoleAndQueryShareAVpc(t *testing.T) {
 func TestConsoleAndQueryShareAnAddress(t *testing.T) {
 	now := time.Date(2026, 10, 9, 10, 0, 0, 0, time.UTC)
 	account := mustParse[resource.AccountID](t, "123456789012")
-	caller := resource.Caller{Account: account, Subject: "console"}
+	caller := resource.Caller{Account: account, Subject: "console", Principal: iam.RootARN(account), Root: true}
 	world := fake.New(fake.Options{Now: func() time.Time { return now }})
 	svc := cloud.New(cloud.Config{Backends: world.Set()})
-	ui := console.New(console.Config{Service: svc, Auth: console.BearerTokens{"tok-console": caller}})
+	ui := console.New(console.Config{Service: svc, IAM: iam.NewStatic("AKIDEXAMPLE", "secret", account), Auth: console.BearerTokens{"tok-console": caller}})
 	cred := sigv4.Credential{AccessKey: "AKIDEXAMPLE", Secret: "secret", Account: account}
 	query := ec2query.New(ec2query.Config{Service: svc, Authorizer: iam.NewStatic(cred.AccessKey, cred.Secret, cred.Account), Verifier: verifier(cred, sigv4.ServiceEC2, now)})
 
@@ -221,7 +221,8 @@ func TestS3ObjectRoundTrip(t *testing.T) {
 
 	ui := console.New(console.Config{
 		Service: svc,
-		Auth:    console.BearerTokens{"tok-console": {Account: account, Subject: "console"}},
+		IAM:     iam.NewStatic("AKIDEXAMPLE", "secret", account),
+		Auth:    console.BearerTokens{"tok-console": {Account: account, Subject: "console", Principal: iam.RootARN(account), Root: true}},
 	})
 	listed := call(t, ui, http.MethodGet, "/api/v1/buckets", "", map[string]string{"Authorization": "Bearer tok-console"})
 	if listed.Code != http.StatusOK || !strings.Contains(listed.Body.String(), "build-logs") {

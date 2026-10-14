@@ -232,6 +232,8 @@ func (c *exchange) wire(e *resource.Error) (int, string) {
 		switch {
 		case e.Field == "PolicyDocument":
 			return http.StatusBadRequest, "MalformedPolicyDocument"
+		case e.Field == "Password":
+			return http.StatusBadRequest, "PasswordPolicyViolation"
 		case c.service == sigv4.ServiceSTS, e.Field != "" && e.Field[0] >= 'a' && e.Field[0] <= 'z':
 			// Constraint failures on a member (lower-case field) are
 			// ValidationError in AWS; STS reports all bad input that way.

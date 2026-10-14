@@ -94,6 +94,11 @@ type Admin interface {
 	ListUsers(ctx context.Context, a resource.AccountID, pathPrefix string) ([]User, error)
 	DeleteUser(ctx context.Context, a resource.AccountID, name string) error
 
+	CreateLoginProfile(ctx context.Context, a resource.AccountID, user, password string) (LoginProfile, error)
+	GetLoginProfile(ctx context.Context, a resource.AccountID, user string) (LoginProfile, error)
+	UpdateLoginProfile(ctx context.Context, a resource.AccountID, user, password string) error
+	DeleteLoginProfile(ctx context.Context, a resource.AccountID, user string) error
+
 	CreateAccessKey(ctx context.Context, a resource.AccountID, user string) (NewAccessKey, error)
 	ListAccessKeys(ctx context.Context, a resource.AccountID, user string) ([]AccessKeyMeta, error)
 	DeleteAccessKey(ctx context.Context, a resource.AccountID, user, keyID string) error
@@ -125,4 +130,11 @@ type Admin interface {
 	ListInlinePolicies(ctx context.Context, a resource.AccountID, kind Entity, name string) ([]string, error)
 
 	AssumeRole(ctx context.Context, caller Principal, roleARN, session string, duration time.Duration) (AssumedRole, error)
+}
+
+// LoginProfile is a user's console password. The password itself is never
+// returned.
+type LoginProfile struct {
+	UserName string
+	Created  time.Time
 }

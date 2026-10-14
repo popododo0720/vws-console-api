@@ -56,6 +56,7 @@ func run(ctx context.Context, args []string) (err error) {
 	iamMode := fs.String("iam", "static", "static: only the -access-key root key, no IAM/STS management; "+
 		"fake: in-memory IAM users, groups, roles, policies and STS sessions, lost on restart, until the vws-iam client lands (vws-proto#24)")
 	iamAddr := fs.String("iam-addr", "127.0.0.1:8084", "IAM and STS Query listen address")
+	rootPasswordFile := fs.String("root-password-file", "", "file holding the account root's console password (mount it from a Secret); empty disables root console sign-in")
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("flags: %w", err)
 	}
@@ -96,6 +97,11 @@ func run(ctx context.Context, args []string) (err error) {
 	// The static key is the account root. Once the vws/iam/v1 client exists
 	// (vws-proto#24) it goes behind iam.WithRoot.
 	root := iam.NewStatic(*accessKey, *secret, account)
+	if *rootPasswordFile != "" {
+		if err := setRootPassword(root, *rootPasswordFile); err != nil {
+			return err
+		}
+	}
 	var auth iam.Client = root
 	var admin iam.Admin
 	switch *iamMode {
@@ -119,6 +125,8 @@ func run(ctx context.Context, args []string) (err error) {
 		{Name: "console", Addr: *consoleAddr, Handler: console.New(console.Config{
 			Service: svc,
 			Auth:    console.BearerTokens{*consoleToken: caller},
+			IAM:     auth,
+			Logger:  logger,
 		})},
 		{Name: "ec2", Addr: *ec2Addr, Handler: ec2query.New(ec2query.Config{Service: svc, Verifier: ec2, Authorizer: auth})},
 		{Name: "s3", Addr: *s3Addr, Handler: s3rest.New(s3rest.Config{Service: svc, Verifier: s3, Authorizer: auth})},
@@ -126,6 +134,20 @@ func run(ctx context.Context, args []string) (err error) {
 			Admin: admin, Authorizer: auth, IAM: verifier(sigv4.ServiceIAM), STS: verifier(sigv4.ServiceSTS),
 		})},
 	}})
+}
+
+// setRootPassword reads the root console password from path. One trailing
+// newline is dropped, as Secret files and echo leave one.
+func setRootPassword(root *iam.Static, path string) error {
+	raw, err := os.ReadFile(path) //nolint:gosec // an operator-chosen path, read once at start.
+	if err != nil {
+		return fmt.Errorf("-root-password-file: %w", err)
+	}
+	pw := strings.TrimSuffix(strings.TrimSuffix(string(raw), "\n"), "\r")
+	if err := root.SetPassword(pw); err != nil {
+		return fmt.Errorf("-root-password-file %s: %w", path, err)
+	}
+	return nil
 }
 
 // requireExplicit rejects a run that would fall back to a built-in development
