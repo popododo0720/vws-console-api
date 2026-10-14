@@ -1,13 +1,18 @@
 package iam
 
 import (
-	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/popododo0720/vws-console-api/internal/resource"
+	"github.com/popododo0720/vws-console-api/internal/sigv4"
 )
+
+var now = time.Date(2026, 10, 9, 10, 0, 0, 0, time.UTC)
 
 func account(t *testing.T) resource.AccountID {
 	t.Helper()
@@ -18,22 +23,71 @@ func account(t *testing.T) resource.AccountID {
 	return a
 }
 
-func TestStaticKeyIsRootAndAllowed(t *testing.T) {
+// verify signs a request with c and runs it through a verifier backed by client.
+func verify(t *testing.T, client Client, c sigv4.Credential) (resource.Caller, error) {
+	t.Helper()
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "http://127.0.0.1:8081/", strings.NewReader("Action=DescribeVpcs"))
+	req.Host = req.URL.Host
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	if err := sigv4.Sign(req, c, sigv4.ServiceEC2, resource.RegionName, now); err != nil {
+		t.Fatal(err)
+	}
+	v := sigv4.NewVerifier(sigv4.Verifier{Service: sigv4.ServiceEC2, Region: resource.RegionName, Now: func() time.Time { return now }, Auth: Authenticator(client)})
+	return v.Verify(req)
+}
+
+func TestStaticKeyIsRootAndVerifiesLocally(t *testing.T) {
 	s := NewStatic("AKIDEXAMPLE", "secret", account(t))
-	cred, err := s.GetSigningCredential(t.Context(), "AKIDEXAMPLE")
-	if err != nil || cred.Secret != "secret" || !cred.Principal.Root || cred.Principal.ARN != "arn:vws:iam::123456789012:root" {
-		t.Fatalf("static credential %+v %v", cred, err)
+	caller, err := verify(t, s, sigv4.Credential{AccessKey: "AKIDEXAMPLE", Secret: "secret"})
+	if err != nil || !caller.Root || caller.Principal != "arn:vws:iam::123456789012:root" || caller.Account != account(t) {
+		t.Fatalf("static root: %+v %v", caller, err)
 	}
-	if _, err := s.GetSigningCredential(t.Context(), "AKIDOTHER"); !errors.Is(err, ErrUnknownKey) {
-		t.Fatalf("other key: %v, want ErrUnknownKey", err)
+	if _, err := verify(t, s, sigv4.Credential{AccessKey: "AKIDEXAMPLE", Secret: "wrong"}); resource.CodeOf(err) != resource.CodeUnauthenticated {
+		t.Errorf("wrong secret: %v", err)
 	}
-	d, err := s.Authorize(t.Context(), Request{Principal: cred.Principal, Action: "ec2:RunInstances", Resource: "*"})
-	if err != nil || !d.Allowed {
+	if _, err := verify(t, s, sigv4.Credential{AccessKey: "AKIDEXAMPLE", Secret: "secret", SessionToken: "tok"}); resource.CodeOf(err) != resource.CodeUnauthenticated {
+		t.Errorf("token with the root key: %v", err)
+	}
+	_, err = verify(t, s, sigv4.Credential{AccessKey: "AKIDOTHER", Secret: "secret"})
+	if e := resource.AsError(err); e == nil || e.Field != "AccessKeyId" {
+		t.Errorf("other key: %v, want unknown key", err)
+	}
+	p := Principal{Account: account(t), ARN: RootARN(account(t)), Root: true}
+	if d, err := s.Authorize(t.Context(), Request{Principal: p, Action: "ec2:RunInstances", Resource: "*"}); err != nil || !d.Allowed {
 		t.Fatalf("root decision %+v %v", d, err)
 	}
-	d, err = s.Authorize(t.Context(), Request{Principal: Principal{Account: account(t), ARN: "arn:vws:iam::123456789012:user/bob"}, Action: "ec2:RunInstances", Resource: "*"})
-	if err != nil || d.Allowed {
+	bob := Principal{Account: account(t), ARN: "arn:vws:iam::123456789012:user/bob"}
+	if d, err := s.Authorize(t.Context(), Request{Principal: bob, Action: "ec2:RunInstances", Resource: "*"}); err != nil || d.Allowed {
 		t.Fatalf("static must not allow a non-root principal: %+v %v", d, err)
+	}
+}
+
+func TestFakeAuthenticatesWithItsOwnSecretsAndSessions(t *testing.T) {
+	f := NewFake()
+	f.Now = func() time.Time { return now }
+	bob := Principal{Account: account(t), ARN: "arn:vws:iam::123456789012:user/bob"}
+	role := Principal{Account: account(t), ARN: "arn:vws:sts::123456789012:assumed-role/ops/s1"}
+	f.AddKey(Key{AccessKey: "AKIDBOB", Secret: "bobsecret", Principal: bob})
+	f.AddKey(Key{AccessKey: "ASIATEMP", Secret: "tmp", SessionToken: "tok-1", Expires: now.Add(time.Hour), Principal: role})
+	f.AddKey(Key{AccessKey: "ASIAOLD", Secret: "tmp", SessionToken: "tok-0", Expires: now, Principal: role})
+	if c, err := verify(t, f, sigv4.Credential{AccessKey: "AKIDBOB", Secret: "bobsecret"}); err != nil || c.Principal != bob.ARN || c.Root {
+		t.Errorf("bob: %+v %v", c, err)
+	}
+	if c, err := verify(t, f, sigv4.Credential{AccessKey: "ASIATEMP", Secret: "tmp", SessionToken: "tok-1"}); err != nil || c.Principal != role.ARN {
+		t.Errorf("temporary: %+v %v", c, err)
+	}
+	for name, c := range map[string]sigv4.Credential{
+		"bad secret":    {AccessKey: "AKIDBOB", Secret: "nope"},
+		"missing token": {AccessKey: "ASIATEMP", Secret: "tmp"},
+		"wrong token":   {AccessKey: "ASIATEMP", Secret: "tmp", SessionToken: "tok-2"},
+		"expired":       {AccessKey: "ASIAOLD", Secret: "tmp", SessionToken: "tok-0"},
+	} {
+		if _, err := verify(t, f, c); resource.CodeOf(err) != resource.CodeUnauthenticated {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	if _, err := f.Authenticate(t.Context(), sigv4.AuthRequest{AccessKeyID: "AKIDNOPE"}); !errors.Is(err, ErrUnknownKey) {
+		t.Errorf("unknown key: %v", err)
 	}
 }
 
@@ -59,50 +113,23 @@ func TestFakePolicyEvaluation(t *testing.T) {
 	}
 }
 
-type countingClient struct {
-	Client
-	calls int
-}
-
-func (c *countingClient) GetSigningCredential(ctx context.Context, key string) (SigningCredential, error) {
-	c.calls++
-	return c.Client.GetSigningCredential(ctx, key)
-}
-
-func TestCacheHonoursTTL(t *testing.T) {
-	now := time.Date(2026, 10, 14, 0, 0, 0, 0, time.UTC)
-	inner := &countingClient{Client: NewStatic("AKIDEXAMPLE", "secret", account(t))}
-	c := NewCache(inner, time.Minute, func() time.Time { return now })
-	for range 3 {
-		if _, err := c.GetSigningCredential(t.Context(), "AKIDEXAMPLE"); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if inner.calls != 1 {
-		t.Fatalf("calls within ttl = %d, want 1", inner.calls)
-	}
-	now = now.Add(2 * time.Minute)
-	if _, err := c.GetSigningCredential(t.Context(), "AKIDEXAMPLE"); err != nil || inner.calls != 2 {
-		t.Fatalf("after ttl: calls %d err %v, want 2", inner.calls, err)
-	}
-	if _, err := c.GetSigningCredential(t.Context(), "AKIDNOPE"); !errors.Is(err, ErrUnknownKey) {
-		t.Fatalf("unknown key through cache: %v", err)
-	}
-}
-
 func TestWithRootKeepsStaticKeyAsAdmin(t *testing.T) {
 	f := NewFake()
-	bob := SigningCredential{AccessKey: "AKIDBOB", Secret: "bobsecret", Principal: Principal{Account: account(t), ARN: "arn:vws:iam::123456789012:user/bob"}}
+	bob := Key{AccessKey: "AKIDBOB", Secret: "bobsecret", Principal: Principal{Account: account(t), ARN: "arn:vws:iam::123456789012:user/bob"}}
 	f.AddKey(bob)
 	c := WithRoot(NewStatic("AKIDEXAMPLE", "secret", account(t)), f)
-	root, err := c.GetSigningCredential(t.Context(), "AKIDEXAMPLE")
-	if err != nil || !root.Principal.Root {
+	root, err := verify(t, c, sigv4.Credential{AccessKey: "AKIDEXAMPLE", Secret: "secret"})
+	if err != nil || !root.Root {
 		t.Fatalf("root %+v %v", root, err)
 	}
-	if got, err := c.GetSigningCredential(t.Context(), "AKIDBOB"); err != nil || got.Secret != "bobsecret" {
+	if got, err := verify(t, c, sigv4.Credential{AccessKey: "AKIDBOB", Secret: "bobsecret"}); err != nil || got.Principal != bob.Principal.ARN {
 		t.Fatalf("bob %+v %v", got, err)
 	}
-	if d, _ := c.Authorize(t.Context(), Request{Principal: root.Principal, Action: "iam:CreateUser", Resource: "*"}); !d.Allowed {
+	if _, err := verify(t, c, sigv4.Credential{AccessKey: "AKIDEXAMPLE", Secret: "bobsecret"}); resource.CodeOf(err) != resource.CodeUnauthenticated {
+		t.Fatalf("root key with a wrong secret must not fall through: %v", err)
+	}
+	rootP := Principal{Account: account(t), ARN: RootARN(account(t)), Root: true}
+	if d, _ := c.Authorize(t.Context(), Request{Principal: rootP, Action: "iam:CreateUser", Resource: "*"}); !d.Allowed {
 		t.Fatalf("root denied: %+v", d)
 	}
 	if d, _ := c.Authorize(t.Context(), Request{Principal: bob.Principal, Action: "iam:CreateUser", Resource: "*"}); d.Allowed {
@@ -113,14 +140,13 @@ func TestWithRootKeepsStaticKeyAsAdmin(t *testing.T) {
 func TestCheckMapsDenyToPermissionDenied(t *testing.T) {
 	f := NewFake()
 	c := resource.Caller{Account: account(t), Subject: "AKIDBOB", Principal: "arn:vws:iam::123456789012:user/bob"}
-	err := Check(t.Context(), f, c, "ec2:RunInstances", "*")
-	if resource.CodeOf(err) != resource.CodePermissionDenied {
+	if err := Check(t.Context(), f, c, "ec2:RunInstances", "*"); resource.CodeOf(err) != resource.CodePermissionDenied {
 		t.Fatalf("deny: %v", err)
 	}
 	if err := Check(t.Context(), nil, c, "ec2:RunInstances", "*"); resource.CodeOf(err) != resource.CodePermissionDenied {
 		t.Fatalf("nil authorizer must fail closed: %v", err)
 	}
-	root := resource.Caller{Account: account(t), Subject: "AKIDEXAMPLE", Principal: "arn:vws:iam::123456789012:root", Root: true}
+	root := resource.Caller{Account: account(t), Subject: "AKIDEXAMPLE", Principal: RootARN(account(t)), Root: true}
 	if err := Check(t.Context(), NewStatic("AKIDEXAMPLE", "secret", account(t)), root, "ec2:RunInstances", "*"); err != nil {
 		t.Fatalf("root: %v", err)
 	}

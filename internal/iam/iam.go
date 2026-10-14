@@ -1,8 +1,9 @@
-// Package iam is console-api's view of vws-iam: resolving an access key to its
-// signing credential, and authorizing one action on one resource. Static
-// serves the bootstrap root key, Fake is an in-memory stand-in until the
-// vws/iam/v1 gRPC client lands (vws-proto#24), and Cache and WithRoot compose
-// them.
+// Package iam is console-api's view of vws-iam AuthService: Authenticate
+// checks a SigV4 signature and names the principal, and Authorize decides one
+// action on one resource. Access-key secrets stay inside the authenticator;
+// console-api never fetches them. Static serves the bootstrap root key, Fake
+// is an in-memory stand-in until the vws/iam/v1 gRPC client lands
+// (vws-proto#24), and WithRoot composes them.
 package iam
 
 import (
@@ -24,8 +25,9 @@ type Principal struct {
 	Root    bool
 }
 
-// SigningCredential is what SigV4 needs to check a signature, and who signed.
-type SigningCredential struct {
+// Key is an access key as an authenticator holds it. SessionToken and
+// Expires are set for temporary (STS) keys.
+type Key struct {
 	AccessKey    string
 	Secret       string
 	SessionToken string
@@ -47,9 +49,11 @@ type Decision struct {
 	Reason  string
 }
 
-// Client is the part of vws-iam console-api calls on every request.
+// Client is the part of vws-iam AuthService console-api calls on every
+// request. Authenticate returns ErrUnknownKey for a key it does not hold and
+// an Unauthenticated *resource.Error for a bad signature or session token.
 type Client interface {
-	GetSigningCredential(ctx context.Context, accessKey string) (SigningCredential, error)
+	Authenticate(ctx context.Context, req sigv4.AuthRequest) (Principal, error)
 	Authorize(ctx context.Context, req Request) (Decision, error)
 }
 
@@ -63,21 +67,29 @@ func RootARN(account resource.AccountID) string {
 	return "arn:vws:iam::" + account.String() + ":root"
 }
 
-// KeyStore adapts a Client to the sigv4 key hook.
-func KeyStore(c Client) sigv4.KeyStore { return keyStore{c} }
+// Authenticator adapts a Client to the sigv4 verifier.
+func Authenticator(c Client) sigv4.Authenticator { return authenticator{c} }
 
-type keyStore struct{ c Client }
+type authenticator struct{ c Client }
 
-func (k keyStore) SigningCredential(ctx context.Context, accessKey string) (sigv4.Credential, error) {
-	cred, err := k.c.GetSigningCredential(ctx, accessKey)
+func (a authenticator) Authenticate(ctx context.Context, req sigv4.AuthRequest) (sigv4.Identity, error) {
+	p, err := a.c.Authenticate(ctx, req)
 	if err != nil {
-		return sigv4.Credential{}, err
+		return sigv4.Identity{}, err
 	}
-	return sigv4.Credential{
-		AccessKey: cred.AccessKey, Secret: cred.Secret, Account: cred.Principal.Account,
-		Principal: cred.Principal.ARN, Root: cred.Principal.Root,
-		SessionToken: cred.SessionToken, Expires: cred.Expires,
-	}, nil
+	return sigv4.Identity{Account: p.Account, Principal: p.ARN, Root: p.Root}, nil
+}
+
+// verifyKey is the local check Static and Fake share: session token and
+// expiry first, then the signature with the key's own secret.
+func verifyKey(k Key, req sigv4.AuthRequest, now time.Time) (Principal, error) {
+	if err := sigv4.CheckSession(k.SessionToken, req.SessionToken, k.Expires, now); err != nil {
+		return Principal{}, err
+	}
+	if !req.VerifiedBy(k.Secret) {
+		return Principal{}, resource.Unauthenticated("signature mismatch")
+	}
+	return k.Principal, nil
 }
 
 // Check authorizes c for action on arn. A nil authorizer, an error, or a deny

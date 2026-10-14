@@ -144,7 +144,7 @@ func verifier(c Credential, service Service, now time.Time) *Verifier {
 		Service: service,
 		Region:  resource.RegionName,
 		Now:     func() time.Time { return now },
-		Keys: Lookup(func(_ context.Context, key string) (Credential, bool) {
+		Auth: Lookup(func(_ context.Context, key string) (Credential, bool) {
 			return c, key == c.AccessKey
 		}),
 	})

@@ -407,7 +407,7 @@ func harness(t *testing.T) (http.Handler, sigv4.Credential, time.Time) {
 		Service: sigv4.ServiceEC2,
 		Region:  resource.RegionName,
 		Now:     func() time.Time { return now },
-		Keys:    iam.KeyStore(iam.NewStatic(cred.AccessKey, cred.Secret, cred.Account)),
+		Auth:    iam.Authenticator(iam.NewStatic(cred.AccessKey, cred.Secret, cred.Account)),
 	})})
 	return h, cred, now
 }

@@ -25,9 +25,10 @@ const (
 	ServiceS3  Service = "s3"
 )
 
-// Credential is the secret half of an access key and who it belongs to.
-// SessionToken and Expires are set for temporary (STS) credentials; such a
-// request must carry the same X-Amz-Security-Token and arrive before Expires.
+// Credential is what a client signs with. Only signing (Sign) and local
+// verifiers (Lookup, the static root key, the fake IAM) hold a Secret; the
+// verifier itself never sees one. SessionToken is set for temporary (STS)
+// credentials and Expires bounds them.
 type Credential struct {
 	AccessKey    string
 	Secret       string
@@ -38,34 +39,94 @@ type Credential struct {
 	Expires      time.Time
 }
 
-// ErrUnknownKey is what a KeyStore returns for an access key it does not hold.
-var ErrUnknownKey = errors.New("unknown access key")
-
-// KeyStore resolves an access key to its signing credential. It returns
-// ErrUnknownKey for a key it does not hold; any other error means the store
-// could not answer.
-type KeyStore interface {
-	SigningCredential(ctx context.Context, accessKey string) (Credential, error)
+// AuthRequest is everything needed to check one signature without the
+// verifier knowing the secret. It mirrors vws-iam AuthService.Authenticate.
+type AuthRequest struct {
+	AccessKeyID      string
+	Date             string // yyyymmdd from the credential scope
+	Region           string
+	Service          Service
+	CanonicalRequest string
+	StringToSign     string
+	Signature        string // lowercase hex
+	SessionToken     string // X-Amz-Security-Token, empty for long-term keys
 }
 
-// Lookup adapts a plain function to a KeyStore. The bool is false when the key
-// is unknown.
+// Identity is who a verified signature belongs to.
+type Identity struct {
+	Account   resource.AccountID
+	Principal string
+	Root      bool
+}
+
+// ErrUnknownKey is what an Authenticator returns for an access key it does
+// not hold.
+var ErrUnknownKey = errors.New("unknown access key")
+
+// Authenticator checks a signature and names its principal. ErrUnknownKey and
+// *resource.Error values reach the caller as they are; any other error means
+// the authenticator could not answer.
+type Authenticator interface {
+	Authenticate(ctx context.Context, req AuthRequest) (Identity, error)
+}
+
+// VerifiedBy reports whether secret produced req.Signature. Local
+// authenticators that hold the secret use it.
+func (req AuthRequest) VerifiedBy(secret string) bool {
+	if secret == "" {
+		return false
+	}
+	got, err := hex.DecodeString(req.Signature)
+	if err != nil {
+		return false
+	}
+	mac := hmac.New(sha256.New, signingKey(secret, req.Date, req.Region, string(req.Service)))
+	_, _ = mac.Write([]byte(req.StringToSign))
+	return hmac.Equal(mac.Sum(nil), got)
+}
+
+// CheckSession enforces a temporary credential's token and expiry, and refuses
+// a token sent with a long-term key (want empty).
+func CheckSession(want, got string, expires, now time.Time) error {
+	if want == "" {
+		if got != "" {
+			return resource.Unauthenticated("security token sent with a long-term key")
+		}
+		return nil
+	}
+	if got == "" || !hmac.Equal([]byte(got), []byte(want)) {
+		return resource.Unauthenticated("the security token included in the request is invalid")
+	}
+	if !expires.IsZero() && !now.Before(expires) {
+		return resource.Unauthenticated("the security token included in the request is expired")
+	}
+	return nil
+}
+
+// Lookup is a local Authenticator over a key table, for tests and local
+// tools. The bool is false when the key is unknown.
 type Lookup func(ctx context.Context, accessKey string) (Credential, bool)
 
-// SigningCredential implements KeyStore.
-func (f Lookup) SigningCredential(ctx context.Context, accessKey string) (Credential, error) {
-	cred, ok := f(ctx, accessKey)
-	if !ok {
-		return Credential{}, ErrUnknownKey
+// Authenticate implements Authenticator.
+func (f Lookup) Authenticate(ctx context.Context, req AuthRequest) (Identity, error) {
+	cred, ok := f(ctx, req.AccessKeyID)
+	if !ok || cred.Account.IsZero() {
+		return Identity{}, ErrUnknownKey
 	}
-	return cred, nil
+	if err := CheckSession(cred.SessionToken, req.SessionToken, cred.Expires, time.Now()); err != nil {
+		return Identity{}, err
+	}
+	if !req.VerifiedBy(cred.Secret) {
+		return Identity{}, resource.Unauthenticated("signature mismatch")
+	}
+	return Identity{Account: cred.Account, Principal: cred.Principal, Root: cred.Root}, nil
 }
 
 // Verifier checks one service and region.
 type Verifier struct {
 	Service Service
 	Region  string
-	Keys    KeyStore
+	Auth    Authenticator
 	Now     func() time.Time
 	Skew    time.Duration
 	MaxBody int64
@@ -89,8 +150,8 @@ func NewVerifier(v Verifier) *Verifier {
 const maxQueryParams = 128
 
 // Verify checks r, replaces r.Body with the bytes that were signed, and
-// returns the account the access key belongs to. The access key is resolved
-// before the body is read. A missing payload hash means the hash of that body,
+// returns who signed it. The Authenticator checks the signature, so no secret
+// reaches this process. A missing payload hash means the hash of the body,
 // which is what query clients send. UNSIGNED-PAYLOAD is rejected.
 func (v *Verifier) Verify(r *http.Request) (resource.Caller, error) {
 	if r.URL.Query().Get("X-Amz-Algorithm") != "" {
@@ -118,80 +179,81 @@ func (v *Verifier) Verify(r *http.Request) (resource.Caller, error) {
 	if len(parts) != 5 || parts[1] != stamp.Format("20060102") || parts[2] != v.Region || parts[3] != string(v.Service) || parts[4] != "aws4_request" {
 		return resource.Caller{}, resource.Unauthenticated("credential scope rejected")
 	}
-	if v.Keys == nil {
+	if v.Auth == nil {
 		return resource.Caller{}, unknownKey()
-	}
-	cred, err := v.Keys.SigningCredential(r.Context(), parts[0])
-	switch {
-	case errors.Is(err, ErrUnknownKey):
-		return resource.Caller{}, unknownKey()
-	case err != nil:
-		return resource.Caller{}, &resource.Error{Code: resource.CodeUnavailable, Message: "credential store unavailable"}
-	}
-	if cred.Secret == "" || cred.Account.IsZero() {
-		return resource.Caller{}, unknownKey()
-	}
-	if err := checkSession(r, cred, v.Now()); err != nil {
-		return resource.Caller{}, err
 	}
 	if r.Header.Get("Content-Type") != "" && !headerSigned(auth.signedHeaders, "content-type") {
 		return resource.Caller{}, resource.Unauthenticated("content-type is not signed")
 	}
 
+	if _, err := hex.DecodeString(auth.signature); err != nil {
+		return resource.Caller{}, resource.Unauthenticated("signature mismatch")
+	}
+	stated := r.Header.Get("X-Amz-Content-Sha256")
+	if stated == "UNSIGNED-PAYLOAD" {
+		return resource.Caller{}, resource.Unauthenticated("unsigned payload is not accepted")
+	}
+	authenticate := func(payloadHash string) (resource.Caller, error) {
+		canon := canonicalRequest(r, auth.signedHeaders, payloadHash)
+		return v.authenticate(r, AuthRequest{
+			AccessKeyID: parts[0], Date: parts[1], Region: parts[2], Service: Service(parts[3]),
+			CanonicalRequest: canon,
+			StringToSign:     "AWS4-HMAC-SHA256\n" + amzDate + "\n" + strings.Join(parts[1:], "/") + "\n" + hexSHA256([]byte(canon)),
+			Signature:        strings.ToLower(auth.signature),
+			SessionToken:     r.Header.Get("X-Amz-Security-Token"),
+		})
+	}
+	// A stated payload hash is part of the signature, so the signer is checked
+	// before the body is read and an unknown key costs no body. Without one
+	// (query clients) the hash of the body is what was signed.
+	var caller resource.Caller
+	if stated != "" {
+		c, err := authenticate(stated)
+		if err != nil {
+			return resource.Caller{}, err
+		}
+		caller = c
+	}
 	body, err := readBody(r.Body, v.MaxBody)
 	if err != nil {
 		return resource.Caller{}, err
 	}
 	r.Body = io.NopCloser(bytes.NewReader(body))
 	r.ContentLength = int64(len(body))
-
 	sum := sha256.Sum256(body)
 	payloadHash := hex.EncodeToString(sum[:])
-	switch stated := r.Header.Get("X-Amz-Content-Sha256"); stated {
-	case "":
-	case "UNSIGNED-PAYLOAD":
-		return resource.Caller{}, resource.Unauthenticated("unsigned payload is not accepted")
-	default:
-		if !hmac.Equal([]byte(stated), []byte(payloadHash)) {
-			return resource.Caller{}, resource.Unauthenticated("payload hash mismatch")
-		}
+	if stated != "" && !hmac.Equal([]byte(stated), []byte(payloadHash)) {
+		return resource.Caller{}, resource.Unauthenticated("payload hash mismatch")
 	}
 	if v.Service == ServiceEC2 && len(body) > 0 && !headerSigned(auth.signedHeaders, "content-type") {
 		return resource.Caller{}, resource.Unauthenticated("content-type is not signed")
 	}
-	canon := canonicalRequest(r, auth.signedHeaders, payloadHash)
-	stringToSign := "AWS4-HMAC-SHA256\n" + amzDate + "\n" + strings.Join(parts[1:], "/") + "\n" + hexSHA256([]byte(canon))
-	mac := hmac.New(sha256.New, signingKey(cred.Secret, parts[1], parts[2], parts[3]))
-	_, _ = mac.Write([]byte(stringToSign))
-	want := mac.Sum(nil)
-	got, err := hex.DecodeString(auth.signature)
-	if err != nil || !hmac.Equal(want, got) {
-		return resource.Caller{}, resource.Unauthenticated("signature mismatch")
+	if stated == "" {
+		return authenticate(payloadHash)
 	}
-	return resource.Caller{Account: cred.Account, Subject: cred.AccessKey, Principal: cred.Principal, Root: cred.Root}, nil
+	return caller, nil
+}
+
+// authenticate asks the Authenticator and maps its answer to a caller.
+func (v *Verifier) authenticate(r *http.Request, req AuthRequest) (resource.Caller, error) {
+	id, err := v.Auth.Authenticate(r.Context(), req)
+	var re *resource.Error
+	switch {
+	case errors.Is(err, ErrUnknownKey):
+		return resource.Caller{}, unknownKey()
+	case errors.As(err, &re):
+		return resource.Caller{}, re
+	case err != nil:
+		return resource.Caller{}, &resource.Error{Code: resource.CodeUnavailable, Message: "authentication unavailable"}
+	}
+	if id.Account.IsZero() {
+		return resource.Caller{}, unknownKey()
+	}
+	return resource.Caller{Account: id.Account, Subject: req.AccessKeyID, Principal: id.Principal, Root: id.Root}, nil
 }
 
 func unknownKey() *resource.Error {
 	return &resource.Error{Code: resource.CodeUnauthenticated, Field: "AccessKeyId", Message: "The access key ID you provided does not exist in our records."}
-}
-
-// checkSession enforces the session token and expiry of a temporary
-// credential, and refuses a token sent with a long-term key.
-func checkSession(r *http.Request, cred Credential, now time.Time) error {
-	got := r.Header.Get("X-Amz-Security-Token")
-	if cred.SessionToken == "" {
-		if got != "" {
-			return resource.Unauthenticated("security token sent with a long-term key")
-		}
-		return nil
-	}
-	if got == "" || !hmac.Equal([]byte(got), []byte(cred.SessionToken)) {
-		return resource.Unauthenticated("the security token included in the request is invalid")
-	}
-	if !cred.Expires.IsZero() && !now.Before(cred.Expires) {
-		return resource.Unauthenticated("the security token included in the request is expired")
-	}
-	return nil
 }
 
 // Sign sets the date, payload hash, and Authorization header on r.

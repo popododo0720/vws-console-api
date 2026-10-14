@@ -3,36 +3,39 @@ package iam
 import (
 	"context"
 	"crypto/subtle"
+	"time"
 
 	"github.com/popododo0720/vws-console-api/internal/resource"
+	"github.com/popododo0720/vws-console-api/internal/sigv4"
 )
 
 // Static serves one long-term key as the account root user. It is the
 // -access-key/-secret pair from vws-console-api-credentials, kept so existing
 // clients keep working while vws-iam takes over every other key.
 type Static struct {
-	cred SigningCredential
+	key Key
 }
 
 // NewStatic returns the root credential for accessKey.
 func NewStatic(accessKey, secret string, account resource.AccountID) *Static {
-	return &Static{cred: SigningCredential{
+	return &Static{key: Key{
 		AccessKey: accessKey, Secret: secret,
 		Principal: Principal{Account: account, ARN: RootARN(account), Root: true},
 	}}
 }
 
-// GetSigningCredential returns the root credential for its own key only.
-func (s *Static) GetSigningCredential(_ context.Context, accessKey string) (SigningCredential, error) {
-	if subtle.ConstantTimeCompare([]byte(accessKey), []byte(s.cred.AccessKey)) != 1 {
-		return SigningCredential{}, ErrUnknownKey
+// Authenticate verifies a signature made with its own key, locally, with the
+// static secret. Any other key is ErrUnknownKey. A session token is refused.
+func (s *Static) Authenticate(_ context.Context, req sigv4.AuthRequest) (Principal, error) {
+	if subtle.ConstantTimeCompare([]byte(req.AccessKeyID), []byte(s.key.AccessKey)) != 1 {
+		return Principal{}, ErrUnknownKey
 	}
-	return s.cred, nil
+	return verifyKey(s.key, req, time.Now())
 }
 
 // Authorize allows the root user of its own account and nobody else.
 func (s *Static) Authorize(_ context.Context, req Request) (Decision, error) {
-	if req.Principal.Root && req.Principal.Account == s.cred.Principal.Account && req.Principal.ARN == s.cred.Principal.ARN {
+	if req.Principal.Root && req.Principal.Account == s.key.Principal.Account && req.Principal.ARN == s.key.Principal.ARN {
 		return Decision{Allowed: true, Reason: "account root"}, nil
 	}
 	return Decision{Reason: "implicit deny"}, nil
@@ -47,11 +50,11 @@ type withRoot struct {
 	next Client
 }
 
-func (w withRoot) GetSigningCredential(ctx context.Context, accessKey string) (SigningCredential, error) {
-	if cred, err := w.root.GetSigningCredential(ctx, accessKey); err == nil {
-		return cred, nil
+func (w withRoot) Authenticate(ctx context.Context, req sigv4.AuthRequest) (Principal, error) {
+	if subtle.ConstantTimeCompare([]byte(req.AccessKeyID), []byte(w.root.key.AccessKey)) == 1 {
+		return w.root.Authenticate(ctx, req)
 	}
-	return w.next.GetSigningCredential(ctx, accessKey)
+	return w.next.Authenticate(ctx, req)
 }
 
 func (w withRoot) Authorize(ctx context.Context, req Request) (Decision, error) {

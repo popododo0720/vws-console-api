@@ -4,6 +4,9 @@ import (
 	"context"
 	"strings"
 	"sync"
+	"time"
+
+	"github.com/popododo0720/vws-console-api/internal/sigv4"
 )
 
 // Effect is Allow or Deny.
@@ -27,18 +30,20 @@ type Statement struct {
 // evaluated as explicit deny, then allow, then implicit deny. It stands in for
 // the vws-iam gRPC client in tests and the fake backend.
 type Fake struct {
+	// Now is the clock for session expiry. Nil uses time.Now.
+	Now   func() time.Time
 	mu    sync.RWMutex
-	keys  map[string]SigningCredential
+	keys  map[string]Key
 	stmts map[string][]Statement
 }
 
 // NewFake returns an empty fake.
 func NewFake() *Fake {
-	return &Fake{keys: map[string]SigningCredential{}, stmts: map[string][]Statement{}}
+	return &Fake{keys: map[string]Key{}, stmts: map[string][]Statement{}}
 }
 
-// AddKey stores a credential.
-func (f *Fake) AddKey(c SigningCredential) {
+// AddKey stores a key with its secret.
+func (f *Fake) AddKey(c Key) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.keys[c.AccessKey] = c
@@ -51,15 +56,19 @@ func (f *Fake) AddStatement(principalARN string, s Statement) {
 	f.stmts[principalARN] = append(f.stmts[principalARN], s)
 }
 
-// GetSigningCredential returns a stored credential.
-func (f *Fake) GetSigningCredential(_ context.Context, accessKey string) (SigningCredential, error) {
+// Authenticate verifies with the stored secret, inside the fake.
+func (f *Fake) Authenticate(_ context.Context, req sigv4.AuthRequest) (Principal, error) {
 	f.mu.RLock()
-	defer f.mu.RUnlock()
-	c, ok := f.keys[accessKey]
+	k, ok := f.keys[req.AccessKeyID]
+	f.mu.RUnlock()
 	if !ok {
-		return SigningCredential{}, ErrUnknownKey
+		return Principal{}, ErrUnknownKey
 	}
-	return c, nil
+	now := time.Now
+	if f.Now != nil {
+		now = f.Now
+	}
+	return verifyKey(k, req, now())
 }
 
 // Authorize evaluates the principal's statements.

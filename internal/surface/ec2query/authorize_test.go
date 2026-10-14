@@ -23,13 +23,13 @@ func TestLimitedUserIsAuthorizedPerAction(t *testing.T) {
 		t.Fatal(err)
 	}
 	f := iam.NewFake()
-	bob := iam.SigningCredential{AccessKey: "AKIDBOB", Secret: "bobsecret", Principal: iam.Principal{Account: account, ARN: "arn:vws:iam::123456789012:user/bob"}}
+	bob := iam.Key{AccessKey: "AKIDBOB", Secret: "bobsecret", Principal: iam.Principal{Account: account, ARN: "arn:vws:iam::123456789012:user/bob"}}
 	f.AddKey(bob)
 	f.AddStatement(bob.Principal.ARN, iam.Statement{Effect: iam.Allow, Actions: []string{"ec2:Describe*"}, Resources: []string{"*"}})
 	client := iam.WithRoot(iam.NewStatic("AKIDEXAMPLE", "secret", account), f)
 	svc := cloud.New(cloud.Config{Backends: fake.New(fake.Options{Now: func() time.Time { return now }}).Set()})
 	h := New(Config{Service: svc, Authorizer: client, Verifier: sigv4.NewVerifier(sigv4.Verifier{
-		Service: sigv4.ServiceEC2, Region: resource.RegionName, Now: func() time.Time { return now }, Keys: iam.KeyStore(client),
+		Service: sigv4.ServiceEC2, Region: resource.RegionName, Now: func() time.Time { return now }, Auth: iam.Authenticator(client),
 	})})
 	bobCred := sigv4.Credential{AccessKey: "AKIDBOB", Secret: "bobsecret", Account: account}
 	root := sigv4.Credential{AccessKey: "AKIDEXAMPLE", Secret: "secret", Account: account}

@@ -90,11 +90,11 @@ func run(ctx context.Context, args []string) (err error) {
 
 	svc := cloud.New(cloud.Config{Backends: set, Audit: logger})
 	// The static key is the account root. Once the vws/iam/v1 client exists
-	// (vws-proto#24) it goes behind iam.WithRoot and iam.NewCache.
+	// (vws-proto#24) it goes behind iam.WithRoot.
 	var auth iam.Client = iam.NewStatic(*accessKey, *secret, account)
-	keys := iam.KeyStore(auth)
-	ec2 := sigv4.NewVerifier(sigv4.Verifier{Service: sigv4.ServiceEC2, Region: resource.RegionName, Keys: keys})
-	s3 := sigv4.NewVerifier(sigv4.Verifier{Service: sigv4.ServiceS3, Region: resource.RegionName, Keys: keys})
+	authn := iam.Authenticator(auth)
+	ec2 := sigv4.NewVerifier(sigv4.Verifier{Service: sigv4.ServiceEC2, Region: resource.RegionName, Auth: authn})
+	s3 := sigv4.NewVerifier(sigv4.Verifier{Service: sigv4.ServiceS3, Region: resource.RegionName, Auth: authn})
 
 	ctx, stop := signal.NotifyContext(ctx, stopSignals()...)
 	defer stop()

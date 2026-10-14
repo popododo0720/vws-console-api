@@ -238,7 +238,7 @@ func verifier(cred sigv4.Credential, service sigv4.Service, now time.Time) *sigv
 		Service: service,
 		Region:  resource.RegionName,
 		Now:     func() time.Time { return now },
-		Keys:    iam.KeyStore(iam.NewStatic(cred.AccessKey, cred.Secret, cred.Account)),
+		Auth:    iam.Authenticator(iam.NewStatic(cred.AccessKey, cred.Secret, cred.Account)),
 	})
 }
 

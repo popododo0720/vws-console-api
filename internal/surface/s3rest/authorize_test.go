@@ -33,14 +33,14 @@ func TestS3ActionsAndARNs(t *testing.T) {
 		t.Fatal(err)
 	}
 	f := iam.NewFake()
-	bob := iam.SigningCredential{AccessKey: "AKIDBOB", Secret: "bobsecret", Principal: iam.Principal{Account: account, ARN: "arn:vws:iam::123456789012:user/bob"}}
+	bob := iam.Key{AccessKey: "AKIDBOB", Secret: "bobsecret", Principal: iam.Principal{Account: account, ARN: "arn:vws:iam::123456789012:user/bob"}}
 	f.AddKey(bob)
 	f.AddStatement(bob.Principal.ARN, iam.Statement{Effect: iam.Allow, Actions: []string{"s3:*"}, Resources: []string{"*"}})
 	f.AddStatement(bob.Principal.ARN, iam.Statement{Effect: iam.Deny, Actions: []string{"s3:PutObject"}, Resources: []string{"arn:vws:s3:::logs/locked/*"}})
 	rec := &recorder{Client: iam.WithRoot(iam.NewStatic("AKIDEXAMPLE", "secret", account), f)}
 	svc := cloud.New(cloud.Config{Backends: fake.New(fake.Options{Now: func() time.Time { return now }}).Set()})
 	h := New(Config{Service: svc, Authorizer: rec, Verifier: sigv4.NewVerifier(sigv4.Verifier{
-		Service: sigv4.ServiceS3, Region: resource.RegionName, Now: func() time.Time { return now }, Keys: iam.KeyStore(rec),
+		Service: sigv4.ServiceS3, Region: resource.RegionName, Now: func() time.Time { return now }, Auth: iam.Authenticator(rec),
 	})})
 	cred := sigv4.Credential{AccessKey: "AKIDBOB", Secret: "bobsecret", Account: account}
 	base := "http://127.0.0.1:8082"
