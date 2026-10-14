@@ -45,7 +45,10 @@ func Run(t *testing.T, newSet Harness) {
 	if _, err := set.Network.GetOperation(ctx, backend.Scope{Account: account}, created.Operation.ID); err != nil {
 		t.Fatal(err)
 	}
-	req := resource.RunInstancesRequest{ImageID: img, InstanceType: "vws.small", SubnetID: created.Items[0].ID, Count: 1}
+	req := resource.RunInstancesRequest{
+		ImageID: img, InstanceType: "vws.small", SubnetID: created.Items[0].ID, Count: 1,
+		Tags: map[string]string{"Name": "web-1", "env": "dev"},
+	}
 	m := backend.Mutation{Scope: backend.Scope{Account: account}, Key: "k1", Fingerprint: "fp1"}
 
 	first, err := set.Compute.RunInstances(ctx, m, req)
@@ -90,6 +93,9 @@ func Run(t *testing.T, newSet Harness) {
 	}
 	if page.Items[0].State != resource.InstanceRunning {
 		t.Fatalf("state %s", page.Items[0].State)
+	}
+	if got := page.Items[0].Tags; got["Name"] != "web-1" || got["env"] != "dev" || len(got) != 2 {
+		t.Fatalf("tags %v, want Name=web-1 env=dev", got)
 	}
 	filtered, err := set.Compute.DescribeInstances(ctx, backend.Scope{Account: account}, resource.InstanceQuery{
 		IDs:    []resource.InstanceID{first.Items[0].ID},
