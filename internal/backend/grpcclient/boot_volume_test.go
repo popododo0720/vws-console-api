@@ -26,6 +26,7 @@ type imageBoot struct {
 	networkv1.UnimplementedSubnetServiceServer
 	storagev1.UnimplementedVolumeServiceServer
 	computev1.UnimplementedInstanceServiceServer
+	computev1.UnimplementedImageServiceServer
 	mu     sync.Mutex
 	labels map[string]string
 	image  string
@@ -46,6 +47,10 @@ func (s *imageBoot) ListSubnets(_ context.Context, req *networkv1.ListSubnetsReq
 	return &networkv1.ListSubnetsResponse{Subnets: []*networkv1.Subnet{{
 		Name: req.GetParent() + "/subnet-01234567",
 	}}}, nil
+}
+
+func (s *imageBoot) GetImage(_ context.Context, req *computev1.GetImageRequest) (*computev1.Image, error) {
+	return &computev1.Image{Name: req.GetName()}, nil
 }
 
 func (s *imageBoot) CreateVolume(_ context.Context, req *storagev1.CreateVolumeRequest) (*longrunningpb.Operation, error) {
@@ -118,6 +123,7 @@ func TestBootVolumeSourcesTheImage(t *testing.T) {
 	networkv1.RegisterSubnetServiceServer(srv, boot)
 	storagev1.RegisterVolumeServiceServer(srv, boot)
 	computev1.RegisterInstanceServiceServer(srv, boot)
+	computev1.RegisterImageServiceServer(srv, boot)
 	go func() { _ = srv.Serve(lis) }()
 	t.Cleanup(srv.Stop)
 	conn, err := grpc.NewClient("passthrough:///compute",
@@ -131,6 +137,7 @@ func TestBootVolumeSourcesTheImage(t *testing.T) {
 	t.Cleanup(func() { _ = conn.Close() })
 	client := computeClient{&api{
 		instances: computev1.NewInstanceServiceClient(conn),
+		images:    computev1.NewImageServiceClient(conn),
 		volumes:   storagev1.NewVolumeServiceClient(conn),
 		subnets:   networkv1.NewSubnetServiceClient(conn),
 		vpcs:      networkv1.NewVpcServiceClient(conn),

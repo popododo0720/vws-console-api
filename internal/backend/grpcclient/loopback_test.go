@@ -50,6 +50,7 @@ func TestContractOverGRPC(t *testing.T) {
 	})
 	loop := newLoopWorld(world.Set(), now)
 	computev1.RegisterInstanceServiceServer(computeSrv, &instanceSrv{w: loop})
+	computev1.RegisterImageServiceServer(computeSrv, imageSrv{})
 	computev1.RegisterKeyPairServiceServer(computeSrv, &keySrv{w: loop})
 	networkv1.RegisterAddressServiceServer(computeSrv, &addressSrv{w: loop})
 	networkv1.RegisterVpcServiceServer(computeSrv, &vpcSrv{w: loop})
@@ -88,6 +89,7 @@ func TestContractOverGRPC(t *testing.T) {
 	t.Cleanup(func() { _ = storageConn.Close() })
 	shared := &api{
 		instances:  computev1.NewInstanceServiceClient(computeConn),
+		images:     computev1.NewImageServiceClient(computeConn),
 		volumes:    storagev1.NewVolumeServiceClient(storageConn),
 		buckets:    storagev1.NewBucketServiceClient(storageConn),
 		objects:    storagev1.NewObjectServiceClient(storageConn),
@@ -108,6 +110,14 @@ func TestContractOverGRPC(t *testing.T) {
 			Network: networkClient{shared},
 		}
 	})
+}
+
+type imageSrv struct {
+	computev1.UnimplementedImageServiceServer
+}
+
+func (imageSrv) GetImage(_ context.Context, req *computev1.GetImageRequest) (*computev1.Image, error) {
+	return &computev1.Image{Name: req.GetName()}, nil
 }
 
 // opsGate hides volume operations from the compute listener and every other

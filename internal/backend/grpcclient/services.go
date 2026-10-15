@@ -27,6 +27,7 @@ import (
 // volumes and subnets as well as instances, so the three backend views share it.
 type api struct {
 	instances  computev1.InstanceServiceClient
+	images     computev1.ImageServiceClient
 	volumes    storagev1.VolumeServiceClient
 	buckets    storagev1.BucketServiceClient
 	objects    storagev1.ObjectServiceClient
@@ -59,6 +60,9 @@ func (c computeClient) RunInstances(ctx context.Context, m backend.Mutation, req
 			return resource.Accepted[resource.Instance]{}, err
 		}
 		keyPair = keyPairName(projectID, key.ID.String())
+	}
+	if err := c.imageInRegion(ctx, projectID, req.ImageID); err != nil {
+		return resource.Accepted[resource.Instance]{}, err
 	}
 	items := make([]resource.Instance, 0, req.Count)
 	var op resource.Operation
@@ -135,6 +139,22 @@ func (c computeClient) RunInstances(ctx context.Context, m backend.Mutation, req
 	op.Action = resource.ActionRunInstances
 	op.Targets = instanceRefs(items)
 	return resource.Accepted[resource.Instance]{Operation: op, Items: items}, nil
+}
+
+func (c computeClient) imageInRegion(ctx context.Context, projectID string, id resource.ImageID) error {
+	name := imageName(projectID, id.String())
+	got, err := c.images.GetImage(ctx, &computev1.GetImageRequest{Name: name})
+	if err == nil && got.GetName() == name {
+		return nil
+	}
+	if err != nil && status.Code(err) != codes.NotFound {
+		return fromRPC(err)
+	}
+	return &resource.Error{
+		Code:    resource.CodeNotFound,
+		Kind:    resource.KindImage,
+		Message: "The image id '[" + id.String() + "]' does not exist",
+	}
 }
 
 // bootVolume is the disk RunInstances creates from the machine image.

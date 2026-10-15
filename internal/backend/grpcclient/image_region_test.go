@@ -30,10 +30,6 @@ const (
 	otherProjectAMI = "ami-abcdefabcdefabcd"
 )
 
-// regionalImages keeps AMIs where they actually live. GetImage of a name in
-// this region returns a same-project image from another region when the id
-// matches, which is how a launch of that AMI succeeds today. CreateVolume
-// accepts every image. The caller must refuse before either create.
 type regionalImages struct {
 	computev1.UnimplementedImageServiceServer
 	computev1.UnimplementedInstanceServiceServer
@@ -43,6 +39,7 @@ type regionalImages struct {
 
 	mu        sync.Mutex
 	byName    map[string]*computev1.Image
+	getErr    error
 	gets      []string
 	volumes   int
 	instances int
@@ -54,21 +51,31 @@ func (s *regionalImages) GetImage(_ context.Context, req *computev1.GetImageRequ
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.gets = append(s.gets, req.GetName())
+	if s.getErr != nil {
+		return nil, s.getErr
+	}
 	if img, ok := s.byName[req.GetName()]; ok {
 		return img, nil
 	}
-	wantProject, err := projectOfName(req.GetName())
-	if err != nil {
-		return nil, status.Errorf(codes.NotFound, "image %s not found", req.GetName())
-	}
-	for name, img := range s.byName {
-		gotProject, perr := projectOfName(name)
-		if perr != nil || gotProject != wantProject || lastSegment(name) != lastSegment(req.GetName()) {
-			continue
-		}
+	if img, ok := s.sameProjectImage(req.GetName()); ok {
 		return img, nil
 	}
 	return nil, status.Errorf(codes.NotFound, "image %s not found", req.GetName())
+}
+
+func (s *regionalImages) sameProjectImage(asked string) (*computev1.Image, bool) {
+	wantProject, err := projectOfName(asked)
+	if err != nil {
+		return nil, false
+	}
+	for name, img := range s.byName {
+		gotProject, perr := projectOfName(name)
+		if perr != nil || gotProject != wantProject || lastSegment(name) != lastSegment(asked) {
+			continue
+		}
+		return img, true
+	}
+	return nil, false
 }
 
 func (s *regionalImages) ListVpcs(
@@ -171,6 +178,26 @@ func TestRunInstancesRequiresImageInCallerRegion(t *testing.T) {
 	t.Run("other project", func(t *testing.T) {
 		assertImageRefused(t, catalog, sub, otherProjectAMI)
 	})
+	t.Run("backend unavailable", func(t *testing.T) {
+		boot, client := startRegional(t, catalog)
+		boot.mu.Lock()
+		boot.getErr = status.Error(codes.Unavailable, "image store down")
+		boot.mu.Unlock()
+		_, err := client.RunInstances(context.Background(), backend.Mutation{
+			Scope: backend.Scope{Account: mustAccount(t)}, Key: "down", Fingerprint: "fp",
+		}, resource.RunInstancesRequest{
+			ImageID: mustImage(t, ownedAMI), InstanceType: "vws.small", SubnetID: sub, Count: 1,
+		})
+		var got *resource.Error
+		if !errors.As(err, &got) || got.Code != resource.CodeUnavailable || got.Message != "image store down" {
+			t.Fatalf("%v", err)
+		}
+		boot.mu.Lock()
+		defer boot.mu.Unlock()
+		if boot.volumes != 0 || boot.instances != 0 {
+			t.Fatalf("volumes %d instances %d", boot.volumes, boot.instances)
+		}
+	})
 	t.Run("owned", func(t *testing.T) {
 		boot, client := startRegional(t, catalog)
 		acc, err := client.RunInstances(context.Background(), backend.Mutation{
@@ -249,6 +276,7 @@ func startRegional(t *testing.T, catalog map[string]*computev1.Image) (*regional
 	t.Cleanup(func() { _ = conn.Close() })
 	client := computeClient{&api{
 		instances: computev1.NewInstanceServiceClient(conn),
+		images:    computev1.NewImageServiceClient(conn),
 		volumes:   storagev1.NewVolumeServiceClient(conn),
 		subnets:   networkv1.NewSubnetServiceClient(conn),
 		vpcs:      networkv1.NewVpcServiceClient(conn),
