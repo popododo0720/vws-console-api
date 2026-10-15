@@ -28,6 +28,11 @@ func ec2Wire(t *testing.T, e *resource.Error) wireErr {
 
 // TestEveryCodeHasAnEC2Error pins the EC2 code and status for each model
 // code. A new code fails here until it has a row.
+//
+// Client errors are a 400-series response. That set includes InvalidAction
+// and every *.NotFound code, answered here as 400. Server errors are a
+// 500-series response. RequestLimitExceeded is in that set and is 503.
+// https://docs.aws.amazon.com/AWSEC2/latest/APIReference/errors-overview.html
 func TestEveryCodeHasAnEC2Error(t *testing.T) {
 	want := map[resource.Code]wireErr{
 		resource.CodeInvalidArgument:     {400, "InvalidParameterValue"},
@@ -37,10 +42,10 @@ func TestEveryCodeHasAnEC2Error(t *testing.T) {
 		resource.CodeIdempotencyMismatch: {400, "IdempotentParameterMismatch"},
 		resource.CodeUnauthenticated:     {401, "AuthFailure"},
 		resource.CodePermissionDenied:    {403, "UnauthorizedOperation"},
-		resource.CodeResourceExhausted:   {400, "RequestLimitExceeded"},
+		resource.CodeResourceExhausted:   {503, "RequestLimitExceeded"},
 		resource.CodePayloadTooLarge:     {400, "InvalidParameterValue"},
 		resource.CodeUnavailable:         {503, "Unavailable"},
-		resource.CodeUnimplemented:       {501, "InvalidAction"},
+		resource.CodeUnimplemented:       {400, "InvalidAction"},
 		resource.CodeInternal:            {500, "InternalError"},
 	}
 	if len(want) != len(resource.Codes()) {

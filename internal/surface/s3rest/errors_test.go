@@ -16,6 +16,9 @@ type wireErr struct {
 
 // TestEveryCodeHasAnS3Error pins the S3 code and status for each model
 // code. A new code fails here until it has a row.
+//
+// NoSuchBucket and NoSuchKey are 404. EntityTooLarge is 400.
+// https://docs.aws.amazon.com/AmazonS3/latest/developerguide/ErrorResponses.html
 func TestEveryCodeHasAnS3Error(t *testing.T) {
 	want := map[resource.Code]wireErr{
 		resource.CodeInvalidArgument:     {400, "InvalidArgument"},
@@ -26,7 +29,7 @@ func TestEveryCodeHasAnS3Error(t *testing.T) {
 		resource.CodeUnauthenticated:     {403, "AccessDenied"},
 		resource.CodePermissionDenied:    {403, "AccessDenied"},
 		resource.CodeResourceExhausted:   {503, "SlowDown"},
-		resource.CodePayloadTooLarge:     {413, "EntityTooLarge"},
+		resource.CodePayloadTooLarge:     {400, "EntityTooLarge"},
 		resource.CodeUnavailable:         {503, "ServiceUnavailable"},
 		resource.CodeUnimplemented:       {501, "NotImplemented"},
 		resource.CodeInternal:            {500, "InternalError"},
