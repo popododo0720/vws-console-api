@@ -27,7 +27,8 @@ func TestVerifierDelegatesToAuthenticator(t *testing.T) {
 	}
 	temp := Credential{AccessKey: "ASIATEMP", Secret: "tmpsecret", Account: account, SessionToken: "tok-1"}
 	var got AuthRequest
-	v := NewVerifier(Verifier{Service: ServiceEC2, Region: resource.RegionName, Now: func() time.Time { return now },
+	v := NewVerifier(Verifier{
+		Service: ServiceEC2, Region: resource.RegionName, Now: func() time.Time { return now },
 		Auth: authFunc(func(_ context.Context, req AuthRequest) (Identity, error) {
 			got = req
 			switch req.AccessKeyID {
@@ -42,7 +43,8 @@ func TestVerifierDelegatesToAuthenticator(t *testing.T) {
 				return Identity{Account: account, Principal: "arn:vws:sts::123456789012:assumed-role/ops/s1"}, nil
 			}
 			return Identity{}, ErrUnknownKey
-		})})
+		}),
+	})
 
 	caller, err := v.Verify(signed(t, temp, ServiceEC2, now, http.MethodPost, "http://127.0.0.1:8081/", "Action=DescribeVpcs"))
 	if err != nil || caller.Principal != "arn:vws:sts::123456789012:assumed-role/ops/s1" || caller.Subject != "ASIATEMP" {
