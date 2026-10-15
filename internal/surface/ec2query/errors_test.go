@@ -64,7 +64,9 @@ func TestInvalidAMIIDNotFoundShape(t *testing.T) {
 	rec := httptest.NewRecorder()
 	writeErr(rec, req, &resource.Error{Code: resource.CodeNotFound, Kind: resource.KindImage, Message: msg})
 	const want = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n" +
-		"<Response><Errors><Error><Code>InvalidAMIID.NotFound</Code><Message>" + msg + "</Message></Error></Errors><RequestID>req-ami</RequestID></Response>"
+		"<Response><Errors><Error><Code>InvalidAMIID.NotFound</Code>" +
+		"<Message>" + msg + "</Message>" +
+		"</Error></Errors><RequestID>req-ami</RequestID></Response>"
 	if rec.Code != http.StatusBadRequest || rec.Body.String() != want {
 		t.Fatalf("status %d body %q", rec.Code, rec.Body.String())
 	}
