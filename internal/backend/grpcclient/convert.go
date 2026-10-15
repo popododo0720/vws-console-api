@@ -670,6 +670,13 @@ func fromRPC(err error) error {
 }
 
 func reasonError(reason string, recon *commonv1.ReconciliationFailure, msg string, code codes.Code) *resource.Error {
+	if id, ok := refusedImageID(msg); ok && missingImage(reason, code) {
+		return &resource.Error{
+			Code:    resource.CodeNotFound,
+			Kind:    resource.KindImage,
+			Message: "The image id '[" + id + "]' does not exist",
+		}
+	}
 	switch reason {
 	case "RESOURCE_NOT_FOUND":
 		return &resource.Error{Code: resource.CodeNotFound, Message: msg}
@@ -684,13 +691,6 @@ func reasonError(reason string, recon *commonv1.ReconciliationFailure, msg strin
 	case "QUOTA_EXCEEDED":
 		return &resource.Error{Code: resource.CodeResourceExhausted, Message: msg}
 	case "RECONCILIATION_FAILED":
-		// Code 5 plus "image <name> not found" is a missing AMI. The name has
-		// to be present. Every other reconciliation failure stays as it was.
-		rest, imageSentence := strings.CutPrefix(msg, "image ")
-		name, named := strings.CutSuffix(rest, " not found")
-		if code == codes.NotFound && imageSentence && named && name != "" {
-			return &resource.Error{Code: resource.CodeNotFound, Kind: resource.KindImage, Message: msg}
-		}
 		if recon != nil && recon.GetRetryable() {
 			return &resource.Error{Code: resource.CodeUnavailable, Message: msg}
 		}
@@ -698,6 +698,32 @@ func reasonError(reason string, recon *commonv1.ReconciliationFailure, msg strin
 	default:
 		return &resource.Error{Code: codeFromGRPC(code), Message: msg}
 	}
+}
+
+// missingImage is the live RunInstances path and the storage operation it wraps.
+// Compute returns VOLUME_FAILED after the boot volume's storage NOT_FOUND.
+// Storage itself returns code 5 RECONCILIATION_FAILED for the same image.
+func missingImage(reason string, code codes.Code) bool {
+	return reason == "VOLUME_FAILED" || (reason == "RECONCILIATION_FAILED" && code == codes.NotFound)
+}
+
+// refusedImageID reads the public AMI id from an "image <name> not found" sentence.
+// The name may be a resource path, and the sentence may follow a volume prefix.
+// A name that is not an AMI id does not match.
+func refusedImageID(msg string) (string, bool) {
+	_, rest, ok := strings.Cut(msg, "image ")
+	if !ok {
+		return "", false
+	}
+	name, ok := strings.CutSuffix(rest, " not found")
+	if !ok || name == "" || strings.ContainsAny(name, " \t") {
+		return "", false
+	}
+	id, err := resource.Parse[resource.ImageID](lastSegment(name))
+	if err != nil {
+		return "", false
+	}
+	return id.String(), true
 }
 
 func codeFromGRPC(c codes.Code) resource.Code {

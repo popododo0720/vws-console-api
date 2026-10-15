@@ -82,11 +82,15 @@ func imageCloneMessage(t *testing.T) string {
 	return "image " + imageName(project(mustAccount(t)), "ami-0123456789abcdef0") + " not found"
 }
 
-func wantImageNotFound(t *testing.T, err error, msg string) {
+func wantImageNotFound(t *testing.T, err error) {
 	t.Helper()
+	const want = "The image id '[ami-0123456789abcdef0]' does not exist"
 	e := resource.AsError(err)
-	if e == nil || e.Code != resource.CodeNotFound || e.Kind != resource.KindImage || e.Message != msg {
-		t.Fatalf("got %#v, want NotFound image %q", e, msg)
+	if e == nil || e.Code != resource.CodeNotFound || e.Kind != resource.KindImage || e.Message != want {
+		t.Fatalf("got %#v, want NotFound image %q", e, want)
+	}
+	if strings.Contains(e.Message, "projects/") || strings.Contains(e.Message, "/") {
+		t.Fatalf("internal path in %q", e.Message)
 	}
 }
 
@@ -134,10 +138,10 @@ func TestRefusedImageCloneIsInvalidAMI(t *testing.T) {
 		return err
 	}
 	t.Run("RunInstances", func(t *testing.T) {
-		wantImageNotFound(t, run(false), msg)
+		wantImageNotFound(t, run(false))
 	})
 	t.Run("RunInstancesRetryable", func(t *testing.T) {
-		wantImageNotFound(t, run(true), msg)
+		wantImageNotFound(t, run(true))
 	})
 	t.Run("CreateVolume", func(t *testing.T) {
 		boot := &refusedImage{msg: msg}
@@ -145,7 +149,7 @@ func TestRefusedImageCloneIsInvalidAMI(t *testing.T) {
 		_, err := client.CreateVolume(context.Background(), backend.Mutation{
 			Scope: backend.Scope{Account: mustAccount(t)}, Key: "vol-absent", Fingerprint: "fp",
 		}, resource.CreateVolumeRequest{SizeGiB: 8, Zone: resource.ZoneName, Type: resource.VolumeGP2})
-		wantImageNotFound(t, err, msg)
+		wantImageNotFound(t, err)
 	})
 	for _, action := range []struct {
 		name string
@@ -191,7 +195,7 @@ func TestRefusedImageCloneIsInvalidAMI(t *testing.T) {
 			if got.Action != action.want || got.State != resource.OperationFailed {
 				t.Fatalf("action %s state %s", got.Action, got.State)
 			}
-			wantImageNotFound(t, got.Error, msg)
+			wantImageNotFound(t, got.Error)
 		})
 	}
 }
@@ -208,38 +212,74 @@ func TestReconciliationMappingsStay(t *testing.T) {
 		want      resource.Code
 		kind      resource.Kind
 	}{
-		{name: "internal image sentence", code: codes.Internal, reason: "RECONCILIATION_FAILED",
-			msg: imageMsg, domain: "vws.dev", want: resource.CodeInternal},
-		{name: "not found volume sentence", code: codes.NotFound, reason: "RECONCILIATION_FAILED",
-			msg: "volume vol-0123456789abcdef0 not found", domain: "vws.dev", want: resource.CodeInternal},
-		{name: "image sentence without a name", code: codes.NotFound, reason: "RECONCILIATION_FAILED",
-			msg: "image not found", domain: "vws.dev", want: resource.CodeInternal},
-		{name: "image sentence with an empty name", code: codes.NotFound, reason: "RECONCILIATION_FAILED",
-			msg: "image  not found", domain: "vws.dev", want: resource.CodeInternal},
-		{name: "retryable volume sentence", code: codes.NotFound, reason: "RECONCILIATION_FAILED",
+		{
+			name: "internal image sentence", code: codes.Internal, reason: "RECONCILIATION_FAILED",
+			msg: imageMsg, domain: "vws.dev", want: resource.CodeInternal,
+		},
+		{
+			name: "not found volume sentence", code: codes.NotFound, reason: "RECONCILIATION_FAILED",
+			msg: "volume vol-0123456789abcdef0 not found", domain: "vws.dev", want: resource.CodeInternal,
+		},
+		{
+			name: "image sentence without a name", code: codes.NotFound, reason: "RECONCILIATION_FAILED",
+			msg: "image not found", domain: "vws.dev", want: resource.CodeInternal,
+		},
+		{
+			name: "image sentence with an empty name", code: codes.NotFound, reason: "RECONCILIATION_FAILED",
+			msg: "image  not found", domain: "vws.dev", want: resource.CodeInternal,
+		},
+		{
+			name: "retryable volume sentence", code: codes.NotFound, reason: "RECONCILIATION_FAILED",
 			msg: "volume vol-0123456789abcdef0 not found", retryable: true, domain: "vws.dev",
-			want: resource.CodeUnavailable},
-		{name: "retryable plain", code: codes.Unavailable, reason: "RECONCILIATION_FAILED",
-			msg: "not ready", retryable: true, domain: "vws.dev", want: resource.CodeUnavailable},
-		{name: "permanent plain", code: codes.Internal, reason: "RECONCILIATION_FAILED",
-			msg: "failed", domain: "vws.dev", want: resource.CodeInternal},
-		{name: "resource not found keeps no kind", code: codes.NotFound, reason: "RESOURCE_NOT_FOUND",
-			msg: imageMsg, domain: "vws.dev", want: resource.CodeNotFound},
-		{name: "dependency stays conflict", code: codes.FailedPrecondition, reason: "DEPENDENCY_NOT_READY",
-			msg: "instance cannot be stopped", domain: "vws.dev", want: resource.CodeConflict},
-		{name: "already exists", code: codes.AlreadyExists, reason: "ALREADY_EXISTS",
-			msg: "exists", domain: "vws.dev", want: resource.CodeAlreadyExists},
-		{name: "invalid spec", code: codes.InvalidArgument, reason: "INVALID_SPEC",
-			msg: "bad", domain: "vws.dev", want: resource.CodeInvalidArgument},
-		{name: "quota", code: codes.ResourceExhausted, reason: "QUOTA_EXCEEDED",
-			msg: "quota", domain: "vws.dev", want: resource.CodeResourceExhausted},
-		{name: "idempotency", code: codes.Aborted, reason: "IDEMPOTENCY_CONFLICT",
-			msg: "mismatch", domain: "vws.dev", want: resource.CodeIdempotencyMismatch},
+			want: resource.CodeUnavailable,
+		},
+		{
+			name: "retryable plain", code: codes.Unavailable, reason: "RECONCILIATION_FAILED",
+			msg: "not ready", retryable: true, domain: "vws.dev", want: resource.CodeUnavailable,
+		},
+		{
+			name: "permanent plain", code: codes.Internal, reason: "RECONCILIATION_FAILED",
+			msg: "failed", domain: "vws.dev", want: resource.CodeInternal,
+		},
+		{
+			name: "resource not found keeps no kind", code: codes.NotFound, reason: "RESOURCE_NOT_FOUND",
+			msg: imageMsg, domain: "vws.dev", want: resource.CodeNotFound,
+		},
+		{
+			name: "dependency stays conflict", code: codes.FailedPrecondition, reason: "DEPENDENCY_NOT_READY",
+			msg: "instance cannot be stopped", domain: "vws.dev", want: resource.CodeConflict,
+		},
+		{
+			name: "volume failed without a missing image", code: codes.FailedPrecondition,
+			reason: "VOLUME_FAILED", domain: "vws.dev", want: resource.CodeConflict,
+			msg: "volume " + volumeName(project(mustAccount(t)), "vol-0123456789abcdef0") +
+				" failed in storage: ceph pool rbd-ssd is full",
+		},
+		{
+			name: "already exists", code: codes.AlreadyExists, reason: "ALREADY_EXISTS",
+			msg: "exists", domain: "vws.dev", want: resource.CodeAlreadyExists,
+		},
+		{
+			name: "invalid spec", code: codes.InvalidArgument, reason: "INVALID_SPEC",
+			msg: "bad", domain: "vws.dev", want: resource.CodeInvalidArgument,
+		},
+		{
+			name: "quota", code: codes.ResourceExhausted, reason: "QUOTA_EXCEEDED",
+			msg: "quota", domain: "vws.dev", want: resource.CodeResourceExhausted,
+		},
+		{
+			name: "idempotency", code: codes.Aborted, reason: "IDEMPOTENCY_CONFLICT",
+			msg: "mismatch", domain: "vws.dev", want: resource.CodeIdempotencyMismatch,
+		},
 		{name: "bare not found", code: codes.NotFound, msg: "missing", want: resource.CodeNotFound},
-		{name: "unknown reason uses the code", code: codes.NotFound, reason: "SOMETHING_ELSE",
-			msg: imageMsg, domain: "vws.dev", want: resource.CodeNotFound},
-		{name: "foreign domain uses the code", code: codes.NotFound, reason: "RECONCILIATION_FAILED",
-			msg: imageMsg, domain: "other.dev", want: resource.CodeNotFound},
+		{
+			name: "unknown reason uses the code", code: codes.NotFound, reason: "SOMETHING_ELSE",
+			msg: imageMsg, domain: "vws.dev", want: resource.CodeNotFound,
+		},
+		{
+			name: "foreign domain uses the code", code: codes.NotFound, reason: "RECONCILIATION_FAILED",
+			msg: imageMsg, domain: "other.dev", want: resource.CodeNotFound,
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
