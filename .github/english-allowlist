@@ -1,0 +1,5 @@
+# check-english.sh files: files that may contain Hangul. One "<glob> <reason>" per line.
+# A glob matches a path from git ls-files with bash pattern rules (* also crosses /). Keep the list short.
+internal/resource/tags_test.go Test data: multi-byte tag keys and values at the 128/256-character limits.
+internal/backend/grpcclient/tag_labels_test.go Test data: a 255-byte Unicode tag value mapped to a label.
+e2e/e2e.py Test data: a Unicode tag key and value in the end-to-end tag case.
