@@ -38,8 +38,12 @@ type roleXML struct {
 }
 
 func toRole(r iam.Role) roleXML {
-	return roleXML{Path: r.Path, RoleName: r.Name, RoleID: r.ID, Arn: r.ARN, CreateDate: stamp(r.Created),
-		AssumeRolePolicyDocument: policyDoc(r.TrustPolicy), Description: r.Description, MaxSessionDuration: r.MaxSessionDuration}
+	return roleXML{
+		Path: r.Path, RoleName: r.Name, RoleID: r.ID, Arn: r.ARN, CreateDate: stamp(r.Created),
+		AssumeRolePolicyDocument: policyDoc(r.TrustPolicy),
+		Description:              r.Description,
+		MaxSessionDuration:       r.MaxSessionDuration,
+	}
 }
 
 type policyXML struct {
@@ -57,9 +61,11 @@ type policyXML struct {
 }
 
 func toPolicy(p iam.ManagedPolicy) policyXML {
-	return policyXML{PolicyName: p.Name, PolicyID: p.ID, Arn: p.ARN, Path: p.Path, DefaultVersionID: "v1",
+	return policyXML{
+		PolicyName: p.Name, PolicyID: p.ID, Arn: p.ARN, Path: p.Path, DefaultVersionID: "v1",
 		AttachmentCount: p.AttachmentCount, IsAttachable: true, Description: p.Description,
-		CreateDate: stamp(p.Created), UpdateDate: stamp(p.Updated)}
+		CreateDate: stamp(p.Created), UpdateDate: stamp(p.Updated),
+	}
 }
 
 type attachedXML struct {

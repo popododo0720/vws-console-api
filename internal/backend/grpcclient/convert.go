@@ -145,7 +145,7 @@ func actionOf(resourceName string, verb commonv1.OperationVerb) (resource.Action
 }
 
 func containsSegment(name, segment string) bool {
-	return len(name) > 0 && (segmentOf(name, segment))
+	return len(name) > 0 && segmentOf(name, segment)
 }
 
 func segmentOf(name, segment string) bool {

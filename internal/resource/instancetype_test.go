@@ -15,8 +15,10 @@ func TestInstanceTypeMapsToNearestVWSType(t *testing.T) {
 		name string
 		size size
 	}{
-		{"vws.small", size{1, 1}}, {"vws.medium", size{2, 4}},
-		{"vws.large", size{4, 8}}, {"vws.xlarge", size{8, 16}},
+		{"vws.small", size{1, 1}},
+		{"vws.medium", size{2, 4}},
+		{"vws.large", size{4, 8}},
+		{"vws.xlarge", size{8, 16}},
 	}
 	t3 := []size{{2, 0.5}, {2, 1}, {2, 2}, {2, 4}, {2, 8}, {4, 16}, {8, 32}}
 	steps := []string{"nano", "micro", "small", "medium", "large", "xlarge", "2xlarge"}

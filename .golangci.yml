@@ -1,3 +1,5 @@
+# Common baseline: vws-deploy .github/golangci-common.yml (vws-deploy#300). Existing lll findings
+# are fixed in a follow-up; until then new-from-merge-base holds changed lines to the baseline.
 # golangci-lint v2. Each architectural rule in AGENTS.md that a linter can
 # check is checked here. The rule names below are cited in that table.
 version: "2"
@@ -10,24 +12,33 @@ linters:
   enable:
     - bodyclose
     - contextcheck
-    - errname
-    - nilerr
-    - nilnil
-    - sloglint
-    - wrapcheck
     - depguard
+    - errcheck
+    - errname
     - errorlint
     - exhaustive
     - gochecknoglobals
     - gocritic
+    - govet
+    - ineffassign
+    - lll
     - misspell
+    - nilerr
+    - nilnil
     - noctx
     - nolintlint
     - revive
+    - sloglint
+    - staticcheck
     - tagliatelle
     - unconvert
+    - unused
     - usestdlibvars
+    - wrapcheck
   settings:
+    lll:
+      line-length: 120
+      tab-width: 1
     errcheck:
       check-type-assertions: true
       check-blank: true
@@ -125,9 +136,13 @@ linters:
     paths:
       - third_party
 
+issues:
+  new-from-merge-base: origin/main
+  max-issues-per-linter: 0
+  max-same-issues: 0
 formatters:
   enable:
-    - gofmt
+    - gofumpt
     - goimports
   exclusions:
     generated: lax
