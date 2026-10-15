@@ -68,14 +68,12 @@ func (s *regionalImages) sameProjectImage(asked string) (*computev1.Image, bool)
 	if err != nil {
 		return nil, false
 	}
-	for name, img := range s.byName {
+	for name := range s.byName {
 		gotProject, perr := projectOfName(name)
 		if perr != nil || gotProject != wantProject || lastSegment(name) != lastSegment(asked) {
 			continue
 		}
-		copied := *img
-		copied.Name = asked
-		return &copied, true
+		return &computev1.Image{Name: asked}, true
 	}
 	return nil, false
 }

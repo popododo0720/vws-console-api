@@ -61,7 +61,7 @@ func (c computeClient) RunInstances(ctx context.Context, m backend.Mutation, req
 		}
 		keyPair = keyPairName(projectID, key.ID.String())
 	}
-	if err := c.imageInRegion(ctx, projectID, req.ImageID); err != nil {
+	if err := imageInRegion(m.Account, req.ImageID); err != nil {
 		return resource.Accepted[resource.Instance]{}, err
 	}
 	items := make([]resource.Instance, 0, req.Count)
@@ -141,14 +141,11 @@ func (c computeClient) RunInstances(ctx context.Context, m backend.Mutation, req
 	return resource.Accepted[resource.Instance]{Operation: op, Items: items}, nil
 }
 
-func (c computeClient) imageInRegion(ctx context.Context, projectID string, id resource.ImageID) error {
-	name := imageName(projectID, id.String())
-	got, err := c.images.GetImage(ctx, &computev1.GetImageRequest{Name: name})
-	if err == nil && got.GetName() == name {
-		return nil
-	}
-	if err != nil && status.Code(err) != codes.NotFound {
-		return fromRPC(err)
+func imageInRegion(account resource.AccountID, id resource.ImageID) error {
+	for _, img := range resource.KnownImages(account) {
+		if img.ID == id && img.Name == resource.RegionName {
+			return nil
+		}
 	}
 	return &resource.Error{
 		Code:    resource.CodeNotFound,
