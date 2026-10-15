@@ -492,8 +492,15 @@ func stsActions() map[string]spec {
 					Credentials credentialsXML `xml:"Credentials"`
 					RoleID      string         `xml:"AssumedRoleUser>AssumedRoleId"`
 					Arn         string         `xml:"AssumedRoleUser>Arn"`
-				}{credentialsXML{AccessKeyID: got.Key.AccessKey, SecretAccessKey: got.Key.Secret, SessionToken: got.Key.SessionToken, Expiration: stamp(got.Key.Expires)},
-					got.AssumedRoleID, got.ARN}, nil
+				}{
+					credentialsXML{
+						AccessKeyID:     got.Key.AccessKey,
+						SecretAccessKey: got.Key.Secret,
+						SessionToken:    got.Key.SessionToken,
+						Expiration:      stamp(got.Key.Expires),
+					},
+					got.AssumedRoleID, got.ARN,
+				}, nil
 			},
 		},
 	}
