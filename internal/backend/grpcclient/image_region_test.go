@@ -73,7 +73,9 @@ func (s *regionalImages) sameProjectImage(asked string) (*computev1.Image, bool)
 		if perr != nil || gotProject != wantProject || lastSegment(name) != lastSegment(asked) {
 			continue
 		}
-		return img, true
+		copied := *img
+		copied.Name = asked
+		return &copied, true
 	}
 	return nil, false
 }
@@ -178,30 +180,52 @@ func TestRunInstancesRequiresImageInCallerRegion(t *testing.T) {
 	t.Run("other project", func(t *testing.T) {
 		assertImageRefused(t, catalog, sub, otherProjectAMI)
 	})
-	t.Run("backend unavailable", func(t *testing.T) {
+	t.Run("catalog image service down", func(t *testing.T) {
 		boot, client := startRegional(t, catalog)
 		boot.mu.Lock()
 		boot.getErr = status.Error(codes.Unavailable, "image store down")
 		boot.mu.Unlock()
-		_, err := client.RunInstances(context.Background(), backend.Mutation{
+		acc, err := client.RunInstances(context.Background(), backend.Mutation{
 			Scope: backend.Scope{Account: mustAccount(t)}, Key: "down", Fingerprint: "fp",
 		}, resource.RunInstancesRequest{
 			ImageID: mustImage(t, ownedAMI), InstanceType: "vws.small", SubnetID: sub, Count: 1,
 		})
-		var got *resource.Error
-		if !errors.As(err, &got) || got.Code != resource.CodeUnavailable || got.Message != "image store down" {
-			t.Fatalf("%v", err)
+		if err != nil || len(acc.Items) != 1 || acc.Items[0].ImageID.String() != ownedAMI {
+			t.Fatalf("%v %+v", err, acc.Items)
 		}
 		boot.mu.Lock()
 		defer boot.mu.Unlock()
-		if boot.volumes != 0 || boot.instances != 0 {
-			t.Fatalf("volumes %d instances %d", boot.volumes, boot.instances)
+		if boot.volumes != 1 || boot.instances != 1 || boot.image != ownedName {
+			t.Fatalf("volumes %d instances %d image %s", boot.volumes, boot.instances, boot.image)
 		}
 	})
 	t.Run("owned", func(t *testing.T) {
 		boot, client := startRegional(t, catalog)
 		acc, err := client.RunInstances(context.Background(), backend.Mutation{
 			Scope: backend.Scope{Account: mustAccount(t)}, Key: "owned", Fingerprint: "fp",
+		}, resource.RunInstancesRequest{
+			ImageID: mustImage(t, ownedAMI), InstanceType: "vws.small", SubnetID: sub, Count: 1,
+		})
+		if err != nil || len(acc.Items) != 1 || acc.Items[0].ImageID.String() != ownedAMI {
+			t.Fatalf("%v %+v", err, acc.Items)
+		}
+		boot.mu.Lock()
+		defer boot.mu.Unlock()
+		if boot.volumes != 1 || boot.instances != 1 || boot.image != ownedName {
+			t.Fatalf("volumes %d instances %d image %s", boot.volumes, boot.instances, boot.image)
+		}
+	})
+	t.Run("catalog", func(t *testing.T) {
+		without := map[string]*computev1.Image{}
+		for name, img := range catalog {
+			if name == ownedName {
+				continue
+			}
+			without[name] = img
+		}
+		boot, client := startRegional(t, without)
+		acc, err := client.RunInstances(context.Background(), backend.Mutation{
+			Scope: backend.Scope{Account: mustAccount(t)}, Key: "catalog", Fingerprint: "fp",
 		}, resource.RunInstancesRequest{
 			ImageID: mustImage(t, ownedAMI), InstanceType: "vws.small", SubnetID: sub, Count: 1,
 		})
