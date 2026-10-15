@@ -684,6 +684,13 @@ func reasonError(reason string, recon *commonv1.ReconciliationFailure, msg strin
 	case "QUOTA_EXCEEDED":
 		return &resource.Error{Code: resource.CodeResourceExhausted, Message: msg}
 	case "RECONCILIATION_FAILED":
+		// Code 5 plus "image <name> not found" is a missing AMI. The name has
+		// to be present. Every other reconciliation failure stays as it was.
+		rest, imageSentence := strings.CutPrefix(msg, "image ")
+		name, named := strings.CutSuffix(rest, " not found")
+		if code == codes.NotFound && imageSentence && named && name != "" {
+			return &resource.Error{Code: resource.CodeNotFound, Kind: resource.KindImage, Message: msg}
+		}
 		if recon != nil && recon.GetRetryable() {
 			return &resource.Error{Code: resource.CodeUnavailable, Message: msg}
 		}

@@ -57,6 +57,19 @@ func TestEveryCodeHasAnEC2Error(t *testing.T) {
 	}
 }
 
+func TestInvalidAMIIDNotFoundShape(t *testing.T) {
+	const msg = "image projects/a123456789012/regions/vws-1/images/ami-0123456789abcdef0 not found"
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/", nil)
+	req.Header.Set("X-Request-Id", "req-ami")
+	rec := httptest.NewRecorder()
+	writeErr(rec, req, &resource.Error{Code: resource.CodeNotFound, Kind: resource.KindImage, Message: msg})
+	const want = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n" +
+		"<Response><Errors><Error><Code>InvalidAMIID.NotFound</Code><Message>" + msg + "</Message></Error></Errors><RequestID>req-ami</RequestID></Response>"
+	if rec.Code != http.StatusBadRequest || rec.Body.String() != want {
+		t.Fatalf("status %d body %q", rec.Code, rec.Body.String())
+	}
+}
+
 func TestEC2ErrorByKind(t *testing.T) {
 	for _, tc := range []struct {
 		code resource.Code

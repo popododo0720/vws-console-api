@@ -178,3 +178,89 @@ func TestRefusedImageCloneIsInvalidAMI(t *testing.T) {
 		})
 	}
 }
+
+func TestReconciliationMappingsStay(t *testing.T) {
+	imageMsg := imageCloneMessage(t)
+	cases := []struct {
+		name      string
+		code      codes.Code
+		reason    string
+		msg       string
+		retryable bool
+		domain    string
+		want      resource.Code
+		kind      resource.Kind
+	}{
+		{"internal image sentence", codes.Internal, "RECONCILIATION_FAILED", imageMsg, false, "vws.dev", resource.CodeInternal, 0},
+		{"not found volume sentence", codes.NotFound, "RECONCILIATION_FAILED", "volume vol-0123456789abcdef0 not found", false, "vws.dev", resource.CodeInternal, 0},
+		{"image sentence without a name", codes.NotFound, "RECONCILIATION_FAILED", "image not found", false, "vws.dev", resource.CodeInternal, 0},
+		{"image sentence with an empty name", codes.NotFound, "RECONCILIATION_FAILED", "image  not found", false, "vws.dev", resource.CodeInternal, 0},
+		{"retryable volume sentence", codes.NotFound, "RECONCILIATION_FAILED", "volume vol-0123456789abcdef0 not found", true, "vws.dev", resource.CodeUnavailable, 0},
+		{"retryable plain", codes.Unavailable, "RECONCILIATION_FAILED", "not ready", true, "vws.dev", resource.CodeUnavailable, 0},
+		{"permanent plain", codes.Internal, "RECONCILIATION_FAILED", "failed", false, "vws.dev", resource.CodeInternal, 0},
+		{"resource not found keeps no kind", codes.NotFound, "RESOURCE_NOT_FOUND", imageMsg, false, "vws.dev", resource.CodeNotFound, 0},
+		{"dependency stays conflict", codes.FailedPrecondition, "DEPENDENCY_NOT_READY", "instance cannot be stopped", false, "vws.dev", resource.CodeConflict, 0},
+		{"already exists", codes.AlreadyExists, "ALREADY_EXISTS", "exists", false, "vws.dev", resource.CodeAlreadyExists, 0},
+		{"invalid spec", codes.InvalidArgument, "INVALID_SPEC", "bad", false, "vws.dev", resource.CodeInvalidArgument, 0},
+		{"quota", codes.ResourceExhausted, "QUOTA_EXCEEDED", "quota", false, "vws.dev", resource.CodeResourceExhausted, 0},
+		{"idempotency", codes.Aborted, "IDEMPOTENCY_CONFLICT", "mismatch", false, "vws.dev", resource.CodeIdempotencyMismatch, 0},
+		{"bare not found", codes.NotFound, "", "missing", false, "", resource.CodeNotFound, 0},
+		{"unknown reason uses the code", codes.NotFound, "SOMETHING_ELSE", imageMsg, false, "vws.dev", resource.CodeNotFound, 0},
+		{"foreign domain uses the code", codes.NotFound, "RECONCILIATION_FAILED", imageMsg, false, "other.dev", resource.CodeNotFound, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := fromRPC(statusFor(t, tc.code, tc.reason, tc.domain, tc.msg, tc.retryable))
+			e := resource.AsError(err)
+			if e == nil || e.Code != tc.want || e.Kind != tc.kind || e.Message != tc.msg {
+				t.Fatalf("got %#v, want code %v kind %v message %q", e, tc.want, tc.kind, tc.msg)
+			}
+		})
+	}
+	st, err := status.New(codes.NotFound, "volume vol-0123456789abcdef0 not found").WithDetails(
+		&errdetails.ErrorInfo{Reason: "RECONCILIATION_FAILED", Domain: "vws.dev"},
+		&commonv1.ReconciliationFailure{Retryable: false},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta, err := anypb.New(&commonv1.OperationMetadata{
+		Resource:   volumeName(project(mustAccount(t)), "vol-0123456789abcdef0"),
+		Verb:       commonv1.OperationVerb_OPERATION_VERB_CREATE,
+		CreateTime: timestamppb.Now(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := operationFrom(&longrunningpb.Operation{
+		Name:     operationName(project(mustAccount(t)), "5f0c2a9e1b7d4c3a"),
+		Metadata: meta,
+		Done:     true,
+		Result:   &longrunningpb.Operation_Error{Error: st.Proto()},
+	}, resource.ServiceCompute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Action != resource.ActionCreateVolume || got.Error == nil || got.Error.Code != resource.CodeInternal || got.Error.Kind != 0 {
+		t.Fatalf("%+v", got)
+	}
+}
+
+func statusFor(t *testing.T, code codes.Code, reason, domain, msg string, retryable bool) error {
+	t.Helper()
+	if domain == "" {
+		return status.Error(code, msg)
+	}
+	info := &errdetails.ErrorInfo{Reason: reason, Domain: domain}
+	var st *status.Status
+	var err error
+	if reason == "RECONCILIATION_FAILED" {
+		st, err = status.New(code, msg).WithDetails(info, &commonv1.ReconciliationFailure{Retryable: retryable})
+	} else {
+		st, err = status.New(code, msg).WithDetails(info)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	return st.Err()
+}
