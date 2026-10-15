@@ -94,6 +94,9 @@ const (
 	VolumeAvailable VolumeState = "available"
 	VolumeInUse     VolumeState = "in-use"
 	VolumeDeleting  VolumeState = "deleting"
+	// VolumeError is the EC2 status of a volume whose reconcile failed.
+	// https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_Volume.html
+	VolumeError VolumeState = "error"
 )
 
 // Volume is a block device.

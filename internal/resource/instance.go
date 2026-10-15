@@ -71,6 +71,23 @@ func (s *InstanceState) UnmarshalText(b []byte) error {
 	return nil
 }
 
+// StateReason is the EC2 explanation of the latest state transition.
+// An empty value means EC2 would omit stateReason.
+type StateReason struct {
+	Code    string `json:"code,omitempty"`
+	Message string `json:"message,omitempty"`
+}
+
+const (
+	// ServerInternalError is the EC2 state-reason code for an instance that
+	// terminated during launch because of an internal error.
+	// https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_StateReason.html
+	ServerInternalError = "Server.InternalError"
+	// ServerInternalErrorMessage is the message EC2 publishes with that code.
+	ServerInternalErrorMessage = "Server.InternalError: " +
+		"An internal error caused the instance to terminate during launch"
+)
+
 // EC2Code is the numeric code EC2 Query uses for s.
 func (s InstanceState) EC2Code() int {
 	switch s {
@@ -99,6 +116,7 @@ type Instance struct {
 	ReservationID ReservationID `json:"reservationId"`
 	OwnerID       AccountID     `json:"ownerId"`
 	State         InstanceState `json:"state"`
+	StateReason   StateReason   `json:"stateReason,omitzero"`
 	ImageID       ImageID       `json:"imageId"`
 	InstanceType  string        `json:"instanceType"`
 	SubnetID      SubnetID      `json:"subnetId"`

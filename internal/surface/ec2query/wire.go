@@ -36,22 +36,23 @@ type instanceSet struct {
 }
 
 type instanceItem struct {
-	InstanceID   string    `xml:"instanceId"`
-	ImageID      string    `xml:"imageId"`
-	InstanceType string    `xml:"instanceType"`
-	KeyName      string    `xml:"keyName,omitempty"`
-	SubnetID     string    `xml:"subnetId"`
-	VpcID        string    `xml:"vpcId,omitempty"`
-	LaunchTime   string    `xml:"launchTime,omitempty"`
-	PublicIP     string    `xml:"ipAddress,omitempty"`
-	NICs         *nicSet   `xml:"networkInterfaceSet,omitempty"`
-	Zone         string    `xml:"placement>availabilityZone"`
-	PrivateIP    string    `xml:"privateIpAddress,omitempty"`
-	State        stateXML  `xml:"instanceState"`
-	Tags         *tagSet   `xml:"tagSet,omitempty"`
-	RootDevice   string    `xml:"rootDeviceName,omitempty"`
-	RootType     string    `xml:"rootDeviceType,omitempty"`
-	Blocks       *blockSet `xml:"blockDeviceMapping,omitempty"`
+	InstanceID   string          `xml:"instanceId"`
+	ImageID      string          `xml:"imageId"`
+	InstanceType string          `xml:"instanceType"`
+	KeyName      string          `xml:"keyName,omitempty"`
+	SubnetID     string          `xml:"subnetId"`
+	VpcID        string          `xml:"vpcId,omitempty"`
+	LaunchTime   string          `xml:"launchTime,omitempty"`
+	PublicIP     string          `xml:"ipAddress,omitempty"`
+	NICs         *nicSet         `xml:"networkInterfaceSet,omitempty"`
+	Zone         string          `xml:"placement>availabilityZone"`
+	PrivateIP    string          `xml:"privateIpAddress,omitempty"`
+	State        stateXML        `xml:"instanceState"`
+	Reason       *stateReasonXML `xml:"stateReason,omitempty"`
+	Tags         *tagSet         `xml:"tagSet,omitempty"`
+	RootDevice   string          `xml:"rootDeviceName,omitempty"`
+	RootType     string          `xml:"rootDeviceType,omitempty"`
+	Blocks       *blockSet       `xml:"blockDeviceMapping,omitempty"`
 }
 
 type blockSet struct {
@@ -128,6 +129,11 @@ func tagSetOf(tags map[string]string) *tagSet {
 type stateXML struct {
 	Code int    `xml:"code"`
 	Name string `xml:"name"`
+}
+
+type stateReasonXML struct {
+	Code    string `xml:"code"`
+	Message string `xml:"message"`
 }
 
 type stopInstancesXML struct {
@@ -508,6 +514,7 @@ func instanceItems(items []resource.Instance) instanceSet {
 			PublicIP:     inst.PublicIP,
 			NICs:         nicSetOf(inst),
 			State:        stateXMLOf(inst.State),
+			Reason:       stateReasonOf(inst.StateReason),
 			Tags:         tagSetOf(inst.Tags),
 			RootDevice:   inst.RootDeviceName,
 			RootType:     rootTypeOf(inst),
@@ -519,6 +526,13 @@ func instanceItems(items []resource.Instance) instanceSet {
 
 func stateXMLOf(s resource.InstanceState) stateXML {
 	return stateXML{Code: s.EC2Code(), Name: s.String()}
+}
+
+func stateReasonOf(r resource.StateReason) *stateReasonXML {
+	if r.Code == "" && r.Message == "" {
+		return nil
+	}
+	return &stateReasonXML{Code: r.Code, Message: r.Message}
 }
 
 func subnetXML(s resource.Subnet) subnetItem {

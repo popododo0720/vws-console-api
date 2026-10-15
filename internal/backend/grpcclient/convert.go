@@ -364,9 +364,17 @@ func instanceModel(in *computev1.Instance) (resource.Instance, error) {
 			vpcID = parsed
 		}
 	}
-	state, err := instanceStateOf(in.GetStatus().GetObserved().GetState(), in.GetStatus().GetPower())
+	observed := in.GetStatus().GetObserved().GetState()
+	state, err := instanceStateOf(observed, in.GetStatus().GetPower())
 	if err != nil {
 		return resource.Instance{}, err
+	}
+	var reason resource.StateReason
+	if observed == commonv1.ReconciliationState_RECONCILIATION_STATE_ERROR {
+		reason = resource.StateReason{
+			Code:    resource.ServerInternalError,
+			Message: resource.ServerInternalErrorMessage,
+		}
 	}
 	if in.GetDeleteTime() != nil && state == resource.InstanceShuttingDown {
 		state = resource.InstanceTerminated
@@ -395,7 +403,7 @@ func instanceModel(in *computev1.Instance) (resource.Instance, error) {
 		private = nics[0].GetPrivateIpv4()
 	}
 	return resource.Instance{
-		ID: id, ReservationID: resID, OwnerID: owner, State: state, ImageID: img,
+		ID: id, ReservationID: resID, OwnerID: owner, State: state, StateReason: reason, ImageID: img,
 		InstanceType: in.GetSpec().GetMachineType(), SubnetID: sub, VpcID: vpcID, Zone: parts[3],
 		LaunchTime: launchTime(in), PrivateIP: private, Tags: userTags(in.GetLabels()),
 		KeyPairID: keyPairID, UserData: in.GetSpec().GetUserData(),
@@ -419,7 +427,10 @@ func instanceStateOf(obs commonv1.ReconciliationState, power computev1.InstanceP
 		return resource.InstanceRunning, nil
 	case commonv1.ReconciliationState_RECONCILIATION_STATE_DELETING:
 		return resource.InstanceShuttingDown, nil
-	case commonv1.ReconciliationState_RECONCILIATION_STATE_ERROR, commonv1.ReconciliationState_RECONCILIATION_STATE_UNSPECIFIED:
+	case commonv1.ReconciliationState_RECONCILIATION_STATE_ERROR:
+		// EC2 has no error instance state. An internal launch failure is terminated.
+		return resource.InstanceTerminated, nil
+	case commonv1.ReconciliationState_RECONCILIATION_STATE_UNSPECIFIED:
 		return 0, resource.Internal(errors.New("bad instance state"))
 	default:
 		return 0, resource.Internal(errors.New("bad instance state"))
