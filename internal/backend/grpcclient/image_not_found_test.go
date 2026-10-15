@@ -3,6 +3,7 @@ package grpcclient
 import (
 	"context"
 	"net"
+	"strings"
 	"testing"
 
 	longrunningpb "cloud.google.com/go/longrunning/autogen/longrunningpb"
@@ -276,6 +277,109 @@ func TestReconciliationMappingsStay(t *testing.T) {
 	if got.Action != resource.ActionCreateVolume || got.Error == nil ||
 		got.Error.Code != resource.CodeInternal || got.Error.Kind != 0 {
 		t.Fatalf("%+v", got)
+	}
+}
+
+// wrappedBoot is the live RunInstances path. CreateVolume is accepted, then
+// CreateInstance returns compute's VOLUME_FAILED wrap of the storage sentence.
+type wrappedBoot struct {
+	networkv1.UnimplementedVpcServiceServer
+	networkv1.UnimplementedSubnetServiceServer
+	storagev1.UnimplementedVolumeServiceServer
+	computev1.UnimplementedInstanceServiceServer
+	image string
+	msg   string
+}
+
+func (s *wrappedBoot) ListVpcs(
+	_ context.Context, req *networkv1.ListVpcsRequest,
+) (*networkv1.ListVpcsResponse, error) {
+	projectID, err := projectOfName(req.GetParent())
+	if err != nil {
+		return nil, toStatus(err)
+	}
+	return &networkv1.ListVpcsResponse{Vpcs: []*networkv1.Vpc{{
+		Name: vpcName(projectID, "vpc-01234567"),
+	}}}, nil
+}
+
+func (s *wrappedBoot) ListSubnets(
+	_ context.Context, req *networkv1.ListSubnetsRequest,
+) (*networkv1.ListSubnetsResponse, error) {
+	return &networkv1.ListSubnetsResponse{Subnets: []*networkv1.Subnet{{
+		Name: req.GetParent() + "/subnets/subnet-01234567",
+	}}}, nil
+}
+
+func (s *wrappedBoot) CreateVolume(
+	_ context.Context, req *storagev1.CreateVolumeRequest,
+) (*longrunningpb.Operation, error) {
+	s.image = req.GetVolume().GetSpec().GetImage()
+	projectID, err := projectOfName(req.GetParent())
+	if err != nil {
+		return nil, toStatus(err)
+	}
+	return doneNamed(volumeName(projectID, req.GetVolumeId()), commonv1.OperationVerb_OPERATION_VERB_CREATE)
+}
+
+func (s *wrappedBoot) CreateInstance(
+	context.Context, *computev1.CreateInstanceRequest,
+) (*longrunningpb.Operation, error) {
+	st, err := status.New(codes.FailedPrecondition, s.msg).WithDetails(
+		&errdetails.ErrorInfo{Reason: "VOLUME_FAILED", Domain: "vws.dev"},
+	)
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	return nil, st.Err()
+}
+
+func TestRunInstancesWrappedImageFailure(t *testing.T) {
+	const ami = "ami-0123456789abcdef0"
+	const want = "The image id '[ami-0123456789abcdef0]' does not exist"
+	projectID := project(mustAccount(t))
+	volID := derivedID("vol-", "run-wrapped", "vol", "0")
+	msg := "volume " + volumeName(projectID, volID) +
+		" failed in storage: image " + imageName(projectID, ami) + " not found"
+	boot := &wrappedBoot{msg: msg}
+	lis := bufconn.Listen(MaxMessageBytes())
+	srv := grpc.NewServer()
+	networkv1.RegisterVpcServiceServer(srv, boot)
+	networkv1.RegisterSubnetServiceServer(srv, boot)
+	storagev1.RegisterVolumeServiceServer(srv, boot)
+	computev1.RegisterInstanceServiceServer(srv, boot)
+	go func() { _ = srv.Serve(lis) }()
+	t.Cleanup(srv.Stop)
+	conn, err := grpc.NewClient("passthrough:///wrapped",
+		append(dialOptions(), grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) {
+			return lis.DialContext(ctx)
+		}))...,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	client := computeClient{&api{
+		instances: computev1.NewInstanceServiceClient(conn),
+		volumes:   storagev1.NewVolumeServiceClient(conn),
+		subnets:   networkv1.NewSubnetServiceClient(conn),
+		vpcs:      networkv1.NewVpcServiceClient(conn),
+	}}
+	sub := must(resource.Parse[resource.SubnetID]("subnet-01234567"))
+	_, err = client.RunInstances(context.Background(), backend.Mutation{
+		Scope: backend.Scope{Account: mustAccount(t)}, Key: "run-wrapped", Fingerprint: "fp",
+	}, resource.RunInstancesRequest{
+		ImageID: mustImage(t, ami), InstanceType: "vws.small", SubnetID: sub, Count: 1,
+	})
+	if boot.image != imageName(projectID, ami) {
+		t.Fatalf("volume source %q", boot.image)
+	}
+	e := resource.AsError(err)
+	if e == nil || e.Code != resource.CodeNotFound || e.Kind != resource.KindImage || e.Message != want {
+		t.Fatalf("got %#v, want NotFound image %q", e, want)
+	}
+	if strings.Contains(e.Message, "projects/") || strings.Contains(e.Message, "volumes/") {
+		t.Fatalf("internal path in %q", e.Message)
 	}
 }
 
