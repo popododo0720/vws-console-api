@@ -16,20 +16,32 @@ are the same strings on the query surface.
 ## Run
 
 ```sh
+VWS_CONSOLE_TOKEN=dev-token VWS_ACCESS_KEY=AKIDEXAMPLE VWS_SECRET_KEY=secret \
 go run ./cmd/vws-console-api -backend=fake \
   -console-addr=127.0.0.1:8080 \
   -ec2-addr=127.0.0.1:8081 \
   -s3-addr=127.0.0.1:8082 \
-  -account=123456789012 \
-  -console-token=dev-token \
-  -access-key=AKIDEXAMPLE \
-  -secret=secret
+  -account=123456789012
 ```
 
 `-backend=grpc` dials `-compute-addr`, `-storage-addr`, and `-network-addr`.
-With `-backend=grpc`, `-console-token`, `-access-key`, and `-secret` must be
-given explicitly. Their defaults (`dev-token`, `AKIDEXAMPLE`, `secret`) are
-public development values and are refused against real backends.
+
+### Credentials
+
+| Credential | Environment | File (Secret mount) | Deprecated flag |
+| --- | --- | --- | --- |
+| console bearer token | `VWS_CONSOLE_TOKEN` | `VWS_CONSOLE_TOKEN_FILE` | `-console-token` |
+| root access key id | `VWS_ACCESS_KEY` | `VWS_ACCESS_KEY_FILE` | `-access-key` |
+| root secret access key | `VWS_SECRET_KEY` | `VWS_SECRET_KEY_FILE` | `-secret` |
+
+Each is read from the flag, then the `_FILE` path, then the variable. A flag
+puts the value in the process arguments (`ps`, `/proc/<pid>/cmdline`), so it is
+kept only for compatibility and logs a deprecation warning that names the flag,
+never the value. Setting both `X_FILE` and `X` is an error, as is an empty or
+unreadable file; one trailing newline in a file is dropped, like
+`-root-password-file`. With `-backend=grpc` every credential must be given; the
+defaults (`dev-token`, `AKIDEXAMPLE`, `secret`) are public development values
+and are refused against real backends.
 The fake backend is in-memory and is gone when the process exits.
 
 `-ops-addr` (default `127.0.0.1:8083`, empty disables it) serves `GET /healthz`
