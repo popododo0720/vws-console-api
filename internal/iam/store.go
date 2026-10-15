@@ -452,8 +452,10 @@ func (f *Fake) CreateRole(_ context.Context, a resource.AccountID, in RoleInput)
 	if st.roles[in.Name] != nil {
 		return Role{}, exists("Role", in.Name)
 	}
-	r := Role{Name: in.Name, Path: path, ID: randID("AROA", 17), ARN: iamARN(a, "role", path, in.Name),
-		TrustPolicy: in.TrustPolicy, Description: in.Description, MaxSessionDuration: maxSession, Created: f.now()}
+	r := Role{
+		Name: in.Name, Path: path, ID: randID("AROA", 17), ARN: iamARN(a, "role", path, in.Name),
+		TrustPolicy: in.TrustPolicy, Description: in.Description, MaxSessionDuration: maxSession, Created: f.now(),
+	}
 	st.roles[in.Name] = &roleRec{Role: r, holder: newHolder(), trust: trust}
 	return r, nil
 }
@@ -761,8 +763,10 @@ func (f *Fake) AssumeRole(_ context.Context, caller Principal, roleARN, session 
 		return AssumedRole{}, resource.Denied("User: " + caller.ARN + " is not authorized to perform: sts:AssumeRole on resource: " + roleARN)
 	}
 	arn := "arn:vws:sts::" + caller.Account.String() + ":assumed-role/" + role.Name + "/" + session
-	k := Key{AccessKey: randID("ASIA", 16), Secret: randSecret(30), SessionToken: randSecret(96),
-		Expires: f.now().Add(duration), Principal: Principal{Account: caller.Account, ARN: arn}}
+	k := Key{
+		AccessKey: randID("ASIA", 16), Secret: randSecret(30), SessionToken: randSecret(96),
+		Expires: f.now().Add(duration), Principal: Principal{Account: caller.Account, ARN: arn},
+	}
 	f.keys[k.AccessKey] = k
 	f.gcSessions()
 	return AssumedRole{Key: k, AssumedRoleID: role.ID + ":" + session, ARN: arn}, nil

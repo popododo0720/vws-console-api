@@ -167,8 +167,10 @@ func authReq(t *testing.T, key, secret, token string) sigv4.AuthRequest {
 	if err := sigv4.Sign(req, credOf(key, secret, token), sigv4.ServiceEC2, resource.RegionName, now); err != nil {
 		t.Fatal(err)
 	}
-	v := sigv4.NewVerifier(sigv4.Verifier{Service: sigv4.ServiceEC2, Region: resource.RegionName, Now: func() time.Time { return now },
-		Auth: captureAuth(func(r sigv4.AuthRequest) { got = r })})
+	v := sigv4.NewVerifier(sigv4.Verifier{
+		Service: sigv4.ServiceEC2, Region: resource.RegionName, Now: func() time.Time { return now },
+		Auth: captureAuth(func(r sigv4.AuthRequest) { got = r }),
+	})
 	_, _ = v.Verify(req)
 	return got
 }
