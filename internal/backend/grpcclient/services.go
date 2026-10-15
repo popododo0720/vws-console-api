@@ -27,7 +27,6 @@ import (
 // volumes and subnets as well as instances, so the three backend views share it.
 type api struct {
 	instances  computev1.InstanceServiceClient
-	images     computev1.ImageServiceClient
 	volumes    storagev1.VolumeServiceClient
 	buckets    storagev1.BucketServiceClient
 	objects    storagev1.ObjectServiceClient

@@ -10,8 +10,6 @@ import (
 
 	longrunningpb "cloud.google.com/go/longrunning/autogen/longrunningpb"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 
 	commonv1 "github.com/popododo0720/vws-proto/gen/go/vws/common/v1"
@@ -31,51 +29,16 @@ const (
 )
 
 type regionalImages struct {
-	computev1.UnimplementedImageServiceServer
 	computev1.UnimplementedInstanceServiceServer
 	networkv1.UnimplementedVpcServiceServer
 	networkv1.UnimplementedSubnetServiceServer
 	storagev1.UnimplementedVolumeServiceServer
 
 	mu        sync.Mutex
-	byName    map[string]*computev1.Image
-	getErr    error
-	gets      []string
 	volumes   int
 	instances int
 	image     string
 	labels    map[string]string
-}
-
-func (s *regionalImages) GetImage(_ context.Context, req *computev1.GetImageRequest) (*computev1.Image, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.gets = append(s.gets, req.GetName())
-	if s.getErr != nil {
-		return nil, s.getErr
-	}
-	if img, ok := s.byName[req.GetName()]; ok {
-		return img, nil
-	}
-	if img, ok := s.sameProjectImage(req.GetName()); ok {
-		return img, nil
-	}
-	return nil, status.Errorf(codes.NotFound, "image %s not found", req.GetName())
-}
-
-func (s *regionalImages) sameProjectImage(asked string) (*computev1.Image, bool) {
-	wantProject, err := projectOfName(asked)
-	if err != nil {
-		return nil, false
-	}
-	for name := range s.byName {
-		gotProject, perr := projectOfName(name)
-		if perr != nil || gotProject != wantProject || lastSegment(name) != lastSegment(asked) {
-			continue
-		}
-		return &computev1.Image{Name: asked}, true
-	}
-	return nil, false
 }
 
 func (s *regionalImages) ListVpcs(
@@ -152,97 +115,51 @@ func (s *regionalImages) GetInstance(
 
 func TestRunInstancesRequiresImageInCallerRegion(t *testing.T) {
 	caller := project(mustAccount(t))
-	other, err := resource.Parse[resource.AccountID]("999999999999")
-	if err != nil {
-		t.Fatal(err)
-	}
 	ownedName := imageName(caller, ownedAMI)
-	otherRegionName := "projects/" + caller + "/regions/vws-2/images/" + otherRegionAMI
-	otherProjectName := imageName(project(other), otherProjectAMI)
-	catalog := map[string]*computev1.Image{
-		ownedName:        {Name: ownedName},
-		otherRegionName:  {Name: otherRegionName},
-		otherProjectName: {Name: otherProjectName},
-	}
 	sub, err := resource.Parse[resource.SubnetID]("subnet-01234567")
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	t.Run("same project other region", func(t *testing.T) {
-		assertImageRefused(t, catalog, sub, otherRegionAMI)
+		assertImageRefused(t, sub, otherRegionAMI)
 	})
 	t.Run("absent", func(t *testing.T) {
-		assertImageRefused(t, catalog, sub, absentAMI)
+		assertImageRefused(t, sub, absentAMI)
 	})
 	t.Run("other project", func(t *testing.T) {
-		assertImageRefused(t, catalog, sub, otherProjectAMI)
-	})
-	t.Run("catalog image service down", func(t *testing.T) {
-		boot, client := startRegional(t, catalog)
-		boot.mu.Lock()
-		boot.getErr = status.Error(codes.Unavailable, "image store down")
-		boot.mu.Unlock()
-		acc, err := client.RunInstances(context.Background(), backend.Mutation{
-			Scope: backend.Scope{Account: mustAccount(t)}, Key: "down", Fingerprint: "fp",
-		}, resource.RunInstancesRequest{
-			ImageID: mustImage(t, ownedAMI), InstanceType: "vws.small", SubnetID: sub, Count: 1,
-		})
-		if err != nil || len(acc.Items) != 1 || acc.Items[0].ImageID.String() != ownedAMI {
-			t.Fatalf("%v %+v", err, acc.Items)
-		}
-		boot.mu.Lock()
-		defer boot.mu.Unlock()
-		if boot.volumes != 1 || boot.instances != 1 || boot.image != ownedName {
-			t.Fatalf("volumes %d instances %d image %s", boot.volumes, boot.instances, boot.image)
-		}
-	})
-	t.Run("owned", func(t *testing.T) {
-		boot, client := startRegional(t, catalog)
-		acc, err := client.RunInstances(context.Background(), backend.Mutation{
-			Scope: backend.Scope{Account: mustAccount(t)}, Key: "owned", Fingerprint: "fp",
-		}, resource.RunInstancesRequest{
-			ImageID: mustImage(t, ownedAMI), InstanceType: "vws.small", SubnetID: sub, Count: 1,
-		})
-		if err != nil || len(acc.Items) != 1 || acc.Items[0].ImageID.String() != ownedAMI {
-			t.Fatalf("%v %+v", err, acc.Items)
-		}
-		boot.mu.Lock()
-		defer boot.mu.Unlock()
-		if boot.volumes != 1 || boot.instances != 1 || boot.image != ownedName {
-			t.Fatalf("volumes %d instances %d image %s", boot.volumes, boot.instances, boot.image)
-		}
+		assertImageRefused(t, sub, otherProjectAMI)
 	})
 	t.Run("catalog", func(t *testing.T) {
-		without := map[string]*computev1.Image{}
-		for name, img := range catalog {
-			if name == ownedName {
-				continue
-			}
-			without[name] = img
-		}
-		boot, client := startRegional(t, without)
-		acc, err := client.RunInstances(context.Background(), backend.Mutation{
-			Scope: backend.Scope{Account: mustAccount(t)}, Key: "catalog", Fingerprint: "fp",
-		}, resource.RunInstancesRequest{
-			ImageID: mustImage(t, ownedAMI), InstanceType: "vws.small", SubnetID: sub, Count: 1,
-		})
-		if err != nil || len(acc.Items) != 1 || acc.Items[0].ImageID.String() != ownedAMI {
-			t.Fatalf("%v %+v", err, acc.Items)
-		}
-		boot.mu.Lock()
-		defer boot.mu.Unlock()
-		if boot.volumes != 1 || boot.instances != 1 || boot.image != ownedName {
-			t.Fatalf("volumes %d instances %d image %s", boot.volumes, boot.instances, boot.image)
-		}
+		assertImageLaunches(t, sub, ownedName, "catalog")
+	})
+	t.Run("owned", func(t *testing.T) {
+		assertImageLaunches(t, sub, ownedName, "owned")
 	})
 }
 
-func assertImageRefused(t *testing.T, catalog map[string]*computev1.Image, sub resource.SubnetID, id string) {
+func assertImageLaunches(t *testing.T, sub resource.SubnetID, ownedName, key string) {
 	t.Helper()
-	boot, client := startRegional(t, catalog)
+	boot, client := startRegional(t)
+	acc, err := client.RunInstances(context.Background(), backend.Mutation{
+		Scope: backend.Scope{Account: mustAccount(t)}, Key: key, Fingerprint: "fp",
+	}, resource.RunInstancesRequest{
+		ImageID: mustImage(t, ownedAMI), InstanceType: "vws.small", SubnetID: sub, Count: 1,
+	})
+	if err != nil || len(acc.Items) != 1 || acc.Items[0].ImageID.String() != ownedAMI {
+		t.Fatalf("%v %+v", err, acc.Items)
+	}
+	boot.mu.Lock()
+	defer boot.mu.Unlock()
+	if boot.volumes != 1 || boot.instances != 1 || boot.image != ownedName {
+		t.Fatalf("volumes %d instances %d image %s", boot.volumes, boot.instances, boot.image)
+	}
+}
+
+func assertImageRefused(t *testing.T, sub resource.SubnetID, id string) {
+	t.Helper()
+	boot, client := startRegional(t)
 	want := "The image id '[" + id + "]' does not exist"
-	callerName := imageName(project(mustAccount(t)), id)
 	for i := 0; i < 2; i++ {
 		_, err := client.RunInstances(context.Background(), backend.Mutation{
 			Scope: backend.Scope{Account: mustAccount(t)}, Key: "refused-" + id + "-" + string(rune('a'+i)), Fingerprint: "fp",
@@ -268,19 +185,13 @@ func assertImageRefused(t *testing.T, catalog map[string]*computev1.Image, sub r
 	if boot.volumes != 0 || boot.instances != 0 {
 		t.Fatalf("volumes %d instances %d", boot.volumes, boot.instances)
 	}
-	for _, name := range boot.gets {
-		if name != callerName {
-			t.Fatalf("get %s, want %s", name, callerName)
-		}
-	}
 }
 
-func startRegional(t *testing.T, catalog map[string]*computev1.Image) (*regionalImages, computeClient) {
+func startRegional(t *testing.T) (*regionalImages, computeClient) {
 	t.Helper()
 	lis := bufconn.Listen(MaxMessageBytes())
 	srv := grpc.NewServer()
-	boot := &regionalImages{byName: catalog}
-	computev1.RegisterImageServiceServer(srv, boot)
+	boot := &regionalImages{}
 	computev1.RegisterInstanceServiceServer(srv, boot)
 	networkv1.RegisterVpcServiceServer(srv, boot)
 	networkv1.RegisterSubnetServiceServer(srv, boot)
@@ -298,7 +209,6 @@ func startRegional(t *testing.T, catalog map[string]*computev1.Image) (*regional
 	t.Cleanup(func() { _ = conn.Close() })
 	client := computeClient{&api{
 		instances: computev1.NewInstanceServiceClient(conn),
-		images:    computev1.NewImageServiceClient(conn),
 		volumes:   storagev1.NewVolumeServiceClient(conn),
 		subnets:   networkv1.NewSubnetServiceClient(conn),
 		vpcs:      networkv1.NewVpcServiceClient(conn),

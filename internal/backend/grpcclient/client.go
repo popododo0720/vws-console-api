@@ -49,7 +49,6 @@ func Dial(ctx context.Context, addrs Addrs) (*Client, error) {
 	}
 	shared := &api{
 		instances:  computev1.NewInstanceServiceClient(computeConn),
-		images:     computev1.NewImageServiceClient(computeConn),
 		volumes:    storagev1.NewVolumeServiceClient(storageConn),
 		buckets:    storagev1.NewBucketServiceClient(storageConn),
 		objects:    storagev1.NewObjectServiceClient(storageConn),
