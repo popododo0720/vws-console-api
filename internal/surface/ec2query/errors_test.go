@@ -4,6 +4,7 @@ import (
 	"encoding/xml"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/popododo0720/vws-console-api/internal/resource"
@@ -54,6 +55,31 @@ func TestEveryCodeHasAnEC2Error(t *testing.T) {
 		if got := ec2Wire(t, &resource.Error{Code: c, Message: "m"}); got != w {
 			t.Errorf("%v = %+v, want %+v", c, got, w)
 		}
+	}
+}
+
+func TestInvalidAMIIDNotFoundShape(t *testing.T) {
+	const msg = "The image id '[ami-0123456789abcdef0]' does not exist"
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/", nil)
+	req.Header.Set("X-Request-Id", "req-ami")
+	rec := httptest.NewRecorder()
+	writeErr(rec, req, &resource.Error{Code: resource.CodeNotFound, Kind: resource.KindImage, Message: msg})
+	const want = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n" +
+		"<Response><Errors><Error><Code>InvalidAMIID.NotFound</Code>" +
+		"<Message>The image id &#39;[ami-0123456789abcdef0]&#39; does not exist</Message>" +
+		"</Error></Errors><RequestID>req-ami</RequestID></Response>"
+	if rec.Code != http.StatusBadRequest || rec.Body.String() != want {
+		t.Fatalf("status %d body %q", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "projects/") {
+		t.Fatalf("internal path in %q", rec.Body.String())
+	}
+	var body errorXML
+	if err := xml.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Code != "InvalidAMIID.NotFound" || body.Message != msg {
+		t.Fatalf("decoded code %q message %q", body.Code, body.Message)
 	}
 }
 
