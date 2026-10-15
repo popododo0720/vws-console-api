@@ -932,15 +932,13 @@ func statusOf(c resource.Code) int {
 		return http.StatusUnauthorized
 	case resource.CodePermissionDenied:
 		return http.StatusForbidden
-	case resource.CodeUnimplemented:
-		return http.StatusNotImplemented
-	case resource.CodeUnavailable:
+	case resource.CodeUnavailable, resource.CodeResourceExhausted:
 		return http.StatusServiceUnavailable
 	case resource.CodeInternal, resource.CodeUnspecified:
 		return http.StatusInternalServerError
 	case resource.CodeInvalidArgument, resource.CodeNotFound, resource.CodeAlreadyExists,
-		resource.CodeConflict, resource.CodeIdempotencyMismatch, resource.CodeResourceExhausted,
-		resource.CodePayloadTooLarge:
+		resource.CodeConflict, resource.CodeIdempotencyMismatch, resource.CodePayloadTooLarge,
+		resource.CodeUnimplemented:
 		return http.StatusBadRequest
 	default:
 		return http.StatusInternalServerError

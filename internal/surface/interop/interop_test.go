@@ -18,6 +18,7 @@ import (
 	"github.com/popododo0720/vws-console-api/internal/sigv4"
 	"github.com/popododo0720/vws-console-api/internal/surface/console"
 	"github.com/popododo0720/vws-console-api/internal/surface/ec2query"
+	"github.com/popododo0720/vws-console-api/internal/surface/iamquery"
 	"github.com/popododo0720/vws-console-api/internal/surface/s3rest"
 )
 
@@ -231,6 +232,75 @@ func TestS3ObjectRoundTrip(t *testing.T) {
 	object := call(t, ui, http.MethodGet, "/api/v1/buckets/build-logs/objects/a.txt", "", map[string]string{"Authorization": "Bearer tok-console"})
 	if object.Code != http.StatusOK || !strings.Contains(object.Body.String(), "aGVsbG8=") {
 		t.Fatalf("console object %d %s", object.Code, object.Body)
+	}
+}
+
+func TestMissingResourceStatusIsPerSurface(t *testing.T) {
+	now := time.Date(2026, 10, 9, 10, 0, 0, 0, time.UTC)
+	account := mustParse[resource.AccountID](t, "123456789012")
+	caller := resource.Caller{
+		Account: account, Subject: "console", Principal: iam.RootARN(account), Root: true,
+	}
+	world := fake.New(fake.Options{Now: func() time.Time { return now }})
+	svc := cloud.New(cloud.Config{Backends: world.Set()})
+	cred := sigv4.Credential{AccessKey: "AKIDEXAMPLE", Secret: "secret", Account: account}
+	ui := console.New(console.Config{
+		Service: svc,
+		IAM:     iam.NewStatic(cred.AccessKey, cred.Secret, account),
+		Auth:    console.BearerTokens{"tok-console": caller},
+	})
+	query := ec2query.New(ec2query.Config{
+		Service:    svc,
+		Authorizer: iam.NewStatic(cred.AccessKey, cred.Secret, account),
+		Verifier:   verifier(cred, sigv4.ServiceEC2, now),
+	})
+	objects := s3rest.New(s3rest.Config{
+		Service:    svc,
+		Authorizer: iam.NewStatic(cred.AccessKey, cred.Secret, account),
+		Verifier:   verifier(cred, sigv4.ServiceS3, now),
+	})
+	directory := iam.NewFake()
+	directory.Now = func() time.Time { return now }
+	identity := iamquery.New(iamquery.Config{
+		Admin:      directory,
+		Authorizer: iam.WithRoot(iam.NewStatic(cred.AccessKey, cred.Secret, account), directory),
+		IAM:        verifier(cred, sigv4.ServiceIAM, now),
+		STS:        verifier(cred, sigv4.ServiceSTS, now),
+	})
+
+	volume := call(t, ui, http.MethodGet, "/api/v1/volumes/vol-00000000000000000", "", map[string]string{
+		"Authorization": "Bearer tok-console",
+	})
+	if volume.Code != http.StatusNotFound || !strings.Contains(volume.Body.String(), `"code":"NotFound"`) {
+		t.Fatalf("console %d %s", volume.Code, volume.Body)
+	}
+
+	ami := serveSigned(t, query, cred, sigv4.ServiceEC2, now, http.MethodPost, "http://127.0.0.1:8081/", url.Values{
+		"Action": {"DescribeImages"}, "Version": {ec2query.Version}, "ImageId.1": {"ami-00000000000000000"},
+	}.Encode())
+	if ami.Code != http.StatusBadRequest || !strings.Contains(ami.Body.String(), "<Code>InvalidAMIID.NotFound</Code>") {
+		t.Fatalf("ec2 %d %s", ami.Code, ami.Body)
+	}
+
+	bucket := serveSigned(t, objects, cred, sigv4.ServiceS3, now, http.MethodGet, "http://127.0.0.1:8082/missing-logs", "")
+	if bucket.Code != http.StatusNotFound || !strings.Contains(bucket.Body.String(), "<Code>NoSuchBucket</Code>") {
+		t.Fatalf("s3 bucket %d %s", bucket.Code, bucket.Body)
+	}
+	made := serveSigned(t, objects, cred, sigv4.ServiceS3, now, http.MethodPut, "http://127.0.0.1:8082/build-logs", "")
+	if made.Code != http.StatusOK {
+		t.Fatalf("bucket %d %s", made.Code, made.Body)
+	}
+	keyURL := "http://127.0.0.1:8082/build-logs/missing.txt"
+	key := serveSigned(t, objects, cred, sigv4.ServiceS3, now, http.MethodGet, keyURL, "")
+	if key.Code != http.StatusNotFound || !strings.Contains(key.Body.String(), "<Code>NoSuchKey</Code>") {
+		t.Fatalf("s3 key %d %s", key.Code, key.Body)
+	}
+
+	user := serveSigned(t, identity, cred, sigv4.ServiceIAM, now, http.MethodPost, "http://127.0.0.1:8084/", url.Values{
+		"Action": {"GetUser"}, "UserName": {"nobody"}, "Version": {iamquery.IAMVersion},
+	}.Encode())
+	if user.Code != http.StatusNotFound || !strings.Contains(user.Body.String(), "<Code>NoSuchEntity</Code>") {
+		t.Fatalf("iam %d %s", user.Code, user.Body)
 	}
 }
 

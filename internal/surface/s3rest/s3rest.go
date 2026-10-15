@@ -599,7 +599,7 @@ func writeErr(w http.ResponseWriter, r *http.Request, err error, resourceName st
 
 func statusOf(e *resource.Error) int {
 	switch e.Code {
-	case resource.CodeInvalidArgument:
+	case resource.CodeInvalidArgument, resource.CodePayloadTooLarge:
 		return http.StatusBadRequest
 	case resource.CodeNotFound:
 		return http.StatusNotFound
@@ -615,8 +615,6 @@ func statusOf(e *resource.Error) int {
 		return http.StatusForbidden
 	case resource.CodeResourceExhausted:
 		return http.StatusServiceUnavailable
-	case resource.CodePayloadTooLarge:
-		return http.StatusRequestEntityTooLarge
 	case resource.CodeUnavailable:
 		return http.StatusServiceUnavailable
 	case resource.CodeUnimplemented:

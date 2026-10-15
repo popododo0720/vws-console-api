@@ -9,8 +9,8 @@ import (
 	"github.com/popododo0720/vws-console-api/internal/resource"
 )
 
-// TestEveryCodeHasAConsoleStatus pins the console status for each model
-// code. The body code is the model code name.
+// TestEveryCodeHasAConsoleStatus pins the console JSON status for each
+// model code. The body code is the model code name.
 func TestEveryCodeHasAConsoleStatus(t *testing.T) {
 	want := map[resource.Code]int{
 		resource.CodeInvalidArgument:     400,

@@ -48,7 +48,7 @@ func TestMalformedNamesAndBodies(t *testing.T) {
 	req.Body = io.NopCloser(strings.NewReader(strings.Repeat("x", resource.MaxObjectBytes+1)))
 	big := httptest.NewRecorder()
 	h.ServeHTTP(big, req)
-	if big.Code != http.StatusRequestEntityTooLarge || !strings.Contains(big.Body.String(), "<Code>EntityTooLarge</Code>") {
+	if big.Code != http.StatusBadRequest || !strings.Contains(big.Body.String(), "<Code>EntityTooLarge</Code>") {
 		t.Fatalf("large body %d %s", big.Code, big.Body)
 	}
 	if res := call(t, h, cred, now, http.MethodGet, "http://127.0.0.1:8082/edge-bucket/big", "", nil); res.Code != http.StatusNotFound {

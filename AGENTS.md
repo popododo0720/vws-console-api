@@ -83,7 +83,8 @@ change.
 | Tests pass under the race detector. | CI job `test` |
 | `//nolint` names one linter and gives a reason. | `nolintlint` |
 | No swallowed errors. A blank error, an unchecked type assertion, `if err != nil { return nil }`, and an unwrapped foreign error fail lint. Tests are exempt from errcheck and wrapcheck. | `errcheck` (check-blank, check-type-assertions), `nilerr`, `nilnil`, `wrapcheck`, `errorlint`, `errname`, `contextcheck`, `sloglint` |
-| Every `resource.Code` has a status and wire code on each surface. | `TestEveryCodeHasAnEC2Error`, `TestEC2ErrorByKind`, `TestEveryCodeHasAnS3Error`, `TestEveryCodeHasAConsoleStatus` |
+| Every `resource.Code` has a status and wire code on each surface. | `TestEveryCodeHasAnEC2Error`, `TestEC2ErrorByKind`, `TestEveryCodeHasAnS3Error`, `TestEveryCodeHasAnIAMError`, `TestEveryCodeHasAConsoleStatus` |
+| Console JSON `NotFound` is HTTP 404. EC2 Query `*.NotFound` is HTTP 400. S3 `NoSuchBucket` and `NoSuchKey` are HTTP 404. IAM `NoSuchEntity` is HTTP 404. | `TestMissingResourceStatusIsPerSurface` |
 | A handler panic is a bare 500. The panic value goes to the log only. A failed response write is logged as a warning. | `TestPanicIsABare500`, `TestWriteFailureIsLogged` |
 | A repeated query parameter, `Authorization` header, or `Authorization` field is an invalid argument. Bucket names, key length, and body size are checked before the backend. | `TestMalformedQueryIsRejected`, `TestAmbiguousAuthorizationIsRejected`, `TestMalformedNamesAndBodies` |
 | No image assets. | CI job `hygiene`; `internal/hygiene` |

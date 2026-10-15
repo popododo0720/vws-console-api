@@ -24,7 +24,8 @@ func TestMalformedQueryIsRejected(t *testing.T) {
 		})
 	}
 	for _, body := range []string{"Version=" + Version, "Action=DropTables&Version=" + Version} {
-		if res := signed(t, h, cred, now, body); res.Code != 501 || !strings.Contains(res.Body.String(), "<Code>InvalidAction</Code>") {
+		res := signed(t, h, cred, now, body)
+		if res.Code != 400 || !strings.Contains(res.Body.String(), "<Code>InvalidAction</Code>") {
 			t.Fatalf("%s: %d %s", body, res.Code, res.Body)
 		}
 	}

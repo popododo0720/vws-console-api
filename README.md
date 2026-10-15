@@ -197,6 +197,24 @@ Header signatures are checked. Presigned query strings are refused.
 This skeleton accepts object bodies up to 4 MiB. A larger body is not a quota
 error.
 
+## Error status by listener
+
+The console listener is this service's JSON API. A missing resource is HTTP
+404 and the body code is `NotFound`.
+
+The protocol listeners use the status on the AWS page for that API.
+
+| Listener | Missing resource | Status | AWS page |
+| --- | --- | --- | --- |
+| EC2 Query | `InvalidAMIID.NotFound` and the other `*.NotFound` codes | 400 | [EC2 error codes](https://docs.aws.amazon.com/AWSEC2/latest/APIReference/errors-overview.html) |
+| S3 | `NoSuchBucket`, `NoSuchKey` | 404 | [S3 error responses](https://docs.aws.amazon.com/AmazonS3/latest/developerguide/ErrorResponses.html) |
+| IAM | `NoSuchEntity` | 404 | [DeleteUser errors](https://docs.aws.amazon.com/IAM/latest/APIReference/API_DeleteUser.html) |
+
+EC2 client errors, including `InvalidAction`, are a 400-series response.
+EC2 server errors, including `RequestLimitExceeded`, are a 500-series
+response, and this listener answers `RequestLimitExceeded` as 503. S3
+`EntityTooLarge` is 400. Each listener's error test pins the full table.
+
 ## Resource API module
 
 The gRPC client imports `github.com/popododo0720/vws-proto`. That module is
