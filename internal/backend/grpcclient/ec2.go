@@ -782,17 +782,21 @@ func volumeModel(in *storagev1.Volume) (resource.Volume, error) {
 }
 
 func volumeStateOf(in *storagev1.Volume) (resource.VolumeState, error) {
-	if in.GetStatus().GetInstance() != "" {
+	obs := in.GetStatus().GetObserved().GetState()
+	// An attachment is in-use, except a failed volume, which EC2 reports as error.
+	if in.GetStatus().GetInstance() != "" && obs != commonv1.ReconciliationState_RECONCILIATION_STATE_ERROR {
 		return resource.VolumeInUse, nil
 	}
-	switch in.GetStatus().GetObserved().GetState() {
+	switch obs {
 	case commonv1.ReconciliationState_RECONCILIATION_STATE_PENDING, commonv1.ReconciliationState_RECONCILIATION_STATE_RECONCILING:
 		return resource.VolumeCreating, nil
 	case commonv1.ReconciliationState_RECONCILIATION_STATE_READY:
 		return resource.VolumeAvailable, nil
 	case commonv1.ReconciliationState_RECONCILIATION_STATE_DELETING:
 		return resource.VolumeDeleting, nil
-	case commonv1.ReconciliationState_RECONCILIATION_STATE_ERROR, commonv1.ReconciliationState_RECONCILIATION_STATE_UNSPECIFIED:
+	case commonv1.ReconciliationState_RECONCILIATION_STATE_ERROR:
+		return resource.VolumeError, nil
+	case commonv1.ReconciliationState_RECONCILIATION_STATE_UNSPECIFIED:
 		return "", resource.Internal(errors.New("bad volume state"))
 	default:
 		return "", resource.Internal(errors.New("bad volume state"))
@@ -808,6 +812,8 @@ func volumeProto(v resource.Volume, projectID string) *storagev1.Volume {
 		obs = commonv1.ReconciliationState_RECONCILIATION_STATE_DELETING
 	case resource.VolumeCreating:
 		obs = commonv1.ReconciliationState_RECONCILIATION_STATE_PENDING
+	case resource.VolumeError:
+		obs = commonv1.ReconciliationState_RECONCILIATION_STATE_ERROR
 	}
 	status := &storagev1.VolumeStatus{
 		Observed:   &commonv1.ObservedState{State: obs},

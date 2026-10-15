@@ -227,7 +227,6 @@ func TestErrorRecordDoesNotFailDescribe(t *testing.T) {
 	if volByID["vol-0123456789abcdef0"].State != resource.VolumeAvailable {
 		t.Fatalf("healthy volume %+v", volByID["vol-0123456789abcdef0"])
 	}
-	// https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_Volume.html status "error"
 	for _, id := range []string{"vol-0fedcba9876543210", "vol-0abcdef0123456789"} {
 		if volByID[id].State != "error" {
 			t.Fatalf("volume %s state %q", id, volByID[id].State)
@@ -271,5 +270,38 @@ func TestTerminateErrorInstanceIsIdempotent(t *testing.T) {
 	}
 	if world.deleteCount() != 2 {
 		t.Fatalf("DeleteInstance calls %d, want 2", world.deleteCount())
+	}
+}
+
+func TestUnspecifiedReconcileStaysInternal(t *testing.T) {
+	account := mustAccount(t)
+	projectID := project(account)
+	for _, state := range []commonv1.ReconciliationState{
+		commonv1.ReconciliationState_RECONCILIATION_STATE_UNSPECIFIED,
+		99,
+	} {
+		world := &errorWorld{
+			inst: []*computev1.Instance{
+				observedInstance(projectID, "i-0123456789abcdef0",
+					commonv1.ReconciliationState_RECONCILIATION_STATE_READY,
+					computev1.InstancePower_INSTANCE_POWER_RUNNING),
+				observedInstance(projectID, "i-0fedcba9876543210", state,
+					computev1.InstancePower_INSTANCE_POWER_UNSPECIFIED),
+			},
+			vol: []*storagev1.Volume{
+				observedVolume(projectID, "vol-0123456789abcdef0", state, ""),
+			},
+		}
+		client := dialErrorWorld(t, world)
+		ctx := context.Background()
+		scope := backend.Scope{Account: account}
+		_, err := client.DescribeInstances(ctx, scope, resource.InstanceQuery{})
+		if resource.CodeOf(err) != resource.CodeInternal {
+			t.Fatalf("instances state %d: %v", state, err)
+		}
+		_, err = client.DescribeVolumes(ctx, scope, resource.VolumeQuery{})
+		if resource.CodeOf(err) != resource.CodeInternal {
+			t.Fatalf("volumes state %d: %v", state, err)
+		}
 	}
 }

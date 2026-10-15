@@ -78,6 +78,16 @@ type StateReason struct {
 	Message string `json:"message,omitempty"`
 }
 
+const (
+	// ServerInternalError is the EC2 state-reason code for an instance that
+	// terminated during launch because of an internal error.
+	// https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_StateReason.html
+	ServerInternalError = "Server.InternalError"
+	// ServerInternalErrorMessage is the message EC2 publishes with that code.
+	ServerInternalErrorMessage = "Server.InternalError: " +
+		"An internal error caused the instance to terminate during launch"
+)
+
 // EC2Code is the numeric code EC2 Query uses for s.
 func (s InstanceState) EC2Code() int {
 	switch s {
