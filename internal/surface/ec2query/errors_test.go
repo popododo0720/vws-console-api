@@ -129,4 +129,8 @@ func TestEC2ErrorByKind(t *testing.T) {
 			t.Errorf("%v %v = %+v, want %+v", tc.code, tc.kind, got, tc.want)
 		}
 	}
+	dup := resource.DuplicatePermission("sg-01234567", "ipPermissions[0].ipRanges[0]")
+	if got := ec2Wire(t, dup); got != (wireErr{400, "InvalidPermission.Duplicate"}) {
+		t.Fatalf("duplicate permission %+v", got)
+	}
 }

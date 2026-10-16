@@ -373,20 +373,32 @@ func exerciseEC2(ctx context.Context, t *testing.T, set backend.Set, account res
 		t.Fatalf("duplicate group: %v", err)
 	}
 	opened, err := set.Network.AuthorizeSecurityGroupIngress(ctx, backend.Mutation{Scope: scope, Key: "k-auth", Fingerprint: "fp-auth"}, resource.AuthorizeSecurityGroupIngressRequest{
-		ID: group.Items[0].ID, Rule: resource.IngressRule{Protocol: "tcp", FromPort: 22, ToPort: 22, Cidr: "10.0.0.0/16"},
+		ID: group.Items[0].ID,
+		Rules: []resource.IngressChange{{
+			IngressRule: resource.IngressRule{Protocol: "tcp", FromPort: 22, ToPort: 22, Cidr: "10.0.0.0/16"},
+		}},
 	})
 	if err != nil || len(opened.Items[0].Rules) != 1 || opened.Items[0].Rules[0].Protocol != "tcp" {
 		t.Fatalf("authorize: %v %+v", err, opened.Items)
 	}
-	if _, err := set.Network.AuthorizeSecurityGroupIngress(ctx, backend.Mutation{Scope: scope, Key: "k-auth-2", Fingerprint: "fp-auth-2"}, resource.AuthorizeSecurityGroupIngressRequest{
-		ID: group.Items[0].ID, Rule: resource.IngressRule{Protocol: "tcp", FromPort: 22, ToPort: 22, Cidr: "10.0.0.0/16"},
-	}); resource.CodeOf(err) != resource.CodeAlreadyExists {
+	dup := resource.AuthorizeSecurityGroupIngressRequest{
+		ID: group.Items[0].ID,
+		Rules: []resource.IngressChange{{
+			IngressRule: resource.IngressRule{Protocol: "tcp", FromPort: 22, ToPort: 22, Cidr: "10.0.0.0/16"},
+		}},
+	}
+	dupM := backend.Mutation{Scope: scope, Key: "k-auth-2", Fingerprint: "fp-auth-2"}
+	_, err = set.Network.AuthorizeSecurityGroupIngress(ctx, dupM, dup)
+	if resource.CodeOf(err) != resource.CodeAlreadyExists {
 		t.Fatalf("duplicate rule: %v", err)
 	}
 	openedMore, err := set.Network.AuthorizeSecurityGroupIngress(ctx, backend.Mutation{Scope: scope, Key: "k-auth-3", Fingerprint: "fp-auth-3"}, resource.AuthorizeSecurityGroupIngressRequest{
-		ID: group.Items[0].ID, Rule: resource.IngressRule{Protocol: "udp", FromPort: 53, ToPort: 53, Cidr: "10.0.0.0/16"},
+		ID: group.Items[0].ID, Rules: []resource.IngressChange{
+			{IngressRule: resource.IngressRule{Protocol: "udp", FromPort: 53, ToPort: 53, Cidr: "10.0.0.0/16"}},
+			{IngressRule: resource.IngressRule{Protocol: "tcp", FromPort: 443, ToPort: 443, Cidr: "10.2.0.0/16"}},
+		},
 	})
-	if err != nil || len(openedMore.Items[0].Rules) != 2 {
+	if err != nil || len(openedMore.Items[0].Rules) != 3 {
 		t.Fatalf("second rule: %v %+v", err, openedMore.Items)
 	}
 
@@ -469,7 +481,7 @@ func exerciseEC2(ctx context.Context, t *testing.T, set backend.Set, account res
 	groups, err := set.Network.DescribeSecurityGroups(ctx, scope, resource.SecurityGroupQuery{
 		Names: []string{"web"}, Page: resource.PageRequest{Size: 50},
 	})
-	if err != nil || len(groups.Items) != 1 || groups.Items[0].ID != group.Items[0].ID || len(groups.Items[0].Rules) != 2 {
+	if err != nil || len(groups.Items) != 1 || groups.Items[0].ID != group.Items[0].ID || len(groups.Items[0].Rules) != 3 {
 		t.Fatalf("describe groups: %v %+v", err, groups.Items)
 	}
 	deletedGroup, err := set.Network.DeleteSecurityGroup(ctx, backend.Mutation{Scope: scope, Key: "k-del-sg", Fingerprint: "fp-del-sg"}, resource.DeleteSecurityGroupRequest{ID: group.Items[0].ID})

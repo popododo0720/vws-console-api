@@ -70,13 +70,15 @@ func (c Code) String() string {
 }
 
 // Error is the domain error every layer returns. The cause is for logs and
-// never appears in a wire body.
+// never appears in a wire body. An empty EC2Code leaves the surface on its
+// default map.
 type Error struct {
 	Code    Code
 	Kind    Kind
 	ID      string
 	Field   string
 	Message string
+	EC2Code string
 	cause   error
 }
 
@@ -99,12 +101,14 @@ func (e *Error) MarshalJSON() ([]byte, error) {
 		ID      string `json:"id,omitempty"`
 		Field   string `json:"field,omitempty"`
 		Message string `json:"message"`
+		EC2Code string `json:"ec2Code,omitempty"`
 	}{
 		Code:    e.Code.String(),
 		Kind:    e.Kind.String(),
 		ID:      e.ID,
 		Field:   e.Field,
 		Message: e.Message,
+		EC2Code: e.EC2Code,
 	})
 }
 
@@ -177,6 +181,64 @@ func Denied(message string) *Error {
 // It is not a quota, so callers must not retry it unchanged.
 func TooLarge(message string) *Error {
 	return &Error{Code: CodePayloadTooLarge, Message: message}
+}
+
+// EC2 error code strings for AuthorizeSecurityGroupIngress refusals.
+const (
+	EC2InvalidPermissionDuplicate   = "InvalidPermission.Duplicate"
+	EC2InvalidPermissionMalformed   = "InvalidPermission.Malformed"
+	EC2UnsupportedOperation         = "UnsupportedOperation"
+	EC2InvalidPrefixListIDMalformed = "InvalidPrefixListId.Malformed"
+	EC2InvalidParameterValue        = "InvalidParameterValue"
+	EC2InvalidGroupNotFound         = "InvalidGroup.NotFound"
+	EC2InvalidGroupIDMalformed      = "InvalidGroupId.Malformed"
+)
+
+// DuplicatePermission reports a rule the group already has, or a repeated rule in one call.
+func DuplicatePermission(id, field string) *Error {
+	if field == "" {
+		field = "ipPermissions"
+	}
+	return &Error{
+		Code: CodeAlreadyExists, Kind: KindSecurityGroup, ID: id, Field: field,
+		Message: "duplicate permission", EC2Code: EC2InvalidPermissionDuplicate,
+	}
+}
+
+// MalformedPermission reports an ingress permission the grammar rejects.
+func MalformedPermission(field, message string) *Error {
+	return &Error{Code: CodeInvalidArgument, Field: field, Message: message, EC2Code: EC2InvalidPermissionMalformed}
+}
+
+// UnsupportedIngress reports a source this service does not store.
+func UnsupportedIngress(field string) *Error {
+	return &Error{Code: CodeInvalidArgument, Field: field, Message: "unsupported", EC2Code: EC2UnsupportedOperation}
+}
+
+// MalformedPrefixList reports a prefix list.
+func MalformedPrefixList(field string) *Error {
+	return &Error{Code: CodeInvalidArgument, Field: field, Message: "malformed", EC2Code: EC2InvalidPrefixListIDMalformed}
+}
+
+// RejectedDescription reports a rule description.
+func RejectedDescription(field string) *Error {
+	return &Error{Code: CodeInvalidArgument, Field: field, Message: "unsupported", EC2Code: EC2InvalidParameterValue}
+}
+
+// GroupNotFound reports a missing security group.
+func GroupNotFound(id string) *Error {
+	return &Error{
+		Code: CodeNotFound, Kind: KindSecurityGroup, ID: id, Message: "not found",
+		EC2Code: EC2InvalidGroupNotFound,
+	}
+}
+
+// AsMalformedGroupID copies err and marks it as a malformed security group id.
+func AsMalformedGroupID(err error) *Error {
+	e := AsError(err)
+	out := *e
+	out.EC2Code = EC2InvalidGroupIDMalformed
+	return &out
 }
 
 // Unimplemented reports a path the skeleton does not serve.

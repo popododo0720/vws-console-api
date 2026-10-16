@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"maps"
+	"strconv"
 	"strings"
 	"time"
 
@@ -1114,17 +1115,21 @@ func (c networkClient) AuthorizeSecurityGroupIngress(ctx context.Context, m back
 	projectID := project(m.Account)
 	current, err := c.findGroup(ctx, projectID, req.ID.String())
 	if err != nil {
+		if resource.CodeOf(err) == resource.CodeNotFound {
+			return resource.Accepted[resource.SecurityGroup]{}, resource.GroupNotFound(req.ID.String())
+		}
 		return resource.Accepted[resource.SecurityGroup]{}, err
 	}
-	for _, have := range current.Rules {
-		if have == req.Rule {
-			return resource.Accepted[resource.SecurityGroup]{}, resource.AlreadyExists(resource.KindSecurityGroup, current.ID.String())
-		}
+	if err := resource.CheckIngressBatch(current.ID.String(), current.Rules, req.Rules); err != nil {
+		return resource.Accepted[resource.SecurityGroup]{}, err
 	}
-	rules := append(append([]resource.IngressRule{}, current.Rules...), req.Rule)
+	rules := append([]resource.IngressRule{}, current.Rules...)
+	for _, rule := range req.Rules {
+		rules = append(rules, rule.IngressRule)
+	}
 	protoRules := make([]*networkv1.SecurityGroupRule, 0, len(rules))
 	for i, rule := range rules {
-		protoRule, err := ruleProto(rule, derivedID("r", m.Key, "rule", hex.EncodeToString([]byte{byte(i)})))
+		protoRule, err := ruleProto(rule, derivedID("r", m.Key, "rule", strconv.Itoa(i)))
 		if err != nil {
 			return resource.Accepted[resource.SecurityGroup]{}, err
 		}
