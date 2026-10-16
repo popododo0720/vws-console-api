@@ -2,8 +2,12 @@ package grpcclient
 
 import (
 	"context"
+	"encoding/binary"
+	"encoding/hex"
 	"errors"
+	"maps"
 	"strings"
+	"time"
 
 	longrunningpb "cloud.google.com/go/longrunning/autogen/longrunningpb"
 	commonv1 "github.com/popododo0720/vws-proto/gen/go/vws/common/v1"
@@ -204,7 +208,7 @@ func (s *groupSrv) GetSecurityGroup(_ context.Context, req *networkv1.GetSecurit
 	if !ok {
 		return nil, toStatus(resource.NotFound(resource.KindSecurityGroup, lastSegment(req.GetName())))
 	}
-	return groupProto(group, projectID), nil
+	return groupProto(group, projectID, s.w.labelsOf(group.ID.String())), nil
 }
 
 func (s *groupSrv) UpdateSecurityGroup(ctx context.Context, req *networkv1.UpdateSecurityGroupRequest) (*longrunningpb.Operation, error) {
@@ -220,36 +224,43 @@ func (s *groupSrv) UpdateSecurityGroup(ctx context.Context, req *networkv1.Updat
 	if err != nil {
 		return nil, toStatus(err)
 	}
-	rules := req.GetSecurityGroup().GetSpec().GetRules()
-	if len(rules) == 0 {
-		return nil, toStatus(resource.Invalid("ipProtocol", "required"))
-	}
 	if err := ctx.Err(); err != nil {
 		return nil, toStatus(err)
+	}
+	if op, ok := s.w.operationForRequest(req.GetRequestId()); ok {
+		return op, nil
 	}
 	group, ok := s.w.group(id.String(), account)
 	if !ok {
 		return nil, toStatus(resource.NotFound(resource.KindSecurityGroup, id.String()))
 	}
-	decoded := make([]resource.IngressRule, 0, len(rules))
-	for _, rule := range rules {
-		decoded = append(decoded, resource.IngressRule{
-			Protocol: protocolName(rule.GetProtocol()),
-			FromPort: int(rule.GetFromPort()),
-			ToPort:   int(rule.GetToPort()),
-			Cidr:     rule.GetCidr(),
-		})
+	paths := req.GetUpdateMask().GetPaths()
+	if groupMaskHas(paths, "spec.rules") {
+		rules := req.GetSecurityGroup().GetSpec().GetRules()
+		if len(rules) == 0 {
+			return nil, toStatus(resource.Invalid("ipProtocol", "required"))
+		}
+		decoded := make([]resource.IngressRule, 0, len(rules))
+		for _, rule := range rules {
+			decoded = append(decoded, resource.IngressRule{
+				Protocol: protocolName(rule.GetProtocol()),
+				FromPort: int(rule.GetFromPort()),
+				ToPort:   int(rule.GetToPort()),
+				Cidr:     rule.GetCidr(),
+			})
+		}
+		group.Rules = decoded
+		s.w.saveGroup(group)
 	}
-	group.Rules = decoded
-	s.w.saveGroup(group)
-	op, err := runningNamed(
-		projectID, req.GetRequestId(), req.GetSecurityGroup().GetName(),
-		commonv1.OperationVerb_OPERATION_VERB_UPDATE, s.w.now,
+	if groupMaskHas(paths, "labels") {
+		s.w.saveGroupLabels(id.String(), req.GetSecurityGroup().GetLabels())
+	}
+	op, err := s.w.runningServerOp(
+		projectID, req.GetRequestId(), req.GetSecurityGroup().GetName(), s.w.now,
 	)
 	if err != nil {
 		return nil, toStatus(err)
 	}
-	s.w.rememberNamed(op)
 	return op, nil
 }
 
@@ -304,6 +315,79 @@ func (w *loopWorld) rememberNamed(op *longrunningpb.Operation) {
 	w.namedOps[op.GetName()] = op
 }
 
+func (w *loopWorld) operationForRequest(requestID string) (*longrunningpb.Operation, bool) {
+	if requestID == "" {
+		return nil, false
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	op, ok := w.byRequest[requestID]
+	return op, ok
+}
+
+func (w *loopWorld) rememberRequest(requestID string, op *longrunningpb.Operation) {
+	if requestID == "" || op == nil {
+		return
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.byRequest == nil {
+		w.byRequest = map[string]*longrunningpb.Operation{}
+	}
+	w.byRequest[requestID] = op
+}
+
+func (w *loopWorld) mintOpLocal() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.opSeq++
+	var raw [16]byte
+	binary.BigEndian.PutUint64(raw[8:], w.opSeq)
+	return hex.EncodeToString(raw[:])
+}
+
+func (w *loopWorld) runningServerOp(
+	projectID, requestID, resourceName string, now time.Time,
+) (*longrunningpb.Operation, error) {
+	op, err := longOp(
+		projectID, w.mintOpLocal(), resourceName, requestID,
+		commonv1.OperationVerb_OPERATION_VERB_UPDATE, now,
+	)
+	if err != nil {
+		return nil, err
+	}
+	w.rememberNamed(op)
+	w.rememberRequest(requestID, op)
+	return op, nil
+}
+
+func (w *loopWorld) saveGroupLabels(id string, labels map[string]string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.groupLabels == nil {
+		w.groupLabels = map[string]map[string]string{}
+	}
+	w.groupLabels[id] = maps.Clone(labels)
+}
+
+func (w *loopWorld) labelsOf(id string) map[string]string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return maps.Clone(w.groupLabels[id])
+}
+
+func groupMaskHas(paths []string, path string) bool {
+	if len(paths) == 0 {
+		return true
+	}
+	for _, got := range paths {
+		if got == path || strings.HasPrefix(got, path+".") {
+			return true
+		}
+	}
+	return false
+}
+
 func (w *loopWorld) namedOp(name string) (*longrunningpb.Operation, bool) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -327,7 +411,7 @@ func (w *loopWorld) group(id string, owner resource.AccountID) (resource.Securit
 	return group, true
 }
 
-func groupProto(group resource.SecurityGroup, projectID string) *networkv1.SecurityGroup {
+func groupProto(group resource.SecurityGroup, projectID string, labels map[string]string) *networkv1.SecurityGroup {
 	rules := make([]*networkv1.SecurityGroupRule, 0, len(group.Rules))
 	for i, rule := range group.Rules {
 		protocol, _ := protocolOf(rule.Protocol)
@@ -341,8 +425,9 @@ func groupProto(group resource.SecurityGroup, projectID string) *networkv1.Secur
 		})
 	}
 	return &networkv1.SecurityGroup{
-		Name: securityGroupName(projectID, group.VpcID.String(), group.ID.String()),
-		Spec: &networkv1.SecurityGroupSpec{Description: group.Name, Rules: rules},
+		Name:   securityGroupName(projectID, group.VpcID.String(), group.ID.String()),
+		Labels: labels,
+		Spec:   &networkv1.SecurityGroupSpec{Description: group.Name, Rules: rules},
 		Status: &networkv1.SecurityGroupStatus{Observed: &commonv1.ObservedState{
 			State: commonv1.ReconciliationState_RECONCILIATION_STATE_READY,
 		}},

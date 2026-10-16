@@ -144,23 +144,26 @@ func (s opsGate) GetOperation(ctx context.Context, req *longrunningpb.GetOperati
 // GetOperation, because the fake settles every read and the resource API does
 // not.
 type loopWorld struct {
-	mu        sync.Mutex
-	set       backend.Set
-	now       time.Time
-	idem      map[string]string
-	exists    map[string]struct{}
-	vpcCIDR   map[string]string
-	subnetVPC map[string]string
-	inst      map[string]instSnap
-	sub       map[string]subSnap
-	groups    map[string]resource.SecurityGroup
-	keyLine   map[string]string
-	keySHA1   map[string]string
-	opLaunch  map[string]string
-	actions   map[string]string
-	detach    map[string]map[string]string
-	boots     map[string]*storagev1.Volume
-	namedOps  map[string]*longrunningpb.Operation
+	mu          sync.Mutex
+	set         backend.Set
+	now         time.Time
+	idem        map[string]string
+	exists      map[string]struct{}
+	vpcCIDR     map[string]string
+	subnetVPC   map[string]string
+	inst        map[string]instSnap
+	sub         map[string]subSnap
+	groups      map[string]resource.SecurityGroup
+	keyLine     map[string]string
+	keySHA1     map[string]string
+	opLaunch    map[string]string
+	actions     map[string]string
+	detach      map[string]map[string]string
+	boots       map[string]*storagev1.Volume
+	namedOps    map[string]*longrunningpb.Operation
+	byRequest   map[string]*longrunningpb.Operation
+	groupLabels map[string]map[string]string
+	opSeq       uint64
 }
 
 type instSnap struct {

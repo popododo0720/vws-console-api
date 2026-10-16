@@ -54,7 +54,11 @@ func expandIngressPermissions(body []byte) ([]resource.IngressChange, error) {
 		}
 		from, to, missing := perm.ports()
 		if missing != "" {
-			return nil, resource.MissingIngressPorts(base + "." + missing)
+			field := base + "." + missing
+			if icmpProtocol(perm.Protocol) {
+				return nil, resource.MissingICMPPorts(field)
+			}
+			return nil, resource.MissingIngressPorts(field)
 		}
 		for j, rg := range perm.Ranges {
 			path := fmt.Sprintf("%s.ipRanges[%d]", base, j)
@@ -88,22 +92,31 @@ type ingressPermission struct {
 }
 
 func (p ingressPermission) ports() (from, to int, missing string) {
-	if !tcpOrUDP(p.Protocol) {
-		if p.FromPort != nil {
-			from = *p.FromPort
+	if icmpProtocol(p.Protocol) || tcpOrUDP(p.Protocol) {
+		if p.FromPort == nil {
+			return 0, 0, "fromPort"
 		}
-		if p.ToPort != nil {
-			to = *p.ToPort
+		if p.ToPort == nil {
+			return 0, 0, "toPort"
 		}
-		return from, to, ""
+		return *p.FromPort, *p.ToPort, ""
 	}
-	if p.FromPort == nil {
-		return 0, 0, "fromPort"
+	if p.FromPort != nil {
+		from = *p.FromPort
 	}
-	if p.ToPort == nil {
-		return 0, 0, "toPort"
+	if p.ToPort != nil {
+		to = *p.ToPort
 	}
-	return *p.FromPort, *p.ToPort, ""
+	return from, to, ""
+}
+
+func icmpProtocol(protocol string) bool {
+	switch strings.ToLower(strings.TrimSpace(protocol)) {
+	case "icmp", "1":
+		return true
+	default:
+		return false
+	}
 }
 
 func tcpOrUDP(protocol string) bool {

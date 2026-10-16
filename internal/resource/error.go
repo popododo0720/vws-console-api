@@ -214,6 +214,15 @@ func MissingIngressPorts(field string) *Error {
 	}
 }
 
+// MissingICMPPorts reports an ICMP permission that omits a type or a code.
+// AWS returns InvalidParameterValue for that omission.
+func MissingICMPPorts(field string) *Error {
+	return &Error{
+		Code: CodeInvalidArgument, Field: field, EC2Code: EC2InvalidParameterValue,
+		Message: "Invalid value 'Must specify both from and to ports with ICMP.' for portRange.",
+	}
+}
+
 // MalformedPermission reports an ingress permission the grammar rejects.
 func MalformedPermission(field, message string) *Error {
 	return &Error{Code: CodeInvalidArgument, Field: field, Message: message, EC2Code: EC2InvalidPermissionMalformed}

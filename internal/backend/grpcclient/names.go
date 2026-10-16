@@ -46,6 +46,13 @@ const (
 	labelDetachOpPrefix = "vws-dop-"
 )
 
+// An authorize replay lives on the group. The server mints the operation id,
+// so the group stores the fingerprint token, the target group, and that id.
+const (
+	labelIngressPrefix   = "vws-in-"
+	labelIngressOpPrefix = "vws-iop-"
+)
+
 // project is the resource-API project for an account. A bare account id is
 // twelve digits, which is not a resource id, so the project is "a" plus the
 // account. accountOf reverses that.
