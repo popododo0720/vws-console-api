@@ -199,6 +199,131 @@ func TestConsoleAndQueryShareAnAddress(t *testing.T) {
 	}
 }
 
+func TestConsoleAndQueryDetachTheSameVolume(t *testing.T) {
+	now := time.Date(2026, 10, 9, 10, 0, 0, 0, time.UTC)
+	account := mustParse[resource.AccountID](t, "123456789012")
+	caller := resource.Caller{Account: account, Subject: "console", Principal: iam.RootARN(account), Root: true}
+	world := fake.New(fake.Options{Now: func() time.Time { return now }})
+	svc := cloud.New(cloud.Config{Backends: world.Set()})
+	static := iam.NewStatic("AKIDEXAMPLE", "secret", account)
+	ui := console.New(console.Config{Service: svc, IAM: static, Auth: console.BearerTokens{"tok-console": caller}})
+	cred := sigv4.Credential{AccessKey: "AKIDEXAMPLE", Secret: "secret", Account: account}
+	query := ec2query.New(ec2query.Config{
+		Service: svc, Authorizer: static, Verifier: verifier(cred, sigv4.ServiceEC2, now),
+	})
+
+	subnetRes := call(t, ui, http.MethodPost, "/api/v1/subnets", `{"cidrBlock":"10.4.0.0/24"}`, map[string]string{
+		"Authorization": "Bearer tok-console", "Content-Type": "application/json", "Idempotency-Key": "subnet-detach",
+	})
+	if subnetRes.Code != http.StatusAccepted {
+		t.Fatalf("subnet %d %s", subnetRes.Code, subnetRes.Body)
+	}
+	var subnetAccepted struct {
+		Items []struct {
+			ID string `json:"subnetId"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(subnetRes.Body.Bytes(), &subnetAccepted); err != nil {
+		t.Fatal(err)
+	}
+	runBody := `{"imageId":"ami-0123456789abcdef0","instanceType":"vws.small","subnetId":"` +
+		subnetAccepted.Items[0].ID + `","count":1}`
+	runRes := call(t, ui, http.MethodPost, "/api/v1/instances", runBody, map[string]string{
+		"Authorization": "Bearer tok-console", "Content-Type": "application/json", "Idempotency-Key": "run-detach",
+	})
+	if runRes.Code != http.StatusAccepted {
+		t.Fatalf("run %d %s", runRes.Code, runRes.Body)
+	}
+	var runAccepted struct {
+		Items []struct {
+			ID string `json:"instanceId"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(runRes.Body.Bytes(), &runAccepted); err != nil {
+		t.Fatal(err)
+	}
+	inst := runAccepted.Items[0].ID
+	volRes := call(t, ui, http.MethodPost, "/api/v1/volumes", `{"size":4,"availabilityZone":"vws-1a"}`, map[string]string{
+		"Authorization": "Bearer tok-console", "Content-Type": "application/json", "Idempotency-Key": "vol-detach",
+	})
+	if volRes.Code != http.StatusAccepted {
+		t.Fatalf("volume %d %s", volRes.Code, volRes.Body)
+	}
+	var volAccepted struct {
+		Items []struct {
+			ID string `json:"volumeId"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(volRes.Body.Bytes(), &volAccepted); err != nil {
+		t.Fatal(err)
+	}
+	vol := volAccepted.Items[0].ID
+	attachBody := `{"instanceId":"` + inst + `","device":"/dev/sdf"}`
+	attached := call(t, ui, http.MethodPost, "/api/v1/volumes/"+vol+"/attach", attachBody, map[string]string{
+		"Authorization": "Bearer tok-console", "Content-Type": "application/json", "Idempotency-Key": "attach-detach",
+	})
+	if attached.Code != http.StatusAccepted {
+		t.Fatalf("attach %d %s", attached.Code, attached.Body)
+	}
+	detached := serveSigned(t, query, cred, sigv4.ServiceEC2, now, http.MethodPost, "http://127.0.0.1:8081/", url.Values{
+		"Action": {"DetachVolume"}, "Version": {ec2query.Version},
+		"VolumeId": {vol}, "InstanceId": {inst}, "Device": {"/dev/sdf"},
+	}.Encode())
+	if detached.Code != http.StatusOK || !strings.Contains(detached.Body.String(), "<status>detaching</status>") ||
+		!strings.Contains(detached.Body.String(), vol) {
+		t.Fatalf("query detach %d %s", detached.Code, detached.Body)
+	}
+	deleted := serveSigned(t, query, cred, sigv4.ServiceEC2, now, http.MethodPost, "http://127.0.0.1:8081/", url.Values{
+		"Action": {"DeleteVolume"}, "Version": {ec2query.Version}, "VolumeId": {vol},
+	}.Encode())
+	if deleted.Code != http.StatusOK || !strings.Contains(deleted.Body.String(), "<return>true</return>") {
+		t.Fatalf("delete %d %s", deleted.Code, deleted.Body)
+	}
+
+	vol2Res := serveSigned(t, query, cred, sigv4.ServiceEC2, now, http.MethodPost, "http://127.0.0.1:8081/", url.Values{
+		"Action": {"CreateVolume"}, "Version": {ec2query.Version}, "Size": {"4"},
+		"AvailabilityZone": {"vws-1a"}, "ClientToken": {"vol-detach-2"},
+	}.Encode())
+	if vol2Res.Code != http.StatusOK {
+		t.Fatalf("query volume %d %s", vol2Res.Code, vol2Res.Body)
+	}
+	vol2 := xmlText(t, vol2Res.Body.String(), "volumeId")
+	attach2 := serveSigned(t, query, cred, sigv4.ServiceEC2, now, http.MethodPost, "http://127.0.0.1:8081/", url.Values{
+		"Action": {"AttachVolume"}, "Version": {ec2query.Version},
+		"VolumeId": {vol2}, "InstanceId": {inst}, "Device": {"/dev/sdg"},
+	}.Encode())
+	if attach2.Code != http.StatusOK {
+		t.Fatalf("query attach %d %s", attach2.Code, attach2.Body)
+	}
+	detachBody := `{"instanceId":"` + inst + `","device":"/dev/sdg"}`
+	consoleDetach := call(t, ui, http.MethodPost, "/api/v1/volumes/"+vol2+"/detach", detachBody, map[string]string{
+		"Authorization": "Bearer tok-console", "Content-Type": "application/json", "Idempotency-Key": "detach-console",
+	})
+	body := consoleDetach.Body.String()
+	if consoleDetach.Code != http.StatusAccepted || !strings.Contains(body, `"status":"detaching"`) ||
+		!strings.Contains(body, vol2) {
+		t.Fatalf("console detach %d %s", consoleDetach.Code, consoleDetach.Body)
+	}
+	consoleDelete := call(t, ui, http.MethodPost, "/api/v1/volumes/"+vol2+"/delete", "", map[string]string{
+		"Authorization": "Bearer tok-console", "Content-Type": "application/json", "Idempotency-Key": "delete-console",
+	})
+	if consoleDelete.Code != http.StatusAccepted {
+		t.Fatalf("console delete %d %s", consoleDelete.Code, consoleDelete.Body)
+	}
+}
+
+func xmlText(t *testing.T, body, tag string) string {
+	t.Helper()
+	open := "<" + tag + ">"
+	closeTag := "</" + tag + ">"
+	start := strings.Index(body, open)
+	end := strings.Index(body, closeTag)
+	if start < 0 || end < start {
+		t.Fatalf("no %s in %s", tag, body)
+	}
+	return body[start+len(open) : end]
+}
+
 func TestS3ObjectRoundTrip(t *testing.T) {
 	now := time.Date(2026, 10, 9, 10, 0, 0, 0, time.UTC)
 	account := mustParse[resource.AccountID](t, "123456789012")

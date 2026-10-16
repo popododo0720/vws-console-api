@@ -79,7 +79,27 @@ func (h *handler) createVolume(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *handler) detachVolume(w http.ResponseWriter, r *http.Request) {
-	writeErr(w, r, resource.Unimplemented(resource.ActionDetachVolume.String()))
+	c, token, ok := h.begin(w, r)
+	if !ok {
+		return
+	}
+	id, err := resource.Parse[resource.VolumeID](r.PathValue("id"))
+	if err != nil {
+		writeErr(w, r, err)
+		return
+	}
+	var req resource.DetachVolumeRequest
+	if err := decode(w, r, &req); err != nil {
+		writeErr(w, r, err)
+		return
+	}
+	req.VolumeID = id
+	acc, err := h.svc.DetachVolume(r.Context(), c, token, req)
+	if err != nil {
+		writeErr(w, r, err)
+		return
+	}
+	writeAccepted(w, acc)
 }
 
 func (h *handler) attachVolume(w http.ResponseWriter, r *http.Request) {

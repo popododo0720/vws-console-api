@@ -136,6 +136,55 @@ func (h *handler) describeVolumes(w http.ResponseWriter, r *http.Request, c reso
 	}{Items: items}})
 }
 
+func (h *handler) detachVolume(w http.ResponseWriter, r *http.Request, c resource.Caller) {
+	token, err := optionalClientToken(r)
+	if err != nil {
+		writeErr(w, r, err)
+		return
+	}
+	vol, err := resource.Parse[resource.VolumeID](r.Form.Get("VolumeId"))
+	if err != nil {
+		writeErr(w, r, err)
+		return
+	}
+	var inst resource.InstanceID
+	if raw := r.Form.Get("InstanceId"); raw != "" {
+		inst, err = resource.Parse[resource.InstanceID](raw)
+		if err != nil {
+			writeErr(w, r, err)
+			return
+		}
+	}
+	force, err := parseOptionalBool(r.Form.Get("Force"))
+	if err != nil {
+		writeErr(w, r, err)
+		return
+	}
+	acc, err := h.svc.DetachVolume(r.Context(), c, token, resource.DetachVolumeRequest{
+		VolumeID: vol, InstanceID: inst, Device: r.Form.Get("Device"), Force: force,
+	})
+	if err != nil {
+		writeErr(w, r, err)
+		return
+	}
+	item := acc.Items[0]
+	writeXML(w, detachVolumeXML{
+		RequestID: requestID(r), VolumeID: item.VolumeID.String(), InstanceID: item.InstanceID.String(),
+		Device: item.Device, Status: string(item.Status), AttachTime: awsTime(item.AttachTime),
+	})
+}
+
+func parseOptionalBool(raw string) (bool, error) {
+	switch raw {
+	case "", "false":
+		return false, nil
+	case "true":
+		return true, nil
+	default:
+		return false, resource.Invalid("Force", "malformed")
+	}
+}
+
 func (h *handler) attachVolume(w http.ResponseWriter, r *http.Request, c resource.Caller) {
 	token, err := optionalClientToken(r)
 	if err != nil {
