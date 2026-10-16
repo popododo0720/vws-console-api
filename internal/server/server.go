@@ -23,12 +23,6 @@ type Surface struct {
 	Handler http.Handler
 }
 
-// Run serves surfaces until ctx is cancelled or a listener fails.
-// It then shuts the listeners down. In-flight requests get five seconds.
-func Run(ctx context.Context, logger *slog.Logger, surfaces ...Surface) error {
-	return Serve(ctx, Options{Logger: logger, Surfaces: surfaces})
-}
-
 // Options configures Serve.
 type Options struct {
 	Logger   *slog.Logger
@@ -39,7 +33,9 @@ type Options struct {
 	OpsAddr string
 }
 
-// Serve is Run with an optional operations listener.
+// Serve serves surfaces, plus an optional operations listener, until ctx is
+// cancelled or a listener fails. It then shuts the listeners down. In-flight
+// requests get five seconds.
 func Serve(ctx context.Context, opts Options) error {
 	logger := opts.Logger
 	if logger == nil {
