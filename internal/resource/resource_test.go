@@ -264,18 +264,68 @@ func TestIngressProtocolIsCanonical(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, err := (AuthorizeSecurityGroupIngressRequest{
-		ID:   id,
-		Rule: IngressRule{Protocol: "17", FromPort: 53, ToPort: 53, Cidr: "10.0.0.0/16"},
+		ID: id,
+		Rules: []IngressChange{{
+			IngressRule: IngressRule{Protocol: "17", FromPort: 53, ToPort: 53, Cidr: "10.0.0.0/16"},
+			Path:        "ipPermissions[0].ipRanges[0]",
+		}},
 	}).Normalize()
-	if err != nil || got.Rule.Protocol != "udp" {
-		t.Fatalf("%v %+v", err, got.Rule)
+	if err != nil || len(got.Rules) != 1 || got.Rules[0].Protocol != "udp" {
+		t.Fatalf("%v %+v", err, got.Rules)
 	}
 	_, err = (AuthorizeSecurityGroupIngressRequest{
-		ID:   id,
-		Rule: IngressRule{Protocol: "sctp", FromPort: 1, ToPort: 1, Cidr: "10.0.0.0/16"},
+		ID: id,
+		Rules: []IngressChange{{
+			IngressRule: IngressRule{Protocol: "sctp", FromPort: 1, ToPort: 1, Cidr: "10.0.0.0/16"},
+			Path:        "ipPermissions[0].ipRanges[0]",
+			Perm:        "ipPermissions[0]",
+		}},
 	}).Normalize()
-	if CodeOf(err) != CodeInvalidArgument {
+	e := AsError(err)
+	if e.Code != CodeInvalidArgument || e.EC2Code != EC2InvalidPermissionMalformed {
 		t.Fatalf("sctp: %v", err)
+	}
+	if e.Field != "ipPermissions[0].ipProtocol" {
+		t.Fatalf("sctp field: %v", err)
+	}
+}
+
+func TestIngressICMPOutsideZeroIsUnsupported(t *testing.T) {
+	id, err := Parse[SecurityGroupID]("sg-01234567")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, rule := range []IngressRule{
+		{Protocol: "icmp", FromPort: 3, ToPort: 4, Cidr: "10.0.0.0/16"},
+		{Protocol: "icmp", FromPort: -1, ToPort: -1, Cidr: "10.0.0.0/16"},
+		{Protocol: "icmp", FromPort: 8, ToPort: 0, Cidr: "10.0.0.0/16"},
+		{Protocol: "icmp", FromPort: 0, ToPort: 0, Cidr: "10.0.0.0/16"},
+	} {
+		_, err = (AuthorizeSecurityGroupIngressRequest{
+			ID: id, Rules: []IngressChange{{IngressRule: rule, Perm: "ipPermissions[0]"}},
+		}).Normalize()
+		if err == nil {
+			t.Fatalf("%+v was stored", rule)
+		}
+		e := AsError(err)
+		if e.EC2Code != EC2UnsupportedOperation || e.Field != "ipPermissions[0].fromPort" {
+			t.Fatalf("%+v: %v", rule, err)
+		}
+	}
+}
+
+func TestIngressBatchRejectsARepeat(t *testing.T) {
+	id, err := Parse[SecurityGroupID]("sg-01234567")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rule := IngressRule{Protocol: "tcp", FromPort: 22, ToPort: 22, Cidr: "10.0.0.0/16"}
+	_, err = (AuthorizeSecurityGroupIngressRequest{ID: id, Rules: []IngressChange{
+		{IngressRule: rule, Path: "ipPermissions[0].ipRanges[0]"},
+		{IngressRule: rule, Path: "ipPermissions[0].ipRanges[1]"},
+	}}).Normalize()
+	if e := AsError(err); e.EC2Code != EC2InvalidPermissionDuplicate || e.Field != "ipPermissions[0].ipRanges[1]" {
+		t.Fatalf("repeat: %v", err)
 	}
 }
 

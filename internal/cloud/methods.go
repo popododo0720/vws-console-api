@@ -349,7 +349,7 @@ func (s *Service) DescribeAddresses(ctx context.Context, c resource.Caller, q re
 	return readPage(ctx, c, q, s.backends.Network.DescribeAddresses)
 }
 
-// AuthorizeSecurityGroupIngress accepts one inbound rule and returns the operation.
+// AuthorizeSecurityGroupIngress accepts inbound rules and returns the operation.
 func (s *Service) AuthorizeSecurityGroupIngress(ctx context.Context, c resource.Caller, token resource.ClientToken, req resource.AuthorizeSecurityGroupIngressRequest) (resource.Accepted[resource.SecurityGroup], error) {
 	token, err := fillToken(token)
 	if err != nil {

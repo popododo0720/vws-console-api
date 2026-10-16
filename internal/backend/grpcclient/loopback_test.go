@@ -34,6 +34,17 @@ import (
 )
 
 func TestContractOverGRPC(t *testing.T) {
+	backendtest.Run(t, func() backend.Set { return startLoop(t) })
+}
+
+func startLoop(t *testing.T) backend.Set {
+	t.Helper()
+	set, _ := startLoopWorld(t)
+	return set
+}
+
+func startLoopWorld(t *testing.T) (backend.Set, *loopWorld) {
+	t.Helper()
 	computeLis := bufconn.Listen(MaxMessageBytes())
 	storageLis := bufconn.Listen(MaxMessageBytes())
 	computeSrv := grpc.NewServer(
@@ -102,13 +113,11 @@ func TestContractOverGRPC(t *testing.T) {
 		storageOps: longrunningpb.NewOperationsClient(storageConn),
 		networkOps: longrunningpb.NewOperationsClient(computeConn),
 	}
-	backendtest.Run(t, func() backend.Set {
-		return backend.Set{
-			Compute: computeClient{shared},
-			Storage: storageClient{shared},
-			Network: networkClient{shared},
-		}
-	})
+	return backend.Set{
+		Compute: computeClient{shared},
+		Storage: storageClient{shared},
+		Network: networkClient{shared},
+	}, loop
 }
 
 // opsGate hides volume operations from the compute listener and every other
@@ -120,6 +129,9 @@ type opsGate struct {
 }
 
 func (s opsGate) GetOperation(ctx context.Context, req *longrunningpb.GetOperationRequest) (*longrunningpb.Operation, error) {
+	if op, ok := s.w.namedOp(req.GetName()); ok {
+		return op, nil
+	}
 	op, err := s.w.lookup(ctx, req.GetName())
 	if err != nil {
 		return nil, toStatus(err)
@@ -138,22 +150,28 @@ func (s opsGate) GetOperation(ctx context.Context, req *longrunningpb.GetOperati
 // GetOperation, because the fake settles every read and the resource API does
 // not.
 type loopWorld struct {
-	mu        sync.Mutex
-	set       backend.Set
-	now       time.Time
-	idem      map[string]string
-	exists    map[string]struct{}
-	vpcCIDR   map[string]string
-	subnetVPC map[string]string
-	inst      map[string]instSnap
-	sub       map[string]subSnap
-	groups    map[string]resource.SecurityGroup
-	keyLine   map[string]string
-	keySHA1   map[string]string
-	opLaunch  map[string]string
-	actions   map[string]string
-	detach    map[string]map[string]string
-	boots     map[string]*storagev1.Volume
+	mu                      sync.Mutex
+	set                     backend.Set
+	now                     time.Time
+	idem                    map[string]string
+	exists                  map[string]struct{}
+	vpcCIDR                 map[string]string
+	subnetVPC               map[string]string
+	inst                    map[string]instSnap
+	sub                     map[string]subSnap
+	groups                  map[string]resource.SecurityGroup
+	keyLine                 map[string]string
+	keySHA1                 map[string]string
+	opLaunch                map[string]string
+	actions                 map[string]string
+	detach                  map[string]map[string]string
+	boots                   map[string]*storagev1.Volume
+	namedOps                map[string]*longrunningpb.Operation
+	byRequest               map[string]requestRecord
+	groupLabels             map[string]map[string]string
+	opSeq                   uint64
+	specUpdates             int
+	omitIngressLabelsOnList bool
 }
 
 type instSnap struct {

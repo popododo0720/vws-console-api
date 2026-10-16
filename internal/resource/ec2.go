@@ -3,6 +3,7 @@ package resource
 import (
 	"fmt"
 	"net"
+	"slices"
 	"strings"
 	"time"
 )
@@ -320,12 +321,31 @@ func (g SecurityGroup) Owner() AccountID { return g.OwnerID }
 // Identity returns the group id.
 func (g SecurityGroup) Identity() string { return g.ID.String() }
 
-// IngressRule is one inbound permission.
+// IngressRule is one inbound permission stored on a group.
 type IngressRule struct {
 	Protocol string `json:"ipProtocol"`
 	FromPort int    `json:"fromPort"`
 	ToPort   int    `json:"toPort"`
 	Cidr     string `json:"cidrIp"`
+}
+
+// IngressChange is one stored rule and the client paths that produced it.
+// Path and Perm are omitted from JSON, so the idempotency fingerprint is the flat rule list.
+type IngressChange struct {
+	IngressRule
+	Path string `json:"-"`
+	Perm string `json:"-"`
+}
+
+func (c IngressChange) field(leaf string) string {
+	base := c.Path
+	if leaf != "cidrIp" {
+		base = c.Perm
+	}
+	if base == "" {
+		return leaf
+	}
+	return base + "." + leaf
 }
 
 // CreateSecurityGroupRequest allocates a group in a VPC.
@@ -348,10 +368,11 @@ func (r CreateSecurityGroupRequest) Normalize() (CreateSecurityGroupRequest, err
 	return r, nil
 }
 
-// AuthorizeSecurityGroupIngressRequest adds one inbound rule.
+// AuthorizeSecurityGroupIngressRequest adds flat IPv4 rules to one group.
+// Rules is the canonical list Normalize produces. Its JSON is the idempotency fingerprint.
 type AuthorizeSecurityGroupIngressRequest struct {
-	ID   SecurityGroupID `json:"groupId"`
-	Rule IngressRule     `json:"ipPermissions"`
+	ID    SecurityGroupID `json:"groupId"`
+	Rules []IngressChange `json:"ipPermissions"`
 }
 
 // Action returns AuthorizeSecurityGroupIngress.
@@ -359,30 +380,74 @@ func (AuthorizeSecurityGroupIngressRequest) Action() Action {
 	return ActionAuthorizeSecurityGroupIngress
 }
 
-// Normalize checks the group and the rule.
+// Normalize canonicalizes every rule and rejects an empty list or a repeated rule.
+// The returned slice is sorted, so two bodies that name the same rules share a fingerprint.
 func (r AuthorizeSecurityGroupIngressRequest) Normalize() (AuthorizeSecurityGroupIngressRequest, error) {
 	if r.ID.IsZero() {
 		return AuthorizeSecurityGroupIngressRequest{}, Invalid("groupId", "required")
 	}
-	protocol, err := canonicalProtocol(r.Rule.Protocol)
-	if err != nil {
-		return AuthorizeSecurityGroupIngressRequest{}, err
+	if len(r.Rules) == 0 {
+		return AuthorizeSecurityGroupIngressRequest{}, MalformedPermission("ipPermissions", "required")
 	}
-	r.Rule.Protocol = protocol
-	cidr, err := normalizeCIDR(r.Rule.Cidr)
-	if err != nil {
-		return AuthorizeSecurityGroupIngressRequest{}, err
+	out := make([]IngressChange, len(r.Rules))
+	seen := make(map[IngressRule]struct{}, len(r.Rules))
+	for i, rule := range r.Rules {
+		protocol, err := canonicalProtocol(rule.Protocol)
+		if err != nil {
+			return AuthorizeSecurityGroupIngressRequest{}, MalformedPermission(rule.field("ipProtocol"), "unsupported")
+		}
+		cidr, err := normalizeCIDR(rule.Cidr)
+		if err != nil {
+			return AuthorizeSecurityGroupIngressRequest{}, MalformedPermission(rule.field("cidrIp"), "must be an ipv4 network")
+		}
+		rule.Protocol = protocol
+		rule.Cidr = cidr
+		// The network service maps ICMP type 0 code 0 to unrestricted ICMP,
+		// which grants more access than the type and code in the request.
+		if protocol == "icmp" {
+			return AuthorizeSecurityGroupIngressRequest{}, UnsupportedIngress(rule.field("fromPort"))
+		}
+		if protocol == "-1" {
+			rule.FromPort = 0
+			rule.ToPort = 0
+		} else if rule.FromPort < 0 || rule.ToPort > 65535 || rule.ToPort < 0 || rule.FromPort > rule.ToPort {
+			return AuthorizeSecurityGroupIngressRequest{}, MalformedPermission(rule.field("fromPort"), "malformed")
+		}
+		if _, ok := seen[rule.IngressRule]; ok {
+			return AuthorizeSecurityGroupIngressRequest{}, DuplicatePermission(r.ID.String(), rule.Path)
+		}
+		seen[rule.IngressRule] = struct{}{}
+		out[i] = rule
 	}
-	r.Rule.Cidr = cidr
-	if protocol == "-1" {
-		r.Rule.FromPort = 0
-		r.Rule.ToPort = 0
-		return r, nil
-	}
-	if r.Rule.FromPort < 0 || r.Rule.ToPort > 65535 || r.Rule.ToPort < 0 || r.Rule.FromPort > r.Rule.ToPort {
-		return AuthorizeSecurityGroupIngressRequest{}, Invalid("fromPort", "malformed")
-	}
+	slices.SortFunc(out, func(a, b IngressChange) int {
+		if a.Protocol != b.Protocol {
+			return strings.Compare(a.Protocol, b.Protocol)
+		}
+		if a.FromPort != b.FromPort {
+			return a.FromPort - b.FromPort
+		}
+		if a.ToPort != b.ToPort {
+			return a.ToPort - b.ToPort
+		}
+		return strings.Compare(a.Cidr, b.Cidr)
+	})
+	r.Rules = out
 	return r, nil
+}
+
+// CheckIngressBatch reports a rule the group already has, or a repeat in this call.
+func CheckIngressBatch(id string, existing []IngressRule, add []IngressChange) error {
+	seen := make(map[IngressRule]struct{}, len(existing)+len(add))
+	for _, rule := range existing {
+		seen[rule] = struct{}{}
+	}
+	for _, rule := range add {
+		if _, ok := seen[rule.IngressRule]; ok {
+			return DuplicatePermission(id, rule.Path)
+		}
+		seen[rule.IngressRule] = struct{}{}
+	}
+	return nil
 }
 
 // canonicalProtocol accepts the names and protocol numbers a query client sends.
