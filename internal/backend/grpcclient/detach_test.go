@@ -17,6 +17,7 @@ import (
 	"google.golang.org/grpc/test/bufconn"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	commonv1 "github.com/popododo0720/vws-proto/gen/go/vws/common/v1"
 	computev1 "github.com/popododo0720/vws-proto/gen/go/vws/compute/v1"
@@ -458,13 +459,19 @@ func TestDetachReplayAfterCompletionKeepsTheDevice(t *testing.T) {
 	holder := observedInstance(projectID, instID,
 		commonv1.ReconciliationState_RECONCILIATION_STATE_READY,
 		computev1.InstancePower_INSTANCE_POWER_RUNNING)
+	launched := time.Unix(1_700_000_100, 0).UTC()
+	created := time.Unix(1_700_000_000, 0).UTC()
+	holder.CreateTime = timestamppb.New(launched)
 	holder.Spec.Volumes = []*computev1.VolumeAttachment{
 		{Volume: volumeName(projectID, rootID), DeviceName: "boot", Boot: true},
 		{Volume: volumeName(projectID, dataID), DeviceName: "/dev/sdf"},
 	}
+	dataVol := observedVolume(projectID, dataID, commonv1.ReconciliationState_RECONCILIATION_STATE_READY, instID)
+	dataVol.CreateTime = timestamppb.New(created)
+	dataVol.Status.DeviceName = "/dev/sdf"
 	world := &detachWorld{
 		inst:      []*computev1.Instance{holder},
-		vol:       observedVolume(projectID, dataID, commonv1.ReconciliationState_RECONCILIATION_STATE_READY, ""),
+		vol:       dataVol,
 		byRequest: map[string]*detachRecord{},
 	}
 	client := dialDetachWorld(t, world)
@@ -488,10 +495,12 @@ func TestDetachReplayAfterCompletionKeepsTheDevice(t *testing.T) {
 	if first.Items[0].Device != "/dev/sdf" || first.Items[0].Status != resource.AttachmentDetaching {
 		t.Fatalf("first %+v", first.Items[0])
 	}
+	if !first.Items[0].AttachTime.Equal(launched) || first.Items[0].AttachTime.Equal(created) {
+		t.Fatalf("attachTime %s, volume created %s, instance launched %s",
+			first.Items[0].AttachTime, created, launched)
+	}
 	world.finishAll()
-	again, err := client.DetachVolume(ctx, mut, resource.DetachVolumeRequest{
-		VolumeID: data, InstanceID: holderID,
-	})
+	again, err := client.DetachVolume(ctx, mut, resource.DetachVolumeRequest{VolumeID: data})
 	if err != nil {
 		t.Fatalf("completed replay: %v", err)
 	}
@@ -591,6 +600,87 @@ func TestConcurrentDetachKeepsBothVolumesOff(t *testing.T) {
 	vols := world.volumeNames(instanceName(projectID, instID))
 	if len(vols) != 1 || vols[0] != volumeName(projectID, rootID) {
 		t.Fatalf("volumes after concurrent detach %v", vols)
+	}
+}
+
+func TestAttachAndDetachDoNotRestoreAVolume(t *testing.T) {
+	account := mustAccount(t)
+	projectID := project(account)
+	const (
+		instID  = "i-0123456789abcdef0"
+		rootID  = "vol-0123456789abcdef0"
+		leftID  = "vol-0fedcba9876543210"
+		rightID = "vol-0abcdef0123456789"
+	)
+	holder := observedInstance(projectID, instID,
+		commonv1.ReconciliationState_RECONCILIATION_STATE_READY,
+		computev1.InstancePower_INSTANCE_POWER_RUNNING)
+	holder.Spec.Volumes = []*computev1.VolumeAttachment{
+		{Volume: volumeName(projectID, rootID), DeviceName: "boot", Boot: true},
+		{Volume: volumeName(projectID, leftID), DeviceName: "/dev/sdf"},
+	}
+	world := &detachWorld{
+		inst: []*computev1.Instance{holder},
+		vol:  observedVolume(projectID, leftID, commonv1.ReconciliationState_RECONCILIATION_STATE_READY, instID),
+		more: []*storagev1.Volume{
+			observedVolume(projectID, rightID, commonv1.ReconciliationState_RECONCILIATION_STATE_READY, ""),
+		},
+		byRequest: map[string]*detachRecord{},
+		gate: &detachGate{
+			release: make(chan struct{}),
+			writes:  make(chan struct{}),
+		},
+	}
+	client := dialDetachWorld(t, world)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	scope := backend.Scope{Account: account}
+	left, err := resource.Parse[resource.VolumeID](leftID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	right, err := resource.Parse[resource.VolumeID](rightID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	holderID, err := resource.Parse[resource.InstanceID](instID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	errCh := make(chan error, 2)
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		_, callErr := client.DetachVolume(ctx, backend.Mutation{
+			Scope: scope, Key: "k-left", Fingerprint: "fp-left",
+		}, resource.DetachVolumeRequest{VolumeID: left, InstanceID: holderID, Device: "/dev/sdf"})
+		if callErr != nil {
+			errCh <- callErr
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		acc, callErr := client.AttachVolume(ctx, backend.Mutation{
+			Scope: scope, Key: "k-right", Fingerprint: "fp-right",
+		}, resource.AttachVolumeRequest{VolumeID: right, InstanceID: holderID, Device: "/dev/sdg"})
+		if callErr != nil {
+			errCh <- callErr
+			return
+		}
+		if acc.Items[0].Device != "/dev/sdg" || acc.Items[0].State != resource.VolumeInUse {
+			errCh <- fmt.Errorf("attach %+v", acc.Items[0])
+		}
+	}()
+	wg.Wait()
+	close(errCh)
+	for callErr := range errCh {
+		t.Errorf("race: %v", callErr)
+	}
+	vols := world.volumeNames(instanceName(projectID, instID))
+	want := []string{volumeName(projectID, rootID), volumeName(projectID, rightID)}
+	if len(vols) != len(want) || vols[0] != want[0] || vols[1] != want[1] {
+		t.Fatalf("volumes after attach and detach %v", vols)
 	}
 }
 
