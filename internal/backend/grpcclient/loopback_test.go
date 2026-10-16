@@ -167,11 +167,12 @@ type loopWorld struct {
 	detach      map[string]map[string]string
 	boots       map[string]*storagev1.Volume
 	namedOps    map[string]*longrunningpb.Operation
-	byRequest   map[string]*longrunningpb.Operation
+	byRequest   map[string]requestRecord
 	groupLabels map[string]map[string]string
 	opSeq       uint64
 	specUpdates int
 	clash       int
+	etags       map[string]string
 }
 
 type instSnap struct {

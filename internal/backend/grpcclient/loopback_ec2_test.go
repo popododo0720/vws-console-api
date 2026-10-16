@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"maps"
+	"strconv"
 	"strings"
 	"time"
 
@@ -209,7 +210,7 @@ func (s *groupSrv) GetSecurityGroup(_ context.Context, req *networkv1.GetSecurit
 	if !ok {
 		return nil, toStatus(resource.NotFound(resource.KindSecurityGroup, lastSegment(req.GetName())))
 	}
-	return groupProto(group, projectID, s.w.labelsOf(group.ID.String())), nil
+	return groupProto(group, projectID, s.w.labelsOf(group.ID.String()), s.w.groupEtag(group.ID.String())), nil
 }
 
 func (s *groupSrv) UpdateSecurityGroup(ctx context.Context, req *networkv1.UpdateSecurityGroupRequest) (*longrunningpb.Operation, error) {
@@ -232,11 +233,20 @@ func (s *groupSrv) UpdateSecurityGroup(ctx context.Context, req *networkv1.Updat
 	if groupMaskHas(paths, "spec.rules") {
 		s.w.noteSpecUpdate()
 	}
-	if op, ok := s.w.operationForRequest(req.GetRequestId()); ok {
-		return op, nil
+	if rec, ok := s.w.requestRecord(req.GetRequestId()); ok {
+		if !labelsCarryToken(req.GetSecurityGroup().GetLabels(), rec.fp) {
+			return nil, toStatus(resource.IdempotencyMismatch())
+		}
+		return rec.op, nil
 	}
 	if s.w.takeClash(id.String()) {
 		return nil, vwsStatus(codes.Aborted, "ETAG_MISMATCH", "etag mismatch")
+	}
+	if req.GetSecurityGroup().GetEtag() != s.w.groupEtag(id.String()) {
+		return nil, vwsStatus(codes.Aborted, "ETAG_MISMATCH", "etag mismatch")
+	}
+	if groupMaskHas(paths, "labels") && len(req.GetSecurityGroup().GetLabels()) > labelMax {
+		return nil, toStatus(resource.Invalid("labels", "at most 64"))
 	}
 	group, ok := s.w.group(id.String(), account)
 	if !ok {
@@ -259,15 +269,19 @@ func (s *groupSrv) UpdateSecurityGroup(ctx context.Context, req *networkv1.Updat
 		group.Rules = decoded
 		s.w.saveGroup(group)
 	}
+	prev := s.w.labelsOf(id.String())
+	token := ""
 	if groupMaskHas(paths, "labels") {
 		s.w.saveGroupLabels(id.String(), req.GetSecurityGroup().GetLabels())
+		token = addedIngressToken(prev, req.GetSecurityGroup().GetLabels())
 	}
 	op, err := s.w.runningServerOp(
-		projectID, req.GetRequestId(), req.GetSecurityGroup().GetName(), s.w.now,
+		projectID, req.GetRequestId(), req.GetSecurityGroup().GetName(), s.w.now, token,
 	)
 	if err != nil {
 		return nil, toStatus(err)
 	}
+	s.w.bumpGroupEtag(id.String())
 	return op, nil
 }
 
@@ -349,26 +363,77 @@ func (w *loopWorld) takeClash(id string) bool {
 	return true
 }
 
-func (w *loopWorld) operationForRequest(requestID string) (*longrunningpb.Operation, bool) {
+type requestRecord struct {
+	op *longrunningpb.Operation
+	fp string
+}
+
+func (w *loopWorld) requestRecord(requestID string) (requestRecord, bool) {
 	if requestID == "" {
-		return nil, false
+		return requestRecord{}, false
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	op, ok := w.byRequest[requestID]
-	return op, ok
+	rec, ok := w.byRequest[requestID]
+	return rec, ok
 }
 
-func (w *loopWorld) rememberRequest(requestID string, op *longrunningpb.Operation) {
+func (w *loopWorld) rememberRequest(requestID string, op *longrunningpb.Operation, fp string) {
 	if requestID == "" || op == nil {
 		return
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if w.byRequest == nil {
-		w.byRequest = map[string]*longrunningpb.Operation{}
+		w.byRequest = map[string]requestRecord{}
 	}
-	w.byRequest[requestID] = op
+	w.byRequest[requestID] = requestRecord{op: op, fp: fp}
+}
+
+func (w *loopWorld) groupEtag(id string) string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.etags[id]
+}
+
+func (w *loopWorld) bumpGroupEtag(id string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.etags == nil {
+		w.etags = map[string]string{}
+	}
+	n, _ := strconv.Atoi(w.etags[id])
+	w.etags[id] = strconv.Itoa(n + 1)
+}
+
+func labelsCarryToken(labels map[string]string, token string) bool {
+	if token == "" {
+		return false
+	}
+	for key, value := range labels {
+		if !strings.HasPrefix(key, labelIngressPrefix) {
+			continue
+		}
+		fp, _, _ := strings.Cut(value, " ")
+		if fp == token {
+			return true
+		}
+	}
+	return false
+}
+
+func addedIngressToken(prev, next map[string]string) string {
+	for key, value := range next {
+		if !strings.HasPrefix(key, labelIngressPrefix) {
+			continue
+		}
+		if prev[key] == value {
+			continue
+		}
+		fp, _, _ := strings.Cut(value, " ")
+		return fp
+	}
+	return ""
 }
 
 func (w *loopWorld) mintOpLocal() string {
@@ -381,7 +446,7 @@ func (w *loopWorld) mintOpLocal() string {
 }
 
 func (w *loopWorld) runningServerOp(
-	projectID, requestID, resourceName string, now time.Time,
+	projectID, requestID, resourceName string, now time.Time, fp string,
 ) (*longrunningpb.Operation, error) {
 	op, err := longOp(
 		projectID, w.mintOpLocal(), resourceName, requestID,
@@ -391,7 +456,7 @@ func (w *loopWorld) runningServerOp(
 		return nil, err
 	}
 	w.rememberNamed(op)
-	w.rememberRequest(requestID, op)
+	w.rememberRequest(requestID, op, fp)
 	return op, nil
 }
 
@@ -445,7 +510,9 @@ func (w *loopWorld) group(id string, owner resource.AccountID) (resource.Securit
 	return group, true
 }
 
-func groupProto(group resource.SecurityGroup, projectID string, labels map[string]string) *networkv1.SecurityGroup {
+func groupProto(
+	group resource.SecurityGroup, projectID string, labels map[string]string, etag string,
+) *networkv1.SecurityGroup {
 	rules := make([]*networkv1.SecurityGroupRule, 0, len(group.Rules))
 	for i, rule := range group.Rules {
 		protocol, _ := protocolOf(rule.Protocol)
@@ -460,6 +527,7 @@ func groupProto(group resource.SecurityGroup, projectID string, labels map[strin
 	}
 	return &networkv1.SecurityGroup{
 		Name:   securityGroupName(projectID, group.VpcID.String(), group.ID.String()),
+		Etag:   etag,
 		Labels: labels,
 		Spec:   &networkv1.SecurityGroupSpec{Description: group.Name, Rules: rules},
 		Status: &networkv1.SecurityGroupStatus{Observed: &commonv1.ObservedState{

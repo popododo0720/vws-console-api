@@ -402,7 +402,9 @@ func (r AuthorizeSecurityGroupIngressRequest) Normalize() (AuthorizeSecurityGrou
 		}
 		rule.Protocol = protocol
 		rule.Cidr = cidr
-		if protocol == "icmp" && (rule.FromPort != 0 || rule.ToPort != 0) {
+		// The network service maps ICMP type 0 code 0 to unrestricted ICMP,
+		// which grants more access than the type and code in the request.
+		if protocol == "icmp" {
 			return AuthorizeSecurityGroupIngressRequest{}, UnsupportedIngress(rule.field("fromPort"))
 		}
 		if protocol == "-1" {

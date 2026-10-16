@@ -102,7 +102,7 @@ func TestAuthorizeReplayDoesNotRebuildRules(t *testing.T) {
 	set, loop := startLoopWorld(t)
 	ctx := t.Context()
 	account, scope := replayAccount(t)
-	group := replayGroup(t, ctx, set, scope, "10.6.0.0/16", "k-vpc-rebuild", "k-sg-rebuild")
+	group := replayGroup(ctx, t, set, scope, "10.6.0.0/16", "k-vpc-rebuild", "k-sg-rebuild")
 	opened, err := authorizeTCP(ctx, set, scope, "k-auth", "fp-auth", group, 22, "10.0.0.0/16")
 	if err != nil {
 		t.Fatal(err)
@@ -142,7 +142,7 @@ func TestAuthorizeRetriesAStaleGroup(t *testing.T) {
 	loop.clash = 1
 	ctx := t.Context()
 	_, scope := replayAccount(t)
-	group := replayGroup(t, ctx, set, scope, "10.7.0.0/16", "k-vpc-clash", "k-sg-clash")
+	group := replayGroup(ctx, t, set, scope, "10.7.0.0/16", "k-vpc-clash", "k-sg-clash")
 	opened, err := authorizeTCP(ctx, set, scope, "k-auth", "fp-auth", group, 22, "10.0.0.0/16")
 	if err != nil {
 		t.Fatal(err)
@@ -156,7 +156,7 @@ func TestAuthorizeReplayStopsBeforeTheLabelCap(t *testing.T) {
 	set, loop := startLoopWorld(t)
 	ctx := t.Context()
 	account, scope := replayAccount(t)
-	group := replayGroup(t, ctx, set, scope, "10.8.0.0/16", "k-vpc-cap", "k-sg-cap")
+	group := replayGroup(ctx, t, set, scope, "10.8.0.0/16", "k-vpc-cap", "k-sg-cap")
 	labels := make(map[string]string, 64)
 	for i := 0; i < 64; i++ {
 		labels[fmt.Sprintf("k%02d", i)] = "v"
@@ -245,7 +245,7 @@ func replayAccount(t *testing.T) (resource.AccountID, backend.Scope) {
 }
 
 func replayGroup(
-	t *testing.T, ctx context.Context, set backend.Set, scope backend.Scope, cidr, vpcKey, groupKey string,
+	ctx context.Context, t *testing.T, set backend.Set, scope backend.Scope, cidr, vpcKey, groupKey string,
 ) resource.SecurityGroupID {
 	t.Helper()
 	vpc, err := set.Network.CreateVpc(ctx, backend.Mutation{
