@@ -654,8 +654,11 @@ func TestDetachPageTokenRepeatIsAnError(t *testing.T) {
 	world := &detachWorld{
 		inst:        []*computev1.Instance{filler},
 		repeatToken: true,
-		vol:         observedVolume(projectID, "vol-0fedcba9876543210", commonv1.ReconciliationState_RECONCILIATION_STATE_READY, ""),
-		byRequest:   map[string]*detachRecord{},
+		vol: observedVolume(
+			projectID, "vol-0fedcba9876543210",
+			commonv1.ReconciliationState_RECONCILIATION_STATE_READY, "",
+		),
+		byRequest: map[string]*detachRecord{},
 	}
 	client := dialDetachWorld(t, world)
 	data, err := resource.Parse[resource.VolumeID]("vol-0fedcba9876543210")

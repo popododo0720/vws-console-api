@@ -259,6 +259,11 @@ func (c computeClient) AttachVolume(ctx context.Context, m backend.Mutation, req
 	return resource.Accepted[resource.Volume]{Operation: op, Items: []resource.Volume{vol}}, nil
 }
 
+// etagMismatchError is a stale instance etag. DetachVolume rereads and tries again.
+type etagMismatchError struct{}
+
+func (etagMismatchError) Error() string { return "etag mismatch" }
+
 func (c computeClient) DetachVolume(
 	ctx context.Context, m backend.Mutation, req resource.DetachVolumeRequest,
 ) (resource.Accepted[resource.VolumeAttachment], error) {
@@ -268,6 +273,24 @@ func (c computeClient) DetachVolume(
 	if err != nil {
 		return zero, err
 	}
+	// Two detaches share one instance spec. The etag is the compare-and-swap.
+	// A mismatch means the other detach committed, so this attempt rereads.
+	for attempt := 0; attempt < 5; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return zero, err
+		}
+		acc, err := c.detachOnce(ctx, m, projectID, vol, req)
+		if !errors.Is(err, etagMismatchError{}) {
+			return acc, err
+		}
+	}
+	return zero, resource.Conflict(resource.KindVolume, vol.ID.String(), "instance changed")
+}
+
+func (c computeClient) detachOnce(
+	ctx context.Context, m backend.Mutation, projectID string, vol resource.Volume, req resource.DetachVolumeRequest,
+) (resource.Accepted[resource.VolumeAttachment], error) {
+	var zero resource.Accepted[resource.VolumeAttachment]
 	got, model, bind, bound, err := c.detachBind(ctx, projectID, vol, req.InstanceID)
 	if err != nil {
 		return zero, err
@@ -286,18 +309,9 @@ func (c computeClient) DetachVolume(
 		if elsewhere {
 			return zero, resource.AttachmentNotFound(vol.ID)
 		}
-		acc, callErr := c.writeDetach(ctx, m, vol, got, model, backend.VolumeBind{
+		return c.writeDetach(ctx, m, vol, got, model, backend.VolumeBind{
 			InstanceID: req.InstanceID, Device: req.Device,
 		}, false)
-		if callErr != nil {
-			return zero, callErr
-		}
-		// A label-only update completes immediately. That is not a detach.
-		// The in-flight operation from the first request is still running.
-		if acc.Operation.State != resource.OperationRunning {
-			return zero, resource.Conflict(resource.KindVolume, vol.ID.String(), "volume is not in use")
-		}
-		return acc, nil
 	}
 	if !req.InstanceID.IsZero() && req.InstanceID != bind.InstanceID {
 		return zero, resource.AttachmentNotFound(vol.ID)
@@ -368,11 +382,20 @@ func (c computeClient) detachInstance(
 }
 
 // findVolumeBind pages the caller's instances until one spec names id.
+// A repeated page token is an error. Stopping early would hide a later bind.
 func (c computeClient) findVolumeBind(
 	ctx context.Context, projectID string, id resource.VolumeID,
 ) (*computev1.Instance, resource.Instance, backend.VolumeBind, bool, error) {
 	token := ""
-	for page := 0; page < 50; page++ {
+	seen := map[string]struct{}{}
+	for {
+		if token != "" {
+			if _, ok := seen[token]; ok {
+				return nil, resource.Instance{}, backend.VolumeBind{}, false, resource.Internal(
+					errors.New("instance page token repeated"))
+			}
+			seen[token] = struct{}{}
+		}
 		out, err := c.instances.ListInstances(ctx, &computev1.ListInstancesRequest{
 			Parent: instanceParent(projectID), PageSize: 100, PageToken: token,
 		})
@@ -426,16 +449,20 @@ func (c computeClient) writeDetach(
 	if err != nil {
 		return zero, err
 	}
-	updated, err := c.instances.UpdateInstance(ctx, &computev1.UpdateInstanceRequest{
+	updated, callErr := c.instances.UpdateInstance(ctx, &computev1.UpdateInstanceRequest{
 		RequestId:  requestUUID(m.Key, "detach"),
 		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.volumes", "labels"}},
 		Instance: &computev1.Instance{
 			Name:   got.GetName(),
+			Etag:   got.GetEtag(),
 			Labels: labels,
 			Spec:   &computev1.InstanceSpec{Volumes: volumes},
 		},
 	})
-	if err := rpcErr(updated, err); err != nil {
+	if etagMismatch(callErr) {
+		return zero, etagMismatchError{}
+	}
+	if err := rpcErr(updated, callErr); err != nil {
 		// An empty spec diff has no volume id for the loopback to pass on.
 		// The volume was read above, so a not-found from that replay attempt
 		// is the not-in-use conflict.
@@ -448,15 +475,41 @@ func (c computeClient) writeDetach(
 	if err != nil {
 		return zero, err
 	}
+	device := bind.Device
+	recalled, haveRecall := recalledDetachDevice(updated)
+	if haveRecall {
+		device = recalled
+	}
+	// A finished update that did not record a removed device is a new no-op.
+	// The original detach's operation still carries the device it removed.
+	if !drop && updated.GetDone() && !haveRecall {
+		return zero, resource.Conflict(resource.KindVolume, vol.ID.String(), "volume is not in use")
+	}
 	op.Action = resource.ActionDetachVolume
 	op.Targets = []resource.Ref{bind.InstanceID.Ref()}
 	return resource.Accepted[resource.VolumeAttachment]{
 		Operation: op,
 		Items: []resource.VolumeAttachment{{
-			VolumeID: vol.ID, OwnerID: vol.OwnerID, InstanceID: bind.InstanceID, Device: bind.Device,
+			VolumeID: vol.ID, OwnerID: vol.OwnerID, InstanceID: bind.InstanceID, Device: device,
 			Status: resource.AttachmentDetaching, AttachTime: vol.CreateTime,
 		}},
 	}, nil
+}
+
+func recalledDetachDevice(op *longrunningpb.Operation) (string, bool) {
+	resp := op.GetResponse()
+	if resp == nil {
+		return "", false
+	}
+	var inst computev1.Instance
+	if err := resp.UnmarshalTo(&inst); err != nil {
+		return "", false
+	}
+	device := inst.GetLabels()[detachDeviceLabel]
+	if device == "" {
+		return "", false
+	}
+	return device, true
 }
 
 // detachDeviceLabel is carried on the update operation response.
