@@ -111,6 +111,8 @@ type Volume struct {
 	Device     string      `json:"device,omitempty"`
 	SnapshotID SnapshotID  `json:"snapshotId,omitzero"`
 	CreateTime time.Time   `json:"createTime"`
+	// AttachTime is when the volume was attached. It stays zero while detached.
+	AttachTime time.Time `json:"attachTime,omitzero"`
 	// DeleteOnTermination is set on a root volume, which goes with its instance.
 	DeleteOnTermination bool `json:"deleteOnTermination,omitempty"`
 }
@@ -163,6 +165,67 @@ func (r CreateVolumeRequest) Normalize() (CreateVolumeRequest, error) {
 		return CreateVolumeRequest{}, Invalid("availabilityZone", "unsupported")
 	}
 	return r, nil
+}
+
+// AttachmentStatus is the EC2 attachment status on a detach accept.
+// It is not a volume state.
+type AttachmentStatus string
+
+// Attachment statuses this process returns. A detach accept is detaching.
+const (
+	AttachmentAttached  AttachmentStatus = "attached"
+	AttachmentDetaching AttachmentStatus = "detaching"
+)
+
+// VolumeAttachment is the accept item for DetachVolume.
+// Identity is the instance id because the operation targets that instance.
+type VolumeAttachment struct {
+	VolumeID   VolumeID         `json:"volumeId"`
+	OwnerID    AccountID        `json:"ownerId"`
+	InstanceID InstanceID       `json:"instanceId"`
+	Device     string           `json:"device"`
+	Status     AttachmentStatus `json:"status"`
+	AttachTime time.Time        `json:"attachTime"`
+}
+
+// Owner returns the account that owns the attachment.
+func (a VolumeAttachment) Owner() AccountID { return a.OwnerID }
+
+// Identity returns the instance id. guardAccepted matches operation targets to it.
+func (a VolumeAttachment) Identity() string { return a.InstanceID.String() }
+
+// DetachVolumeRequest detaches one volume. Instance, device, and force are optional.
+type DetachVolumeRequest struct {
+	VolumeID   VolumeID   `json:"volumeId"`
+	InstanceID InstanceID `json:"instanceId,omitzero"`
+	Device     string     `json:"device,omitempty"`
+	// Force is part of the fingerprint. Nothing applies it: there is no guest flush.
+	Force bool `json:"force,omitempty"`
+}
+
+// Action returns DetachVolume.
+func (DetachVolumeRequest) Action() Action { return ActionDetachVolume }
+
+// Normalize requires a volume id. It does not look at Force.
+func (r DetachVolumeRequest) Normalize() (DetachVolumeRequest, error) {
+	if r.VolumeID.IsZero() {
+		return DetachVolumeRequest{}, Invalid("volumeId", "required")
+	}
+	return r, nil
+}
+
+// AttachmentNotFound reports a DetachVolume whose volume is bound and whose
+// InstanceId or Device does not name that bind.
+func AttachmentNotFound(id VolumeID) *Error {
+	return &Error{
+		Code: CodeNotFound, Kind: KindVolume, ID: id.String(),
+		Field: "attachment", Message: "attachment not found",
+	}
+}
+
+// IsAttachmentNotFound reports whether e came from AttachmentNotFound.
+func IsAttachmentNotFound(e *Error) bool {
+	return e != nil && e.Code == CodeNotFound && e.Kind == KindVolume && e.Field == "attachment"
 }
 
 // AttachVolumeRequest attaches a volume to an instance.

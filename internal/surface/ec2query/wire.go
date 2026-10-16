@@ -258,6 +258,16 @@ type attachVolumeXML struct {
 	Status     string   `xml:"status"`
 }
 
+type detachVolumeXML struct {
+	XMLName    struct{} `xml:"DetachVolumeResponse"`
+	RequestID  string   `xml:"requestId"`
+	VolumeID   string   `xml:"volumeId"`
+	InstanceID string   `xml:"instanceId"`
+	Device     string   `xml:"device"`
+	Status     string   `xml:"status"`
+	AttachTime string   `xml:"attachTime,omitempty"`
+}
+
 type modifyVolumeXML struct {
 	XMLName      struct{}              `xml:"ModifyVolumeResponse"`
 	RequestID    string                `xml:"requestId"`

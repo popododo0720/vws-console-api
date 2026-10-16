@@ -102,6 +102,8 @@ func (h *handler) serve(w http.ResponseWriter, r *http.Request) {
 		h.createVolume(w, r, caller)
 	case resource.ActionAttachVolume.String():
 		h.attachVolume(w, r, caller)
+	case resource.ActionDetachVolume.String():
+		h.detachVolume(w, r, caller)
 	case resource.ActionDeleteVolume.String():
 		h.deleteVolume(w, r, caller)
 	case resource.ActionModifyVolume.String():
@@ -528,6 +530,8 @@ func rejectUnknown(r *http.Request, action string) error {
 		allow = allowCreateVolume
 	case resource.ActionAttachVolume.String():
 		allow = allowAttachVolume
+	case resource.ActionDetachVolume.String():
+		allow = allowDetachVolume
 	case resource.ActionDeleteVolume.String():
 		allow = allowDeleteVolume
 	case resource.ActionModifyVolume.String():
@@ -630,6 +634,15 @@ func allowCreateVolume(key string) bool {
 
 func allowAttachVolume(key string) bool {
 	return key == "Action" || key == "Version" || key == "ClientToken" || key == "VolumeId" || key == "InstanceId" || key == "Device"
+}
+
+func allowDetachVolume(key string) bool {
+	switch key {
+	case "Action", "Version", "ClientToken", "VolumeId", "InstanceId", "Device", "Force":
+		return true
+	default:
+		return false
+	}
 }
 
 func allowDeleteVolume(key string) bool {
@@ -950,6 +963,9 @@ func ec2Code(e *resource.Error) string {
 	case resource.CodeNotFound:
 		if resource.IsAssociationNotFound(e) {
 			return "InvalidAssociationID.NotFound"
+		}
+		if resource.IsAttachmentNotFound(e) {
+			return "InvalidAttachment.NotFound"
 		}
 		return notFoundCode(e.Kind)
 	case resource.CodeInvalidArgument:

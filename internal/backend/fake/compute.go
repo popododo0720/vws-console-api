@@ -69,7 +69,6 @@ func (c compute) RunInstances(ctx context.Context, m backend.Mutation, req resou
 			SubnetID:      req.SubnetID,
 			VpcID:         vpcOf(c.w.sub[req.SubnetID]),
 			Zone:          resource.ZoneName,
-			LaunchTime:    c.w.now().UTC(),
 			PrivateIP:     c.w.nextIP(),
 			Tags:          copyTags(req.Tags),
 			UserData:      req.UserData,
@@ -84,12 +83,14 @@ func (c compute) RunInstances(ctx context.Context, m backend.Mutation, req resou
 		if _, exists := c.w.vol[volID]; exists {
 			return resource.Accepted[resource.Instance]{}, resource.Internal(errors.New("identifier collision"))
 		}
+		launched := c.w.now().UTC()
+		inst.LaunchTime = launched
 		inst.RootDeviceName = resource.RootDeviceName
 		inst.BlockDevices = []resource.BlockDevice{{Device: resource.RootDeviceName, VolumeID: volID, DeleteOnTermination: true}}
 		roots = append(roots, resource.Volume{
 			ID: volID, OwnerID: m.Account, SizeGiB: 8, Zone: resource.ZoneName, Type: resource.VolumeGP2,
 			State: resource.VolumeInUse, InstanceID: id, Device: resource.RootDeviceName,
-			CreateTime: c.w.now().UTC(), DeleteOnTermination: true,
+			CreateTime: launched, AttachTime: launched, DeleteOnTermination: true,
 		})
 		items = append(items, inst)
 		targets = append(targets, id.Ref())

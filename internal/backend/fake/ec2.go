@@ -202,18 +202,95 @@ func (c compute) AttachVolume(ctx context.Context, m backend.Mutation, req resou
 		return resource.Accepted[resource.Volume]{}, resource.Conflict(resource.KindInstance, inst.ID.String(), "instance cannot accept a volume from "+inst.State.String())
 	}
 	prev := *vol
+	prevBlocks := append([]resource.BlockDevice(nil), inst.BlockDevices...)
 	vol.State = resource.VolumeInUse
 	vol.InstanceID = req.InstanceID
 	vol.Device = req.Device
+	vol.AttachTime = c.w.now().UTC()
+	inst.BlockDevices = append(inst.BlockDevices, resource.BlockDevice{Device: req.Device, VolumeID: req.VolumeID})
 	op, err := c.w.newOp(m.Account, resource.ServiceCompute, resource.ActionAttachVolume, []resource.Ref{vol.ID.Ref()}, func(time.Time) {})
 	if err != nil {
 		*vol = prev
+		inst.BlockDevices = prevBlocks
 		return resource.Accepted[resource.Volume]{}, err
 	}
 	item := *vol
 	acc := resource.Accepted[resource.Volume]{Operation: op, Items: []resource.Volume{item}}
 	c.w.finish(m.Key, m.Fingerprint, acc)
 	return acc, nil
+}
+
+func (c compute) DetachVolume(
+	ctx context.Context, m backend.Mutation, req resource.DetachVolumeRequest,
+) (resource.Accepted[resource.VolumeAttachment], error) {
+	var zero resource.Accepted[resource.VolumeAttachment]
+	if err := ctx.Err(); err != nil {
+		return zero, err
+	}
+	c.w.mu.Lock()
+	defer c.w.mu.Unlock()
+	c.w.settle(c.w.now())
+	if acc, ok, err := replay[resource.Accepted[resource.VolumeAttachment]](c.w, m.Key, m.Fingerprint); err != nil || ok {
+		return acc, err
+	}
+	vol, ok := c.w.vol[req.VolumeID]
+	if !ok || vol.OwnerID != m.Account {
+		return zero, resource.NotFound(resource.KindVolume, req.VolumeID.String())
+	}
+	inst, bind, found := c.w.bindOfVolume(m.Account, vol.ID)
+	if !found {
+		return zero, resource.Conflict(resource.KindVolume, vol.ID.String(), "volume is not in use")
+	}
+	// A wrong instance or device is not this attachment, including on the root
+	// device. DropBind would otherwise report the root conflict first.
+	if !req.InstanceID.IsZero() && req.InstanceID != bind.InstanceID {
+		return zero, resource.AttachmentNotFound(vol.ID)
+	}
+	if req.Device != "" && req.Device != bind.Device {
+		return zero, resource.AttachmentNotFound(vol.ID)
+	}
+	next, _, err := backend.DropBind(*inst, vol.ID)
+	if err != nil {
+		return zero, err
+	}
+	prevVol := *vol
+	prevBlocks := inst.BlockDevices
+	inst.BlockDevices = next.BlockDevices
+	attachedAt := vol.AttachTime
+	vol.State = resource.VolumeAvailable
+	vol.InstanceID = resource.InstanceID{}
+	vol.Device = ""
+	vol.AttachTime = time.Time{}
+	op, err := c.w.newOp(
+		m.Account, resource.ServiceCompute, resource.ActionDetachVolume,
+		[]resource.Ref{inst.ID.Ref()}, func(time.Time) {},
+	)
+	if err != nil {
+		*vol = prevVol
+		inst.BlockDevices = prevBlocks
+		return zero, err
+	}
+	item := resource.VolumeAttachment{
+		VolumeID: vol.ID, OwnerID: vol.OwnerID, InstanceID: bind.InstanceID, Device: bind.Device,
+		Status: resource.AttachmentDetaching, AttachTime: attachedAt,
+	}
+	acc := resource.Accepted[resource.VolumeAttachment]{Operation: op, Items: []resource.VolumeAttachment{item}}
+	c.w.finish(m.Key, m.Fingerprint, acc)
+	return acc, nil
+}
+
+func (w *World) bindOfVolume(
+	account resource.AccountID, id resource.VolumeID,
+) (*resource.Instance, backend.VolumeBind, bool) {
+	for _, inst := range w.inst {
+		if inst.OwnerID != account {
+			continue
+		}
+		if bind, ok := backend.BindOf(*inst, id); ok {
+			return inst, bind, true
+		}
+	}
+	return nil, backend.VolumeBind{}, false
 }
 
 func (c compute) DeleteVolume(ctx context.Context, m backend.Mutation, req resource.DeleteVolumeRequest) (resource.Accepted[resource.Volume], error) {
@@ -230,7 +307,9 @@ func (c compute) DeleteVolume(ctx context.Context, m backend.Mutation, req resou
 	if !ok || vol.OwnerID != m.Account {
 		return resource.Accepted[resource.Volume]{}, resource.NotFound(resource.KindVolume, req.ID.String())
 	}
-	if vol.State == resource.VolumeInUse {
+	// Storage rejects a delete while an instance spec still names the volume.
+	// State is only the projection attach and detach keep beside that list.
+	if c.w.volumeOnInstance(vol.ID) {
 		return resource.Accepted[resource.Volume]{}, resource.Conflict(resource.KindVolume, vol.ID.String(), "volume is in use")
 	}
 	prev := vol.State
@@ -580,6 +659,17 @@ func cidrInside(child, parent string) bool {
 	childOnes, childBits := childNet.Mask.Size()
 	parentOnes, parentBits := parentNet.Mask.Size()
 	return childBits == 32 && parentBits == 32 && childOnes > parentOnes
+}
+
+func (w *World) volumeOnInstance(id resource.VolumeID) bool {
+	for _, inst := range w.inst {
+		for _, block := range inst.BlockDevices {
+			if block.VolumeID == id {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // dropRootVolumes deletes the volumes that go with a terminated instance.

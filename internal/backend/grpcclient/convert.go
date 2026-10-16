@@ -652,6 +652,24 @@ func errorDetail(c resource.Code) (string, codes.Code, *commonv1.ReconciliationF
 	}
 }
 
+// etagMismatch reports the compute compare-and-swap failure for a stale instance etag.
+func etagMismatch(err error) bool {
+	if err == nil {
+		return false
+	}
+	st, ok := status.FromError(err)
+	if !ok {
+		return false
+	}
+	for _, detail := range st.Details() {
+		info, isInfo := detail.(*errdetails.ErrorInfo)
+		if isInfo && info.GetReason() == "ETAG_MISMATCH" {
+			return true
+		}
+	}
+	return false
+}
+
 func fromRPC(err error) error {
 	if err == nil {
 		return nil

@@ -88,6 +88,20 @@ func TestInvalidAMIIDNotFoundShape(t *testing.T) {
 	}
 }
 
+func TestAttachmentNotFoundCode(t *testing.T) {
+	vol, err := resource.Parse[resource.VolumeID]("vol-0123456789abcdef0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := ec2Wire(t, resource.AttachmentNotFound(vol)); got != (wireErr{400, "InvalidAttachment.NotFound"}) {
+		t.Fatalf("attachment %+v", got)
+	}
+	plain := &resource.Error{Code: resource.CodeNotFound, Kind: resource.KindVolume, Message: "m"}
+	if got := ec2Wire(t, plain); got != (wireErr{400, "InvalidVolume.NotFound"}) {
+		t.Fatalf("volume %+v", got)
+	}
+}
+
 func TestEC2ErrorByKind(t *testing.T) {
 	for _, tc := range []struct {
 		code resource.Code

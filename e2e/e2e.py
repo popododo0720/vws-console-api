@@ -193,6 +193,7 @@ def not_found():
             AllocationId="eipalloc-00000000000000000", InstanceId="i-00000000000000000")),
         ("DisassociateAddress", "InvalidAssociationID.NotFound", lambda: ec2.disassociate_address(
             AssociationId="eipassoc-00000000000000000")),
+        ("DetachVolume", "InvalidVolume.NotFound", lambda: ec2.detach_volume(VolumeId=vol)),
     ]:
         step(f"{name} missing is {code}", lambda code=code, call=call: ec2_error(code, call))
 
@@ -348,6 +349,15 @@ def vms():
         step("StopInstances without ClientToken", lambda: check(
             ec2.stop_instances(InstanceIds=[S["iid"]])["StoppingInstances"], "empty"), "vm")
         step("wait for stopped", lambda: wait_state(S["iid"], "stopped"), "vm")
+        def detach_data_volume():
+            vid = ec2.create_volume(AvailabilityZone="vws-1a", Size=1)["VolumeId"]
+            ec2.get_waiter("volume_available").wait(VolumeIds=[vid], WaiterConfig={"Delay": 1, "MaxAttempts": 30})
+            ec2.attach_volume(VolumeId=vid, InstanceId=S["iid"], Device="/dev/sdf")
+            det = ec2.detach_volume(VolumeId=vid, InstanceId=S["iid"], Device="/dev/sdf")
+            check(det["VolumeId"] == vid and det["InstanceId"] == S["iid"] and det["Device"] == "/dev/sdf" and det["State"] == "detaching", f"detach {det}")
+            check(isinstance(det.get("AttachTime"), datetime.datetime), f"attach time {det}")
+            ec2.delete_volume(VolumeId=vid)
+        step("DetachVolume then DeleteVolume", detach_data_volume, "vm")
         step("StartInstances", lambda: ec2.start_instances(InstanceIds=[S["iid"]]), "vm")
         step("wait for running", lambda: wait_state(S["iid"], "running"), "vm")
         associate()

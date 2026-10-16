@@ -148,6 +148,8 @@ func (h *handler) mutation(action resource.Action) (string, string, http.Handler
 		return http.MethodPost, "/api/v1/volumes", h.createVolume
 	case resource.ActionAttachVolume:
 		return http.MethodPost, "/api/v1/volumes/{id}/attach", h.attachVolume
+	case resource.ActionDetachVolume:
+		return http.MethodPost, "/api/v1/volumes/{id}/detach", h.detachVolume
 	case resource.ActionDeleteVolume:
 		return http.MethodPost, "/api/v1/volumes/{id}/delete", h.deleteVolume
 	case resource.ActionCreateSecurityGroup:
