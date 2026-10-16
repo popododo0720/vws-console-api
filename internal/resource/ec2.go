@@ -402,6 +402,9 @@ func (r AuthorizeSecurityGroupIngressRequest) Normalize() (AuthorizeSecurityGrou
 		}
 		rule.Protocol = protocol
 		rule.Cidr = cidr
+		if protocol == "icmp" && (rule.FromPort != 0 || rule.ToPort != 0) {
+			return AuthorizeSecurityGroupIngressRequest{}, UnsupportedIngress(rule.field("fromPort"))
+		}
 		if protocol == "-1" {
 			rule.FromPort = 0
 			rule.ToPort = 0

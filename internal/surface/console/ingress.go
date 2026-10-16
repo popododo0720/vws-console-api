@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/popododo0720/vws-console-api/internal/resource"
 )
@@ -37,7 +38,10 @@ func expandIngressPermissions(body []byte) ([]resource.IngressChange, error) {
 	for i, perm := range raw.Permissions {
 		base := fmt.Sprintf("ipPermissions[%d]", i)
 		if len(perm.Prefixes) > 0 {
-			return nil, resource.MalformedPrefixList(base + ".prefixListIds")
+			if !prefixListsWellFormed(perm.Prefixes) {
+				return nil, resource.MalformedPrefixList(base + ".prefixListIds")
+			}
+			return nil, resource.UnsupportedIngress(base + ".prefixListIds")
 		}
 		if len(perm.IPv6) > 0 {
 			return nil, resource.UnsupportedIngress(base + ".ipv6Ranges")
@@ -48,6 +52,10 @@ func expandIngressPermissions(body []byte) ([]resource.IngressChange, error) {
 		if len(perm.Ranges) == 0 {
 			return nil, resource.MalformedPermission(base+".ipRanges", "required")
 		}
+		from, to, missing := perm.ports()
+		if missing != "" {
+			return nil, resource.MissingIngressPorts(base + "." + missing)
+		}
 		for j, rg := range perm.Ranges {
 			path := fmt.Sprintf("%s.ipRanges[%d]", base, j)
 			if rg.Description != "" {
@@ -55,7 +63,7 @@ func expandIngressPermissions(body []byte) ([]resource.IngressChange, error) {
 			}
 			out = append(out, resource.IngressChange{
 				IngressRule: resource.IngressRule{
-					Protocol: perm.Protocol, FromPort: perm.FromPort, ToPort: perm.ToPort, Cidr: rg.Cidr,
+					Protocol: perm.Protocol, FromPort: from, ToPort: to, Cidr: rg.Cidr,
 				},
 				Path: path,
 				Perm: base,
@@ -71,12 +79,55 @@ type ingressBody struct {
 
 type ingressPermission struct {
 	Protocol string         `json:"ipProtocol"`
-	FromPort int            `json:"fromPort"`
-	ToPort   int            `json:"toPort"`
+	FromPort *int           `json:"fromPort"`
+	ToPort   *int           `json:"toPort"`
 	Ranges   []ingressRange `json:"ipRanges"`
 	IPv6     []ipv6Range    `json:"ipv6Ranges"`
 	Pairs    []groupPair    `json:"userIdGroupPairs"`
 	Prefixes []prefixRef    `json:"prefixListIds"`
+}
+
+func (p ingressPermission) ports() (from, to int, missing string) {
+	if !tcpOrUDP(p.Protocol) {
+		if p.FromPort != nil {
+			from = *p.FromPort
+		}
+		if p.ToPort != nil {
+			to = *p.ToPort
+		}
+		return from, to, ""
+	}
+	if p.FromPort == nil {
+		return 0, 0, "fromPort"
+	}
+	if p.ToPort == nil {
+		return 0, 0, "toPort"
+	}
+	return *p.FromPort, *p.ToPort, ""
+}
+
+func tcpOrUDP(protocol string) bool {
+	switch strings.ToLower(strings.TrimSpace(protocol)) {
+	case "tcp", "6", "udp", "17":
+		return true
+	default:
+		return false
+	}
+}
+
+func prefixListsWellFormed(refs []prefixRef) bool {
+	for _, ref := range refs {
+		hexID, ok := strings.CutPrefix(ref.ID, "pl-")
+		if !ok || len(hexID) < 8 || len(hexID) > 17 {
+			return false
+		}
+		for _, c := range hexID {
+			if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 type ingressRange struct {

@@ -205,6 +205,15 @@ func DuplicatePermission(id, field string) *Error {
 	}
 }
 
+// MissingIngressPorts reports a TCP or UDP permission that omits a port.
+// AWS returns InvalidParameterValue for that omission.
+func MissingIngressPorts(field string) *Error {
+	return &Error{
+		Code: CodeInvalidArgument, Field: field, EC2Code: EC2InvalidParameterValue,
+		Message: "Invalid value 'Must specify both from and to ports with TCP/UDP.' for portRange.",
+	}
+}
+
 // MalformedPermission reports an ingress permission the grammar rejects.
 func MalformedPermission(field, message string) *Error {
 	return &Error{Code: CodeInvalidArgument, Field: field, Message: message, EC2Code: EC2InvalidPermissionMalformed}

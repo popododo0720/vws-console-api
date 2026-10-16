@@ -1113,6 +1113,9 @@ func (c networkClient) CreateSecurityGroup(ctx context.Context, m backend.Mutati
 
 func (c networkClient) AuthorizeSecurityGroupIngress(ctx context.Context, m backend.Mutation, req resource.AuthorizeSecurityGroupIngressRequest) (resource.Accepted[resource.SecurityGroup], error) {
 	projectID := project(m.Account)
+	if acc, ok, err := c.replayIngress(ctx, m, projectID, req.ID.String()); err != nil || ok {
+		return acc, err
+	}
 	current, err := c.findGroup(ctx, projectID, req.ID.String())
 	if err != nil {
 		if resource.CodeOf(err) == resource.CodeNotFound {
@@ -1157,6 +1160,33 @@ func (c networkClient) AuthorizeSecurityGroupIngress(ctx context.Context, m back
 	op.Action = resource.ActionAuthorizeSecurityGroupIngress
 	op.Targets = []resource.Ref{got.ID.Ref()}
 	return resource.Accepted[resource.SecurityGroup]{Operation: op, Items: []resource.SecurityGroup{got}}, nil
+}
+
+// replayIngress reads the operation this key already stored. The duplicate
+// check would report the rules from that call as AlreadyExists.
+func (c networkClient) replayIngress(
+	ctx context.Context, m backend.Mutation, projectID, groupID string,
+) (resource.Accepted[resource.SecurityGroup], bool, error) {
+	var zero resource.Accepted[resource.SecurityGroup]
+	local := strings.ReplaceAll(requestUUID(m.Key, "ingress"), "-", "")
+	id, err := resource.NewOperationID(resource.ServiceNetwork, local)
+	if err != nil {
+		return zero, false, resource.Internal(err)
+	}
+	op, err := c.GetOperation(ctx, backend.Scope{Account: m.Account}, id)
+	if resource.CodeOf(err) == resource.CodeNotFound {
+		return zero, false, nil
+	}
+	if err != nil {
+		return zero, false, err
+	}
+	got, err := c.findGroup(ctx, projectID, groupID)
+	if err != nil {
+		return zero, false, err
+	}
+	op.Action = resource.ActionAuthorizeSecurityGroupIngress
+	op.Targets = []resource.Ref{got.ID.Ref()}
+	return resource.Accepted[resource.SecurityGroup]{Operation: op, Items: []resource.SecurityGroup{got}}, true, nil
 }
 
 func (c computeClient) getVolume(ctx context.Context, projectID, id string) (resource.Volume, error) {

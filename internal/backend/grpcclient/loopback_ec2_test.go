@@ -242,7 +242,15 @@ func (s *groupSrv) UpdateSecurityGroup(ctx context.Context, req *networkv1.Updat
 	}
 	group.Rules = decoded
 	s.w.saveGroup(group)
-	return runningNamed(projectID, req.GetRequestId(), req.GetSecurityGroup().GetName(), commonv1.OperationVerb_OPERATION_VERB_UPDATE, s.w.now)
+	op, err := runningNamed(
+		projectID, req.GetRequestId(), req.GetSecurityGroup().GetName(),
+		commonv1.OperationVerb_OPERATION_VERB_UPDATE, s.w.now,
+	)
+	if err != nil {
+		return nil, toStatus(err)
+	}
+	s.w.rememberNamed(op)
+	return op, nil
 }
 
 type keySrv struct {
@@ -282,6 +290,25 @@ func (w *loopWorld) cidrOf(name string) (string, bool) {
 	defer w.mu.Unlock()
 	cidr, ok := w.vpcCIDR[name]
 	return cidr, ok
+}
+
+func (w *loopWorld) rememberNamed(op *longrunningpb.Operation) {
+	if op == nil || op.GetName() == "" {
+		return
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.namedOps == nil {
+		w.namedOps = map[string]*longrunningpb.Operation{}
+	}
+	w.namedOps[op.GetName()] = op
+}
+
+func (w *loopWorld) namedOp(name string) (*longrunningpb.Operation, bool) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	op, ok := w.namedOps[name]
+	return op, ok
 }
 
 func (w *loopWorld) saveGroup(group resource.SecurityGroup) {

@@ -120,6 +120,9 @@ type opsGate struct {
 }
 
 func (s opsGate) GetOperation(ctx context.Context, req *longrunningpb.GetOperationRequest) (*longrunningpb.Operation, error) {
+	if op, ok := s.w.namedOp(req.GetName()); ok {
+		return op, nil
+	}
 	op, err := s.w.lookup(ctx, req.GetName())
 	if err != nil {
 		return nil, toStatus(err)
@@ -154,6 +157,7 @@ type loopWorld struct {
 	actions   map[string]string
 	detach    map[string]map[string]string
 	boots     map[string]*storagev1.Volume
+	namedOps  map[string]*longrunningpb.Operation
 }
 
 type instSnap struct {
