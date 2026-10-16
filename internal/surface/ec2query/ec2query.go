@@ -951,6 +951,9 @@ func ec2Code(e *resource.Error) string {
 		if resource.IsAssociationNotFound(e) {
 			return "InvalidAssociationID.NotFound"
 		}
+		if resource.IsAttachmentNotFound(e) {
+			return "InvalidAttachment.NotFound"
+		}
 		return notFoundCode(e.Kind)
 	case resource.CodeInvalidArgument:
 		// EC2 reports a public key it cannot read as InvalidKey.Format.

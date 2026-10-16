@@ -61,6 +61,15 @@ func (s *Service) AttachVolume(ctx context.Context, c resource.Caller, token res
 	return mutate(ctx, s, c, token, req, s.backends.Compute.AttachVolume)
 }
 
+// DetachVolume accepts a detach and returns the operation.
+func (s *Service) DetachVolume(ctx context.Context, c resource.Caller, token resource.ClientToken, req resource.DetachVolumeRequest) (resource.Accepted[resource.VolumeAttachment], error) {
+	token, err := fillToken(token)
+	if err != nil {
+		return resource.Accepted[resource.VolumeAttachment]{}, err
+	}
+	return mutate(ctx, s, c, token, req, s.backends.Compute.DetachVolume)
+}
+
 // DeleteVolume accepts a delete and returns the operation.
 func (s *Service) DeleteVolume(ctx context.Context, c resource.Caller, token resource.ClientToken, req resource.DeleteVolumeRequest) (resource.Accepted[resource.Volume], error) {
 	token, err := fillToken(token)

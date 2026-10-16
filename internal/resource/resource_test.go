@@ -117,9 +117,42 @@ func TestOperationIDRoundTrip(t *testing.T) {
 	}
 }
 
+func TestVolumeAttachmentIdentityIsTheInstance(t *testing.T) {
+	inst, err := Parse[InstanceID]("i-0123456789abcdef0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	vol, err := Parse[VolumeID]("vol-0123456789abcdef0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner, err := Parse[AccountID]("123456789012")
+	if err != nil {
+		t.Fatal(err)
+	}
+	item := VolumeAttachment{VolumeID: vol, OwnerID: owner, InstanceID: inst, Status: AttachmentDetaching}
+	if item.Identity() != inst.String() || item.Owner() != owner {
+		t.Fatalf("identity %s owner %s", item.Identity(), item.Owner())
+	}
+	if _, err := (DetachVolumeRequest{}).Normalize(); err == nil {
+		t.Fatal("missing volume id")
+	}
+	norm, err := (DetachVolumeRequest{VolumeID: vol, Force: true}).Normalize()
+	if err != nil || !norm.Force || norm.Action() != ActionDetachVolume {
+		t.Fatalf("normalize: %v %+v", err, norm)
+	}
+	miss := AttachmentNotFound(vol)
+	if !IsAttachmentNotFound(miss) || miss.Field != "attachment" || miss.Kind != KindVolume || miss.Code != CodeNotFound {
+		t.Fatalf("%+v", miss)
+	}
+	if IsAttachmentNotFound(NotFound(KindVolume, vol.String())) {
+		t.Fatal("plain volume not-found")
+	}
+}
+
 func TestActionsAreDerived(t *testing.T) {
 	got := Actions()
-	if len(got) != 24 {
+	if len(got) != 25 {
 		t.Fatalf("actions: %v", got)
 	}
 	for _, a := range got {

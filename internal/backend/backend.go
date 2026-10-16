@@ -46,6 +46,7 @@ type Compute interface {
 	CreateTags(ctx context.Context, m Mutation, req resource.CreateTagsRequest) (resource.Accepted[resource.Instance], error)
 	CreateVolume(ctx context.Context, m Mutation, req resource.CreateVolumeRequest) (resource.Accepted[resource.Volume], error)
 	AttachVolume(ctx context.Context, m Mutation, req resource.AttachVolumeRequest) (resource.Accepted[resource.Volume], error)
+	DetachVolume(ctx context.Context, m Mutation, req resource.DetachVolumeRequest) (resource.Accepted[resource.VolumeAttachment], error)
 	DeleteVolume(ctx context.Context, m Mutation, req resource.DeleteVolumeRequest) (resource.Accepted[resource.Volume], error)
 	ModifyVolume(ctx context.Context, m Mutation, req resource.ModifyVolumeRequest) (resource.Accepted[resource.Volume], error)
 	DescribeVolumes(ctx context.Context, s Scope, q resource.VolumeQuery) (resource.Page[resource.Volume], error)

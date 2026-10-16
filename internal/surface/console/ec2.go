@@ -78,6 +78,10 @@ func (h *handler) createVolume(w http.ResponseWriter, r *http.Request) {
 	writeAccepted(w, acc)
 }
 
+func (h *handler) detachVolume(w http.ResponseWriter, r *http.Request) {
+	writeErr(w, r, resource.Unimplemented(resource.ActionDetachVolume.String()))
+}
+
 func (h *handler) attachVolume(w http.ResponseWriter, r *http.Request) {
 	c, token, ok := h.begin(w, r)
 	if !ok {

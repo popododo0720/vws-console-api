@@ -547,7 +547,7 @@ func (s *instanceSrv) changePower(ctx context.Context, req *computev1.UpdateInst
 		resource.ActionTerminateInstances, resource.ActionCreateKeyPair,
 		resource.ActionDeleteKeyPair, resource.ActionDeleteSecurityGroup, resource.ActionDeleteSubnet,
 		resource.ActionAllocateAddress, resource.ActionReleaseAddress, resource.ActionCreateSnapshot, resource.ActionDeleteSnapshot,
-		resource.ActionAssociateAddress, resource.ActionDisassociateAddress, resource.ActionModifyVolume, resource.ActionCreateTags:
+		resource.ActionAssociateAddress, resource.ActionDisassociateAddress, resource.ActionModifyVolume, resource.ActionCreateTags, resource.ActionDetachVolume:
 		return nil, toStatus(resource.Invalid("power", "unsupported"))
 	default:
 		return nil, toStatus(resource.Invalid("power", "unsupported"))
@@ -1177,7 +1177,7 @@ func (s *opsSrv) GetOperation(ctx context.Context, req *longrunningpb.GetOperati
 
 func operationVerb(action resource.Action) commonv1.OperationVerb {
 	switch action {
-	case resource.ActionStopInstances, resource.ActionStartInstances, resource.ActionAttachVolume, resource.ActionAuthorizeSecurityGroupIngress, resource.ActionAssociateAddress, resource.ActionDisassociateAddress, resource.ActionModifyVolume, resource.ActionCreateTags:
+	case resource.ActionStopInstances, resource.ActionStartInstances, resource.ActionAttachVolume, resource.ActionAuthorizeSecurityGroupIngress, resource.ActionAssociateAddress, resource.ActionDisassociateAddress, resource.ActionModifyVolume, resource.ActionCreateTags, resource.ActionDetachVolume:
 		return commonv1.OperationVerb_OPERATION_VERB_UPDATE
 	case resource.ActionTerminateInstances, resource.ActionDeleteVpc, resource.ActionDeleteVolume, resource.ActionDeleteKeyPair, resource.ActionDeleteSecurityGroup, resource.ActionDeleteSubnet, resource.ActionReleaseAddress, resource.ActionDeleteSnapshot:
 		return commonv1.OperationVerb_OPERATION_VERB_DELETE

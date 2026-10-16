@@ -403,7 +403,7 @@ func NextInstanceState(action Action, from InstanceState) (transitional, settled
 		default:
 			return 0, 0, Conflict(KindInstance, "", "instance cannot be terminated from "+from.String())
 		}
-	case ActionRunInstances, ActionCreateSubnet, ActionCreateVpc, ActionDeleteVpc, ActionCreateVolume, ActionAttachVolume, ActionDeleteVolume, ActionCreateSecurityGroup, ActionAuthorizeSecurityGroupIngress, ActionCreateKeyPair, ActionDeleteKeyPair, ActionDeleteSecurityGroup, ActionDeleteSubnet, ActionAllocateAddress, ActionReleaseAddress, ActionCreateSnapshot, ActionDeleteSnapshot, ActionAssociateAddress, ActionDisassociateAddress, ActionModifyVolume, ActionCreateTags, actionNone:
+	case ActionRunInstances, ActionCreateSubnet, ActionCreateVpc, ActionDeleteVpc, ActionCreateVolume, ActionAttachVolume, ActionDeleteVolume, ActionCreateSecurityGroup, ActionAuthorizeSecurityGroupIngress, ActionCreateKeyPair, ActionDeleteKeyPair, ActionDeleteSecurityGroup, ActionDeleteSubnet, ActionAllocateAddress, ActionReleaseAddress, ActionCreateSnapshot, ActionDeleteSnapshot, ActionAssociateAddress, ActionDisassociateAddress, ActionModifyVolume, ActionCreateTags, ActionDetachVolume, actionNone:
 		return 0, 0, Invalid("action", "not an instance transition")
 	default:
 		return 0, 0, Invalid("action", "not an instance transition")

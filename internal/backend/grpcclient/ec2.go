@@ -254,6 +254,13 @@ func (c computeClient) AttachVolume(ctx context.Context, m backend.Mutation, req
 	return resource.Accepted[resource.Volume]{Operation: op, Items: []resource.Volume{vol}}, nil
 }
 
+func (c computeClient) DetachVolume(ctx context.Context, _ backend.Mutation, _ resource.DetachVolumeRequest) (resource.Accepted[resource.VolumeAttachment], error) {
+	if err := ctx.Err(); err != nil {
+		return resource.Accepted[resource.VolumeAttachment]{}, err
+	}
+	return resource.Accepted[resource.VolumeAttachment]{}, resource.Unimplemented("DetachVolume")
+}
+
 func (c computeClient) DeleteVolume(ctx context.Context, m backend.Mutation, req resource.DeleteVolumeRequest) (resource.Accepted[resource.Volume], error) {
 	projectID := project(m.Account)
 	vol, err := c.getVolume(ctx, projectID, req.ID.String())
