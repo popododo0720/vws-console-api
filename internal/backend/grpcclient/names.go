@@ -37,6 +37,15 @@ const nameTag = "Name"
 
 const labelPrefix = "vws-"
 
+// A detach replay lives on the instance. The kernel does not store the accept,
+// and storage clears status.instance after the spec drop. One label names the
+// request and the device. The other names the operation and the fingerprint
+// token. Both are copied forward so a later detach does not erase them.
+const (
+	labelDetachPrefix   = "vws-detach-"
+	labelDetachOpPrefix = "vws-dop-"
+)
+
 // project is the resource-API project for an account. A bare account id is
 // twelve digits, which is not a resource id, so the project is "a" plus the
 // account. accountOf reverses that.

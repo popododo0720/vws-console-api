@@ -377,13 +377,14 @@ func TestDetachKeepsLabelsAndReadsTheSpec(t *testing.T) {
 		t.Fatalf("volumes after detach %v", vols)
 	}
 
+	wrote := world.updateCount()
 	replayed, err := client.DetachVolume(ctx, mut, resource.DetachVolumeRequest{
 		VolumeID: data, InstanceID: holderID, Device: "/dev/sdf",
 	})
 	if err != nil || replayed.Operation.ID != detached.Operation.ID {
 		t.Fatalf("replay %v %+v", err, replayed)
 	}
-	if world.updateCount() != 1 {
+	if world.updateCount() != wrote {
 		t.Fatalf("replay wrote a second update (%d)", world.updateCount())
 	}
 
@@ -925,7 +926,8 @@ func TestDetachReplaySurvivesAnotherVolume(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = client.DetachVolume(ctx, backend.Mutation{Scope: scope, Key: "k-b", Fingerprint: "fp-b"}, resource.DetachVolumeRequest{
+	mutB := backend.Mutation{Scope: scope, Key: "k-b", Fingerprint: "fp-b"}
+	_, err = client.DetachVolume(ctx, mutB, resource.DetachVolumeRequest{
 		VolumeID: right, InstanceID: holderID,
 	})
 	if err != nil {

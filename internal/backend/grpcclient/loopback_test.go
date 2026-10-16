@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"io"
+	"maps"
 	"net"
 	"sort"
 	"strings"
@@ -151,6 +152,7 @@ type loopWorld struct {
 	keySHA1   map[string]string
 	opLaunch  map[string]string
 	actions   map[string]string
+	detach    map[string]map[string]string
 	boots     map[string]*storagev1.Volume
 }
 
@@ -179,8 +181,41 @@ func newLoopWorld(set backend.Set, now time.Time) *loopWorld {
 		keySHA1:  map[string]string{},
 		opLaunch: map[string]string{},
 		actions:  map[string]string{},
+		detach:   map[string]map[string]string{},
 		boots:    map[string]*storagev1.Volume{},
 	}
+}
+
+func (w *loopWorld) rememberDetach(id string, labels map[string]string) {
+	kept := map[string]string{}
+	for key, value := range labels {
+		if detachRecordKey(key) {
+			kept[key] = value
+		}
+	}
+	if len(kept) == 0 {
+		return
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	prev := w.detach[id]
+	if prev == nil {
+		prev = map[string]string{}
+		w.detach[id] = prev
+	}
+	maps.Copy(prev, kept)
+}
+
+func (w *loopWorld) detachOf(id string) map[string]string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	src := w.detach[id]
+	if len(src) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(src))
+	maps.Copy(out, src)
+	return out
 }
 
 func (w *loopWorld) rememberAction(id, action string) {
@@ -669,8 +704,23 @@ func (s *instanceSrv) detachVolume(
 		Scope: backend.Scope{Account: account}, Key: req.GetRequestId(), Fingerprint: fp,
 	}, resource.DetachVolumeRequest{VolumeID: volID, InstanceID: instID, Device: device})
 	if err != nil {
+		// The operation id is written after the drop, as a second update whose
+		// volume list no longer changes. The fake has no volume id to detach.
+		if volName == "" && resource.CodeOf(err) == resource.CodeNotFound {
+			s.w.rememberDetach(instID.String(), req.GetInstance().GetLabels())
+			msg, opErr := runningNamed(
+				projectID, req.GetRequestId(), instanceName(projectID, instID.String()),
+				commonv1.OperationVerb_OPERATION_VERB_UPDATE, s.w.now,
+			)
+			if opErr != nil {
+				return nil, opErr
+			}
+			msg.Done = true
+			return msg, nil
+		}
 		return nil, toStatus(err)
 	}
+	s.w.rememberDetach(instID.String(), req.GetInstance().GetLabels())
 	s.w.rememberAction(instID.String(), resource.ActionDetachVolume.String())
 	return runningOp(
 		projectID, acc.Operation, instanceName(projectID, instID.String()),
@@ -829,13 +879,17 @@ func (s *instanceSrv) GetInstance(ctx context.Context, req *computev1.GetInstanc
 
 func (s *instanceSrv) stampAction(msg *computev1.Instance, id string) *computev1.Instance {
 	action := s.w.actionOf(id)
-	if action == "" {
+	records := s.w.detachOf(id)
+	if action == "" && len(records) == 0 {
 		return msg
 	}
 	if msg.Labels == nil {
 		msg.Labels = map[string]string{}
 	}
-	msg.Labels[labelAction] = action
+	if action != "" {
+		msg.Labels[labelAction] = action
+	}
+	maps.Copy(msg.Labels, records)
 	return msg
 }
 
@@ -856,7 +910,8 @@ func (s *instanceSrv) ListInstances(ctx context.Context, req *computev1.ListInst
 	}
 	items := make([]*computev1.Instance, 0, len(page.Items))
 	for _, inst := range page.Items {
-		items = append(items, instanceProto(inst, projectID, s.w.vpcOf(inst.SubnetID.String())))
+		msg := instanceProto(inst, projectID, s.w.vpcOf(inst.SubnetID.String()))
+		items = append(items, s.stampAction(msg, inst.ID.String()))
 	}
 	return &computev1.ListInstancesResponse{Instances: items, NextPageToken: page.NextToken}, nil
 }

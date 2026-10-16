@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
+	"maps"
 	"strings"
 	"time"
 
@@ -259,7 +260,7 @@ func (c computeClient) attachOnce(
 			DeviceName: req.Device,
 		})
 	}
-	labels, err := instanceUpdateLabels(model, inst.GetLabels(), resource.ActionAttachVolume, m.Fingerprint)
+	labels, err := instanceUpdateLabels(model, inst.GetLabels(), resource.ActionAttachVolume, m.Fingerprint, nil)
 	if err != nil {
 		return zero, err
 	}
@@ -319,6 +320,16 @@ func (c computeClient) DetachVolume(
 	return zero, resource.Conflict(resource.KindVolume, vol.ID.String(), "instance changed")
 }
 
+// detachReplay is a detach this client already committed.
+// requestHex is the detach request UUID without dashes.
+type detachReplay struct {
+	requestHex  string
+	device      string
+	opLocal     string
+	fingerprint string
+	instanceID  resource.InstanceID
+}
+
 func (c computeClient) detachOnce(
 	ctx context.Context, m backend.Mutation, projectID string, vol resource.Volume, req resource.DetachVolumeRequest,
 ) (resource.Accepted[resource.VolumeAttachment], error) {
@@ -327,20 +338,22 @@ func (c computeClient) detachOnce(
 	if err != nil {
 		return zero, err
 	}
-	if !bound && req.InstanceID.IsZero() {
-		if got == nil {
-			return zero, resource.Conflict(resource.KindVolume, vol.ID.String(), "volume is not in use")
+	if bound {
+		if !req.InstanceID.IsZero() && req.InstanceID != bind.InstanceID {
+			return zero, resource.AttachmentNotFound(vol.ID)
 		}
-		// The spec no longer names the volume. status.instance still does.
-		// UpdateInstance has to run so a repeated request id can replay.
-		return c.writeDetach(ctx, m, vol, got, model, backend.VolumeBind{
-			InstanceID: vol.InstanceID, Device: vol.Device,
-		}, false)
+		if req.Device != "" && req.Device != bind.Device {
+			return zero, resource.AttachmentNotFound(vol.ID)
+		}
+		if bind.Boot {
+			// instance.proto rejects a spec without exactly one boot entry, stopped or running.
+			return zero, resource.Conflict(resource.KindVolume, vol.ID.String(), "volume is the root device")
+		}
+		return c.writeDetach(ctx, m, vol, got, model, bind, true)
 	}
-	if !bound && !req.InstanceID.IsZero() {
-		// The named instance is not the spec that holds this volume.
-		// A different spec still does: the attachment id is wrong.
-		// Neither spec does: the same request id may still be in flight.
+	// The spec does not name the volume. A repeat of the detach that removed it
+	// is the stored record. Anything else is not in use, and must not write.
+	if !req.InstanceID.IsZero() {
 		elsewhere, scanErr := c.volumeBoundElsewhere(ctx, projectID, vol.ID, req.InstanceID)
 		if scanErr != nil {
 			return zero, scanErr
@@ -348,21 +361,23 @@ func (c computeClient) detachOnce(
 		if elsewhere {
 			return zero, resource.AttachmentNotFound(vol.ID)
 		}
-		return c.writeDetach(ctx, m, vol, got, model, backend.VolumeBind{
-			InstanceID: req.InstanceID, Device: req.Device,
-		}, false)
 	}
-	if !req.InstanceID.IsZero() && req.InstanceID != bind.InstanceID {
-		return zero, resource.AttachmentNotFound(vol.ID)
+	holder, holderModel, rec, ok, err := c.findDetachReplay(ctx, projectID, vol.ID, req.InstanceID, got, model)
+	if err != nil {
+		return zero, err
 	}
-	if req.Device != "" && req.Device != bind.Device {
-		return zero, resource.AttachmentNotFound(vol.ID)
+	if !ok || rec.requestHex != detachRequestHex(m.Key) {
+		return zero, resource.Conflict(resource.KindVolume, vol.ID.String(), "volume is not in use")
 	}
-	if bind.Boot {
-		// instance.proto rejects a spec without exactly one boot entry, stopped or running.
-		return zero, resource.Conflict(resource.KindVolume, vol.ID.String(), "volume is the root device")
+	if rec.opLocal != "" && !detachFingerprintMatches(rec.fingerprint, m.Fingerprint) {
+		return zero, resource.IdempotencyMismatch()
 	}
-	return c.writeDetach(ctx, m, vol, got, model, bind, true)
+	if rec.opLocal != "" {
+		return c.acceptDetachReplay(ctx, m.Account, vol, holderModel, rec)
+	}
+	return c.writeDetach(ctx, m, vol, holder, holderModel, backend.VolumeBind{
+		InstanceID: rec.instanceID, Device: rec.device,
+	}, false)
 }
 
 // detachBind finds the instance spec that names the volume.
@@ -482,6 +497,58 @@ func (c computeClient) volumeBoundElsewhere(
 	return model.ID != skip, nil
 }
 
+// findDetachReplay reads the detach record for id.
+// A named instance is the only place a named request may replay.
+// A volume-only request pages until some instance still carries the record.
+func (c computeClient) findDetachReplay(
+	ctx context.Context, projectID string, id resource.VolumeID, want resource.InstanceID,
+	hint *computev1.Instance, hintModel resource.Instance,
+) (*computev1.Instance, resource.Instance, detachReplay, bool, error) {
+	if hint != nil {
+		if rec, ok := detachReplayFrom(hint.GetLabels(), id.String()); ok {
+			rec.instanceID = hintModel.ID
+			return hint, hintModel, rec, true, nil
+		}
+		if !want.IsZero() {
+			return nil, resource.Instance{}, detachReplay{}, false, nil
+		}
+	}
+	token := ""
+	seen := map[string]struct{}{}
+	for {
+		if token != "" {
+			if _, ok := seen[token]; ok {
+				return nil, resource.Instance{}, detachReplay{}, false, resource.Internal(
+					errors.New("instance page token repeated"))
+			}
+			seen[token] = struct{}{}
+		}
+		out, err := c.instances.ListInstances(ctx, &computev1.ListInstancesRequest{
+			Parent: instanceParent(projectID), PageSize: 100, PageToken: token,
+		})
+		if err != nil {
+			return nil, resource.Instance{}, detachReplay{}, false, fromRPC(err)
+		}
+		for _, item := range out.GetInstances() {
+			rec, ok := detachReplayFrom(item.GetLabels(), id.String())
+			if !ok {
+				continue
+			}
+			model, err := instanceModel(item)
+			if err != nil {
+				return nil, resource.Instance{}, detachReplay{}, false, err
+			}
+			rec.instanceID = model.ID
+			return item, model, rec, true, nil
+		}
+		token = out.GetNextPageToken()
+		if token == "" {
+			break
+		}
+	}
+	return nil, resource.Instance{}, detachReplay{}, false, nil
+}
+
 func (c computeClient) writeDetach(
 	ctx context.Context, m backend.Mutation, vol resource.Volume,
 	got *computev1.Instance, model resource.Instance, bind backend.VolumeBind, drop bool,
@@ -497,7 +564,14 @@ func (c computeClient) writeDetach(
 	if protoBootCount(volumes) != 1 {
 		return zero, resource.Conflict(resource.KindVolume, vol.ID.String(), "volume is the root device")
 	}
-	labels, err := instanceUpdateLabels(model, got.GetLabels(), resource.ActionDetachVolume, m.Fingerprint)
+	device := bind.Device
+	if device == "" {
+		device = vol.Device
+	}
+	labels, err := instanceUpdateLabels(
+		model, got.GetLabels(), resource.ActionDetachVolume, m.Fingerprint,
+		detachReplayLabel(vol.ID.String(), detachRequestHex(m.Key), device),
+	)
 	if err != nil {
 		return zero, err
 	}
@@ -527,12 +601,8 @@ func (c computeClient) writeDetach(
 	if err != nil {
 		return zero, err
 	}
-	device := bind.Device
-	if device == "" {
-		device = vol.Device
-	}
-	// A repeated request id returns the stored operation and leaves the etag.
-	// A new token writes labels and changes the etag, which is not a detach.
+	// A no-op update still stores a request id. A fresh token must not get that far.
+	// A replay of the original request leaves the etag alone.
 	if !drop && updated.GetDone() {
 		after, err := c.instances.GetInstance(ctx, &computev1.GetInstanceRequest{Name: got.GetName()})
 		if err != nil {
@@ -542,6 +612,9 @@ func (c computeClient) writeDetach(
 			return zero, resource.Conflict(resource.KindVolume, vol.ID.String(), "volume is not in use")
 		}
 	}
+	if err := c.persistDetachOp(ctx, m, got.GetName(), vol.ID.String(), op.ID.Local()); err != nil {
+		return zero, err
+	}
 	op.Action = resource.ActionDetachVolume
 	op.Targets = []resource.Ref{bind.InstanceID.Ref()}
 	return resource.Accepted[resource.VolumeAttachment]{
@@ -549,6 +622,81 @@ func (c computeClient) writeDetach(
 		Items: []resource.VolumeAttachment{{
 			VolumeID: vol.ID, OwnerID: vol.OwnerID, InstanceID: bind.InstanceID, Device: device,
 			Status: resource.AttachmentDetaching, AttachTime: detachAttachTime(vol, model),
+		}},
+	}, nil
+}
+
+// persistDetachOp writes the operation id next to the detach record.
+// The id is known only after UpdateInstance returns, and a later retry has to
+// read it without rebuilding the volume list that request fingerprinted.
+func (c computeClient) persistDetachOp(ctx context.Context, m backend.Mutation, name, volID, opLocal string) error {
+	key := labelDetachOpPrefix + volID
+	value := opLocal + " " + detachFPToken(m.Fingerprint)
+	for attempt := 0; attempt < 5; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		got, err := c.instances.GetInstance(ctx, &computev1.GetInstanceRequest{Name: name})
+		if err != nil {
+			return fromNamedRPC(name, err)
+		}
+		if got.GetLabels()[key] == value {
+			return nil
+		}
+		labels := maps.Clone(got.GetLabels())
+		if labels == nil {
+			labels = map[string]string{}
+		}
+		labels[key] = value
+		updated, callErr := c.instances.UpdateInstance(ctx, &computev1.UpdateInstanceRequest{
+			RequestId:  requestUUID(m.Key, "detach-op", opLocal, got.GetEtag()),
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.volumes", "labels"}},
+			Instance: &computev1.Instance{
+				Name:   name,
+				Etag:   got.GetEtag(),
+				Labels: labels,
+				Spec:   &computev1.InstanceSpec{Volumes: got.GetSpec().GetVolumes()},
+			},
+		})
+		if etagMismatch(callErr) {
+			continue
+		}
+		if err := rpcErr(updated, callErr); err != nil {
+			return err
+		}
+		return nil
+	}
+	return resource.Conflict(resource.KindVolume, volID, "instance changed")
+}
+
+func (c computeClient) acceptDetachReplay(
+	ctx context.Context, account resource.AccountID, vol resource.Volume, inst resource.Instance, rec detachReplay,
+) (resource.Accepted[resource.VolumeAttachment], error) {
+	var zero resource.Accepted[resource.VolumeAttachment]
+	id, err := resource.NewOperationID(resource.ServiceCompute, rec.opLocal)
+	if err != nil {
+		return zero, resource.Internal(err)
+	}
+	op := resource.Operation{
+		ID: id, Action: resource.ActionDetachVolume, State: resource.OperationRunning,
+		OwnerID: vol.OwnerID, Targets: []resource.Ref{rec.instanceID.Ref()},
+	}
+	if c.computeOps != nil {
+		loaded, err := c.GetOperation(ctx, backend.Scope{Account: account}, id)
+		if err != nil {
+			return zero, err
+		}
+		op = loaded
+		op.Action = resource.ActionDetachVolume
+		if len(op.Targets) == 0 {
+			op.Targets = []resource.Ref{rec.instanceID.Ref()}
+		}
+	}
+	return resource.Accepted[resource.VolumeAttachment]{
+		Operation: op,
+		Items: []resource.VolumeAttachment{{
+			VolumeID: vol.ID, OwnerID: vol.OwnerID, InstanceID: rec.instanceID, Device: rec.device,
+			Status: resource.AttachmentDetaching, AttachTime: detachAttachTime(vol, inst),
 		}},
 	}, nil
 }
@@ -567,7 +715,7 @@ func detachAttachTime(vol resource.Volume, inst resource.Instance) time.Time {
 // instanceUpdateLabels replaces an instance label map without dropping the
 // image, reservation, or launch labels instanceModel and RunInstances stored.
 func instanceUpdateLabels(
-	inst resource.Instance, raw map[string]string, action resource.Action, fingerprint string,
+	inst resource.Instance, raw map[string]string, action resource.Action, fingerprint string, record map[string]string,
 ) (map[string]string, error) {
 	extra := map[string]string{
 		labelAction:      action.String(),
@@ -578,7 +726,51 @@ func instanceUpdateLabels(
 	if launch := raw[labelLaunch]; launch != "" {
 		extra[labelLaunch] = launch
 	}
+	for key, value := range raw {
+		if detachRecordKey(key) {
+			extra[key] = value
+		}
+	}
+	maps.Copy(extra, record)
 	return withInternalLabels(inst.Tags, extra)
+}
+
+func detachReplayLabel(volID, requestHex, device string) map[string]string {
+	return map[string]string{labelDetachPrefix + volID: requestHex + " " + device}
+}
+
+func detachRequestHex(key string) string {
+	return strings.ReplaceAll(requestUUID(key, "detach"), "-", "")
+}
+
+func detachFPToken(fingerprint string) string {
+	sum := sha256.Sum256([]byte(fingerprint))
+	return hex.EncodeToString(sum[:8])
+}
+
+func detachFingerprintMatches(token, fingerprint string) bool {
+	return token == detachFPToken(fingerprint)
+}
+
+func detachRecordKey(key string) bool {
+	return strings.HasPrefix(key, labelDetachPrefix) || strings.HasPrefix(key, labelDetachOpPrefix)
+}
+
+func detachReplayFrom(labels map[string]string, volID string) (detachReplay, bool) {
+	raw, ok := labels[labelDetachPrefix+volID]
+	if !ok {
+		return detachReplay{}, false
+	}
+	requestHex, device, ok := strings.Cut(raw, " ")
+	if !ok || requestHex == "" {
+		return detachReplay{}, false
+	}
+	rec := detachReplay{requestHex: requestHex, device: device}
+	if opLocal, fp, cut := strings.Cut(labels[labelDetachOpPrefix+volID], " "); cut && opLocal != "" {
+		rec.opLocal = opLocal
+		rec.fingerprint = fp
+	}
+	return rec, true
 }
 
 func protoBootCount(vols []*computev1.VolumeAttachment) int {
