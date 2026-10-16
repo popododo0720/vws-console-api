@@ -26,9 +26,9 @@ func BindOf(inst resource.Instance, id resource.VolumeID) (VolumeBind, bool) {
 }
 
 // DropBind copies inst without id.
-// A missing bind is not in use. A boot bind stays: instance.proto requires one
-// boot entry, so a stopped instance is the same error. EC2 would allow this
-// detach after stop.
+// A missing bind is not in use. A boot bind stays. instance.proto requires
+// exactly one boot entry and the server rejects a spec that breaks that rule,
+// including when the instance is stopped.
 func DropBind(inst resource.Instance, id resource.VolumeID) (resource.Instance, VolumeBind, error) {
 	bind, ok := BindOf(inst, id)
 	if !ok {

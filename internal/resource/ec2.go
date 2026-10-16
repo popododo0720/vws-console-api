@@ -111,6 +111,8 @@ type Volume struct {
 	Device     string      `json:"device,omitempty"`
 	SnapshotID SnapshotID  `json:"snapshotId,omitzero"`
 	CreateTime time.Time   `json:"createTime"`
+	// AttachTime is when the volume was attached. It stays zero while detached.
+	AttachTime time.Time `json:"attachTime,omitzero"`
 	// DeleteOnTermination is set on a root volume, which goes with its instance.
 	DeleteOnTermination bool `json:"deleteOnTermination,omitempty"`
 }

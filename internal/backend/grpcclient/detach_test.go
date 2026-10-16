@@ -16,7 +16,6 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	commonv1 "github.com/popododo0720/vws-proto/gen/go/vws/common/v1"
@@ -187,8 +186,6 @@ func (s *detachWorld) UpdateInstance(
 	}
 	if removed == "" {
 		op.Done = true
-	} else if err := setDetachDevice(op, inst, removed); err != nil {
-		return nil, status.Error(codes.Internal, err.Error())
 	}
 	s.byRequest[req.GetRequestId()] = &detachRecord{fp: fp, op: op}
 	return op, nil
@@ -265,20 +262,6 @@ func removedDetachDevice(before, after []*computev1.VolumeAttachment) string {
 		return vol.GetDeviceName()
 	}
 	return ""
-}
-
-func setDetachDevice(op *longrunningpb.Operation, inst *computev1.Instance, device string) error {
-	cloned := proto.Clone(inst).(*computev1.Instance)
-	if cloned.Labels == nil {
-		cloned.Labels = map[string]string{}
-	}
-	cloned.Labels[detachDeviceLabel] = device
-	packed, err := anypb.New(cloned)
-	if err != nil {
-		return err
-	}
-	op.Result = &longrunningpb.Operation_Response{Response: packed}
-	return nil
 }
 
 func vwsStatus(code codes.Code, reason, msg string) error {
@@ -446,6 +429,45 @@ func (s *detachWorld) volumeNames(name string) []string {
 		return out
 	}
 	return nil
+}
+
+func TestStoppedRootDetachStaysOnTheSpec(t *testing.T) {
+	account := mustAccount(t)
+	projectID := project(account)
+	const (
+		instID = "i-0123456789abcdef0"
+		rootID = "vol-0123456789abcdef0"
+	)
+	holder := observedInstance(projectID, instID,
+		commonv1.ReconciliationState_RECONCILIATION_STATE_READY,
+		computev1.InstancePower_INSTANCE_POWER_STOPPED)
+	holder.Spec.Volumes = []*computev1.VolumeAttachment{
+		{Volume: volumeName(projectID, rootID), DeviceName: "boot", Boot: true},
+	}
+	world := &detachWorld{
+		inst:      []*computev1.Instance{holder},
+		vol:       observedVolume(projectID, rootID, commonv1.ReconciliationState_RECONCILIATION_STATE_READY, instID),
+		byRequest: map[string]*detachRecord{},
+	}
+	client := dialDetachWorld(t, world)
+	root, err := resource.Parse[resource.VolumeID](rootID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	holderID, err := resource.Parse[resource.InstanceID](instID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = client.DetachVolume(context.Background(), backend.Mutation{
+		Scope: backend.Scope{Account: account}, Key: "k-root", Fingerprint: "fp-root",
+	}, resource.DetachVolumeRequest{VolumeID: root, InstanceID: holderID})
+	if resource.CodeOf(err) != resource.CodeConflict {
+		t.Fatalf("stopped root: %v", err)
+	}
+	vols := world.volumeNames(instanceName(projectID, instID))
+	if len(vols) != 1 || vols[0] != volumeName(projectID, rootID) || world.updateCount() != 0 {
+		t.Fatalf("root spec %v updates %d", vols, world.updateCount())
+	}
 }
 
 func TestDetachReplayAfterCompletionKeepsTheDevice(t *testing.T) {

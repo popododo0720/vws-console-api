@@ -206,6 +206,7 @@ func (c compute) AttachVolume(ctx context.Context, m backend.Mutation, req resou
 	vol.State = resource.VolumeInUse
 	vol.InstanceID = req.InstanceID
 	vol.Device = req.Device
+	vol.AttachTime = c.w.now().UTC()
 	inst.BlockDevices = append(inst.BlockDevices, resource.BlockDevice{Device: req.Device, VolumeID: req.VolumeID})
 	op, err := c.w.newOp(m.Account, resource.ServiceCompute, resource.ActionAttachVolume, []resource.Ref{vol.ID.Ref()}, func(time.Time) {})
 	if err != nil {
@@ -255,9 +256,11 @@ func (c compute) DetachVolume(
 	prevVol := *vol
 	prevBlocks := inst.BlockDevices
 	inst.BlockDevices = next.BlockDevices
+	attachedAt := vol.AttachTime
 	vol.State = resource.VolumeAvailable
 	vol.InstanceID = resource.InstanceID{}
 	vol.Device = ""
+	vol.AttachTime = time.Time{}
 	op, err := c.w.newOp(
 		m.Account, resource.ServiceCompute, resource.ActionDetachVolume,
 		[]resource.Ref{inst.ID.Ref()}, func(time.Time) {},
@@ -269,7 +272,7 @@ func (c compute) DetachVolume(
 	}
 	item := resource.VolumeAttachment{
 		VolumeID: vol.ID, OwnerID: vol.OwnerID, InstanceID: bind.InstanceID, Device: bind.Device,
-		Status: resource.AttachmentDetaching, AttachTime: vol.CreateTime,
+		Status: resource.AttachmentDetaching, AttachTime: attachedAt,
 	}
 	acc := resource.Accepted[resource.VolumeAttachment]{Operation: op, Items: []resource.VolumeAttachment{item}}
 	c.w.finish(m.Key, m.Fingerprint, acc)
