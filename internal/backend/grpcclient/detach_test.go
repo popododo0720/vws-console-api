@@ -785,6 +785,166 @@ func TestDetachPageTokenRepeatIsAnError(t *testing.T) {
 	}
 }
 
+func TestDetachReplayAfterStatusCleared(t *testing.T) {
+	account := mustAccount(t)
+	projectID := project(account)
+	const (
+		instID = "i-0123456789abcdef0"
+		rootID = "vol-0123456789abcdef0"
+		dataID = "vol-0fedcba9876543210"
+	)
+	holder := observedInstance(projectID, instID,
+		commonv1.ReconciliationState_RECONCILIATION_STATE_READY,
+		computev1.InstancePower_INSTANCE_POWER_RUNNING)
+	holder.CreateTime = timestamppb.New(time.Unix(1_700_000_100, 0).UTC())
+	holder.Spec.Volumes = []*computev1.VolumeAttachment{
+		{Volume: volumeName(projectID, rootID), DeviceName: "boot", Boot: true},
+		{Volume: volumeName(projectID, dataID), DeviceName: "/dev/sdf"},
+	}
+	dataVol := observedVolume(projectID, dataID, commonv1.ReconciliationState_RECONCILIATION_STATE_READY, instID)
+	dataVol.Status.DeviceName = "/dev/sdf"
+	world := &detachWorld{
+		inst:      []*computev1.Instance{holder},
+		vol:       dataVol,
+		byRequest: map[string]*detachRecord{},
+	}
+	client := dialDetachWorld(t, world)
+	ctx := context.Background()
+	data, err := resource.Parse[resource.VolumeID](dataID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	holderID, err := resource.Parse[resource.InstanceID](instID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mut := backend.Mutation{Scope: backend.Scope{Account: account}, Key: "k-cleared", Fingerprint: "fp-cleared"}
+	first, err := client.DetachVolume(ctx, mut, resource.DetachVolumeRequest{
+		VolumeID: data, InstanceID: holderID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	world.finishAll()
+	dataVol.Status.Instance = ""
+	dataVol.Status.DeviceName = ""
+	again, err := client.DetachVolume(ctx, mut, resource.DetachVolumeRequest{VolumeID: data})
+	if err != nil {
+		t.Fatalf("volume-only replay after status cleared: %v", err)
+	}
+	if again.Operation.ID != first.Operation.ID || again.Items[0].Device != "/dev/sdf" ||
+		again.Items[0].InstanceID != holderID || again.Items[0].Status != resource.AttachmentDetaching {
+		t.Fatalf("replay %+v op %s, first %s", again.Items[0], again.Operation.ID, first.Operation.ID)
+	}
+}
+
+func TestRejectedDetachDoesNotReplay(t *testing.T) {
+	account := mustAccount(t)
+	projectID := project(account)
+	const (
+		instID = "i-0123456789abcdef0"
+		rootID = "vol-0123456789abcdef0"
+		dataID = "vol-0fedcba9876543210"
+	)
+	holder := observedInstance(projectID, instID,
+		commonv1.ReconciliationState_RECONCILIATION_STATE_READY,
+		computev1.InstancePower_INSTANCE_POWER_RUNNING)
+	holder.Spec.Volumes = []*computev1.VolumeAttachment{
+		{Volume: volumeName(projectID, rootID), DeviceName: "boot", Boot: true},
+	}
+	world := &detachWorld{
+		inst:      []*computev1.Instance{holder},
+		vol:       observedVolume(projectID, dataID, commonv1.ReconciliationState_RECONCILIATION_STATE_READY, ""),
+		byRequest: map[string]*detachRecord{},
+	}
+	client := dialDetachWorld(t, world)
+	data, err := resource.Parse[resource.VolumeID](dataID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	holderID, err := resource.Parse[resource.InstanceID](instID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mut := backend.Mutation{Scope: backend.Scope{Account: account}, Key: "k-reject", Fingerprint: "fp-reject"}
+	req := resource.DetachVolumeRequest{VolumeID: data, InstanceID: holderID, Device: "/dev/sdf"}
+	_, err = client.DetachVolume(context.Background(), mut, req)
+	if resource.CodeOf(err) != resource.CodeConflict || world.updateCount() != 0 {
+		t.Fatalf("rejected detach: %v updates %d", err, world.updateCount())
+	}
+	_, err = client.DetachVolume(context.Background(), mut, req)
+	if resource.CodeOf(err) != resource.CodeConflict || world.updateCount() != 0 {
+		t.Fatalf("repeated rejected token: %v updates %d", err, world.updateCount())
+	}
+}
+
+func TestDetachReplaySurvivesAnotherVolume(t *testing.T) {
+	account := mustAccount(t)
+	projectID := project(account)
+	const (
+		instID  = "i-0123456789abcdef0"
+		rootID  = "vol-0123456789abcdef0"
+		leftID  = "vol-0fedcba9876543210"
+		rightID = "vol-0abcdef0123456789"
+	)
+	holder := observedInstance(projectID, instID,
+		commonv1.ReconciliationState_RECONCILIATION_STATE_READY,
+		computev1.InstancePower_INSTANCE_POWER_RUNNING)
+	holder.Spec.Volumes = []*computev1.VolumeAttachment{
+		{Volume: volumeName(projectID, rootID), DeviceName: "boot", Boot: true},
+		{Volume: volumeName(projectID, leftID), DeviceName: "/dev/sdf"},
+		{Volume: volumeName(projectID, rightID), DeviceName: "/dev/sdg"},
+	}
+	world := &detachWorld{
+		inst: []*computev1.Instance{holder},
+		vol:  observedVolume(projectID, leftID, commonv1.ReconciliationState_RECONCILIATION_STATE_READY, instID),
+		more: []*storagev1.Volume{
+			observedVolume(projectID, rightID, commonv1.ReconciliationState_RECONCILIATION_STATE_READY, instID),
+		},
+		byRequest: map[string]*detachRecord{},
+	}
+	client := dialDetachWorld(t, world)
+	ctx := context.Background()
+	scope := backend.Scope{Account: account}
+	left, err := resource.Parse[resource.VolumeID](leftID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	right, err := resource.Parse[resource.VolumeID](rightID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	holderID, err := resource.Parse[resource.InstanceID](instID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mutA := backend.Mutation{Scope: scope, Key: "k-a", Fingerprint: "fp-a"}
+	first, err := client.DetachVolume(ctx, mutA, resource.DetachVolumeRequest{
+		VolumeID: left, InstanceID: holderID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = client.DetachVolume(ctx, backend.Mutation{Scope: scope, Key: "k-b", Fingerprint: "fp-b"}, resource.DetachVolumeRequest{
+		VolumeID: right, InstanceID: holderID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, err := client.DetachVolume(ctx, mutA, resource.DetachVolumeRequest{VolumeID: left})
+	if err != nil {
+		t.Fatalf("retry A after B: %v", err)
+	}
+	if again.Operation.ID != first.Operation.ID || again.Items[0].Device != "/dev/sdf" ||
+		again.Items[0].Status != resource.AttachmentDetaching {
+		t.Fatalf("retry A %+v op %s, first %s", again.Items[0], again.Operation.ID, first.Operation.ID)
+	}
+	vols := world.volumeNames(instanceName(projectID, instID))
+	if len(vols) != 1 || vols[0] != volumeName(projectID, rootID) {
+		t.Fatalf("volumes after retry A %v", vols)
+	}
+}
+
 func assertDetachLabels(t *testing.T, labels map[string]string) {
 	t.Helper()
 	if labels[labelImage] != "ami-0123456789abcdef0" || labels[labelReservation] != "r-01234567" ||
