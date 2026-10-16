@@ -86,6 +86,67 @@ func TestAuthorizeIngressTakesThePermissionList(t *testing.T) {
 	}
 }
 
+func TestAuthorizeIngressRequiresPortsForTCPAndUDP(t *testing.T) {
+	h := newIngressHarness(t)
+	group := h.group(t)
+	path := "/api/v1/security-groups/" + group + "/authorize-ingress"
+	cases := []struct {
+		name  string
+		body  string
+		field string
+	}{
+		{
+			name: "omit-both",
+			body: `{
+				"ipPermissions": [{
+					"ipProtocol": "tcp",
+					"ipRanges": [{"cidrIp": "10.0.0.0/16"}]
+				}]
+			}`,
+			field: "ipPermissions[0].fromPort",
+		},
+		{
+			name: "omit-to",
+			body: `{
+				"ipPermissions": [{
+					"ipProtocol": "udp",
+					"fromPort": 53,
+					"ipRanges": [{"cidrIp": "10.0.0.0/16"}]
+				}]
+			}`,
+			field: "ipPermissions[0].toPort",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := h.post(t, path, tc.body, "sg-port-"+tc.name)
+			got := errorField(t, rec.Body.Bytes())
+			if rec.Code != http.StatusBadRequest || got.EC2Code != "InvalidParameterValue" || got.Field != tc.field {
+				t.Fatalf("%d %+v %s", rec.Code, got, rec.Body)
+			}
+			if rules := h.rules(t, group); len(rules) != 0 {
+				t.Fatalf("missing port wrote %v", rules)
+			}
+		})
+	}
+	fresh := newIngressHarness(t)
+	zeroGroup := fresh.group(t)
+	zero := fresh.post(t, "/api/v1/security-groups/"+zeroGroup+"/authorize-ingress", `{
+		"ipPermissions": [{
+			"ipProtocol": "tcp",
+			"fromPort": 0,
+			"toPort": 0,
+			"ipRanges": [{"cidrIp": "10.0.0.0/16"}]
+		}]
+	}`, "sg-port-zero")
+	if zero.Code != http.StatusAccepted {
+		t.Fatalf("explicit zero %d %s", zero.Code, zero.Body)
+	}
+	if got := fresh.rules(t, zeroGroup); len(got) != 1 || got[0] != "tcp 0 0 10.0.0.0/16" {
+		t.Fatalf("explicit zero stored %v", got)
+	}
+}
+
 func TestAuthorizeIngressRefusesUnsupportedSources(t *testing.T) {
 	h := newIngressHarness(t)
 	group := h.group(t)
@@ -147,6 +208,19 @@ func TestAuthorizeIngressRefusesUnsupportedSources(t *testing.T) {
 				"ipPermissions": [{
 					"ipProtocol": "tcp", "fromPort": 22, "toPort": 22,
 					"prefixListIds": [{"prefixListId": "pl-01234567"}]
+				}]
+			}`,
+			status: http.StatusBadRequest,
+			code:   "InvalidArgument",
+			ec2:    "UnsupportedOperation",
+			field:  "ipPermissions[0].prefixListIds",
+		},
+		{
+			name: "prefix-malformed",
+			body: `{
+				"ipPermissions": [{
+					"ipProtocol": "tcp", "fromPort": 22, "toPort": 22,
+					"prefixListIds": [{"prefixListId": "pl-ZZ"}]
 				}]
 			}`,
 			status: http.StatusBadRequest,

@@ -290,6 +290,38 @@ func TestIngressProtocolIsCanonical(t *testing.T) {
 	}
 }
 
+func TestIngressICMPOutsideZeroIsUnsupported(t *testing.T) {
+	id, err := Parse[SecurityGroupID]("sg-01234567")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, rule := range []IngressRule{
+		{Protocol: "icmp", FromPort: 3, ToPort: 4, Cidr: "10.0.0.0/16"},
+		{Protocol: "icmp", FromPort: -1, ToPort: -1, Cidr: "10.0.0.0/16"},
+		{Protocol: "icmp", FromPort: 8, ToPort: 0, Cidr: "10.0.0.0/16"},
+	} {
+		_, err = (AuthorizeSecurityGroupIngressRequest{
+			ID: id, Rules: []IngressChange{{IngressRule: rule, Perm: "ipPermissions[0]"}},
+		}).Normalize()
+		if err == nil {
+			t.Fatalf("%+v was stored", rule)
+		}
+		e := AsError(err)
+		if e.EC2Code != EC2UnsupportedOperation || e.Field != "ipPermissions[0].fromPort" {
+			t.Fatalf("%+v: %v", rule, err)
+		}
+	}
+	got, err := (AuthorizeSecurityGroupIngressRequest{
+		ID: id,
+		Rules: []IngressChange{{
+			IngressRule: IngressRule{Protocol: "icmp", Cidr: "10.0.0.0/16"},
+		}},
+	}).Normalize()
+	if err != nil || len(got.Rules) != 1 || got.Rules[0].FromPort != 0 || got.Rules[0].ToPort != 0 {
+		t.Fatalf("icmp 0: %v %+v", err, got.Rules)
+	}
+}
+
 func TestIngressBatchRejectsARepeat(t *testing.T) {
 	id, err := Parse[SecurityGroupID]("sg-01234567")
 	if err != nil {

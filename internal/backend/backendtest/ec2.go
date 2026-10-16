@@ -381,6 +381,17 @@ func exerciseEC2(ctx context.Context, t *testing.T, set backend.Set, account res
 	if err != nil || len(opened.Items[0].Rules) != 1 || opened.Items[0].Rules[0].Protocol != "tcp" {
 		t.Fatalf("authorize: %v %+v", err, opened.Items)
 	}
+	again, err := set.Network.AuthorizeSecurityGroupIngress(ctx, backend.Mutation{
+		Scope: scope, Key: "k-auth", Fingerprint: "fp-auth",
+	}, resource.AuthorizeSecurityGroupIngressRequest{
+		ID: group.Items[0].ID,
+		Rules: []resource.IngressChange{{
+			IngressRule: resource.IngressRule{Protocol: "tcp", FromPort: 22, ToPort: 22, Cidr: "10.0.0.0/16"},
+		}},
+	})
+	if err != nil || again.Operation.ID != opened.Operation.ID || len(again.Items[0].Rules) != 1 {
+		t.Fatalf("authorize replay: %v op %s want %s", err, again.Operation.ID, opened.Operation.ID)
+	}
 	dup := resource.AuthorizeSecurityGroupIngressRequest{
 		ID: group.Items[0].ID,
 		Rules: []resource.IngressChange{{
