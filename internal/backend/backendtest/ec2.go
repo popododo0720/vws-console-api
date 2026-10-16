@@ -392,6 +392,25 @@ func exerciseEC2(ctx context.Context, t *testing.T, set backend.Set, account res
 	if err != nil || again.Operation.ID != opened.Operation.ID || len(again.Items[0].Rules) != 1 {
 		t.Fatalf("authorize replay: %v op %s want %s", err, again.Operation.ID, opened.Operation.ID)
 	}
+	changed, err := set.Network.AuthorizeSecurityGroupIngress(ctx, backend.Mutation{
+		Scope: scope, Key: "k-auth", Fingerprint: "fp-auth-other",
+	}, resource.AuthorizeSecurityGroupIngressRequest{
+		ID: group.Items[0].ID,
+		Rules: []resource.IngressChange{{
+			IngressRule: resource.IngressRule{Protocol: "tcp", FromPort: 80, ToPort: 80, Cidr: "10.9.0.0/16"},
+		}},
+	})
+	if resource.CodeOf(err) != resource.CodeIdempotencyMismatch || len(changed.Items) != 0 {
+		t.Fatalf("authorize fingerprint: %v %+v", err, changed.Items)
+	}
+	held, err := set.Network.DescribeSecurityGroups(ctx, scope, resource.SecurityGroupQuery{
+		IDs: []resource.SecurityGroupID{group.Items[0].ID}, Page: resource.PageRequest{Size: 50},
+	})
+	ruleOK := err == nil && len(held.Items) == 1 && len(held.Items[0].Rules) == 1 &&
+		held.Items[0].Rules[0].FromPort == 22 && held.Items[0].Rules[0].Cidr == "10.0.0.0/16"
+	if !ruleOK {
+		t.Fatalf("fingerprint mismatch changed the group: %v %+v", err, held.Items)
+	}
 	dup := resource.AuthorizeSecurityGroupIngressRequest{
 		ID: group.Items[0].ID,
 		Rules: []resource.IngressChange{{

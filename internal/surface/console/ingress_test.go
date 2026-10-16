@@ -147,6 +147,91 @@ func TestAuthorizeIngressRequiresPortsForTCPAndUDP(t *testing.T) {
 	}
 }
 
+func TestAuthorizeIngressRequiresICMPTypeAndCode(t *testing.T) {
+	cases := []struct {
+		name  string
+		body  string
+		field string
+	}{
+		{
+			name: "omit-both",
+			body: `{
+				"ipPermissions": [{
+					"ipProtocol": "icmp",
+					"ipRanges": [{"cidrIp": "10.0.0.0/16"}]
+				}]
+			}`,
+			field: "ipPermissions[0].fromPort",
+		},
+		{
+			name: "omit-from",
+			body: `{
+				"ipPermissions": [{
+					"ipProtocol": "icmp",
+					"toPort": 0,
+					"ipRanges": [{"cidrIp": "10.0.0.0/16"}]
+				}]
+			}`,
+			field: "ipPermissions[0].fromPort",
+		},
+		{
+			name: "omit-to",
+			body: `{
+				"ipPermissions": [{
+					"ipProtocol": "icmp",
+					"fromPort": 0,
+					"ipRanges": [{"cidrIp": "10.0.0.0/16"}]
+				}]
+			}`,
+			field: "ipPermissions[0].toPort",
+		},
+		{
+			name: "protocol-number",
+			body: `{
+				"ipPermissions": [{
+					"ipProtocol": "1",
+					"ipRanges": [{"cidrIp": "10.0.0.0/16"}]
+				}]
+			}`,
+			field: "ipPermissions[0].fromPort",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newIngressHarness(t)
+			group := h.group(t)
+			path := "/api/v1/security-groups/" + group + "/authorize-ingress"
+			rec := h.post(t, path, tc.body, "sg-icmp-"+tc.name)
+			got := errorField(t, rec.Body.Bytes())
+			if rec.Code != http.StatusBadRequest || got.EC2Code != "InvalidParameterValue" || got.Field != tc.field {
+				t.Fatalf("%d %+v %s", rec.Code, got, rec.Body)
+			}
+			if !strings.Contains(rec.Body.String(), "Must specify both from and to ports with ICMP.") {
+				t.Fatalf("icmp omission %s", rec.Body)
+			}
+			if rules := h.rules(t, group); len(rules) != 0 {
+				t.Fatalf("missing icmp wrote %v", rules)
+			}
+		})
+	}
+	fresh := newIngressHarness(t)
+	zeroGroup := fresh.group(t)
+	zero := fresh.post(t, "/api/v1/security-groups/"+zeroGroup+"/authorize-ingress", `{
+		"ipPermissions": [{
+			"ipProtocol": "icmp",
+			"fromPort": 0,
+			"toPort": 0,
+			"ipRanges": [{"cidrIp": "10.0.0.0/16"}]
+		}]
+	}`, "sg-icmp-zero")
+	if zero.Code != http.StatusAccepted {
+		t.Fatalf("explicit icmp zero %d %s", zero.Code, zero.Body)
+	}
+	if got := fresh.rules(t, zeroGroup); len(got) != 1 || got[0] != "icmp 0 0 10.0.0.0/16" {
+		t.Fatalf("explicit icmp zero stored %v", got)
+	}
+}
+
 func TestAuthorizeIngressRefusesUnsupportedSources(t *testing.T) {
 	h := newIngressHarness(t)
 	group := h.group(t)

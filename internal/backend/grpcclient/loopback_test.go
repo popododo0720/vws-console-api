@@ -34,6 +34,11 @@ import (
 )
 
 func TestContractOverGRPC(t *testing.T) {
+	backendtest.Run(t, func() backend.Set { return startLoop(t) })
+}
+
+func startLoop(t *testing.T) backend.Set {
+	t.Helper()
 	computeLis := bufconn.Listen(MaxMessageBytes())
 	storageLis := bufconn.Listen(MaxMessageBytes())
 	computeSrv := grpc.NewServer(
@@ -102,13 +107,11 @@ func TestContractOverGRPC(t *testing.T) {
 		storageOps: longrunningpb.NewOperationsClient(storageConn),
 		networkOps: longrunningpb.NewOperationsClient(computeConn),
 	}
-	backendtest.Run(t, func() backend.Set {
-		return backend.Set{
-			Compute: computeClient{shared},
-			Storage: storageClient{shared},
-			Network: networkClient{shared},
-		}
-	})
+	return backend.Set{
+		Compute: computeClient{shared},
+		Storage: storageClient{shared},
+		Network: networkClient{shared},
+	}
 }
 
 // opsGate hides volume operations from the compute listener and every other
