@@ -60,6 +60,9 @@ func (c computeClient) RunInstances(ctx context.Context, m backend.Mutation, req
 		}
 		keyPair = keyPairName(projectID, key.ID.String())
 	}
+	if err := imageInRegion(m.Account, req.ImageID); err != nil {
+		return resource.Accepted[resource.Instance]{}, err
+	}
 	items := make([]resource.Instance, 0, req.Count)
 	var op resource.Operation
 	// One launch is one reservation. A retry with the same key derives the same id.
@@ -135,6 +138,19 @@ func (c computeClient) RunInstances(ctx context.Context, m backend.Mutation, req
 	op.Action = resource.ActionRunInstances
 	op.Targets = instanceRefs(items)
 	return resource.Accepted[resource.Instance]{Operation: op, Items: items}, nil
+}
+
+func imageInRegion(account resource.AccountID, id resource.ImageID) error {
+	for _, img := range resource.KnownImages(account) {
+		if img.ID == id && img.Name == resource.RegionName {
+			return nil
+		}
+	}
+	return &resource.Error{
+		Code:    resource.CodeNotFound,
+		Kind:    resource.KindImage,
+		Message: "The image id '[" + id.String() + "]' does not exist",
+	}
 }
 
 // bootVolume is the disk RunInstances creates from the machine image.
