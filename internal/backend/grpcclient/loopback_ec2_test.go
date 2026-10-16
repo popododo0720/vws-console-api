@@ -14,6 +14,7 @@ import (
 	computev1 "github.com/popododo0720/vws-proto/gen/go/vws/compute/v1"
 	networkv1 "github.com/popododo0720/vws-proto/gen/go/vws/network/v1"
 	storagev1 "github.com/popododo0720/vws-proto/gen/go/vws/storage/v1"
+	"google.golang.org/grpc/codes"
 
 	"github.com/popododo0720/vws-console-api/internal/backend"
 	"github.com/popododo0720/vws-console-api/internal/resource"
@@ -227,14 +228,20 @@ func (s *groupSrv) UpdateSecurityGroup(ctx context.Context, req *networkv1.Updat
 	if err := ctx.Err(); err != nil {
 		return nil, toStatus(err)
 	}
+	paths := req.GetUpdateMask().GetPaths()
+	if groupMaskHas(paths, "spec.rules") {
+		s.w.noteSpecUpdate()
+	}
 	if op, ok := s.w.operationForRequest(req.GetRequestId()); ok {
 		return op, nil
+	}
+	if s.w.takeClash(id.String()) {
+		return nil, vwsStatus(codes.Aborted, "ETAG_MISMATCH", "etag mismatch")
 	}
 	group, ok := s.w.group(id.String(), account)
 	if !ok {
 		return nil, toStatus(resource.NotFound(resource.KindSecurityGroup, id.String()))
 	}
-	paths := req.GetUpdateMask().GetPaths()
 	if groupMaskHas(paths, "spec.rules") {
 		rules := req.GetSecurityGroup().GetSpec().GetRules()
 		if len(rules) == 0 {
@@ -313,6 +320,33 @@ func (w *loopWorld) rememberNamed(op *longrunningpb.Operation) {
 		w.namedOps = map[string]*longrunningpb.Operation{}
 	}
 	w.namedOps[op.GetName()] = op
+}
+
+func (w *loopWorld) noteSpecUpdate() {
+	w.mu.Lock()
+	w.specUpdates++
+	w.mu.Unlock()
+}
+
+func (w *loopWorld) specUpdateCount() int {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.specUpdates
+}
+
+func (w *loopWorld) takeClash(id string) bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.clash == 0 {
+		return false
+	}
+	w.clash--
+	group := w.groups[id]
+	group.Rules = append(group.Rules, resource.IngressRule{
+		Protocol: "tcp", FromPort: 9, ToPort: 9, Cidr: "10.9.0.0/16",
+	})
+	w.groups[id] = group
+	return true
 }
 
 func (w *loopWorld) operationForRequest(requestID string) (*longrunningpb.Operation, bool) {

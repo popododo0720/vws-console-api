@@ -39,6 +39,12 @@ func TestContractOverGRPC(t *testing.T) {
 
 func startLoop(t *testing.T) backend.Set {
 	t.Helper()
+	set, _ := startLoopWorld(t)
+	return set
+}
+
+func startLoopWorld(t *testing.T) (backend.Set, *loopWorld) {
+	t.Helper()
 	computeLis := bufconn.Listen(MaxMessageBytes())
 	storageLis := bufconn.Listen(MaxMessageBytes())
 	computeSrv := grpc.NewServer(
@@ -111,7 +117,7 @@ func startLoop(t *testing.T) backend.Set {
 		Compute: computeClient{shared},
 		Storage: storageClient{shared},
 		Network: networkClient{shared},
-	}
+	}, loop
 }
 
 // opsGate hides volume operations from the compute listener and every other
@@ -164,6 +170,8 @@ type loopWorld struct {
 	byRequest   map[string]*longrunningpb.Operation
 	groupLabels map[string]map[string]string
 	opSeq       uint64
+	specUpdates int
+	clash       int
 }
 
 type instSnap struct {

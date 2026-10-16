@@ -299,6 +299,7 @@ func TestIngressICMPOutsideZeroIsUnsupported(t *testing.T) {
 		{Protocol: "icmp", FromPort: 3, ToPort: 4, Cidr: "10.0.0.0/16"},
 		{Protocol: "icmp", FromPort: -1, ToPort: -1, Cidr: "10.0.0.0/16"},
 		{Protocol: "icmp", FromPort: 8, ToPort: 0, Cidr: "10.0.0.0/16"},
+		{Protocol: "icmp", FromPort: 0, ToPort: 0, Cidr: "10.0.0.0/16"},
 	} {
 		_, err = (AuthorizeSecurityGroupIngressRequest{
 			ID: id, Rules: []IngressChange{{IngressRule: rule, Perm: "ipPermissions[0]"}},
@@ -310,15 +311,6 @@ func TestIngressICMPOutsideZeroIsUnsupported(t *testing.T) {
 		if e.EC2Code != EC2UnsupportedOperation || e.Field != "ipPermissions[0].fromPort" {
 			t.Fatalf("%+v: %v", rule, err)
 		}
-	}
-	got, err := (AuthorizeSecurityGroupIngressRequest{
-		ID: id,
-		Rules: []IngressChange{{
-			IngressRule: IngressRule{Protocol: "icmp", Cidr: "10.0.0.0/16"},
-		}},
-	}).Normalize()
-	if err != nil || len(got.Rules) != 1 || got.Rules[0].FromPort != 0 || got.Rules[0].ToPort != 0 {
-		t.Fatalf("icmp 0: %v %+v", err, got.Rules)
 	}
 }
 

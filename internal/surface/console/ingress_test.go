@@ -224,11 +224,13 @@ func TestAuthorizeIngressRequiresICMPTypeAndCode(t *testing.T) {
 			"ipRanges": [{"cidrIp": "10.0.0.0/16"}]
 		}]
 	}`, "sg-icmp-zero")
-	if zero.Code != http.StatusAccepted {
-		t.Fatalf("explicit icmp zero %d %s", zero.Code, zero.Body)
+	got := errorField(t, zero.Body.Bytes())
+	if zero.Code != http.StatusBadRequest || got.EC2Code != "UnsupportedOperation" ||
+		got.Field != "ipPermissions[0].fromPort" {
+		t.Fatalf("explicit icmp zero %d %+v %s", zero.Code, got, zero.Body)
 	}
-	if got := fresh.rules(t, zeroGroup); len(got) != 1 || got[0] != "icmp 0 0 10.0.0.0/16" {
-		t.Fatalf("explicit icmp zero stored %v", got)
+	if rules := fresh.rules(t, zeroGroup); len(rules) != 0 {
+		t.Fatalf("explicit icmp zero stored %v", rules)
 	}
 }
 
