@@ -493,18 +493,30 @@ func (s *instanceSrv) CreateInstance(ctx context.Context, req *computev1.CreateI
 }
 
 func (s *instanceSrv) UpdateInstance(ctx context.Context, req *computev1.UpdateInstanceRequest) (*longrunningpb.Operation, error) {
-	spec := req.GetInstance().GetSpec()
-	if _, _, ok := dataVolume(spec); ok {
-		if bootCount(spec) != 1 {
-			return nil, toStatus(resource.Invalid("volumes", "boot required"))
-		}
-		volName, device, _ := dataVolume(spec)
-		return s.attachVolume(ctx, req, volName, device)
-	}
 	if paths := req.GetUpdateMask().GetPaths(); len(paths) == 1 && paths[0] == "labels" {
 		return s.retag(ctx, req)
 	}
-	power := req.GetInstance().GetSpec().GetPower()
+	spec := req.GetInstance().GetSpec()
+	current, err := s.currentVolumes(ctx, req.GetInstance().GetName())
+	if err != nil {
+		return nil, toStatus(err)
+	}
+	kind, volName, device := classifyVolumeUpdate(current, spec.GetVolumes())
+	switch kind {
+	case "attach":
+		if bootCount(spec) != 1 {
+			return nil, toStatus(resource.Invalid("volumes", "boot required"))
+		}
+		return s.attachVolume(ctx, req, volName, device)
+	case "detach":
+		return s.detachVolume(ctx, req, volName, device)
+	case "same":
+		if maskHas(req, "spec.volumes") && bootCount(spec) == 1 && spec.GetPower() == computev1.InstancePower_INSTANCE_POWER_UNSPECIFIED {
+			// The data volume is already gone. The request id still replays the detach.
+			return s.detachVolume(ctx, req, "", "")
+		}
+	}
+	power := spec.GetPower()
 	switch power {
 	case computev1.InstancePower_INSTANCE_POWER_STOPPED:
 		return s.changePower(ctx, req, resource.ActionStopInstances)
@@ -625,6 +637,114 @@ func (s *instanceSrv) attachVolume(ctx context.Context, req *computev1.UpdateIns
 	return runningOp(projectID, acc.Operation, volumeName(projectID, acc.Items[0].ID.String()), commonv1.OperationVerb_OPERATION_VERB_UPDATE, s.w.now)
 }
 
+func (s *instanceSrv) detachVolume(ctx context.Context, req *computev1.UpdateInstanceRequest, volName, device string) (*longrunningpb.Operation, error) {
+	projectID, err := projectOfName(req.GetInstance().GetName())
+	if err != nil {
+		return nil, toStatus(err)
+	}
+	account, err := accountOf(projectID)
+	if err != nil {
+		return nil, toStatus(err)
+	}
+	instID, err := resource.Parse[resource.InstanceID](lastSegment(req.GetInstance().GetName()))
+	if err != nil {
+		return nil, toStatus(err)
+	}
+	var volID resource.VolumeID
+	if volName != "" {
+		volID, err = resource.Parse[resource.VolumeID](lastSegment(volName))
+		if err != nil {
+			return nil, toStatus(err)
+		}
+	}
+	fp, err := protoFingerprint(req)
+	if err != nil {
+		return nil, toStatus(err)
+	}
+	acc, err := s.w.set.Compute.DetachVolume(ctx, backend.Mutation{
+		Scope: backend.Scope{Account: account}, Key: req.GetRequestId(), Fingerprint: fp,
+	}, resource.DetachVolumeRequest{VolumeID: volID, InstanceID: instID, Device: device})
+	if err != nil {
+		return nil, toStatus(err)
+	}
+	s.w.rememberAction(instID.String(), resource.ActionDetachVolume.String())
+	return runningOp(projectID, acc.Operation, instanceName(projectID, instID.String()), commonv1.OperationVerb_OPERATION_VERB_UPDATE, s.w.now)
+}
+
+func (s *instanceSrv) currentVolumes(ctx context.Context, name string) ([]*computev1.VolumeAttachment, error) {
+	projectID, err := projectOfName(name)
+	if err != nil {
+		return nil, err
+	}
+	account, err := accountOf(projectID)
+	if err != nil {
+		return nil, err
+	}
+	id, err := resource.Parse[resource.InstanceID](lastSegment(name))
+	if err != nil {
+		return nil, err
+	}
+	page, err := s.w.set.Compute.DescribeInstances(ctx, backend.Scope{Account: account}, resource.InstanceQuery{
+		IDs: []resource.InstanceID{id}, Page: resource.PageRequest{Size: 1},
+	})
+	if err != nil {
+		return nil, err
+	}
+	if len(page.Items) == 0 {
+		return nil, resource.NotFound(resource.KindInstance, id.String())
+	}
+	return volumeAttachments(projectID, page.Items[0].BlockDevices), nil
+}
+
+func classifyVolumeUpdate(current, next []*computev1.VolumeAttachment) (kind, volName, device string) {
+	cur := map[string]*computev1.VolumeAttachment{}
+	nxt := map[string]*computev1.VolumeAttachment{}
+	for _, v := range current {
+		if v.GetVolume() != "" {
+			cur[v.GetVolume()] = v
+		}
+	}
+	for _, v := range next {
+		if v.GetVolume() != "" {
+			nxt[v.GetVolume()] = v
+		}
+	}
+	var added, removed []*computev1.VolumeAttachment
+	for name, v := range nxt {
+		if _, ok := cur[name]; !ok {
+			added = append(added, v)
+		}
+	}
+	for name, v := range cur {
+		if _, ok := nxt[name]; !ok {
+			removed = append(removed, v)
+		}
+	}
+	if len(added) == 1 && len(removed) == 0 && !bootAttachment(added[0]) {
+		return "attach", added[0].GetVolume(), added[0].GetDeviceName()
+	}
+	if len(removed) == 1 && len(added) == 0 && !bootAttachment(removed[0]) {
+		return "detach", removed[0].GetVolume(), removed[0].GetDeviceName()
+	}
+	if len(added) == 0 && len(removed) == 0 {
+		return "same", "", ""
+	}
+	return "other", "", ""
+}
+
+func bootAttachment(v *computev1.VolumeAttachment) bool {
+	return v.GetBoot() || v.GetDeviceName() == "boot" || v.GetDeviceName() == resource.RootDeviceName
+}
+
+func maskHas(req *computev1.UpdateInstanceRequest, path string) bool {
+	for _, got := range req.GetUpdateMask().GetPaths() {
+		if got == path {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *instanceSrv) DeleteInstance(ctx context.Context, req *computev1.DeleteInstanceRequest) (*longrunningpb.Operation, error) {
 	projectID, err := projectOfName(req.GetName())
 	if err != nil {
@@ -661,22 +781,6 @@ func bootCount(spec *computev1.InstanceSpec) int {
 	return n
 }
 
-func dataVolume(spec *computev1.InstanceSpec) (string, string, bool) {
-	if spec == nil {
-		return "", "", false
-	}
-	var name, device string
-	found := false
-	for _, vol := range spec.GetVolumes() {
-		if vol.GetBoot() || vol.GetDeviceName() == "" || vol.GetDeviceName() == "boot" {
-			continue
-		}
-		name, device = vol.GetVolume(), vol.GetDeviceName()
-		found = true
-	}
-	return name, device, found
-}
-
 func (s *instanceSrv) GetInstance(ctx context.Context, req *computev1.GetInstanceRequest) (*computev1.Instance, error) {
 	projectID, err := projectOfName(req.GetName())
 	if err != nil {
@@ -688,7 +792,16 @@ func (s *instanceSrv) GetInstance(ctx context.Context, req *computev1.GetInstanc
 	}
 	idText := lastSegment(req.GetName())
 	if snap, ok := s.w.liveInst(idText, account); ok {
-		return s.stampAction(instanceProto(snap.inst, projectID, snap.vpc), snap.inst.ID.String()), nil
+		inst := snap.inst
+		page, rowErr := s.w.set.Compute.DescribeInstances(ctx, backend.Scope{Account: account}, resource.InstanceQuery{
+			IDs: []resource.InstanceID{snap.inst.ID}, Page: resource.PageRequest{Size: 1},
+		})
+		if rowErr == nil && len(page.Items) == 1 {
+			// The launch snapshot is taken before a later attach.
+			inst.BlockDevices = page.Items[0].BlockDevices
+			inst.RootDeviceName = page.Items[0].RootDeviceName
+		}
+		return s.stampAction(instanceProto(inst, projectID, snap.vpc), inst.ID.String()), nil
 	}
 	id, err := resource.Parse[resource.InstanceID](idText)
 	if err != nil {
