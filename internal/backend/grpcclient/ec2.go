@@ -1114,24 +1114,6 @@ func (c networkClient) CreateSecurityGroup(ctx context.Context, m backend.Mutati
 func (c networkClient) AuthorizeSecurityGroupIngress(ctx context.Context, m backend.Mutation, req resource.AuthorizeSecurityGroupIngressRequest) (resource.Accepted[resource.SecurityGroup], error) {
 	var zero resource.Accepted[resource.SecurityGroup]
 	projectID := project(m.Account)
-	// The etag is the compare-and-swap for the rule list and the replay label.
-	// A mismatch means another update committed, so this attempt rereads.
-	for attempt := 0; attempt < 5; attempt++ {
-		if err := ctx.Err(); err != nil {
-			return zero, err
-		}
-		acc, err := c.authorizeIngressOnce(ctx, m, projectID, req)
-		if !errors.Is(err, etagMismatchError{}) {
-			return acc, err
-		}
-	}
-	return zero, resource.Conflict(resource.KindSecurityGroup, req.ID.String(), "security group changed")
-}
-
-func (c networkClient) authorizeIngressOnce(
-	ctx context.Context, m backend.Mutation, projectID string, req resource.AuthorizeSecurityGroupIngressRequest,
-) (resource.Accepted[resource.SecurityGroup], error) {
-	var zero resource.Accepted[resource.SecurityGroup]
 	rec, found, err := c.findIngressReplay(ctx, projectID, m.Key)
 	if err != nil {
 		return zero, err
@@ -1148,6 +1130,16 @@ func (c networkClient) authorizeIngressOnce(
 			return zero, resource.GroupNotFound(req.ID.String())
 		}
 		return zero, err
+	}
+	rec, found, err = ingressReplayFrom(msg, m.Key)
+	if err != nil {
+		return zero, err
+	}
+	if found {
+		if rec.groupID != req.ID.String() || !detachFingerprintMatches(rec.fp, m.Fingerprint) {
+			return zero, resource.IdempotencyMismatch()
+		}
+		return c.replayIngress(ctx, m, rec)
 	}
 	current, err := groupModel(msg)
 	if err != nil {
@@ -1196,14 +1188,10 @@ func (c networkClient) writeIngress(
 		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.rules", "labels"}},
 		SecurityGroup: &networkv1.SecurityGroup{
 			Name:   msg.GetName(),
-			Etag:   msg.GetEtag(),
 			Labels: labels,
 			Spec:   &networkv1.SecurityGroupSpec{Rules: protoRules},
 		},
 	})
-	if etagMismatch(callErr) {
-		return zero, etagMismatchError{}
-	}
 	if err := rpcErr(updated, callErr); err != nil {
 		return zero, err
 	}
@@ -1224,41 +1212,27 @@ func (c networkClient) replayIngress(
 	ctx context.Context, m backend.Mutation, rec ingressReplay,
 ) (resource.Accepted[resource.SecurityGroup], error) {
 	var zero resource.Accepted[resource.SecurityGroup]
-	labels := maps.Clone(rec.msg.GetLabels())
-	if labels == nil {
-		labels = map[string]string{}
-	}
-	updated, callErr := c.groups.UpdateSecurityGroup(ctx, &networkv1.UpdateSecurityGroupRequest{
-		RequestId:  requestUUID(m.Key, "ingress"),
-		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"labels"}},
-		SecurityGroup: &networkv1.SecurityGroup{
-			Name:   rec.msg.GetName(),
-			Etag:   rec.msg.GetEtag(),
-			Labels: labels,
-		},
-	})
-	if etagMismatch(callErr) {
-		return zero, etagMismatchError{}
-	}
-	if err := rpcErr(updated, callErr); err != nil {
-		return zero, err
-	}
-	op, err := operationFrom(updated, resource.ServiceNetwork)
+	current, err := groupModel(rec.msg)
 	if err != nil {
 		return zero, err
 	}
-	got, err := c.findGroup(ctx, project(m.Account), rec.groupID)
-	if err != nil {
-		return zero, err
+	return c.writeIngress(ctx, m, rec.msg, current, current.Rules)
+}
+
+func ingressReplayFrom(msg *networkv1.SecurityGroup, key string) (ingressReplay, bool, error) {
+	raw, ok := msg.GetLabels()[ingressTokenLabel(key)]
+	if !ok {
+		return ingressReplay{}, false, nil
 	}
-	op.Action = resource.ActionAuthorizeSecurityGroupIngress
-	op.Targets = []resource.Ref{got.ID.Ref()}
-	return resource.Accepted[resource.SecurityGroup]{Operation: op, Items: []resource.SecurityGroup{got}}, nil
+	fp, groupID, cut := strings.Cut(raw, " ")
+	if !cut || fp == "" || groupID == "" {
+		return ingressReplay{}, false, resource.Internal(errors.New("bad ingress replay label"))
+	}
+	return ingressReplay{groupID: groupID, fp: fp, msg: msg}, true, nil
 }
 
 func (c networkClient) findIngressReplay(ctx context.Context, projectID, key string) (ingressReplay, bool, error) {
 	var zero ingressReplay
-	tokenKey := ingressTokenLabel(key)
 	page := ""
 	for vpcPage := 0; vpcPage < 50; vpcPage++ {
 		out, err := c.vpcs.ListVpcs(ctx, &networkv1.ListVpcsRequest{
@@ -1277,15 +1251,14 @@ func (c networkClient) findIngressReplay(ctx context.Context, projectID, key str
 					return zero, false, fromRPC(err)
 				}
 				for _, item := range listed.GetSecurityGroups() {
-					raw, ok := item.GetLabels()[tokenKey]
+					rec, ok, err := ingressReplayFrom(item, key)
+					if err != nil {
+						return zero, false, err
+					}
 					if !ok {
 						continue
 					}
-					fp, groupID, cut := strings.Cut(raw, " ")
-					if !cut || fp == "" || groupID == "" {
-						return zero, false, resource.Internal(errors.New("bad ingress replay label"))
-					}
-					return ingressReplay{groupID: groupID, fp: fp, msg: item}, true, nil
+					return rec, true, nil
 				}
 				groupToken = listed.GetNextPageToken()
 				if groupToken == "" {

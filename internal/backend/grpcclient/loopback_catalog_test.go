@@ -78,7 +78,7 @@ func (s *groupSrv) ListSecurityGroups(_ context.Context, req *networkv1.ListSecu
 	vpcID := lastSegment(req.GetParent())
 	items := make([]*networkv1.SecurityGroup, 0)
 	for _, group := range s.w.groupsIn(vpcID) {
-		items = append(items, groupProto(group, projectID, s.w.labelsForList(group.ID.String()), s.w.groupEtag(group.ID.String())))
+		items = append(items, groupProto(group, projectID, s.w.labelsForList(group.ID.String())))
 	}
 	return &networkv1.ListSecurityGroupsResponse{SecurityGroups: items}, nil
 }

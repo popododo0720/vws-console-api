@@ -171,8 +171,6 @@ type loopWorld struct {
 	groupLabels             map[string]map[string]string
 	opSeq                   uint64
 	specUpdates             int
-	clash                   int
-	etags                   map[string]string
 	omitIngressLabelsOnList bool
 }
 
