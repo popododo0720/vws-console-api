@@ -459,6 +459,10 @@ func (c computeClient) writeDetach(
 	}, nil
 }
 
+// detachDeviceLabel is carried on the update operation response.
+// It is not stored on the instance. A replay reads the device the first detach removed.
+const detachDeviceLabel = "vws-detach-device"
+
 // instanceUpdateLabels replaces an instance label map without dropping the
 // image, reservation, or launch labels instanceModel and RunInstances stored.
 func instanceUpdateLabels(
