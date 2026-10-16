@@ -62,7 +62,9 @@ func (s *Service) AttachVolume(ctx context.Context, c resource.Caller, token res
 }
 
 // DetachVolume accepts a detach and returns the operation.
-func (s *Service) DetachVolume(ctx context.Context, c resource.Caller, token resource.ClientToken, req resource.DetachVolumeRequest) (resource.Accepted[resource.VolumeAttachment], error) {
+func (s *Service) DetachVolume(
+	ctx context.Context, c resource.Caller, token resource.ClientToken, req resource.DetachVolumeRequest,
+) (resource.Accepted[resource.VolumeAttachment], error) {
 	token, err := fillToken(token)
 	if err != nil {
 		return resource.Accepted[resource.VolumeAttachment]{}, err

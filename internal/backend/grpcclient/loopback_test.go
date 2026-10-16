@@ -511,7 +511,8 @@ func (s *instanceSrv) UpdateInstance(ctx context.Context, req *computev1.UpdateI
 	case "detach":
 		return s.detachVolume(ctx, req, volName, device)
 	case "same":
-		if maskHas(req, "spec.volumes") && bootCount(spec) == 1 && spec.GetPower() == computev1.InstancePower_INSTANCE_POWER_UNSPECIFIED {
+		powerUnset := spec.GetPower() == computev1.InstancePower_INSTANCE_POWER_UNSPECIFIED
+		if maskHas(req, "spec.volumes") && bootCount(spec) == 1 && powerUnset {
 			// The data volume is already gone. The request id still replays the detach.
 			return s.detachVolume(ctx, req, "", "")
 		}
@@ -559,7 +560,8 @@ func (s *instanceSrv) changePower(ctx context.Context, req *computev1.UpdateInst
 		resource.ActionTerminateInstances, resource.ActionCreateKeyPair,
 		resource.ActionDeleteKeyPair, resource.ActionDeleteSecurityGroup, resource.ActionDeleteSubnet,
 		resource.ActionAllocateAddress, resource.ActionReleaseAddress, resource.ActionCreateSnapshot, resource.ActionDeleteSnapshot,
-		resource.ActionAssociateAddress, resource.ActionDisassociateAddress, resource.ActionModifyVolume, resource.ActionCreateTags, resource.ActionDetachVolume:
+		resource.ActionAssociateAddress, resource.ActionDisassociateAddress,
+		resource.ActionModifyVolume, resource.ActionCreateTags, resource.ActionDetachVolume:
 		return nil, toStatus(resource.Invalid("power", "unsupported"))
 	default:
 		return nil, toStatus(resource.Invalid("power", "unsupported"))
@@ -637,7 +639,9 @@ func (s *instanceSrv) attachVolume(ctx context.Context, req *computev1.UpdateIns
 	return runningOp(projectID, acc.Operation, volumeName(projectID, acc.Items[0].ID.String()), commonv1.OperationVerb_OPERATION_VERB_UPDATE, s.w.now)
 }
 
-func (s *instanceSrv) detachVolume(ctx context.Context, req *computev1.UpdateInstanceRequest, volName, device string) (*longrunningpb.Operation, error) {
+func (s *instanceSrv) detachVolume(
+	ctx context.Context, req *computev1.UpdateInstanceRequest, volName, device string,
+) (*longrunningpb.Operation, error) {
 	projectID, err := projectOfName(req.GetInstance().GetName())
 	if err != nil {
 		return nil, toStatus(err)
@@ -668,7 +672,10 @@ func (s *instanceSrv) detachVolume(ctx context.Context, req *computev1.UpdateIns
 		return nil, toStatus(err)
 	}
 	s.w.rememberAction(instID.String(), resource.ActionDetachVolume.String())
-	return runningOp(projectID, acc.Operation, instanceName(projectID, instID.String()), commonv1.OperationVerb_OPERATION_VERB_UPDATE, s.w.now)
+	return runningOp(
+		projectID, acc.Operation, instanceName(projectID, instID.String()),
+		commonv1.OperationVerb_OPERATION_VERB_UPDATE, s.w.now,
+	)
 }
 
 func (s *instanceSrv) currentVolumes(ctx context.Context, name string) ([]*computev1.VolumeAttachment, error) {
@@ -1290,7 +1297,10 @@ func (s *opsSrv) GetOperation(ctx context.Context, req *longrunningpb.GetOperati
 
 func operationVerb(action resource.Action) commonv1.OperationVerb {
 	switch action {
-	case resource.ActionStopInstances, resource.ActionStartInstances, resource.ActionAttachVolume, resource.ActionAuthorizeSecurityGroupIngress, resource.ActionAssociateAddress, resource.ActionDisassociateAddress, resource.ActionModifyVolume, resource.ActionCreateTags, resource.ActionDetachVolume:
+	case resource.ActionStopInstances, resource.ActionStartInstances, resource.ActionAttachVolume,
+		resource.ActionAuthorizeSecurityGroupIngress, resource.ActionAssociateAddress,
+		resource.ActionDisassociateAddress, resource.ActionModifyVolume,
+		resource.ActionCreateTags, resource.ActionDetachVolume:
 		return commonv1.OperationVerb_OPERATION_VERB_UPDATE
 	case resource.ActionTerminateInstances, resource.ActionDeleteVpc, resource.ActionDeleteVolume, resource.ActionDeleteKeyPair, resource.ActionDeleteSecurityGroup, resource.ActionDeleteSubnet, resource.ActionReleaseAddress, resource.ActionDeleteSnapshot:
 		return commonv1.OperationVerb_OPERATION_VERB_DELETE

@@ -215,7 +215,10 @@ func (r DetachVolumeRequest) Normalize() (DetachVolumeRequest, error) {
 // AttachmentNotFound reports a DetachVolume whose volume is bound and whose
 // InstanceId or Device does not name that bind.
 func AttachmentNotFound(id VolumeID) *Error {
-	return &Error{Code: CodeNotFound, Kind: KindVolume, ID: id.String(), Field: "attachment", Message: "attachment not found"}
+	return &Error{
+		Code: CodeNotFound, Kind: KindVolume, ID: id.String(),
+		Field: "attachment", Message: "attachment not found",
+	}
 }
 
 // IsAttachmentNotFound reports whether e came from AttachmentNotFound.

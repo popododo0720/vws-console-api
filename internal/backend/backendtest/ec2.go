@@ -82,20 +82,30 @@ func exerciseEC2(ctx context.Context, t *testing.T, set backend.Set, account res
 	}); resource.CodeOf(err) != resource.CodeConflict {
 		t.Fatalf("delete busy volume: %v", err)
 	}
-	detachM := backend.Mutation{Scope: scope, Key: "k-detach", Fingerprint: "fp-detach"}
+	mut := func(key, fp string) backend.Mutation {
+		return backend.Mutation{Scope: scope, Key: key, Fingerprint: fp}
+	}
+	detachM := mut("k-detach", "fp-detach")
 	detached, err := set.Compute.DetachVolume(ctx, detachM, resource.DetachVolumeRequest{
 		VolumeID: vol.Items[0].ID, InstanceID: stopped, Device: "/dev/sdf",
 	})
-	if err != nil || detached.Items[0].Status != resource.AttachmentDetaching || detached.Items[0].InstanceID != stopped || detached.Items[0].Device != "/dev/sdf" || detached.Operation.Action != resource.ActionDetachVolume {
+	if err != nil || len(detached.Items) != 1 {
+		t.Fatalf("detach: %v %+v", err, detached)
+	}
+	got := detached.Items[0]
+	if got.Status != resource.AttachmentDetaching || got.InstanceID != stopped ||
+		got.Device != "/dev/sdf" || detached.Operation.Action != resource.ActionDetachVolume {
 		t.Fatalf("detach: %v %+v", err, detached)
 	}
 	replayed, err := set.Compute.DetachVolume(ctx, detachM, resource.DetachVolumeRequest{
 		VolumeID: vol.Items[0].ID, InstanceID: stopped, Device: "/dev/sdf",
 	})
-	if err != nil || replayed.Operation.ID != detached.Operation.ID || replayed.Items[0].Status != resource.AttachmentDetaching {
+	if err != nil || replayed.Operation.ID != detached.Operation.ID ||
+		replayed.Items[0].Status != resource.AttachmentDetaching {
 		t.Fatalf("detach replay: %v %+v", err, replayed)
 	}
-	if op, err := set.Compute.GetOperation(ctx, scope, detached.Operation.ID); err != nil || op.Action != resource.ActionDetachVolume {
+	op, err := set.Compute.GetOperation(ctx, scope, detached.Operation.ID)
+	if err != nil || op.Action != resource.ActionDetachVolume {
 		t.Fatalf("detach operation: %v %s", err, op.Action)
 	}
 	listed, err = set.Compute.DescribeVolumes(ctx, scope, resource.VolumeQuery{
@@ -115,12 +125,12 @@ func exerciseEC2(ctx context.Context, t *testing.T, set backend.Set, account res
 			t.Fatalf("bind remains %+v", bound.Items[0].BlockDevices)
 		}
 	}
-	if _, err := set.Compute.DetachVolume(ctx, backend.Mutation{Scope: scope, Key: "k-detach-again", Fingerprint: "fp-detach-again"}, resource.DetachVolumeRequest{
+	if _, err := set.Compute.DetachVolume(ctx, mut("k-detach-again", "fp-detach-again"), resource.DetachVolumeRequest{
 		VolumeID: vol.Items[0].ID, InstanceID: stopped, Device: "/dev/sdf",
 	}); resource.CodeOf(err) != resource.CodeConflict {
 		t.Fatalf("detach available: %v", err)
 	}
-	if _, err := set.Compute.DeleteVolume(ctx, backend.Mutation{Scope: scope, Key: "k-del-detached", Fingerprint: "fp-del-detached"}, resource.DeleteVolumeRequest{
+	if _, err := set.Compute.DeleteVolume(ctx, mut("k-del-detached", "fp-del-detached"), resource.DeleteVolumeRequest{
 		ID: vol.Items[0].ID,
 	}); err != nil {
 		t.Fatalf("delete after detach: %v", err)
@@ -129,9 +139,10 @@ func exerciseEC2(ctx context.Context, t *testing.T, set backend.Set, account res
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := set.Compute.DetachVolume(ctx, backend.Mutation{Scope: scope, Key: "k-detach-missing", Fingerprint: "fp-detach-missing"}, resource.DetachVolumeRequest{
+	_, err = set.Compute.DetachVolume(ctx, mut("k-detach-missing", "fp-detach-missing"), resource.DetachVolumeRequest{
 		VolumeID: missingVol,
-	}); resource.CodeOf(err) != resource.CodeNotFound || resource.AsError(err).Kind != resource.KindVolume {
+	})
+	if resource.CodeOf(err) != resource.CodeNotFound || resource.AsError(err).Kind != resource.KindVolume {
 		t.Fatalf("missing volume: %v", err)
 	}
 	var root resource.VolumeID
@@ -143,40 +154,42 @@ func exerciseEC2(ctx context.Context, t *testing.T, set backend.Set, account res
 	if root.IsZero() {
 		t.Fatal("no root volume")
 	}
-	if _, err := set.Compute.DetachVolume(ctx, backend.Mutation{Scope: scope, Key: "k-detach-root", Fingerprint: "fp-detach-root"}, resource.DetachVolumeRequest{
+	if _, err := set.Compute.DetachVolume(ctx, mut("k-detach-root", "fp-detach-root"), resource.DetachVolumeRequest{
 		VolumeID: root, InstanceID: stopped,
 	}); resource.CodeOf(err) != resource.CodeConflict {
 		t.Fatalf("detach root: %v", err)
 	}
-	if _, err := set.Compute.DeleteVolume(ctx, backend.Mutation{Scope: scope, Key: "k-del-root", Fingerprint: "fp-del-root"}, resource.DeleteVolumeRequest{
+	if _, err := set.Compute.DeleteVolume(ctx, mut("k-del-root", "fp-del-root"), resource.DeleteVolumeRequest{
 		ID: root,
 	}); resource.CodeOf(err) != resource.CodeConflict {
 		t.Fatalf("delete root: %v", err)
 	}
-	data, err := set.Compute.CreateVolume(ctx, backend.Mutation{Scope: scope, Key: "k-detach-data", Fingerprint: "fp-detach-data"}, volReq)
+	data, err := set.Compute.CreateVolume(ctx, mut("k-detach-data", "fp-detach-data"), volReq)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := set.Compute.GetOperation(ctx, scope, data.Operation.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := set.Compute.AttachVolume(ctx, backend.Mutation{Scope: scope, Key: "k-attach-data", Fingerprint: "fp-attach-data"}, resource.AttachVolumeRequest{
+	if _, err := set.Compute.AttachVolume(ctx, mut("k-attach-data", "fp-attach-data"), resource.AttachVolumeRequest{
 		VolumeID: data.Items[0].ID, InstanceID: stopped, Device: "/dev/sdg",
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := set.Compute.DetachVolume(ctx, backend.Mutation{Scope: scope, Key: "k-detach-device", Fingerprint: "fp-detach-device"}, resource.DetachVolumeRequest{
+	_, err = set.Compute.DetachVolume(ctx, mut("k-detach-device", "fp-detach-device"), resource.DetachVolumeRequest{
 		VolumeID: data.Items[0].ID, InstanceID: stopped, Device: "/dev/sdh",
-	}); !resource.IsAttachmentNotFound(resource.AsError(err)) {
+	})
+	if !resource.IsAttachmentNotFound(resource.AsError(err)) {
 		t.Fatalf("wrong device: %v", err)
 	}
 	wrongInst, err := resource.Parse[resource.InstanceID]("i-0123456789abcdef0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := set.Compute.DetachVolume(ctx, backend.Mutation{Scope: scope, Key: "k-detach-inst", Fingerprint: "fp-detach-inst"}, resource.DetachVolumeRequest{
+	_, err = set.Compute.DetachVolume(ctx, mut("k-detach-inst", "fp-detach-inst"), resource.DetachVolumeRequest{
 		VolumeID: data.Items[0].ID, InstanceID: wrongInst, Device: "/dev/sdg",
-	}); !resource.IsAttachmentNotFound(resource.AsError(err)) {
+	})
+	if !resource.IsAttachmentNotFound(resource.AsError(err)) {
 		t.Fatalf("wrong instance: %v", err)
 	}
 	forceM := backend.Mutation{Scope: scope, Key: "k-force", Fingerprint: "fp-force"}
@@ -193,22 +206,27 @@ func exerciseEC2(ctx context.Context, t *testing.T, set backend.Set, account res
 	}); resource.CodeOf(err) != resource.CodeIdempotencyMismatch {
 		t.Fatalf("force flipped: %v", err)
 	}
-	only, err := set.Compute.CreateVolume(ctx, backend.Mutation{Scope: scope, Key: "k-detach-only", Fingerprint: "fp-detach-only"}, volReq)
+	only, err := set.Compute.CreateVolume(ctx, mut("k-detach-only", "fp-detach-only"), volReq)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := set.Compute.GetOperation(ctx, scope, only.Operation.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := set.Compute.AttachVolume(ctx, backend.Mutation{Scope: scope, Key: "k-attach-only", Fingerprint: "fp-attach-only"}, resource.AttachVolumeRequest{
+	if _, err := set.Compute.AttachVolume(ctx, mut("k-attach-only", "fp-attach-only"), resource.AttachVolumeRequest{
 		VolumeID: only.Items[0].ID, InstanceID: stopped, Device: "/dev/sdh",
 	}); err != nil {
 		t.Fatal(err)
 	}
-	byID, err := set.Compute.DetachVolume(ctx, backend.Mutation{Scope: scope, Key: "k-detach-only-go", Fingerprint: "fp-detach-only-go"}, resource.DetachVolumeRequest{
+	byID, err := set.Compute.DetachVolume(ctx, mut("k-detach-only-go", "fp-detach-only-go"), resource.DetachVolumeRequest{
 		VolumeID: only.Items[0].ID,
 	})
-	if err != nil || byID.Items[0].Status != resource.AttachmentDetaching || byID.Items[0].InstanceID != stopped || byID.Items[0].Device != "/dev/sdh" {
+	if err != nil || len(byID.Items) != 1 {
+		t.Fatalf("volume id only: %v %+v", err, byID)
+	}
+	onlyItem := byID.Items[0]
+	if onlyItem.Status != resource.AttachmentDetaching || onlyItem.InstanceID != stopped ||
+		onlyItem.Device != "/dev/sdh" {
 		t.Fatalf("volume id only: %v %+v", err, byID)
 	}
 	extra, err := set.Compute.CreateVolume(ctx, backend.Mutation{Scope: scope, Key: "k-vol-2", Fingerprint: "fp-vol-2"}, volReq)
@@ -526,7 +544,7 @@ func exerciseEC2(ctx context.Context, t *testing.T, set backend.Set, account res
 		t.Fatalf("released address: %v", err)
 	}
 
-	src, err := set.Compute.CreateVolume(ctx, backend.Mutation{Scope: scope, Key: "k-snap-src", Fingerprint: "fp-snap-src"}, volReq)
+	src, err := set.Compute.CreateVolume(ctx, mut("k-snap-src", "fp-snap-src"), volReq)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -536,7 +554,8 @@ func exerciseEC2(ctx context.Context, t *testing.T, set backend.Set, account res
 	snap, err := set.Compute.CreateSnapshot(ctx, backend.Mutation{Scope: scope, Key: "k-snap", Fingerprint: "fp-snap"}, resource.CreateSnapshotRequest{
 		VolumeID: src.Items[0].ID, Description: "daily",
 	})
-	if err != nil || snap.Items[0].VolumeID != src.Items[0].ID || snap.Items[0].State != resource.SnapshotPending || snap.Items[0].VolumeSize != src.Items[0].SizeGiB {
+	if err != nil || snap.Items[0].VolumeID != src.Items[0].ID ||
+		snap.Items[0].State != resource.SnapshotPending || snap.Items[0].VolumeSize != src.Items[0].SizeGiB {
 		t.Fatalf("snapshot: %v %+v", err, snap.Items)
 	}
 	snapOp, err := set.Compute.GetOperation(ctx, scope, snap.Operation.ID)

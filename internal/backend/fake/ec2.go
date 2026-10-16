@@ -219,9 +219,12 @@ func (c compute) AttachVolume(ctx context.Context, m backend.Mutation, req resou
 	return acc, nil
 }
 
-func (c compute) DetachVolume(ctx context.Context, m backend.Mutation, req resource.DetachVolumeRequest) (resource.Accepted[resource.VolumeAttachment], error) {
+func (c compute) DetachVolume(
+	ctx context.Context, m backend.Mutation, req resource.DetachVolumeRequest,
+) (resource.Accepted[resource.VolumeAttachment], error) {
+	var zero resource.Accepted[resource.VolumeAttachment]
 	if err := ctx.Err(); err != nil {
-		return resource.Accepted[resource.VolumeAttachment]{}, err
+		return zero, err
 	}
 	c.w.mu.Lock()
 	defer c.w.mu.Unlock()
@@ -231,21 +234,21 @@ func (c compute) DetachVolume(ctx context.Context, m backend.Mutation, req resou
 	}
 	vol, ok := c.w.vol[req.VolumeID]
 	if !ok || vol.OwnerID != m.Account {
-		return resource.Accepted[resource.VolumeAttachment]{}, resource.NotFound(resource.KindVolume, req.VolumeID.String())
+		return zero, resource.NotFound(resource.KindVolume, req.VolumeID.String())
 	}
 	inst, bind, found := c.w.bindOfVolume(m.Account, vol.ID)
 	if !found {
-		return resource.Accepted[resource.VolumeAttachment]{}, resource.Conflict(resource.KindVolume, vol.ID.String(), "volume is not in use")
+		return zero, resource.Conflict(resource.KindVolume, vol.ID.String(), "volume is not in use")
 	}
 	next, _, err := backend.DropBind(*inst, vol.ID)
 	if err != nil {
-		return resource.Accepted[resource.VolumeAttachment]{}, err
+		return zero, err
 	}
 	if !req.InstanceID.IsZero() && req.InstanceID != bind.InstanceID {
-		return resource.Accepted[resource.VolumeAttachment]{}, resource.AttachmentNotFound(vol.ID)
+		return zero, resource.AttachmentNotFound(vol.ID)
 	}
 	if req.Device != "" && req.Device != bind.Device {
-		return resource.Accepted[resource.VolumeAttachment]{}, resource.AttachmentNotFound(vol.ID)
+		return zero, resource.AttachmentNotFound(vol.ID)
 	}
 	prevVol := *vol
 	prevBlocks := inst.BlockDevices
@@ -253,11 +256,14 @@ func (c compute) DetachVolume(ctx context.Context, m backend.Mutation, req resou
 	vol.State = resource.VolumeAvailable
 	vol.InstanceID = resource.InstanceID{}
 	vol.Device = ""
-	op, err := c.w.newOp(m.Account, resource.ServiceCompute, resource.ActionDetachVolume, []resource.Ref{inst.ID.Ref()}, func(time.Time) {})
+	op, err := c.w.newOp(
+		m.Account, resource.ServiceCompute, resource.ActionDetachVolume,
+		[]resource.Ref{inst.ID.Ref()}, func(time.Time) {},
+	)
 	if err != nil {
 		*vol = prevVol
 		inst.BlockDevices = prevBlocks
-		return resource.Accepted[resource.VolumeAttachment]{}, err
+		return zero, err
 	}
 	item := resource.VolumeAttachment{
 		VolumeID: vol.ID, OwnerID: vol.OwnerID, InstanceID: bind.InstanceID, Device: bind.Device,
@@ -268,7 +274,9 @@ func (c compute) DetachVolume(ctx context.Context, m backend.Mutation, req resou
 	return acc, nil
 }
 
-func (w *World) bindOfVolume(account resource.AccountID, id resource.VolumeID) (*resource.Instance, backend.VolumeBind, bool) {
+func (w *World) bindOfVolume(
+	account resource.AccountID, id resource.VolumeID,
+) (*resource.Instance, backend.VolumeBind, bool) {
 	for _, inst := range w.inst {
 		if inst.OwnerID != account {
 			continue

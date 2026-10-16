@@ -35,7 +35,8 @@ func DropBind(inst resource.Instance, id resource.VolumeID) (resource.Instance, 
 		return resource.Instance{}, VolumeBind{}, resource.Conflict(resource.KindVolume, id.String(), "volume is not in use")
 	}
 	if bind.Boot {
-		return resource.Instance{}, VolumeBind{}, resource.Conflict(resource.KindVolume, id.String(), "volume is the root device")
+		return resource.Instance{}, VolumeBind{}, resource.Conflict(
+			resource.KindVolume, id.String(), "volume is the root device")
 	}
 	blocks := make([]resource.BlockDevice, 0, len(inst.BlockDevices)-1)
 	for _, block := range inst.BlockDevices {

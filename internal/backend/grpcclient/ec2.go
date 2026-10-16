@@ -254,48 +254,51 @@ func (c computeClient) AttachVolume(ctx context.Context, m backend.Mutation, req
 	return resource.Accepted[resource.Volume]{Operation: op, Items: []resource.Volume{vol}}, nil
 }
 
-func (c computeClient) DetachVolume(ctx context.Context, m backend.Mutation, req resource.DetachVolumeRequest) (resource.Accepted[resource.VolumeAttachment], error) {
+func (c computeClient) DetachVolume(
+	ctx context.Context, m backend.Mutation, req resource.DetachVolumeRequest,
+) (resource.Accepted[resource.VolumeAttachment], error) {
+	var zero resource.Accepted[resource.VolumeAttachment]
 	projectID := project(m.Account)
 	vol, err := c.getVolume(ctx, projectID, req.VolumeID.String())
 	if err != nil {
-		return resource.Accepted[resource.VolumeAttachment]{}, err
+		return zero, err
 	}
 	if !req.InstanceID.IsZero() && !vol.InstanceID.IsZero() && req.InstanceID != vol.InstanceID {
-		return resource.Accepted[resource.VolumeAttachment]{}, resource.AttachmentNotFound(vol.ID)
+		return zero, resource.AttachmentNotFound(vol.ID)
 	}
 	instID := req.InstanceID
 	if instID.IsZero() {
 		instID = vol.InstanceID
 	}
 	if instID.IsZero() {
-		return resource.Accepted[resource.VolumeAttachment]{}, resource.Conflict(resource.KindVolume, vol.ID.String(), "volume is not in use")
+		return zero, resource.Conflict(resource.KindVolume, vol.ID.String(), "volume is not in use")
 	}
 	instName := instanceName(projectID, instID.String())
 	got, err := c.instances.GetInstance(ctx, &computev1.GetInstanceRequest{Name: instName})
 	if err != nil {
 		mapped := fromNamedRPC(instName, err)
 		if resource.CodeOf(mapped) == resource.CodeNotFound {
-			return resource.Accepted[resource.VolumeAttachment]{}, resource.Conflict(resource.KindVolume, vol.ID.String(), "volume is not in use")
+			return zero, resource.Conflict(resource.KindVolume, vol.ID.String(), "volume is not in use")
 		}
-		return resource.Accepted[resource.VolumeAttachment]{}, mapped
+		return zero, mapped
 	}
 	model, err := instanceModel(got)
 	if err != nil {
-		return resource.Accepted[resource.VolumeAttachment]{}, err
+		return zero, err
 	}
 	bind, bound := backend.BindOf(model, vol.ID)
 	if bound && bind.Boot {
 		// instance.proto requires one boot entry. EC2 would allow this detach after stop.
-		return resource.Accepted[resource.VolumeAttachment]{}, resource.Conflict(resource.KindVolume, vol.ID.String(), "volume is the root device")
+		return zero, resource.Conflict(resource.KindVolume, vol.ID.String(), "volume is the root device")
 	}
 	if bound && !req.InstanceID.IsZero() && req.InstanceID != bind.InstanceID {
-		return resource.Accepted[resource.VolumeAttachment]{}, resource.AttachmentNotFound(vol.ID)
+		return zero, resource.AttachmentNotFound(vol.ID)
 	}
 	if bound && req.Device != "" && req.Device != bind.Device {
-		return resource.Accepted[resource.VolumeAttachment]{}, resource.AttachmentNotFound(vol.ID)
+		return zero, resource.AttachmentNotFound(vol.ID)
 	}
 	if !bound && req.InstanceID.IsZero() {
-		return resource.Accepted[resource.VolumeAttachment]{}, resource.Conflict(resource.KindVolume, vol.ID.String(), "volume is not in use")
+		return zero, resource.Conflict(resource.KindVolume, vol.ID.String(), "volume is not in use")
 	}
 	// The row may already be clear. Naming the instance still updates it, so the same request id replays.
 	device := req.Device
@@ -311,14 +314,14 @@ func (c computeClient) DetachVolume(ctx context.Context, m backend.Mutation, req
 		volumes = append(volumes, v)
 	}
 	if protoBootCount(volumes) != 1 {
-		return resource.Accepted[resource.VolumeAttachment]{}, resource.Conflict(resource.KindVolume, vol.ID.String(), "volume is the root device")
+		return zero, resource.Conflict(resource.KindVolume, vol.ID.String(), "volume is the root device")
 	}
 	labels, err := withInternalLabels(model.Tags, map[string]string{
 		labelAction:      resource.ActionDetachVolume.String(),
 		labelFingerprint: clip(m.Fingerprint, 63),
 	})
 	if err != nil {
-		return resource.Accepted[resource.VolumeAttachment]{}, err
+		return zero, err
 	}
 	updated, err := c.instances.UpdateInstance(ctx, &computev1.UpdateInstanceRequest{
 		RequestId:  requestUUID(m.Key, "detach"),
@@ -334,13 +337,13 @@ func (c computeClient) DetachVolume(ctx context.Context, m backend.Mutation, req
 		// The volume was read above, so a not-found from that replay attempt
 		// is the not-in-use conflict.
 		if !bound && resource.CodeOf(err) == resource.CodeNotFound {
-			return resource.Accepted[resource.VolumeAttachment]{}, resource.Conflict(resource.KindVolume, vol.ID.String(), "volume is not in use")
+			return zero, resource.Conflict(resource.KindVolume, vol.ID.String(), "volume is not in use")
 		}
-		return resource.Accepted[resource.VolumeAttachment]{}, err
+		return zero, err
 	}
 	op, err := operationFrom(updated, resource.ServiceCompute)
 	if err != nil {
-		return resource.Accepted[resource.VolumeAttachment]{}, err
+		return zero, err
 	}
 	op.Action = resource.ActionDetachVolume
 	op.Targets = []resource.Ref{instID.Ref()}
