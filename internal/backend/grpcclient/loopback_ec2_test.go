@@ -475,6 +475,19 @@ func (w *loopWorld) labelsOf(id string) map[string]string {
 	return maps.Clone(w.groupLabels[id])
 }
 
+func (w *loopWorld) labelsForList(id string) map[string]string {
+	labels := w.labelsOf(id)
+	if !w.omitIngressLabelsOnList {
+		return labels
+	}
+	for key := range labels {
+		if strings.HasPrefix(key, labelIngressPrefix) {
+			delete(labels, key)
+		}
+	}
+	return labels
+}
+
 func groupMaskHas(paths []string, path string) bool {
 	if len(paths) == 0 {
 		return true

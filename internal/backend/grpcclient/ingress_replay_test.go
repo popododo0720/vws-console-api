@@ -103,8 +103,7 @@ func TestAuthorizeReplayDoesNotRebuildRules(t *testing.T) {
 	ctx := t.Context()
 	account, scope := replayAccount(t)
 	group := replayGroup(ctx, t, set, scope, "10.6.0.0/16", "k-vpc-rebuild", "k-sg-rebuild")
-	opened, err := authorizeTCP(ctx, set, scope, "k-auth", "fp-auth", group, 22, "10.0.0.0/16")
-	if err != nil {
+	if _, err := authorizeTCP(ctx, set, scope, "k-auth", "fp-auth", group, 22, "10.0.0.0/16"); err != nil {
 		t.Fatal(err)
 	}
 	writes := loop.specUpdateCount()
@@ -125,30 +124,35 @@ func TestAuthorizeReplayDoesNotRebuildRules(t *testing.T) {
 	})
 	loop.saveGroup(stored)
 	again, err := authorizeTCP(ctx, set, scope, "k-auth", "fp-auth", group, 22, "10.0.0.0/16")
-	if err != nil || again.Operation.ID != opened.Operation.ID {
-		t.Fatalf("replay: %v op %s want %s", err, again.Operation.ID, opened.Operation.ID)
+	if resource.CodeOf(err) != resource.CodeIdempotencyMismatch {
+		t.Fatalf("changed rules: %v op %s", err, again.Operation.ID)
 	}
 	if got := loop.specUpdateCount(); got != writes {
 		t.Fatalf("replay rewrote rules (%d spec updates, was %d)", got, writes)
 	}
 	held, ok := loop.group(id, account)
-	if !ok || !rulePort(held.Rules, 9) {
-		t.Fatalf("replay dropped the concurrent rule %+v", held.Rules)
+	if !ok || !rulePort(held.Rules, 9) || !rulePort(held.Rules, 22) {
+		t.Fatalf("replay changed the stored rules %+v", held.Rules)
 	}
 }
 
-func TestAuthorizeRetriesAStaleGroup(t *testing.T) {
+func TestAuthorizeReplaysWhenTheListMissesTheLabel(t *testing.T) {
 	set, loop := startLoopWorld(t)
-	loop.clash = 1
 	ctx := t.Context()
-	_, scope := replayAccount(t)
-	group := replayGroup(ctx, t, set, scope, "10.7.0.0/16", "k-vpc-clash", "k-sg-clash")
+	account, scope := replayAccount(t)
+	group := replayGroup(ctx, t, set, scope, "10.7.0.0/16", "k-vpc-miss", "k-sg-miss")
 	opened, err := authorizeTCP(ctx, set, scope, "k-auth", "fp-auth", group, 22, "10.0.0.0/16")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !rulePort(opened.Items[0].Rules, 22) || !rulePort(opened.Items[0].Rules, 9) {
-		t.Fatalf("stale retry stored %+v", opened.Items[0].Rules)
+	loop.omitIngressLabelsOnList = true
+	again, err := authorizeTCP(ctx, set, scope, "k-auth", "fp-auth", group, 22, "10.0.0.0/16")
+	if err != nil || again.Operation.ID != opened.Operation.ID {
+		t.Fatalf("missed list: %v op %s want %s", err, again.Operation.ID, opened.Operation.ID)
+	}
+	held, ok := loop.group(group.String(), account)
+	if !ok || len(held.Rules) != 1 || !rulePort(held.Rules, 22) {
+		t.Fatalf("missed list stored %+v", held.Rules)
 	}
 }
 
@@ -193,13 +197,83 @@ func TestReplayRequestComparesFingerprint(t *testing.T) {
 	if status.Code(err) != codes.Aborted {
 		t.Fatalf("different fingerprint: %v", err)
 	}
-	same, err := srv.UpdateSecurityGroup(ctx, groupUpdate(name, requestID, "aaaaaaaaaaaaaaaa", 80))
+	_, err = srv.UpdateSecurityGroup(ctx, groupUpdate(name, requestID, "aaaaaaaaaaaaaaaa", 80))
+	if status.Code(err) != codes.Aborted {
+		t.Fatalf("different rules: %v", err)
+	}
+	same, err := srv.UpdateSecurityGroup(ctx, groupUpdate(name, requestID, "aaaaaaaaaaaaaaaa", 22))
 	if err != nil || same.GetName() != first.GetName() {
-		t.Fatalf("same fingerprint: %v %s", err, same.GetName())
+		t.Fatalf("same body: %v %s", err, same.GetName())
 	}
 	held, ok := w.group(id.String(), account)
 	if !ok || len(held.Rules) != 1 || held.Rules[0].FromPort != 22 {
 		t.Fatalf("replay applied a new body %+v", held.Rules)
+	}
+}
+
+func TestReplayRejectsALabelsOnlyBody(t *testing.T) {
+	account, _ := replayAccount(t)
+	vpc, err := resource.Parse[resource.VpcID]("vpc-01234567")
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := resource.Parse[resource.SecurityGroupID]("sg-01234567")
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := newLoopWorld(backend.Set{}, time.Unix(1_700_000_000, 0).UTC())
+	w.saveGroup(resource.SecurityGroup{ID: id, OwnerID: account, Name: "web", VpcID: vpc})
+	srv := &groupSrv{w: w}
+	name := securityGroupName(project(account), vpc.String(), id.String())
+	ctx := t.Context()
+	const requestID = "11111111-1111-4111-8111-111111111111"
+	if _, err := srv.UpdateSecurityGroup(ctx, groupUpdate(name, requestID, "aaaaaaaaaaaaaaaa", 22)); err != nil {
+		t.Fatal(err)
+	}
+	again := groupUpdate(name, requestID, "aaaaaaaaaaaaaaaa", 22)
+	again.UpdateMask = &fieldmaskpb.FieldMask{Paths: []string{"labels"}}
+	again.SecurityGroup.Spec = nil
+	if _, err := srv.UpdateSecurityGroup(ctx, again); status.Code(err) != codes.Aborted {
+		t.Fatalf("labels only: %v", err)
+	}
+	held, ok := w.group(id.String(), account)
+	if !ok || len(held.Rules) != 1 || held.Rules[0].FromPort != 22 {
+		t.Fatalf("labels only wrote %+v", held.Rules)
+	}
+}
+
+func TestEmptyEtagDoesNotCompareAndSwap(t *testing.T) {
+	account, _ := replayAccount(t)
+	vpc, err := resource.Parse[resource.VpcID]("vpc-01234567")
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := resource.Parse[resource.SecurityGroupID]("sg-01234567")
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := newLoopWorld(backend.Set{}, time.Unix(1_700_000_000, 0).UTC())
+	w.saveGroup(resource.SecurityGroup{ID: id, OwnerID: account, Name: "web", VpcID: vpc})
+	srv := &groupSrv{w: w}
+	name := securityGroupName(project(account), vpc.String(), id.String())
+	ctx := t.Context()
+	if _, err := srv.UpdateSecurityGroup(ctx, groupUpdate(
+		name, "22222222-2222-4222-8222-222222222222", "aaaaaaaaaaaaaaaa", 22,
+	)); err != nil {
+		t.Fatal(err)
+	}
+	got, err := srv.GetSecurityGroup(ctx, &networkv1.GetSecurityGroupRequest{Name: name})
+	if err != nil || got.GetEtag() != "" {
+		t.Fatalf("etag %q err %v", got.GetEtag(), err)
+	}
+	if _, err := srv.UpdateSecurityGroup(ctx, groupUpdate(
+		name, "33333333-3333-4333-8333-333333333333", "bbbbbbbbbbbbbbbb", 80,
+	)); err != nil {
+		t.Fatalf("later update: %v", err)
+	}
+	held, ok := w.group(id.String(), account)
+	if !ok || len(held.Rules) != 1 || held.Rules[0].FromPort != 80 {
+		t.Fatalf("later update left %+v", held.Rules)
 	}
 }
 
