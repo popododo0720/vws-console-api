@@ -222,21 +222,26 @@ func (c computeClient) AttachVolume(ctx context.Context, m backend.Mutation, req
 	if err != nil {
 		return resource.Accepted[resource.Volume]{}, fromNamedRPC(instName, err)
 	}
+	model, err := instanceModel(inst)
+	if err != nil {
+		return resource.Accepted[resource.Volume]{}, err
+	}
 	volumes := append([]*computev1.VolumeAttachment{}, inst.GetSpec().GetVolumes()...)
 	volumes = append(volumes, &computev1.VolumeAttachment{
 		Volume:     volumeName(projectID, req.VolumeID.String()),
 		DeviceName: req.Device,
 	})
+	labels, err := instanceUpdateLabels(model, inst.GetLabels(), resource.ActionAttachVolume, m.Fingerprint)
+	if err != nil {
+		return resource.Accepted[resource.Volume]{}, err
+	}
 	updated, err := c.instances.UpdateInstance(ctx, &computev1.UpdateInstanceRequest{
 		RequestId:  requestUUID(m.Key, "attach"),
 		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.volumes", "labels"}},
 		Instance: &computev1.Instance{
-			Name: instanceName(projectID, req.InstanceID.String()),
-			Labels: map[string]string{
-				labelAction:      resource.ActionAttachVolume.String(),
-				labelFingerprint: clip(m.Fingerprint, 63),
-			},
-			Spec: &computev1.InstanceSpec{Volumes: volumes},
+			Name:   instanceName(projectID, req.InstanceID.String()),
+			Labels: labels,
+			Spec:   &computev1.InstanceSpec{Volumes: volumes},
 		},
 	})
 	if err := rpcErr(updated, err); err != nil {
@@ -263,52 +268,153 @@ func (c computeClient) DetachVolume(
 	if err != nil {
 		return zero, err
 	}
-	if !req.InstanceID.IsZero() && !vol.InstanceID.IsZero() && req.InstanceID != vol.InstanceID {
-		return zero, resource.AttachmentNotFound(vol.ID)
-	}
-	instID := req.InstanceID
-	if instID.IsZero() {
-		instID = vol.InstanceID
-	}
-	if instID.IsZero() {
-		return zero, resource.Conflict(resource.KindVolume, vol.ID.String(), "volume is not in use")
-	}
-	instName := instanceName(projectID, instID.String())
-	got, err := c.instances.GetInstance(ctx, &computev1.GetInstanceRequest{Name: instName})
-	if err != nil {
-		mapped := fromNamedRPC(instName, err)
-		if resource.CodeOf(mapped) == resource.CodeNotFound {
-			return zero, resource.Conflict(resource.KindVolume, vol.ID.String(), "volume is not in use")
-		}
-		return zero, mapped
-	}
-	model, err := instanceModel(got)
+	got, model, bind, bound, err := c.detachBind(ctx, projectID, vol, req.InstanceID)
 	if err != nil {
 		return zero, err
-	}
-	bind, bound := backend.BindOf(model, vol.ID)
-	if bound && bind.Boot {
-		// instance.proto requires one boot entry. EC2 would allow this detach after stop.
-		return zero, resource.Conflict(resource.KindVolume, vol.ID.String(), "volume is the root device")
-	}
-	if bound && !req.InstanceID.IsZero() && req.InstanceID != bind.InstanceID {
-		return zero, resource.AttachmentNotFound(vol.ID)
-	}
-	if bound && req.Device != "" && req.Device != bind.Device {
-		return zero, resource.AttachmentNotFound(vol.ID)
 	}
 	if !bound && req.InstanceID.IsZero() {
 		return zero, resource.Conflict(resource.KindVolume, vol.ID.String(), "volume is not in use")
 	}
-	// The row may already be clear. Naming the instance still updates it, so the same request id replays.
-	device := req.Device
-	if bound {
-		device = bind.Device
-		instID = bind.InstanceID
+	if !bound && !req.InstanceID.IsZero() {
+		// The named instance is not the spec that holds this volume.
+		// A different spec still does: the attachment id is wrong.
+		// Neither spec does: the same request id may still be in flight.
+		elsewhere, scanErr := c.volumeBoundElsewhere(ctx, projectID, vol.ID, req.InstanceID)
+		if scanErr != nil {
+			return zero, scanErr
+		}
+		if elsewhere {
+			return zero, resource.AttachmentNotFound(vol.ID)
+		}
+		acc, callErr := c.writeDetach(ctx, m, vol, got, model, backend.VolumeBind{
+			InstanceID: req.InstanceID, Device: req.Device,
+		}, false)
+		if callErr != nil {
+			return zero, callErr
+		}
+		// A label-only update completes immediately. That is not a detach.
+		// The in-flight operation from the first request is still running.
+		if acc.Operation.State != resource.OperationRunning {
+			return zero, resource.Conflict(resource.KindVolume, vol.ID.String(), "volume is not in use")
+		}
+		return acc, nil
 	}
+	if !req.InstanceID.IsZero() && req.InstanceID != bind.InstanceID {
+		return zero, resource.AttachmentNotFound(vol.ID)
+	}
+	if req.Device != "" && req.Device != bind.Device {
+		return zero, resource.AttachmentNotFound(vol.ID)
+	}
+	if bind.Boot {
+		// instance.proto requires one boot entry. EC2 would allow this detach after stop.
+		return zero, resource.Conflict(resource.KindVolume, vol.ID.String(), "volume is the root device")
+	}
+	return c.writeDetach(ctx, m, vol, got, model, bind, true)
+}
+
+// detachBind finds the instance spec that names the volume.
+// status.instance is only a hint. The spec is the attachment.
+func (c computeClient) detachBind(
+	ctx context.Context, projectID string, vol resource.Volume, want resource.InstanceID,
+) (*computev1.Instance, resource.Instance, backend.VolumeBind, bool, error) {
+	if !want.IsZero() {
+		got, model, err := c.detachInstance(ctx, projectID, want)
+		if err != nil {
+			if resource.CodeOf(err) != resource.CodeNotFound {
+				return nil, resource.Instance{}, backend.VolumeBind{}, false, err
+			}
+			onSpec, scanErr := c.volumeBoundElsewhere(ctx, projectID, vol.ID, want)
+			if scanErr != nil {
+				return nil, resource.Instance{}, backend.VolumeBind{}, false, scanErr
+			}
+			if onSpec || !vol.InstanceID.IsZero() {
+				return nil, resource.Instance{}, backend.VolumeBind{}, false, resource.AttachmentNotFound(vol.ID)
+			}
+			return nil, resource.Instance{}, backend.VolumeBind{}, false, resource.Conflict(
+				resource.KindVolume, vol.ID.String(), "volume is not in use")
+		}
+		if bind, ok := backend.BindOf(model, vol.ID); ok {
+			return got, model, bind, true, nil
+		}
+		return got, model, backend.VolumeBind{}, false, nil
+	}
+	if !vol.InstanceID.IsZero() {
+		got, model, err := c.detachInstance(ctx, projectID, vol.InstanceID)
+		if err != nil && resource.CodeOf(err) != resource.CodeNotFound {
+			return nil, resource.Instance{}, backend.VolumeBind{}, false, err
+		}
+		if err == nil {
+			if bind, ok := backend.BindOf(model, vol.ID); ok {
+				return got, model, bind, true, nil
+			}
+		}
+	}
+	return c.findVolumeBind(ctx, projectID, vol.ID)
+}
+
+func (c computeClient) detachInstance(
+	ctx context.Context, projectID string, id resource.InstanceID,
+) (*computev1.Instance, resource.Instance, error) {
+	name := instanceName(projectID, id.String())
+	got, err := c.instances.GetInstance(ctx, &computev1.GetInstanceRequest{Name: name})
+	if err != nil {
+		return nil, resource.Instance{}, fromNamedRPC(name, err)
+	}
+	model, err := instanceModel(got)
+	if err != nil {
+		return nil, resource.Instance{}, err
+	}
+	return got, model, nil
+}
+
+// findVolumeBind pages the caller's instances until one spec names id.
+func (c computeClient) findVolumeBind(
+	ctx context.Context, projectID string, id resource.VolumeID,
+) (*computev1.Instance, resource.Instance, backend.VolumeBind, bool, error) {
+	token := ""
+	for page := 0; page < 50; page++ {
+		out, err := c.instances.ListInstances(ctx, &computev1.ListInstancesRequest{
+			Parent: instanceParent(projectID), PageSize: 100, PageToken: token,
+		})
+		if err != nil {
+			return nil, resource.Instance{}, backend.VolumeBind{}, false, fromRPC(err)
+		}
+		for _, item := range out.GetInstances() {
+			model, err := instanceModel(item)
+			if err != nil {
+				return nil, resource.Instance{}, backend.VolumeBind{}, false, err
+			}
+			if bind, ok := backend.BindOf(model, id); ok {
+				return item, model, bind, true, nil
+			}
+		}
+		token = out.GetNextPageToken()
+		if token == "" {
+			break
+		}
+	}
+	return nil, resource.Instance{}, backend.VolumeBind{}, false, nil
+}
+
+// volumeBoundElsewhere reports whether a spec other than skip names id.
+func (c computeClient) volumeBoundElsewhere(
+	ctx context.Context, projectID string, id resource.VolumeID, skip resource.InstanceID,
+) (bool, error) {
+	_, model, _, ok, err := c.findVolumeBind(ctx, projectID, id)
+	if err != nil || !ok {
+		return false, err
+	}
+	return model.ID != skip, nil
+}
+
+func (c computeClient) writeDetach(
+	ctx context.Context, m backend.Mutation, vol resource.Volume,
+	got *computev1.Instance, model resource.Instance, bind backend.VolumeBind, drop bool,
+) (resource.Accepted[resource.VolumeAttachment], error) {
+	var zero resource.Accepted[resource.VolumeAttachment]
 	volumes := make([]*computev1.VolumeAttachment, 0, len(got.GetSpec().GetVolumes()))
 	for _, v := range got.GetSpec().GetVolumes() {
-		if bound && lastSegment(v.GetVolume()) == vol.ID.String() && !v.GetBoot() && v.GetDeviceName() != "boot" {
+		if drop && lastSegment(v.GetVolume()) == vol.ID.String() && !v.GetBoot() && v.GetDeviceName() != "boot" {
 			continue
 		}
 		volumes = append(volumes, v)
@@ -316,10 +422,7 @@ func (c computeClient) DetachVolume(
 	if protoBootCount(volumes) != 1 {
 		return zero, resource.Conflict(resource.KindVolume, vol.ID.String(), "volume is the root device")
 	}
-	labels, err := withInternalLabels(model.Tags, map[string]string{
-		labelAction:      resource.ActionDetachVolume.String(),
-		labelFingerprint: clip(m.Fingerprint, 63),
-	})
+	labels, err := instanceUpdateLabels(model, got.GetLabels(), resource.ActionDetachVolume, m.Fingerprint)
 	if err != nil {
 		return zero, err
 	}
@@ -327,7 +430,7 @@ func (c computeClient) DetachVolume(
 		RequestId:  requestUUID(m.Key, "detach"),
 		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.volumes", "labels"}},
 		Instance: &computev1.Instance{
-			Name:   instName,
+			Name:   got.GetName(),
 			Labels: labels,
 			Spec:   &computev1.InstanceSpec{Volumes: volumes},
 		},
@@ -336,7 +439,7 @@ func (c computeClient) DetachVolume(
 		// An empty spec diff has no volume id for the loopback to pass on.
 		// The volume was read above, so a not-found from that replay attempt
 		// is the not-in-use conflict.
-		if !bound && resource.CodeOf(err) == resource.CodeNotFound {
+		if !drop && resource.CodeOf(err) == resource.CodeNotFound {
 			return zero, resource.Conflict(resource.KindVolume, vol.ID.String(), "volume is not in use")
 		}
 		return zero, err
@@ -346,14 +449,31 @@ func (c computeClient) DetachVolume(
 		return zero, err
 	}
 	op.Action = resource.ActionDetachVolume
-	op.Targets = []resource.Ref{instID.Ref()}
+	op.Targets = []resource.Ref{bind.InstanceID.Ref()}
 	return resource.Accepted[resource.VolumeAttachment]{
 		Operation: op,
 		Items: []resource.VolumeAttachment{{
-			VolumeID: vol.ID, OwnerID: vol.OwnerID, InstanceID: instID, Device: device,
+			VolumeID: vol.ID, OwnerID: vol.OwnerID, InstanceID: bind.InstanceID, Device: bind.Device,
 			Status: resource.AttachmentDetaching, AttachTime: vol.CreateTime,
 		}},
 	}, nil
+}
+
+// instanceUpdateLabels replaces an instance label map without dropping the
+// image, reservation, or launch labels instanceModel and RunInstances stored.
+func instanceUpdateLabels(
+	inst resource.Instance, raw map[string]string, action resource.Action, fingerprint string,
+) (map[string]string, error) {
+	extra := map[string]string{
+		labelAction:      action.String(),
+		labelFingerprint: clip(fingerprint, 63),
+		labelImage:       inst.ImageID.String(),
+		labelReservation: inst.ReservationID.String(),
+	}
+	if launch := raw[labelLaunch]; launch != "" {
+		extra[labelLaunch] = launch
+	}
+	return withInternalLabels(inst.Tags, extra)
 }
 
 func protoBootCount(vols []*computev1.VolumeAttachment) int {

@@ -240,15 +240,17 @@ func (c compute) DetachVolume(
 	if !found {
 		return zero, resource.Conflict(resource.KindVolume, vol.ID.String(), "volume is not in use")
 	}
-	next, _, err := backend.DropBind(*inst, vol.ID)
-	if err != nil {
-		return zero, err
-	}
+	// A wrong instance or device is not this attachment, including on the root
+	// device. DropBind would otherwise report the root conflict first.
 	if !req.InstanceID.IsZero() && req.InstanceID != bind.InstanceID {
 		return zero, resource.AttachmentNotFound(vol.ID)
 	}
 	if req.Device != "" && req.Device != bind.Device {
 		return zero, resource.AttachmentNotFound(vol.ID)
+	}
+	next, _, err := backend.DropBind(*inst, vol.ID)
+	if err != nil {
+		return zero, err
 	}
 	prevVol := *vol
 	prevBlocks := inst.BlockDevices
