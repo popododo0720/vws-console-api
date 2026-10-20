@@ -186,3 +186,21 @@ func TestPolicyTagNeedsListPermission(t *testing.T) {
 	}
 	has(t, call(t, h, bob, sigv4.ServiceIAM, tag), http.StatusOK, `<TagPolicyResponse>`)
 }
+
+func TestListPolicyTagsParameterErrors(t *testing.T) {
+	h, _, _, root := harness(t)
+	createTagPolicy(t, h, root)
+	base := url.Values{"Action": {"ListPolicyTags"}, "PolicyArn": {policyTagARN}}
+	bad := url.Values{}
+	for k, v := range base {
+		bad[k] = v
+	}
+	bad.Set("Marker", "bad\x01marker")
+	has(t, call(t, h, root, sigv4.ServiceIAM, bad), http.StatusBadRequest, `<Code>InvalidInput</Code>`)
+	unsupported := url.Values{}
+	for k, v := range base {
+		unsupported[k] = v
+	}
+	unsupported.Set("PathPrefix", "/")
+	has(t, call(t, h, root, sigv4.ServiceIAM, unsupported), http.StatusBadRequest, `<Code>InvalidInput</Code>`)
+}

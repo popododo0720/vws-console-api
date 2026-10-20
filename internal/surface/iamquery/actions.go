@@ -448,13 +448,16 @@ func iamActions() map[string]spec {
 			},
 		},
 		"ListPolicyTags": {
-			params: []string{"PolicyArn"}, list: true, needsAdmin: true, resource: policyARN,
+			params: []string{"PolicyArn", "Marker", "MaxItems"}, needsAdmin: true, resource: policyARN,
 			run: func(h *handler, c *exchange) (any, error) {
 				if err := requirePolicyArn(c, h, "iam:ListPolicyTags"); err != nil {
 					return nil, err
 				}
 				maxItems, err := maxItemsParam(c)
 				if err != nil {
+					return nil, err
+				}
+				if err := markerParam(c); err != nil {
 					return nil, err
 				}
 				page, err := h.cfg.Admin.ListPolicyTags(

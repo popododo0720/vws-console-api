@@ -120,3 +120,21 @@ func accountID(t *testing.T) resource.AccountID {
 	}
 	return a
 }
+
+// A policy ARN in another account does not exist for the caller, as in AWS.
+func TestPolicyTagOtherAccountIsNotFound(t *testing.T) {
+	c, s := harness(t)
+	admin := STSAdmin{Client: c}
+	other := "arn:vws:iam::210987654321:policy/tagged"
+	tags := []iam.Tag{{Key: "k", Value: "v"}}
+	if err := admin.TagPolicy(t.Context(), accountID(t), other, tags); resource.CodeOf(err) != resource.CodeNotFound {
+		t.Fatalf("cross-account tag mapped to %v", err)
+	}
+	page, err := admin.ListPolicyTags(t.Context(), accountID(t), other, "", 0)
+	if resource.CodeOf(err) != resource.CodeNotFound {
+		t.Fatalf("cross-account list mapped to %v (%+v)", err, page)
+	}
+	if len(s.tagPolicy) != 0 || len(s.listTags) != 0 {
+		t.Fatalf("a cross-account call reached vws-iam: %v %v", s.tagPolicy, s.listTags)
+	}
+}

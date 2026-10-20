@@ -192,18 +192,25 @@ func (STSAdmin) DeleteLoginProfile(_ context.Context, _ resource.AccountID, _ st
 }
 
 // policyResource turns arn:vws:iam::{project}:policy{path}{name} into
-// projects/{project}/policies/{name}.
-func policyResource(arn string) (string, error) {
+// projects/{project}/policies/{name}. A policy in another account does not
+// exist for the caller, as in AWS.
+func policyResource(a resource.AccountID, arn string) (string, error) {
 	parts := strings.SplitN(arn, ":", 6)
 	if len(parts) != 6 || parts[0] != "arn" || parts[2] != "iam" || !strings.HasPrefix(parts[5], "policy") {
 		return "", resource.Invalid("policyArn", "not a policy ARN")
 	}
-	if _, err := resource.Parse[resource.AccountID](parts[4]); err != nil {
+	account, err := resource.Parse[resource.AccountID](parts[4])
+	if err != nil {
 		return "", resource.Invalid("policyArn", "not a policy ARN")
 	}
 	name := parts[5][strings.LastIndex(parts[5], "/")+1:]
 	if name == "" {
 		return "", resource.Invalid("policyArn", "not a policy ARN")
+	}
+	if account != a {
+		return "", &resource.Error{
+			Code: resource.CodeNotFound, Message: "Policy " + arn + " does not exist or is not attachable.",
+		}
 	}
 	return "projects/" + parts[4] + "/policies/" + name, nil
 }
@@ -223,8 +230,8 @@ func operationResult(op *longrunningpb.Operation) error {
 }
 
 // TagPolicy implements iam.Admin over PolicyService.TagPolicy.
-func (a STSAdmin) TagPolicy(ctx context.Context, _ resource.AccountID, arn string, tags []iam.Tag) error {
-	name, err := policyResource(arn)
+func (a STSAdmin) TagPolicy(ctx context.Context, account resource.AccountID, arn string, tags []iam.Tag) error {
+	name, err := policyResource(account, arn)
 	if err != nil {
 		return err
 	}
@@ -240,8 +247,8 @@ func (a STSAdmin) TagPolicy(ctx context.Context, _ resource.AccountID, arn strin
 }
 
 // UntagPolicy implements iam.Admin over PolicyService.UntagPolicy.
-func (a STSAdmin) UntagPolicy(ctx context.Context, _ resource.AccountID, arn string, keys []string) error {
-	name, err := policyResource(arn)
+func (a STSAdmin) UntagPolicy(ctx context.Context, account resource.AccountID, arn string, keys []string) error {
+	name, err := policyResource(account, arn)
 	if err != nil {
 		return err
 	}
@@ -255,9 +262,9 @@ func (a STSAdmin) UntagPolicy(ctx context.Context, _ resource.AccountID, arn str
 // ListPolicyTags implements iam.Admin over PolicyService.ListPolicyTags. The
 // AWS Marker is the proto page token: both are opaque to the caller.
 func (a STSAdmin) ListPolicyTags(
-	ctx context.Context, _ resource.AccountID, arn, marker string, maxItems int,
+	ctx context.Context, account resource.AccountID, arn, marker string, maxItems int,
 ) (iam.TagPage, error) {
-	name, err := policyResource(arn)
+	name, err := policyResource(account, arn)
 	if err != nil {
 		return iam.TagPage{}, err
 	}

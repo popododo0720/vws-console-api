@@ -157,3 +157,18 @@ func maxItemsParam(c *exchange) (int, error) {
 	}
 	return n, nil
 }
+
+// markerParam checks ListPolicyTags Marker: 1 or more characters in the
+// AWS range U+0020 to U+00FF.
+func markerParam(c *exchange) error {
+	marker := c.form("Marker")
+	if marker == "" {
+		return nil
+	}
+	for _, r := range marker {
+		if r < 0x20 || r > 0xFF {
+			return resource.Invalid("Marker", "The Marker value is invalid.")
+		}
+	}
+	return nil
+}
