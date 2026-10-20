@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	longrunningpb "cloud.google.com/go/longrunning/autogen/longrunningpb"
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -35,6 +36,7 @@ var authTime = time.Date(2026, 10, 14, 7, 0, 0, 0, time.UTC)
 type server struct {
 	iamv1.UnimplementedAuthServiceServer
 	iamv1.UnimplementedTokenServiceServer
+	iamv1.UnimplementedPolicyServiceServer
 	mu          sync.Mutex
 	authn       []*iamv1.AuthenticateRequest
 	authz       []*iamv1.AuthorizeRequest
@@ -52,6 +54,57 @@ type server struct {
 	sessions    sessionServer // nil: Login, ValidateSession, Logout are unimplemented
 	// sent records every request message, to prove what left console-api.
 	sent []proto.Message
+	// Policy tag calls.
+	tagPolicy    []*iamv1.TagPolicyRequest
+	untagPolicy  []*iamv1.UntagPolicyRequest
+	listTags     []*iamv1.ListPolicyTagsRequest
+	tagErr       error
+	tagPolicyRes *longrunningpb.Operation
+	listTagsRes  *iamv1.ListPolicyTagsResponse
+}
+
+func (s *server) TagPolicy(ctx context.Context, req *iamv1.TagPolicyRequest) (*longrunningpb.Operation, error) {
+	if err := s.enter(ctx); err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.tagPolicy = append(s.tagPolicy, req)
+	if s.tagErr != nil {
+		return nil, s.tagErr
+	}
+	if s.tagPolicyRes != nil {
+		return s.tagPolicyRes, nil
+	}
+	return &longrunningpb.Operation{Done: true}, nil
+}
+
+func (s *server) UntagPolicy(ctx context.Context, req *iamv1.UntagPolicyRequest) (*longrunningpb.Operation, error) {
+	if err := s.enter(ctx); err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.untagPolicy = append(s.untagPolicy, req)
+	if s.tagErr != nil {
+		return nil, s.tagErr
+	}
+	return &longrunningpb.Operation{Done: true}, nil
+}
+
+func (s *server) ListPolicyTags(
+	ctx context.Context, req *iamv1.ListPolicyTagsRequest,
+) (*iamv1.ListPolicyTagsResponse, error) {
+	if err := s.enter(ctx); err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.listTags = append(s.listTags, req)
+	if s.tagErr != nil {
+		return nil, s.tagErr
+	}
+	return s.listTagsRes, nil
 }
 
 func (s *server) enter(ctx context.Context) error {
@@ -139,6 +192,7 @@ func harness(t *testing.T) (*Client, *server) {
 	}))
 	iamv1.RegisterAuthServiceServer(g, s)
 	iamv1.RegisterTokenServiceServer(g, s)
+	iamv1.RegisterPolicyServiceServer(g, s)
 	go func() { _ = g.Serve(lis) }()
 	t.Cleanup(g.Stop)
 	conn, err := grpc.NewClient("passthrough:///bufnet",

@@ -70,6 +70,9 @@ type roleRec struct {
 type policyRec struct {
 	ManagedPolicy
 	parsed []policyStatement
+	// tags are the AWS tags of the policy, keyed by tag key. AWS policy tag
+	// keys are case sensitive, so the map is not folded.
+	tags map[string]string
 }
 
 func notFound(what, name string) error {
@@ -527,7 +530,7 @@ func (f *Fake) CreatePolicy(_ context.Context, a resource.AccountID, name, path,
 	}
 	now := f.now()
 	p := ManagedPolicy{Name: name, Path: path, ID: randID("ANPA", 17), ARN: arn, Description: description, Document: document, Created: now, Updated: now}
-	st.policies[arn] = &policyRec{ManagedPolicy: p, parsed: parsed}
+	st.policies[arn] = &policyRec{ManagedPolicy: p, parsed: parsed, tags: map[string]string{}}
 	return p, nil
 }
 
@@ -578,6 +581,100 @@ func (f *Fake) DeletePolicy(_ context.Context, a resource.AccountID, arn string)
 	}
 	delete(st.policies, arn)
 	return nil
+}
+
+// --- policy tags ---
+
+// TagPolicy implements Admin. A named key is overwritten; the whole request
+// fails and stores nothing when a tag is invalid or the policy would keep
+// more than 50 tags.
+func (f *Fake) TagPolicy(_ context.Context, a resource.AccountID, arn string, tags []Tag) error {
+	if len(tags) < 1 || len(tags) > MaxTags {
+		return validationError("tags", "Member must have length between 1 and 50")
+	}
+	if err := ValidateTags(tags); err != nil {
+		return err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	p, err := f.account(a).policy(arn)
+	if err != nil {
+		return err
+	}
+	merged := make(map[string]string, len(p.tags)+len(tags))
+	for k, v := range p.tags {
+		merged[k] = v
+	}
+	for _, tag := range tags {
+		merged[tag.Key] = tag.Value
+	}
+	if len(merged) > MaxTags {
+		return quota("Cannot exceed quota for TagsPerPolicy: 50")
+	}
+	p.tags = merged
+	p.Updated = f.now()
+	return nil
+}
+
+// UntagPolicy implements Admin. A key that is not attached is ignored.
+func (f *Fake) UntagPolicy(_ context.Context, a resource.AccountID, arn string, keys []string) error {
+	if len(keys) < 1 || len(keys) > MaxTags {
+		return validationError("tagKeys", "Member must have length between 1 and 50")
+	}
+	for _, key := range keys {
+		if err := ValidateTagKey(key); err != nil {
+			return err
+		}
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	p, err := f.account(a).policy(arn)
+	if err != nil {
+		return err
+	}
+	for _, key := range keys {
+		delete(p.tags, key)
+	}
+	p.Updated = f.now()
+	return nil
+}
+
+// ListPolicyTags implements Admin. Tags are sorted by key and paged with an
+// opaque marker, as in AWS.
+func (f *Fake) ListPolicyTags(
+	_ context.Context, a resource.AccountID, arn, marker string, maxItems int,
+) (TagPage, error) {
+	if maxItems <= 0 {
+		maxItems = DefaultTagPageSize
+	}
+	if maxItems > MaxTagPageSize {
+		maxItems = MaxTagPageSize
+	}
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	p, err := f.account(a).policy(arn)
+	if err != nil {
+		return TagPage{}, err
+	}
+	keys := make([]string, 0, len(p.tags))
+	for key := range p.tags {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	start := 0
+	if marker != "" {
+		start = sort.Search(len(keys), func(i int) bool { return keys[i] > marker })
+	}
+	end := min(start+maxItems, len(keys))
+	page := TagPage{Tags: []Tag{}}
+	for _, key := range keys[start:end] {
+		page.Tags = append(page.Tags, Tag{Key: key, Value: p.tags[key]})
+	}
+	if end < len(keys) {
+		page.IsTruncated = true
+		page.Marker = keys[end-1]
+	}
+	return page, nil
 }
 
 func (st *store) holderOf(kind Entity, name string) (*holder, error) {

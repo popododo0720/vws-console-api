@@ -43,12 +43,14 @@ type Options struct {
 	Backoff time.Duration
 }
 
-// Client implements the per-request half of iam.Client and AssumeRole.
+// Client implements the per-request half of iam.Client, AssumeRole and the
+// policy tag calls of iam.Admin.
 type Client struct {
-	auth    iamv1.AuthServiceClient
-	tokens  iamv1.TokenServiceClient
-	backoff time.Duration
-	close   func() error
+	auth     iamv1.AuthServiceClient
+	tokens   iamv1.TokenServiceClient
+	policies iamv1.PolicyServiceClient
+	backoff  time.Duration
+	close    func() error
 }
 
 // Dial connects to vws-iam at target. The connection is lazy; the first call
@@ -69,7 +71,11 @@ func New(conn grpc.ClientConnInterface, o Options) *Client {
 	if o.Backoff <= 0 {
 		o.Backoff = 50 * time.Millisecond
 	}
-	return &Client{auth: iamv1.NewAuthServiceClient(conn), tokens: iamv1.NewTokenServiceClient(conn), backoff: o.Backoff, close: func() error { return nil }}
+	return &Client{
+		auth: iamv1.NewAuthServiceClient(conn), tokens: iamv1.NewTokenServiceClient(conn),
+		policies: iamv1.NewPolicyServiceClient(conn), backoff: o.Backoff,
+		close: func() error { return nil },
+	}
 }
 
 // Close closes a connection Dial opened.

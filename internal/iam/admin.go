@@ -129,6 +129,10 @@ type Admin interface {
 	DeleteInlinePolicy(ctx context.Context, a resource.AccountID, kind Entity, name, policy string) error
 	ListInlinePolicies(ctx context.Context, a resource.AccountID, kind Entity, name string) ([]string, error)
 
+	TagPolicy(ctx context.Context, a resource.AccountID, arn string, tags []Tag) error
+	UntagPolicy(ctx context.Context, a resource.AccountID, arn string, keys []string) error
+	ListPolicyTags(ctx context.Context, a resource.AccountID, arn, marker string, maxItems int) (TagPage, error)
+
 	AssumeRole(ctx context.Context, caller Principal, roleARN, session string, duration time.Duration) (AssumedRole, error)
 }
 

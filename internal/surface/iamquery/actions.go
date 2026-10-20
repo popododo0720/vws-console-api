@@ -14,7 +14,10 @@ import (
 // spec is one action: the form keys it reads, the ARN it is authorized on
 // (nil means "*"), and what it does.
 type spec struct {
-	params     []string
+	params []string
+	// prefixes are form key prefixes the action reads (the indexed members of
+	// an AWS list, such as Tags.member.1.Key). The action validates them.
+	prefixes   []string
 	list       bool // also accepts Marker, MaxItems and PathPrefix
 	needsAdmin bool
 	// public skips Authorize, as AWS does for sts:GetCallerIdentity. The
@@ -30,6 +33,11 @@ func (s spec) allows(k string) bool {
 	}
 	for _, p := range s.params {
 		if p == k {
+			return true
+		}
+	}
+	for _, p := range s.prefixes {
+		if strings.HasPrefix(k, p) {
 			return true
 		}
 	}
@@ -403,6 +411,61 @@ func iamActions() map[string]spec {
 		"DeletePolicy": admin([]string{"PolicyArn"}, policyARN, func(h *handler, c *exchange) (any, error) {
 			return nil, h.cfg.Admin.DeletePolicy(c.r.Context(), c.caller.Account, c.form("PolicyArn"))
 		}),
+		"TagPolicy": {
+			params: []string{"PolicyArn"}, prefixes: []string{"Tags.member."}, needsAdmin: true,
+			resource: policyARN,
+			run: func(h *handler, c *exchange) (any, error) {
+				if err := requirePolicyArn(c, h, "iam:TagPolicy"); err != nil {
+					return nil, err
+				}
+				tags, err := parseTagMembers(c)
+				if err != nil {
+					return nil, err
+				}
+				if err := iam.ValidateTags(tags); err != nil {
+					return nil, err
+				}
+				return nil, h.cfg.Admin.TagPolicy(c.r.Context(), c.caller.Account, c.form("PolicyArn"), tags)
+			},
+		},
+		"UntagPolicy": {
+			params: []string{"PolicyArn"}, prefixes: []string{"TagKeys.member."}, needsAdmin: true,
+			resource: policyARN,
+			run: func(h *handler, c *exchange) (any, error) {
+				if err := requirePolicyArn(c, h, "iam:UntagPolicy"); err != nil {
+					return nil, err
+				}
+				keys, err := parseTagKeys(c)
+				if err != nil {
+					return nil, err
+				}
+				for _, key := range keys {
+					if err := iam.ValidateTagKey(key); err != nil {
+						return nil, err
+					}
+				}
+				return nil, h.cfg.Admin.UntagPolicy(c.r.Context(), c.caller.Account, c.form("PolicyArn"), keys)
+			},
+		},
+		"ListPolicyTags": {
+			params: []string{"PolicyArn"}, list: true, needsAdmin: true, resource: policyARN,
+			run: func(h *handler, c *exchange) (any, error) {
+				if err := requirePolicyArn(c, h, "iam:ListPolicyTags"); err != nil {
+					return nil, err
+				}
+				maxItems, err := maxItemsParam(c)
+				if err != nil {
+					return nil, err
+				}
+				page, err := h.cfg.Admin.ListPolicyTags(
+					c.r.Context(), c.caller.Account, c.form("PolicyArn"), c.form("Marker"), maxItems)
+				out := tagsResult{Tags: []tagXML{}, IsTruncated: page.IsTruncated, Marker: page.Marker}
+				for _, tag := range page.Tags {
+					out.Tags = append(out.Tags, tagXML{Key: tag.Key, Value: tag.Value})
+				}
+				return out, err
+			},
+		},
 	}
 	for kind, e := range map[iam.Entity]struct {
 		word, key string

@@ -2,6 +2,13 @@ package iamclient
 
 import (
 	"context"
+	"errors"
+	"strings"
+
+	"cloud.google.com/go/longrunning/autogen/longrunningpb"
+	"google.golang.org/grpc/status"
+
+	iamv1 "github.com/popododo0720/vws-proto/gen/go/vws/iam/v1"
 
 	"github.com/popododo0720/vws-console-api/internal/iam"
 	"github.com/popododo0720/vws-console-api/internal/resource"
@@ -182,4 +189,89 @@ func (STSAdmin) UpdateLoginProfile(_ context.Context, _ resource.AccountID, _, _
 // DeleteLoginProfile implements iam.Admin.
 func (STSAdmin) DeleteLoginProfile(_ context.Context, _ resource.AccountID, _ string) error {
 	return notServed("DeleteLoginProfile")
+}
+
+// policyResource turns arn:vws:iam::{project}:policy{path}{name} into
+// projects/{project}/policies/{name}.
+func policyResource(arn string) (string, error) {
+	parts := strings.SplitN(arn, ":", 6)
+	if len(parts) != 6 || parts[0] != "arn" || parts[2] != "iam" || !strings.HasPrefix(parts[5], "policy") {
+		return "", resource.Invalid("policyArn", "not a policy ARN")
+	}
+	if _, err := resource.Parse[resource.AccountID](parts[4]); err != nil {
+		return "", resource.Invalid("policyArn", "not a policy ARN")
+	}
+	name := parts[5][strings.LastIndex(parts[5], "/")+1:]
+	if name == "" {
+		return "", resource.Invalid("policyArn", "not a policy ARN")
+	}
+	return "projects/" + parts[4] + "/policies/" + name, nil
+}
+
+// operationResult maps a finished vws-iam operation to an error. vws-iam
+// answers IAM mutations synchronously, so a running operation is a fault.
+func operationResult(op *longrunningpb.Operation) error {
+	switch {
+	case op == nil:
+		return resource.Internal(errors.New("vws-iam returned no operation"))
+	case !op.GetDone():
+		return resource.Internal(errors.New("vws-iam returned a running operation"))
+	case op.GetError() != nil:
+		return authError(status.ErrorProto(op.GetError()))
+	}
+	return nil
+}
+
+// TagPolicy implements iam.Admin over PolicyService.TagPolicy.
+func (a STSAdmin) TagPolicy(ctx context.Context, _ resource.AccountID, arn string, tags []iam.Tag) error {
+	name, err := policyResource(arn)
+	if err != nil {
+		return err
+	}
+	req := &iamv1.TagPolicyRequest{Name: name, Tags: make([]*iamv1.Tag, 0, len(tags))}
+	for _, tag := range tags {
+		req.Tags = append(req.Tags, &iamv1.Tag{Key: tag.Key, Value: tag.Value})
+	}
+	op, err := call(ctx, a.policies.TagPolicy, req)
+	if err != nil {
+		return authError(err)
+	}
+	return operationResult(op)
+}
+
+// UntagPolicy implements iam.Admin over PolicyService.UntagPolicy.
+func (a STSAdmin) UntagPolicy(ctx context.Context, _ resource.AccountID, arn string, keys []string) error {
+	name, err := policyResource(arn)
+	if err != nil {
+		return err
+	}
+	op, err := call(ctx, a.policies.UntagPolicy, &iamv1.UntagPolicyRequest{Name: name, TagKeys: keys})
+	if err != nil {
+		return authError(err)
+	}
+	return operationResult(op)
+}
+
+// ListPolicyTags implements iam.Admin over PolicyService.ListPolicyTags. The
+// AWS Marker is the proto page token: both are opaque to the caller.
+func (a STSAdmin) ListPolicyTags(
+	ctx context.Context, _ resource.AccountID, arn, marker string, maxItems int,
+) (iam.TagPage, error) {
+	name, err := policyResource(arn)
+	if err != nil {
+		return iam.TagPage{}, err
+	}
+	req := &iamv1.ListPolicyTagsRequest{Name: name, PageToken: marker}
+	if maxItems > 0 {
+		req.PageSize = int32(maxItems) //nolint:gosec // the surface bounds MaxItems to 1..1000.
+	}
+	resp, err := retry(ctx, a.backoff, a.policies.ListPolicyTags, req)
+	if err != nil {
+		return iam.TagPage{}, authError(err)
+	}
+	page := iam.TagPage{Tags: []iam.Tag{}, IsTruncated: resp.GetNextPageToken() != "", Marker: resp.GetNextPageToken()}
+	for _, tag := range resp.GetTags() {
+		page.Tags = append(page.Tags, iam.Tag{Key: tag.GetKey(), Value: tag.GetValue()})
+	}
+	return page, nil
 }
