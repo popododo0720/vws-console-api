@@ -3,6 +3,7 @@ package iam
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/popododo0720/vws-console-api/internal/resource"
 )
@@ -158,5 +159,42 @@ func TestFakePolicyTagPages(t *testing.T) {
 	}
 	if strings.Join(keys, "") != "abcde" {
 		t.Fatalf("paged keys %v", keys)
+	}
+}
+
+// AWS changes a policy's UpdateDate only when a new version is created, not
+// when a tag is added or removed.
+func TestFakePolicyTagsKeepUpdateDate(t *testing.T) {
+	ctx := t.Context()
+	a := account(t)
+	f := NewFake()
+	at := now
+	f.Now = func() time.Time { return at }
+	p, err := f.CreatePolicy(ctx, a, "dates", "/", describeOnly, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	created := p.Updated
+	at = at.Add(time.Hour)
+	if err := f.TagPolicy(ctx, a, p.ARN, []Tag{{Key: "env", Value: "prod"}}); err != nil {
+		t.Fatal(err)
+	}
+	after, err := f.GetPolicy(ctx, a, p.ARN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !after.Updated.Equal(created) {
+		t.Fatalf("tagging moved UpdateDate to %v, want %v", after.Updated, created)
+	}
+	at = at.Add(time.Hour)
+	if err := f.UntagPolicy(ctx, a, p.ARN, []string{"env"}); err != nil {
+		t.Fatal(err)
+	}
+	after, err = f.GetPolicy(ctx, a, p.ARN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !after.Updated.Equal(created) {
+		t.Fatalf("untagging moved UpdateDate to %v, want %v", after.Updated, created)
 	}
 }

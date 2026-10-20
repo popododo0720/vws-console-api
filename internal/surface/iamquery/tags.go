@@ -54,7 +54,8 @@ func requirePolicyArn(c *exchange, h *handler, action string) error {
 		return resource.Invalid("policyArn", "1 validation error detected: Value '"+arn+
 			"' at 'policyArn' failed to satisfy constraint: Member must have length between 20 and 2048")
 	}
-	if action == "iam:TagPolicy" || action == "iam:UntagPolicy" {
+	// AWS requires the list permission only to add tags, not to remove them.
+	if action == "iam:TagPolicy" {
 		if err := iam.Check(c.r.Context(), h.cfg.Authorizer, c.caller, "iam:ListPolicyTags", arn); err != nil {
 			return err
 		}
@@ -62,9 +63,13 @@ func requirePolicyArn(c *exchange, h *handler, action string) error {
 	return nil
 }
 
-// parseTagMembers reads Tags.member.N.Key/Value into request order.
+// parseTagMembers reads Tags.member.N.Key/Value into request order. Key and
+// Value are required members: a missing one is a validation failure, while an
+// empty Value that is present is the AWS empty tag value.
 func parseTagMembers(c *exchange) ([]iam.Tag, error) {
+	type members struct{ key, value bool }
 	byIndex := map[int]*iam.Tag{}
+	present := map[int]*members{}
 	for key := range c.r.Form {
 		if !strings.HasPrefix(key, "Tags.member.") {
 			continue
@@ -79,11 +84,12 @@ func parseTagMembers(c *exchange) ([]iam.Tag, error) {
 		}
 		if byIndex[index] == nil {
 			byIndex[index] = &iam.Tag{}
+			present[index] = &members{}
 		}
 		if m[2] == "Key" {
-			byIndex[index].Key = c.form(key)
+			byIndex[index].Key, present[index].key = c.form(key), true
 		} else {
-			byIndex[index].Value = c.form(key)
+			byIndex[index].Value, present[index].value = c.form(key), true
 		}
 	}
 	indexes := make([]int, 0, len(byIndex))
@@ -91,15 +97,21 @@ func parseTagMembers(c *exchange) ([]iam.Tag, error) {
 		indexes = append(indexes, index)
 	}
 	sort.Ints(indexes)
+	if len(indexes) == 0 {
+		return nil, nullMember("tags")
+	}
+	if len(indexes) > iam.MaxTags {
+		return nil, badMember("tags", "Member must have length less than or equal to 50")
+	}
 	tags := make([]iam.Tag, 0, len(indexes))
 	for _, index := range indexes {
+		if !present[index].key {
+			return nil, nullMember("tags.member." + strconv.Itoa(index) + ".Key")
+		}
+		if !present[index].value {
+			return nil, nullMember("tags.member." + strconv.Itoa(index) + ".Value")
+		}
 		tags = append(tags, *byIndex[index])
-	}
-	switch {
-	case len(tags) == 0:
-		return nil, nullMember("tags")
-	case len(tags) > iam.MaxTags:
-		return nil, badMember("tags", "Member must have length less than or equal to 50")
 	}
 	return tags, nil
 }

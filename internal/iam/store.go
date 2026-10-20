@@ -612,7 +612,6 @@ func (f *Fake) TagPolicy(_ context.Context, a resource.AccountID, arn string, ta
 		return quota("Cannot exceed quota for TagsPerPolicy: 50")
 	}
 	p.tags = merged
-	p.Updated = f.now()
 	return nil
 }
 
@@ -635,7 +634,6 @@ func (f *Fake) UntagPolicy(_ context.Context, a resource.AccountID, arn string, 
 	for _, key := range keys {
 		delete(p.tags, key)
 	}
-	p.Updated = f.now()
 	return nil
 }
 

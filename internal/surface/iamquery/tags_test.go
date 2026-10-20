@@ -180,6 +180,13 @@ func TestPolicyTagNeedsListPermission(t *testing.T) {
 		"Tags.member.1.Key": {"k"}, "Tags.member.1.Value": {"v"},
 	}
 	has(t, call(t, h, bob, sigv4.ServiceIAM, tag), http.StatusForbidden, `<Code>AccessDenied</Code>`)
+	// Removing tags needs iam:UntagPolicy only; the list permission is not required.
+	if err := f.PutInlinePolicy(ctx, root.Account, iam.EntityUser, "bob", "untag",
+		`{"Statement":[{"Effect":"Allow","Action":["iam:UntagPolicy"],"Resource":"*"}]}`); err != nil {
+		t.Fatal(err)
+	}
+	untag := url.Values{"Action": {"UntagPolicy"}, "PolicyArn": {policyTagARN}, "TagKeys.member.1": {"k"}}
+	has(t, call(t, h, bob, sigv4.ServiceIAM, untag), http.StatusOK, `<UntagPolicyResponse>`)
 	if err := f.PutInlinePolicy(ctx, root.Account, iam.EntityUser, "bob", "tag",
 		`{"Statement":[{"Effect":"Allow","Action":["iam:TagPolicy","iam:ListPolicyTags"],"Resource":"*"}]}`); err != nil {
 		t.Fatal(err)
@@ -203,4 +210,22 @@ func TestListPolicyTagsParameterErrors(t *testing.T) {
 	}
 	unsupported.Set("PathPrefix", "/")
 	has(t, call(t, h, root, sigv4.ServiceIAM, unsupported), http.StatusBadRequest, `<Code>InvalidInput</Code>`)
+}
+
+func TestTagPolicyRequiresTagMembers(t *testing.T) {
+	h, _, _, root := harness(t)
+	createTagPolicy(t, h, root)
+	form := url.Values{"Action": {"TagPolicy"}, "PolicyArn": {policyTagARN}}
+	form.Set("Tags.member.1.Key", "only-key")
+	has(t, call(t, h, root, sigv4.ServiceIAM, form), http.StatusBadRequest, `<Code>ValidationError</Code>`)
+	form = url.Values{"Action": {"TagPolicy"}, "PolicyArn": {policyTagARN}}
+	form.Set("Tags.member.1.Value", "only-value")
+	has(t, call(t, h, root, sigv4.ServiceIAM, form), http.StatusBadRequest, `<Code>ValidationError</Code>`)
+	// An empty value that is present is the AWS empty tag value.
+	form = url.Values{"Action": {"TagPolicy"}, "PolicyArn": {policyTagARN}}
+	form.Set("Tags.member.1.Key", "empty")
+	form.Set("Tags.member.1.Value", "")
+	has(t, call(t, h, root, sigv4.ServiceIAM, form), http.StatusOK, `<TagPolicyResponse>`)
+	has(t, call(t, h, root, sigv4.ServiceIAM, url.Values{"Action": {"ListPolicyTags"}, "PolicyArn": {policyTagARN}}),
+		http.StatusOK, `<Tags><member><Key>empty</Key><Value></Value></member></Tags>`)
 }
