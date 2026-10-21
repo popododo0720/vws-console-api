@@ -22,9 +22,6 @@ const (
 	maxMaxSession        = 43200
 )
 
-// serviceLinkedRolePath is the path AWS gives a role that a service owns.
-const serviceLinkedRolePath = "/aws-service-role/"
-
 var (
 	entityName  = regexp.MustCompile(`^[\w+=,.@-]{1,64}$`)
 	groupName   = regexp.MustCompile(`^[\w+=,.@-]{1,128}$`)
@@ -488,11 +485,8 @@ func (f *Fake) UpdateRoleDescription(_ context.Context, a resource.AccountID, na
 	if r == nil {
 		return Role{}, notFound("role", name)
 	}
-	if strings.HasPrefix(r.Path, serviceLinkedRolePath) {
-		return Role{}, &resource.Error{
-			Code: resource.CodeConflict, Field: "UnmodifiableEntity",
-			Message: "The role " + name + " is a service-linked role and only the service that depends on it can modify it.",
-		}
+	if IsServiceLinkedRole(r.Path) {
+		return Role{}, UnmodifiableRole(name)
 	}
 	r.Description = description
 	return r.Role, nil
