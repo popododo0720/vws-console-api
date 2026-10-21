@@ -363,6 +363,16 @@ func iamActions() map[string]spec {
 			}
 			return out, err
 		}),
+		"UpdateAssumeRolePolicy": admin(
+			[]string{"RoleName", "PolicyDocument"}, roleARN,
+			func(h *handler, c *exchange) (any, error) {
+				if err := required(c, "RoleName", "PolicyDocument"); err != nil {
+					return nil, err
+				}
+				return nil, h.cfg.Admin.UpdateAssumeRolePolicy(
+					c.r.Context(), c.caller.Account, c.form("RoleName"), c.form("PolicyDocument"))
+			},
+		),
 		"DeleteRole": admin([]string{"RoleName"}, roleARN, func(h *handler, c *exchange) (any, error) {
 			return nil, h.cfg.Admin.DeleteRole(c.r.Context(), c.caller.Account, c.form("RoleName"))
 		}),

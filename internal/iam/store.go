@@ -488,6 +488,23 @@ func (f *Fake) ListRoles(_ context.Context, a resource.AccountID, prefix string)
 	return out, nil
 }
 
+// UpdateAssumeRolePolicy implements Admin.
+func (f *Fake) UpdateAssumeRolePolicy(_ context.Context, a resource.AccountID, name, document string) error {
+	trust, err := parsePolicy(document, true)
+	if err != nil {
+		return err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	r := f.account(a).roles[name]
+	if r == nil {
+		return notFound("role", name)
+	}
+	r.TrustPolicy = document
+	r.trust = trust
+	return nil
+}
+
 // DeleteRole implements Admin.
 func (f *Fake) DeleteRole(_ context.Context, a resource.AccountID, name string) error {
 	f.mu.Lock()

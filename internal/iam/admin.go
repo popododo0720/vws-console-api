@@ -114,6 +114,7 @@ type Admin interface {
 	CreateRole(ctx context.Context, a resource.AccountID, in RoleInput) (Role, error)
 	GetRole(ctx context.Context, a resource.AccountID, name string) (Role, error)
 	ListRoles(ctx context.Context, a resource.AccountID, pathPrefix string) ([]Role, error)
+	UpdateAssumeRolePolicy(ctx context.Context, a resource.AccountID, name, document string) error
 	DeleteRole(ctx context.Context, a resource.AccountID, name string) error
 
 	CreatePolicy(ctx context.Context, a resource.AccountID, name, path, document, description string) (ManagedPolicy, error)
