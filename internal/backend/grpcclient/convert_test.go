@@ -261,9 +261,8 @@ func TestInstanceStateMapping(t *testing.T) {
 		if obs != tc.obs || power != tc.power {
 			t.Fatalf("%s -> %s %s", tc.state, obs, power)
 		}
-		got, err := instanceStateOf(obs, power)
-		if err != nil || got != tc.state {
-			t.Fatalf("%s: %s %v", tc.state, got, err)
+		if got := instanceStateOf(obs, power); got != tc.state {
+			t.Fatalf("%s: %s", tc.state, got)
 		}
 	}
 }
