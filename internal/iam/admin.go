@@ -134,6 +134,12 @@ type Admin interface {
 	UntagPolicy(ctx context.Context, a resource.AccountID, arn string, keys []string) error
 	ListPolicyTags(ctx context.Context, a resource.AccountID, arn, marker string, maxItems int) (TagPage, error)
 
+	// The MFA device argument is the device serial number, the ARN the AWS
+	// Query API calls SerialNumber.
+	TagMFADevice(ctx context.Context, a resource.AccountID, serial string, tags []Tag) error
+	UntagMFADevice(ctx context.Context, a resource.AccountID, serial string, keys []string) error
+	ListMFADeviceTags(ctx context.Context, a resource.AccountID, serial, marker string, maxItems int) (TagPage, error)
+
 	AssumeRole(ctx context.Context, caller Principal, roleARN, session string, duration time.Duration) (AssumedRole, error)
 }
 

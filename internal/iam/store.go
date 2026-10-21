@@ -34,7 +34,17 @@ type store struct {
 	users    map[string]*userRec
 	groups   map[string]*groupRec
 	roles    map[string]*roleRec
-	policies map[string]*policyRec // by ARN
+	policies map[string]*policyRec    // by ARN
+	mfa      map[string]*mfaDeviceRec // by serial number
+}
+
+// mfaDeviceRec is a virtual MFA device in the fake. The device keeps its tags
+// only: the IAM Query surface has no action that manages devices yet, so the
+// tags are reachable only on a device added with AddMfaDevice.
+type mfaDeviceRec struct {
+	// tags are the AWS tags of the device, keyed by tag key. AWS tag keys are
+	// case sensitive for a virtual MFA device, so the map is not folded.
+	tags map[string]string
 }
 
 type holder struct {
@@ -126,10 +136,26 @@ func randSecret(n int) string {
 func (f *Fake) account(a resource.AccountID) *store {
 	st := f.accounts[a]
 	if st == nil {
-		st = &store{users: map[string]*userRec{}, groups: map[string]*groupRec{}, roles: map[string]*roleRec{}, policies: map[string]*policyRec{}}
+		st = &store{
+			users: map[string]*userRec{}, groups: map[string]*groupRec{}, roles: map[string]*roleRec{},
+			policies: map[string]*policyRec{}, mfa: map[string]*mfaDeviceRec{},
+		}
 		f.accounts[a] = st
 	}
 	return st
+}
+
+// AddMfaDevice registers a virtual MFA device so its tags can be managed, and
+// returns its serial number (the AWS SerialNumber). It is for tests and for a
+// fake seeded with the devices of an account: the IAM Query surface does not
+// create MFA devices yet.
+func (f *Fake) AddMfaDevice(a resource.AccountID, name string) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	st := f.account(a)
+	serial := iamARN(a, "mfa", "/", name)
+	st.mfa[serial] = &mfaDeviceRec{tags: map[string]string{}}
+	return serial
 }
 
 func iamARN(a resource.AccountID, kind, path, name string) string {
@@ -684,6 +710,111 @@ func (f *Fake) ListPolicyTags(
 	page := TagPage{Tags: []Tag{}}
 	for _, key := range keys[start:end] {
 		page.Tags = append(page.Tags, Tag{Key: key, Value: p.tags[key]})
+	}
+	if end < len(keys) {
+		page.IsTruncated = true
+		page.Marker = keys[end-1]
+	}
+	return page, nil
+}
+
+// --- virtual MFA device tags ---
+
+func mfaDeviceNotFound() error {
+	return &resource.Error{Code: resource.CodeNotFound, Message: "The specified MFA device does not exist."}
+}
+
+// mfaDevice returns the device with serial. The caller holds f.mu.
+func (st *store) mfaDevice(serial string) (*mfaDeviceRec, error) {
+	d := st.mfa[serial]
+	if d == nil {
+		return nil, mfaDeviceNotFound()
+	}
+	return d, nil
+}
+
+// TagMFADevice implements Admin. A named key is overwritten; the whole request
+// fails and stores nothing when a tag is invalid or the device would keep more
+// than 50 tags.
+func (f *Fake) TagMFADevice(_ context.Context, a resource.AccountID, serial string, tags []Tag) error {
+	if len(tags) < 1 || len(tags) > MaxTags {
+		return validationError("tags", "Member must have length between 1 and 50")
+	}
+	if err := ValidateTags(tags); err != nil {
+		return err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	d, err := f.account(a).mfaDevice(serial)
+	if err != nil {
+		return err
+	}
+	merged := make(map[string]string, len(d.tags)+len(tags))
+	for k, v := range d.tags {
+		merged[k] = v
+	}
+	for _, tag := range tags {
+		merged[tag.Key] = tag.Value
+	}
+	if len(merged) > MaxTags {
+		return quota("Cannot exceed quota for TagsPerMfaDevice: 50")
+	}
+	d.tags = merged
+	return nil
+}
+
+// UntagMFADevice implements Admin. A key that is not attached is ignored.
+func (f *Fake) UntagMFADevice(_ context.Context, a resource.AccountID, serial string, keys []string) error {
+	if len(keys) < 1 || len(keys) > MaxTags {
+		return validationError("tagKeys", "Member must have length between 1 and 50")
+	}
+	for _, key := range keys {
+		if err := ValidateTagKey(key); err != nil {
+			return err
+		}
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	d, err := f.account(a).mfaDevice(serial)
+	if err != nil {
+		return err
+	}
+	for _, key := range keys {
+		delete(d.tags, key)
+	}
+	return nil
+}
+
+// ListMFADeviceTags implements Admin. Tags are sorted by key and paged with an
+// opaque marker, as in AWS.
+func (f *Fake) ListMFADeviceTags(
+	_ context.Context, a resource.AccountID, serial, marker string, maxItems int,
+) (TagPage, error) {
+	if maxItems <= 0 {
+		maxItems = DefaultTagPageSize
+	}
+	if maxItems > MaxTagPageSize {
+		maxItems = MaxTagPageSize
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	d, err := f.account(a).mfaDevice(serial)
+	if err != nil {
+		return TagPage{}, err
+	}
+	keys := make([]string, 0, len(d.tags))
+	for key := range d.tags {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	start := 0
+	if marker != "" {
+		start = sort.Search(len(keys), func(i int) bool { return keys[i] > marker })
+	}
+	end := min(start+maxItems, len(keys))
+	page := TagPage{Tags: []Tag{}}
+	for _, key := range keys[start:end] {
+		page.Tags = append(page.Tags, Tag{Key: key, Value: d.tags[key]})
 	}
 	if end < len(keys) {
 		page.IsTruncated = true
