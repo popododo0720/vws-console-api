@@ -111,6 +111,11 @@ func (STSAdmin) ListRoles(_ context.Context, _ resource.AccountID, _ string) ([]
 	return nil, notServed("ListRoles")
 }
 
+// UpdateAssumeRolePolicy implements iam.Admin.
+func (STSAdmin) UpdateAssumeRolePolicy(_ context.Context, _ resource.AccountID, _, _ string) error {
+	return notServed("UpdateAssumeRolePolicy")
+}
+
 // DeleteRole implements iam.Admin.
 func (STSAdmin) DeleteRole(_ context.Context, _ resource.AccountID, _ string) error {
 	return notServed("DeleteRole")

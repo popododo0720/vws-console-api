@@ -104,6 +104,45 @@ func TestPolicyDocumentsAreURLEncoded(t *testing.T) {
 	has(t, res, http.StatusOK, `<Document>`+strings.ReplaceAll(url.QueryEscape(doc), "+", "%20")+`</Document>`, `<IsDefaultVersion>true</IsDefaultVersion>`)
 }
 
+func TestUpdateAssumeRolePolicy(t *testing.T) {
+	h, f, rec, root := harness(t)
+	ctx := t.Context()
+	oldTrust := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"sts:AssumeRole","Principal":"*"}]}`
+	newTrust := `{"Version":"2012-10-17","Statement":[` +
+		`{"Effect":"Allow","Action":"sts:AssumeRole",` +
+		`"Principal":{"AWS":"arn:vws:iam::123456789012:user/bob"}}]}`
+	roleIn := iam.RoleInput{Name: "ops", Path: "/", TrustPolicy: oldTrust}
+	if _, err := f.CreateRole(ctx, root.Account, roleIn); err != nil {
+		t.Fatal(err)
+	}
+	res := call(t, h, root, sigv4.ServiceIAM, url.Values{
+		"Action": {"UpdateAssumeRolePolicy"}, "RoleName": {"ops"}, "PolicyDocument": {newTrust},
+	})
+	has(t, res, http.StatusOK, `<UpdateAssumeRolePolicyResponse>`, `<ResponseMetadata><RequestId>`)
+	role, err := f.GetRole(ctx, root.Account, "ops")
+	if err != nil || role.TrustPolicy != newTrust {
+		t.Fatalf("stored trust policy %s, want %s: %v", role.TrustPolicy, newTrust, err)
+	}
+	want := "iam:UpdateAssumeRolePolicy arn:vws:iam::123456789012:role/ops"
+	if len(rec.seen) == 0 || rec.seen[len(rec.seen)-1] != want {
+		t.Errorf("authorized %v, want last %q", rec.seen, want)
+	}
+	res = call(t, h, root, sigv4.ServiceIAM, url.Values{
+		"Action": {"UpdateAssumeRolePolicy"}, "RoleName": {"ops"}, "PolicyDocument": {"{nope"},
+	})
+	has(t, res, http.StatusBadRequest, `<Code>MalformedPolicyDocument</Code>`)
+	res = call(t, h, root, sigv4.ServiceIAM, url.Values{
+		"Action": {"UpdateAssumeRolePolicy"}, "RoleName": {"none"}, "PolicyDocument": {newTrust},
+	})
+	has(t, res, http.StatusNotFound, `<Code>NoSuchEntity</Code>`)
+	big := `{"Statement":[{"Effect":"Allow","Action":"sts:AssumeRole",` +
+		`"Principal":"*","Sid":"` + strings.Repeat("a", 6200) + `"}]}`
+	res = call(t, h, root, sigv4.ServiceIAM, url.Values{
+		"Action": {"UpdateAssumeRolePolicy"}, "RoleName": {"ops"}, "PolicyDocument": {big},
+	})
+	has(t, res, http.StatusConflict, `<Code>LimitExceeded</Code>`)
+}
+
 func TestLimitedUserAndSTS(t *testing.T) {
 	h, f, rec, root := harness(t)
 	ctx := t.Context()

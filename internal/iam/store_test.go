@@ -148,6 +148,47 @@ func TestAssumeRole(t *testing.T) {
 	}
 }
 
+func TestUpdateAssumeRolePolicy(t *testing.T) {
+	ctx := t.Context()
+	a := account(t)
+	f := NewFake()
+	u, _ := f.CreateUser(ctx, a, "bob", "/")
+	eve, _ := f.CreateUser(ctx, a, "eve", "/")
+	oldTrust := `{"Version":"2012-10-17","Statement":[` +
+		`{"Effect":"Allow","Action":"sts:AssumeRole","Principal":{"AWS":"` + u.ARN + `"}}]}`
+	newTrust := `{"Version":"2012-10-17","Statement":[` +
+		`{"Effect":"Allow","Action":"sts:AssumeRole","Principal":{"AWS":"` + eve.ARN + `"}}]}`
+	r, err := f.CreateRole(ctx, a, RoleInput{Name: "ops", Path: "/", TrustPolicy: oldTrust})
+	if err != nil {
+		t.Fatal(err)
+	}
+	malformed := `{"Statement":[{"Effect":"Allow","Action":"sts:AssumeRole"}]}`
+	if err := f.UpdateAssumeRolePolicy(ctx, a, "ops", malformed); resource.CodeOf(err) != resource.CodeInvalidArgument {
+		t.Errorf("malformed trust policy: %v", err)
+	}
+	if got, _ := f.GetRole(ctx, a, "ops"); got.TrustPolicy != oldTrust {
+		t.Errorf("a malformed update changed the trust policy to %s", got.TrustPolicy)
+	}
+	if err := f.UpdateAssumeRolePolicy(ctx, a, "none", newTrust); resource.CodeOf(err) != resource.CodeNotFound {
+		t.Errorf("missing role: %v", err)
+	}
+	oversized := strings.Repeat("x", maxPolicyBytes+1)
+	if err := f.UpdateAssumeRolePolicy(ctx, a, "ops", oversized); resource.CodeOf(err) != resource.CodeResourceExhausted {
+		t.Errorf("oversized policy: %v", err)
+	}
+	must(t, f.UpdateAssumeRolePolicy(ctx, a, "ops", newTrust))
+	if got, _ := f.GetRole(ctx, a, "ops"); got.TrustPolicy != newTrust {
+		t.Fatalf("trust policy %s, want %s", got.TrustPolicy, newTrust)
+	}
+	if _, err := f.AssumeRole(ctx, Principal{Account: a, ARN: eve.ARN}, r.ARN, "s1", time.Hour); err != nil {
+		t.Errorf("new trusted principal: %v", err)
+	}
+	_, err = f.AssumeRole(ctx, Principal{Account: a, ARN: u.ARN}, r.ARN, "s2", time.Hour)
+	if resource.CodeOf(err) != resource.CodePermissionDenied {
+		t.Errorf("old trusted principal: %v", err)
+	}
+}
+
 func must(t *testing.T, err error) {
 	t.Helper()
 	if err != nil {
