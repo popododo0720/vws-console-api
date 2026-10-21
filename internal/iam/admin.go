@@ -2,7 +2,9 @@ package iam
 
 import (
 	"context"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/popododo0720/vws-console-api/internal/resource"
 )
@@ -50,6 +52,50 @@ type RoleInput struct {
 	MaxSessionDuration int
 }
 
+// RoleUpdate is what UpdateRole changes. A nil field is left alone.
+type RoleUpdate struct {
+	Description        *string
+	MaxSessionDuration *int
+}
+
+// MaxRoleDescription is AWS's limit on a role description.
+const MaxRoleDescription = 1000
+
+// ServiceLinkedRolePath is the path AWS reserves for service-linked roles.
+const ServiceLinkedRolePath = "/aws-service-role/"
+
+// ValidateRoleDescription reports a description over the AWS limit.
+func ValidateRoleDescription(description string) error {
+	if utf8.RuneCountInString(description) > MaxRoleDescription {
+		return resource.Invalid("description",
+			"1 validation error detected: Value at 'description' failed to satisfy constraint: "+
+				"Member must have length less than or equal to 1000")
+	}
+	return nil
+}
+
+// ValidateMaxSessionDuration reports a value outside the AWS range.
+func ValidateMaxSessionDuration(seconds int) error {
+	if seconds < defaultMaxSession || seconds > maxMaxSession {
+		return resource.Invalid("maxSessionDuration", "MaxSessionDuration must be between 3600 and 43200 seconds")
+	}
+	return nil
+}
+
+// IsServiceLinkedRole reports a path only the service that owns the role may
+// change.
+func IsServiceLinkedRole(path string) bool {
+	return strings.HasPrefix(path, ServiceLinkedRolePath)
+}
+
+// UnmodifiableRole reports a service-linked role as AWS UnmodifiableEntity.
+func UnmodifiableRole(name string) error {
+	return &resource.Error{
+		Code: resource.CodeConflict, Field: "UnmodifiableEntity",
+		Message: "The role " + name + " is a service-linked role and only the service that depends on it can modify it.",
+	}
+}
+
 // Role is an IAM role.
 type Role struct {
 	Name, Path, ID, ARN, TrustPolicy, Description string
@@ -85,9 +131,10 @@ type AssumedRole struct {
 
 // Admin is the IAM management API behind the IAM and STS Query surface. Every
 // call is scoped to one account. Errors are *resource.Error: NotFound,
-// AlreadyExists, Conflict (delete conflict), InvalidArgument (Field
-// "PolicyDocument" for a malformed policy), ResourceExhausted (a quota),
-// PermissionDenied (AssumeRole trust).
+// AlreadyExists, Conflict (delete conflict, or Field "UnmodifiableEntity" for
+// a service-linked role), InvalidArgument (Field "PolicyDocument" for a
+// malformed policy), ResourceExhausted (a quota), PermissionDenied (AssumeRole
+// trust).
 type Admin interface {
 	CreateUser(ctx context.Context, a resource.AccountID, name, path string) (User, error)
 	GetUser(ctx context.Context, a resource.AccountID, name string) (User, error)
@@ -114,6 +161,7 @@ type Admin interface {
 
 	CreateRole(ctx context.Context, a resource.AccountID, in RoleInput) (Role, error)
 	GetRole(ctx context.Context, a resource.AccountID, name string) (Role, error)
+	UpdateRole(ctx context.Context, a resource.AccountID, name string, in RoleUpdate) error
 	ListRoles(ctx context.Context, a resource.AccountID, pathPrefix string) ([]Role, error)
 	UpdateAssumeRolePolicy(ctx context.Context, a resource.AccountID, name, document string) error
 	DeleteRole(ctx context.Context, a resource.AccountID, name string) error

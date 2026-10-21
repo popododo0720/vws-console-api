@@ -51,9 +51,17 @@ type exchange struct {
 	service sigv4.Service
 	caller  resource.Caller
 	action  string
+	// resourceErr is set when the action's ARN cannot be computed. The
+	// request fails closed instead of authorizing on a guessed ARN.
+	resourceErr error
 }
 
 func (c *exchange) form(k string) string { return c.r.Form.Get(k) }
+
+func (c *exchange) present(k string) bool {
+	_, ok := c.r.Form[k]
+	return ok
+}
 
 func (h *handler) serve(w http.ResponseWriter, r *http.Request) {
 	c := &exchange{w: w, r: r, service: scopeService(r.Header.Get("Authorization"))}
@@ -105,6 +113,10 @@ func (h *handler) serve(w http.ResponseWriter, r *http.Request) {
 	arn := "*"
 	if spec.resource != nil {
 		arn = spec.resource(h, c)
+		if c.resourceErr != nil {
+			c.fail(c.resourceErr)
+			return
+		}
 	}
 	if !spec.public {
 		if err := iam.Check(r.Context(), h.cfg.Authorizer, c.caller, string(c.service)+":"+c.action, arn); err != nil {
@@ -225,6 +237,9 @@ func (c *exchange) wire(e *resource.Error) (int, string) {
 	case resource.CodeAlreadyExists:
 		return http.StatusConflict, "EntityAlreadyExists"
 	case resource.CodeConflict:
+		if e.Field == "UnmodifiableEntity" {
+			return http.StatusBadRequest, "UnmodifiableEntity"
+		}
 		return http.StatusConflict, "DeleteConflict"
 	case resource.CodeResourceExhausted:
 		return http.StatusConflict, "LimitExceeded"

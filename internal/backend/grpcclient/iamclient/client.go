@@ -1,6 +1,6 @@
 // Package iamclient is the vws-iam client: AuthService Authenticate and
-// Authorize, console sessions (Login, ValidateSession, Logout) and STS
-// AssumeRole over vws.iam.v1 gRPC (vws-proto v0.3.0).
+// Authorize, console sessions (Login, ValidateSession, Logout), STS
+// AssumeRole and role updates over vws.iam.v1 gRPC (vws-proto v0.3.0).
 package iamclient
 
 import (
@@ -43,13 +43,14 @@ type Options struct {
 	Backoff time.Duration
 }
 
-// Client implements the per-request half of iam.Client, AssumeRole and the
-// policy and virtual MFA device tag calls of iam.Admin.
+// Client implements the per-request half of iam.Client, AssumeRole, the
+// policy and virtual MFA device tag calls, and the role calls of iam.Admin.
 type Client struct {
 	auth       iamv1.AuthServiceClient
 	tokens     iamv1.TokenServiceClient
 	policies   iamv1.PolicyServiceClient
 	mfaDevices iamv1.MfaDeviceServiceClient
+	roles      iamv1.RoleServiceClient
 	backoff    time.Duration
 	close      func() error
 }
@@ -75,6 +76,7 @@ func New(conn grpc.ClientConnInterface, o Options) *Client {
 	return &Client{
 		auth: iamv1.NewAuthServiceClient(conn), tokens: iamv1.NewTokenServiceClient(conn),
 		policies: iamv1.NewPolicyServiceClient(conn), mfaDevices: iamv1.NewMfaDeviceServiceClient(conn),
+		roles:   iamv1.NewRoleServiceClient(conn),
 		backoff: o.Backoff, close: func() error { return nil },
 	}
 }
@@ -298,6 +300,9 @@ func authError(err error) error {
 	case codes.ResourceExhausted:
 		return &resource.Error{Code: resource.CodeResourceExhausted, Message: st.Message()}
 	default:
+		if aws == "UnmodifiableEntity" {
+			return &resource.Error{Code: resource.CodeConflict, Field: "UnmodifiableEntity", Message: st.Message()}
+		}
 		// Unavailable, deadline, internal: the surfaces answer "unavailable"
 		// without echoing vws-iam's message.
 		return fmt.Errorf("vws-iam: %w", errors.New(st.Code().String()))

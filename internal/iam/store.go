@@ -519,8 +519,8 @@ func (f *Fake) CreateRole(_ context.Context, a resource.AccountID, in RoleInput)
 	if maxSession == 0 {
 		maxSession = defaultMaxSession
 	}
-	if maxSession < defaultMaxSession || maxSession > maxMaxSession {
-		return Role{}, resource.Invalid("maxSessionDuration", "MaxSessionDuration must be between 3600 and 43200 seconds")
+	if err := ValidateMaxSessionDuration(maxSession); err != nil {
+		return Role{}, err
 	}
 	trust, err := parsePolicy(in.TrustPolicy, true)
 	if err != nil {
@@ -549,6 +549,36 @@ func (f *Fake) GetRole(_ context.Context, a resource.AccountID, name string) (Ro
 		return Role{}, notFound("role", name)
 	}
 	return r.Role, nil
+}
+
+// UpdateRole implements Admin.
+func (f *Fake) UpdateRole(_ context.Context, a resource.AccountID, name string, in RoleUpdate) error {
+	if in.Description != nil {
+		if err := ValidateRoleDescription(*in.Description); err != nil {
+			return err
+		}
+	}
+	if in.MaxSessionDuration != nil {
+		if err := ValidateMaxSessionDuration(*in.MaxSessionDuration); err != nil {
+			return err
+		}
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	r := f.account(a).roles[name]
+	if r == nil {
+		return notFound("role", name)
+	}
+	if IsServiceLinkedRole(r.Path) {
+		return UnmodifiableRole(name)
+	}
+	if in.Description != nil {
+		r.Description = *in.Description
+	}
+	if in.MaxSessionDuration != nil {
+		r.MaxSessionDuration = *in.MaxSessionDuration
+	}
+	return nil
 }
 
 // ListRoles implements Admin.
