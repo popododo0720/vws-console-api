@@ -37,6 +37,7 @@ type server struct {
 	iamv1.UnimplementedAuthServiceServer
 	iamv1.UnimplementedTokenServiceServer
 	iamv1.UnimplementedPolicyServiceServer
+	iamv1.UnimplementedRoleServiceServer
 	mu          sync.Mutex
 	authn       []*iamv1.AuthenticateRequest
 	authz       []*iamv1.AuthorizeRequest
@@ -64,6 +65,39 @@ type server struct {
 	getPolicy    []*iamv1.GetPolicyRequest
 	getPolicyRes *iamv1.Policy
 	getPolicyErr error
+	// Role calls.
+	getRole       []*iamv1.GetRoleRequest
+	getRoleRes    *iamv1.Role
+	getRoleErr    error
+	updateRole    []*iamv1.UpdateRoleRequest
+	updateRoleRes *longrunningpb.Operation
+	updateRoleErr error
+}
+
+func (s *server) GetRole(ctx context.Context, req *iamv1.GetRoleRequest) (*iamv1.Role, error) {
+	if err := s.enter(ctx); err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.getRole = append(s.getRole, req)
+	if s.getRoleErr != nil {
+		return nil, s.getRoleErr
+	}
+	return s.getRoleRes, nil
+}
+
+func (s *server) UpdateRole(ctx context.Context, req *iamv1.UpdateRoleRequest) (*longrunningpb.Operation, error) {
+	if err := s.enter(ctx); err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.updateRole = append(s.updateRole, req)
+	if s.updateRoleErr != nil {
+		return nil, s.updateRoleErr
+	}
+	return s.updateRoleRes, nil
 }
 
 func (s *server) GetPolicy(ctx context.Context, req *iamv1.GetPolicyRequest) (*iamv1.Policy, error) {
@@ -212,6 +246,7 @@ func harness(t *testing.T) (*Client, *server) {
 	iamv1.RegisterAuthServiceServer(g, s)
 	iamv1.RegisterTokenServiceServer(g, s)
 	iamv1.RegisterPolicyServiceServer(g, s)
+	iamv1.RegisterRoleServiceServer(g, s)
 	go func() { _ = g.Serve(lis) }()
 	t.Cleanup(g.Stop)
 	conn, err := grpc.NewClient("passthrough:///bufnet",

@@ -80,9 +80,10 @@ goes in gRPC metadata. The static root key cannot assume a role (as in AWS).
 Each call has a 5 s timeout, or the request's deadline if earlier;
 `Authenticate`, `Authorize`, `ValidateSession` and `Logout` retry `UNAVAILABLE`
 up to 3 times with doubling backoff; `Login` and `AssumeRole` are never
-retried. The IAM management actions (users, groups, roles, policies, access
+retried. Most IAM management actions (users, groups, roles, policies, access
 keys, login profiles) are not mapped to vws-iam's services yet and answer
-`InvalidAction` in this mode.
+`InvalidAction` in this mode. The policy tag calls and `GetRole`/`UpdateRole`
+are the exceptions, served over `PolicyService` and `RoleService`.
 
 ```sh
 aws --endpoint-url http://127.0.0.1:8084 --region vws-1 iam create-user --user-name bob

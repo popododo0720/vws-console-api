@@ -7,6 +7,7 @@ import (
 
 	"cloud.google.com/go/longrunning/autogen/longrunningpb"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	iamv1 "github.com/popododo0720/vws-proto/gen/go/vws/iam/v1"
 
@@ -14,10 +15,11 @@ import (
 	"github.com/popododo0720/vws-console-api/internal/resource"
 )
 
-// STSAdmin serves the IAM Query surface's STS calls over vws-iam. The IAM
+// STSAdmin serves the IAM Query surface's STS calls over vws-iam. Most IAM
 // management calls are not mapped to vws-iam's User, Group, Role, Policy and
 // AccessKey services yet; each answers Unimplemented, which the surface
-// returns as InvalidAction.
+// returns as InvalidAction. The policy tag calls, GetRole and UpdateRole are
+// mapped.
 type STSAdmin struct{ *Client }
 
 var _ iam.Admin = STSAdmin{}
@@ -101,9 +103,91 @@ func (STSAdmin) CreateRole(_ context.Context, _ resource.AccountID, _ iam.RoleIn
 	return iam.Role{}, notServed("CreateRole")
 }
 
-// GetRole implements iam.Admin.
-func (STSAdmin) GetRole(_ context.Context, _ resource.AccountID, _ string) (iam.Role, error) {
-	return iam.Role{}, notServed("GetRole")
+// GetRole implements iam.Admin over RoleService.GetRole. The surface reads
+// the role first so a path-scoped role is authorized on its real ARN.
+func (a STSAdmin) GetRole(ctx context.Context, account resource.AccountID, name string) (iam.Role, error) {
+	role, err := a.role(ctx, account, name)
+	if err != nil {
+		return iam.Role{}, err
+	}
+	return roleFromProto(role, name), nil
+}
+
+// role fetches one role from vws-iam.
+func (a STSAdmin) role(ctx context.Context, account resource.AccountID, name string) (*iamv1.Role, error) {
+	role, err := retry(ctx, a.backoff, a.roles.GetRole, &iamv1.GetRoleRequest{Name: roleName(account, name)})
+	if err != nil {
+		return nil, authError(err)
+	}
+	return role, nil
+}
+
+// roleName is the vws-iam resource name of a role.
+func roleName(account resource.AccountID, name string) string {
+	return "projects/" + account.String() + "/roles/" + name
+}
+
+// UpdateRole implements iam.Admin over RoleService.UpdateRole. The mask names
+// only the fields the caller sent, so unspecified fields keep their value.
+func (a STSAdmin) UpdateRole(
+	ctx context.Context, account resource.AccountID, name string, in iam.RoleUpdate,
+) error {
+	if in.Description != nil {
+		if err := iam.ValidateRoleDescription(*in.Description); err != nil {
+			return err
+		}
+	}
+	if in.MaxSessionDuration != nil {
+		if err := iam.ValidateMaxSessionDuration(*in.MaxSessionDuration); err != nil {
+			return err
+		}
+	}
+	existing, err := a.role(ctx, account, name)
+	if err != nil {
+		return err
+	}
+	if iam.IsServiceLinkedRole(existing.GetSpec().GetPath()) {
+		return iam.UnmodifiableRole(name)
+	}
+	if in.Description == nil && in.MaxSessionDuration == nil {
+		return nil
+	}
+	req := &iamv1.UpdateRoleRequest{
+		Role: &iamv1.Role{Name: roleName(account, name), Spec: &iamv1.RoleSpec{}},
+	}
+	paths := []string{}
+	if in.Description != nil {
+		req.Role.Spec.Description = *in.Description
+		paths = append(paths, "spec.description")
+	}
+	if in.MaxSessionDuration != nil {
+		seconds := int32(*in.MaxSessionDuration) //nolint:gosec // the range is validated above.
+		req.Role.Spec.MaxSessionDurationSeconds = seconds
+		paths = append(paths, "spec.max_session_duration_seconds")
+	}
+	req.UpdateMask = &fieldmaskpb.FieldMask{Paths: paths}
+	op, err := call(ctx, a.roles.UpdateRole, req)
+	if err != nil {
+		return authError(err)
+	}
+	return operationResult(op)
+}
+
+// roleFromProto maps the fields the IAM Query role shape returns.
+func roleFromProto(r *iamv1.Role, name string) iam.Role {
+	if n := r.GetName(); n != "" {
+		name = n[strings.LastIndex(n, "/")+1:]
+	}
+	out := iam.Role{
+		Name: name, Path: r.GetSpec().GetPath(), ID: r.GetStatus().GetUniqueId(),
+		ARN: r.GetStatus().GetArn(), TrustPolicy: r.GetSpec().GetAssumeRolePolicy(),
+		Description:        r.GetSpec().GetDescription(),
+		MaxSessionDuration: int(r.GetSpec().GetMaxSessionDurationSeconds()),
+	}
+	if t := r.GetCreateTime(); t != nil {
+		out.Created = t.AsTime()
+	}
+	return out
 }
 
 // ListRoles implements iam.Admin.

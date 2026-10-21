@@ -2,6 +2,7 @@ package iam
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -145,6 +146,87 @@ func TestAssumeRole(t *testing.T) {
 	f.Now = func() time.Time { return now.Add(16 * time.Minute) }
 	if _, err := f.Authenticate(context.Background(), authReq(t, got.Key.AccessKey, got.Key.Secret, got.Key.SessionToken)); resource.CodeOf(err) != resource.CodeUnauthenticated {
 		t.Errorf("expired session: %v", err)
+	}
+}
+
+func TestUpdateRole(t *testing.T) {
+	ctx := t.Context()
+	a := account(t)
+	f := NewFake()
+	trust := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"sts:AssumeRole","Principal":{"AWS":"*"}}]}`
+	r, err := f.CreateRole(ctx, a, RoleInput{Name: "ops", Path: "/", TrustPolicy: trust, Description: "old"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	description, maxSession := "new", 7200
+	must(t, f.UpdateRole(ctx, a, "ops", RoleUpdate{Description: &description, MaxSessionDuration: &maxSession}))
+	got, err := f.GetRole(ctx, a, "ops")
+	if err != nil || got.Description != "new" || got.MaxSessionDuration != 7200 ||
+		got.TrustPolicy != trust || got.ARN != r.ARN {
+		t.Fatalf("updated role %+v %v", got, err)
+	}
+
+	description = "newer"
+	must(t, f.UpdateRole(ctx, a, "ops", RoleUpdate{Description: &description}))
+	if got, _ := f.GetRole(ctx, a, "ops"); got.Description != "newer" || got.MaxSessionDuration != 7200 {
+		t.Errorf("description-only update changed more than the description: %+v", got)
+	}
+	maxSession = 3600
+	must(t, f.UpdateRole(ctx, a, "ops", RoleUpdate{MaxSessionDuration: &maxSession}))
+	if got, _ := f.GetRole(ctx, a, "ops"); got.MaxSessionDuration != 3600 || got.Description != "newer" {
+		t.Errorf("duration-only update changed more than the duration: %+v", got)
+	}
+
+	if err := f.UpdateRole(ctx, a, "none",
+		RoleUpdate{Description: &description}); resource.CodeOf(err) != resource.CodeNotFound {
+		t.Errorf("missing role: %v", err)
+	}
+	long := strings.Repeat("x", MaxRoleDescription+1)
+	low, high := 3599, 43201
+	for _, in := range []RoleUpdate{
+		{Description: &long},
+		{MaxSessionDuration: &low},
+		{MaxSessionDuration: &high},
+	} {
+		if err := f.UpdateRole(ctx, a, "ops", in); resource.CodeOf(err) != resource.CodeInvalidArgument {
+			t.Errorf("invalid update %+v: %v", in, err)
+		}
+	}
+	if got, _ := f.GetRole(ctx, a, "ops"); got.Description != "newer" || got.MaxSessionDuration != 3600 {
+		t.Errorf("a rejected update changed the role: %+v", got)
+	}
+
+	latin := strings.Repeat("é", MaxRoleDescription)
+	must(t, f.UpdateRole(ctx, a, "ops", RoleUpdate{Description: &latin}))
+	if got, _ := f.GetRole(ctx, a, "ops"); got.Description != latin {
+		t.Errorf("a 1000-character description was not stored")
+	}
+	latin = strings.Repeat("é", MaxRoleDescription+1)
+	if err := f.UpdateRole(ctx, a, "ops",
+		RoleUpdate{Description: &latin}); resource.CodeOf(err) != resource.CodeInvalidArgument {
+		t.Errorf("oversized multi-byte description: %v", err)
+	}
+
+	empty := ""
+	must(t, f.UpdateRole(ctx, a, "ops", RoleUpdate{Description: &empty}))
+	if got, _ := f.GetRole(ctx, a, "ops"); got.Description != "" {
+		t.Errorf("empty description did not clear it: %q", got.Description)
+	}
+
+	if _, err := f.CreateRole(ctx, a, RoleInput{
+		Name: "svc", Path: ServiceLinkedRolePath + "compute.vws/", TrustPolicy: trust,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	description = "changed"
+	err = f.UpdateRole(ctx, a, "svc", RoleUpdate{Description: &description})
+	var re *resource.Error
+	if !errors.As(err, &re) || re.Code != resource.CodeConflict || re.Field != "UnmodifiableEntity" {
+		t.Errorf("service-linked role: %+v", err)
+	}
+	if got, _ := f.GetRole(ctx, a, "svc"); got.Description != "" {
+		t.Errorf("a service-linked role changed: %q", got.Description)
 	}
 }
 

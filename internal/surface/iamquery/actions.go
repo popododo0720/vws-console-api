@@ -103,8 +103,12 @@ func roleARN(h *handler, c *exchange) string {
 	if c.action == "CreateRole" {
 		return arnOf(c, "role", pathOr(c.form("Path")), name)
 	}
-	if r, err := h.cfg.Admin.GetRole(c.r.Context(), c.caller.Account, name); err == nil {
+	r, err := h.cfg.Admin.GetRole(c.r.Context(), c.caller.Account, name)
+	if err == nil {
 		return r.ARN
+	}
+	if resource.CodeOf(err) != resource.CodeNotFound {
+		c.resourceErr = err
 	}
 	return arnOf(c, "role", "/", name)
 }
@@ -355,6 +359,36 @@ func iamActions() map[string]spec {
 				Role roleXML `xml:"Role"`
 			}{toRole(r)}, err
 		}),
+		"UpdateRole": admin(
+			[]string{"RoleName", "Description", "MaxSessionDuration"}, roleARN,
+			func(h *handler, c *exchange) (any, error) {
+				if err := required(c, "RoleName"); err != nil {
+					return nil, err
+				}
+				var in iam.RoleUpdate
+				if c.present("Description") {
+					description := c.form("Description")
+					in.Description = &description
+				}
+				if c.present("MaxSessionDuration") {
+					raw := c.form("MaxSessionDuration")
+					if raw == "" {
+						return nil, resource.Invalid("maxSessionDuration", "must be a number")
+					}
+					n, err := strconv.Atoi(raw)
+					if err != nil {
+						return nil, resource.Invalid("maxSessionDuration", "must be a number")
+					}
+					in.MaxSessionDuration = &n
+				}
+				if err := h.cfg.Admin.UpdateRole(c.r.Context(), c.caller.Account, c.form("RoleName"), in); err != nil {
+					return nil, err
+				}
+				// AWS keeps the empty UpdateRoleResult wrapper, and SDKs
+				// expect it.
+				return struct{}{}, nil
+			},
+		),
 		"ListRoles": lister(nil, func(h *handler, c *exchange) (any, error) {
 			rs, err := h.cfg.Admin.ListRoles(c.r.Context(), c.caller.Account, c.form("PathPrefix"))
 			out := rolesResult{Roles: []roleXML{}}

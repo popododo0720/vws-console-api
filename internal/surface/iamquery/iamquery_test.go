@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -26,7 +27,30 @@ func (r *recorder) Authorize(ctx context.Context, req iam.Request) (iam.Decision
 	return r.Client.Authorize(ctx, req)
 }
 
+type oneRoleLookupError struct {
+	iam.Admin
+	mu   sync.Mutex
+	err  error
+	fail bool
+}
+
+func (a *oneRoleLookupError) GetRole(ctx context.Context, account resource.AccountID, name string) (iam.Role, error) {
+	a.mu.Lock()
+	fail := a.fail
+	a.fail = false
+	a.mu.Unlock()
+	if fail {
+		return iam.Role{}, a.err
+	}
+	return a.Admin.GetRole(ctx, account, name)
+}
+
 func harness(t *testing.T) (http.Handler, *iam.Fake, *recorder, sigv4.Credential) {
+	t.Helper()
+	return harnessAdmin(t, nil)
+}
+
+func harnessAdmin(t *testing.T, wrap func(iam.Admin) iam.Admin) (http.Handler, *iam.Fake, *recorder, sigv4.Credential) {
 	t.Helper()
 	account, err := resource.Parse[resource.AccountID]("123456789012")
 	if err != nil {
@@ -38,7 +62,11 @@ func harness(t *testing.T) (http.Handler, *iam.Fake, *recorder, sigv4.Credential
 	verifier := func(s sigv4.Service) *sigv4.Verifier {
 		return sigv4.NewVerifier(sigv4.Verifier{Service: s, Region: resource.RegionName, Now: func() time.Time { return now }, Auth: iam.Authenticator(rec)})
 	}
-	h := New(Config{Admin: f, Authorizer: rec, IAM: verifier(sigv4.ServiceIAM), STS: verifier(sigv4.ServiceSTS)})
+	admin := iam.Admin(f)
+	if wrap != nil {
+		admin = wrap(f)
+	}
+	h := New(Config{Admin: admin, Authorizer: rec, IAM: verifier(sigv4.ServiceIAM), STS: verifier(sigv4.ServiceSTS)})
 	return h, f, rec, sigv4.Credential{AccessKey: "AKIDEXAMPLE", Secret: "secret", Account: account}
 }
 
@@ -102,6 +130,130 @@ func TestPolicyDocumentsAreURLEncoded(t *testing.T) {
 	has(t, res, http.StatusOK, `<Arn>arn:vws:iam::123456789012:policy/d</Arn>`, `<DefaultVersionId>v1</DefaultVersionId>`, `<AttachmentCount>0</AttachmentCount>`)
 	res = call(t, h, root, sigv4.ServiceIAM, url.Values{"Action": {"GetPolicyVersion"}, "PolicyArn": {"arn:vws:iam::123456789012:policy/d"}, "VersionId": {"v1"}})
 	has(t, res, http.StatusOK, `<Document>`+strings.ReplaceAll(url.QueryEscape(doc), "+", "%20")+`</Document>`, `<IsDefaultVersion>true</IsDefaultVersion>`)
+}
+
+func TestUpdateRole(t *testing.T) {
+	h, f, rec, root := harness(t)
+	ctx := t.Context()
+	trust := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"sts:AssumeRole","Principal":{"AWS":"*"}}]}`
+	if _, err := f.CreateRole(ctx, root.Account, iam.RoleInput{
+		Name: "ops", Path: "/", TrustPolicy: trust, Description: "old",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	res := call(t, h, root, sigv4.ServiceIAM, url.Values{
+		"Action": {"UpdateRole"}, "RoleName": {"ops"}, "Description": {"new"}, "MaxSessionDuration": {"7200"},
+	})
+	has(t, res, http.StatusOK, `<UpdateRoleResponse>`,
+		`<UpdateRoleResult></UpdateRoleResult>`, `<ResponseMetadata><RequestId>`)
+	role, err := f.GetRole(ctx, root.Account, "ops")
+	if err != nil || role.Description != "new" || role.MaxSessionDuration != 7200 {
+		t.Fatalf("stored role %+v, want description new and duration 7200: %v", role, err)
+	}
+	res = call(t, h, root, sigv4.ServiceIAM, url.Values{
+		"Action": {"UpdateRole"}, "RoleName": {"ops"}, "Description": {"new"}, "MaxSessionDuration": {"7200"},
+	})
+	has(t, res, http.StatusOK, `<UpdateRoleResult></UpdateRoleResult>`)
+	if role, _ := f.GetRole(ctx, root.Account, "ops"); role.Description != "new" || role.MaxSessionDuration != 7200 {
+		t.Errorf("a repeated update changed the role: %+v", role)
+	}
+	res = call(t, h, root, sigv4.ServiceIAM, url.Values{
+		"Action": {"UpdateRole"}, "RoleName": {"ops"}, "Description": {""},
+	})
+	has(t, res, http.StatusOK, `<UpdateRoleResult></UpdateRoleResult>`)
+	if role, _ := f.GetRole(ctx, root.Account, "ops"); role.Description != "" || role.MaxSessionDuration != 7200 {
+		t.Errorf("clearing the description changed the duration or kept the description: %+v", role)
+	}
+	want := "iam:UpdateRole arn:vws:iam::123456789012:role/ops"
+	if len(rec.seen) == 0 || rec.seen[len(rec.seen)-1] != want {
+		t.Errorf("authorized %v, want last %q", rec.seen, want)
+	}
+
+	if _, err := f.CreateRole(ctx, root.Account, iam.RoleInput{
+		Name: "team", Path: "/team/", TrustPolicy: trust,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	res = call(t, h, root, sigv4.ServiceIAM, url.Values{
+		"Action": {"UpdateRole"}, "RoleName": {"team"}, "MaxSessionDuration": {"5400"},
+	})
+	has(t, res, http.StatusOK, `<UpdateRoleResponse>`)
+	if role, _ := f.GetRole(ctx, root.Account, "team"); role.MaxSessionDuration != 5400 {
+		t.Errorf("duration-only update stored %d, want 5400", role.MaxSessionDuration)
+	}
+	want = "iam:UpdateRole arn:vws:iam::123456789012:role/team/team"
+	if len(rec.seen) == 0 || rec.seen[len(rec.seen)-1] != want {
+		t.Errorf("authorized %v, want last %q", rec.seen, want)
+	}
+
+	res = call(t, h, root, sigv4.ServiceIAM, url.Values{
+		"Action": {"UpdateRole"}, "RoleName": {"none"}, "Description": {"new"},
+	})
+	has(t, res, http.StatusNotFound, `<Code>NoSuchEntity</Code>`)
+	res = call(t, h, root, sigv4.ServiceIAM, url.Values{
+		"Action": {"UpdateRole"}, "RoleName": {"ops"}, "MaxSessionDuration": {"60"},
+	})
+	has(t, res, http.StatusBadRequest, `<Code>ValidationError</Code>`)
+	res = call(t, h, root, sigv4.ServiceIAM, url.Values{
+		"Action": {"UpdateRole"}, "RoleName": {"ops"}, "MaxSessionDuration": {""},
+	})
+	has(t, res, http.StatusBadRequest, `<Code>ValidationError</Code>`)
+	res = call(t, h, root, sigv4.ServiceIAM, url.Values{
+		"Action": {"UpdateRole"}, "RoleName": {"ops"}, "Description": {strings.Repeat("x", 1001)},
+	})
+	has(t, res, http.StatusBadRequest, `<Code>ValidationError</Code>`)
+	res = call(t, h, root, sigv4.ServiceIAM, url.Values{
+		"Action": {"UpdateRole"}, "Description": {"new"},
+	})
+	has(t, res, http.StatusBadRequest, `<Code>ValidationError</Code>`)
+
+	if _, err := f.CreateRole(ctx, root.Account, iam.RoleInput{
+		Name: "svc", Path: iam.ServiceLinkedRolePath + "compute.vws/", TrustPolicy: trust,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	res = call(t, h, root, sigv4.ServiceIAM, url.Values{
+		"Action": {"UpdateRole"}, "RoleName": {"svc"}, "Description": {"new"},
+	})
+	has(t, res, http.StatusBadRequest, `<Code>UnmodifiableEntity</Code>`)
+}
+
+func TestUpdateRoleFailsClosedWhenTheRoleLookupFails(t *testing.T) {
+	lookup := &oneRoleLookupError{
+		err:  &resource.Error{Code: resource.CodeUnavailable, Message: "vws-iam is unavailable"},
+		fail: true,
+	}
+	h, f, _, root := harnessAdmin(t, func(a iam.Admin) iam.Admin {
+		lookup.Admin = a
+		return lookup
+	})
+	ctx := t.Context()
+	trust := `{"Statement":[{"Effect":"Allow","Action":"sts:AssumeRole","Principal":{"AWS":"*"}}]}`
+	if _, err := f.CreateRole(ctx, root.Account, iam.RoleInput{
+		Name: "ops", Path: "/team/", TrustPolicy: trust, Description: "old",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.CreateUser(ctx, root.Account, "bob", "/"); err != nil {
+		t.Fatal(err)
+	}
+	policy := `{"Statement":[{"Effect":"Allow","Action":"iam:UpdateRole",` +
+		`"Resource":"arn:vws:iam::123456789012:role/ops"}]}`
+	if err := f.PutInlinePolicy(ctx, root.Account, iam.EntityUser, "bob", "update", policy); err != nil {
+		t.Fatal(err)
+	}
+	k, err := f.CreateAccessKey(ctx, root.Account, "bob")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bob := sigv4.Credential{AccessKey: k.AccessKeyID, Secret: k.Secret}
+	res := call(t, h, bob, sigv4.ServiceIAM, url.Values{
+		"Action": {"UpdateRole"}, "RoleName": {"ops"}, "Description": {"new"},
+	})
+	has(t, res, http.StatusServiceUnavailable, `<Code>ServiceUnavailable</Code>`)
+	if role, _ := f.GetRole(ctx, root.Account, "ops"); role.Description != "old" {
+		t.Errorf("a failed lookup still changed the role: %+v", role)
+	}
 }
 
 func TestLimitedUserAndSTS(t *testing.T) {
