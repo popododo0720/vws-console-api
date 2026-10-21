@@ -245,7 +245,7 @@ func (a STSAdmin) policyFor(ctx context.Context, account resource.AccountID, arn
 	return name, nil
 }
 
-// mfaDeviceResource turns arn:vws:iam::{project}:mfa/{name} into
+// mfaDeviceResource turns arn:vws:iam::{project}:mfa{path}{name} into
 // projects/{project}/mfaDevices/{name}. A serial number that names no device
 // of the caller, as in AWS, does not exist.
 func mfaDeviceResource(a resource.AccountID, serial string) (string, error) {
@@ -257,8 +257,12 @@ func mfaDeviceResource(a resource.AccountID, serial string) (string, error) {
 	if err != nil {
 		return "", mfaDeviceNotFound()
 	}
-	name, ok := strings.CutPrefix(parts[5], "mfa/")
-	if !ok || name == "" || strings.Contains(name, "/") || account != a {
+	rest, ok := strings.CutPrefix(parts[5], "mfa/")
+	if !ok || rest == "" || account != a {
+		return "", mfaDeviceNotFound()
+	}
+	name := rest[strings.LastIndex(rest, "/")+1:]
+	if name == "" {
 		return "", mfaDeviceNotFound()
 	}
 	return "projects/" + parts[4] + "/mfaDevices/" + name, nil
@@ -266,6 +270,31 @@ func mfaDeviceResource(a resource.AccountID, serial string) (string, error) {
 
 func mfaDeviceNotFound() error {
 	return &resource.Error{Code: resource.CodeNotFound, Message: "The specified MFA device does not exist."}
+}
+
+// mfaDeviceFor resolves a device serial number to a resource name and checks
+// that the stored serial number, including its partition, region, account,
+// path and name, equals the serial number the caller sent. vws-iam addresses a
+// device by the name in the resource, not by its full serial number, so
+// without this check a serial number for one partition, region or path would
+// reach the same device. The answer for a mismatch is the answer for a missing
+// device.
+func (a STSAdmin) mfaDeviceFor(ctx context.Context, account resource.AccountID, serial string) (string, error) {
+	name, err := mfaDeviceResource(account, serial)
+	if err != nil {
+		return "", err
+	}
+	dev, err := retry(ctx, a.backoff, a.mfaDevices.GetMfaDevice, &iamv1.GetMfaDeviceRequest{Name: name})
+	if err != nil {
+		if resource.CodeOf(authError(err)) == resource.CodeNotFound {
+			return "", mfaDeviceNotFound()
+		}
+		return "", authError(err)
+	}
+	if dev.GetStatus().GetSerialNumber() != serial {
+		return "", mfaDeviceNotFound()
+	}
+	return name, nil
 }
 
 // operationResult maps a finished vws-iam operation to an error. vws-iam
@@ -338,7 +367,7 @@ func (a STSAdmin) ListPolicyTags(
 
 // TagMFADevice implements iam.Admin over MfaDeviceService.TagMFADevice.
 func (a STSAdmin) TagMFADevice(ctx context.Context, account resource.AccountID, serial string, tags []iam.Tag) error {
-	name, err := mfaDeviceResource(account, serial)
+	name, err := a.mfaDeviceFor(ctx, account, serial)
 	if err != nil {
 		return err
 	}
@@ -355,7 +384,7 @@ func (a STSAdmin) TagMFADevice(ctx context.Context, account resource.AccountID, 
 
 // UntagMFADevice implements iam.Admin over MfaDeviceService.UntagMFADevice.
 func (a STSAdmin) UntagMFADevice(ctx context.Context, account resource.AccountID, serial string, keys []string) error {
-	name, err := mfaDeviceResource(account, serial)
+	name, err := a.mfaDeviceFor(ctx, account, serial)
 	if err != nil {
 		return err
 	}
@@ -371,7 +400,7 @@ func (a STSAdmin) UntagMFADevice(ctx context.Context, account resource.AccountID
 func (a STSAdmin) ListMFADeviceTags(
 	ctx context.Context, account resource.AccountID, serial, marker string, maxItems int,
 ) (iam.TagPage, error) {
-	name, err := mfaDeviceResource(account, serial)
+	name, err := a.mfaDeviceFor(ctx, account, serial)
 	if err != nil {
 		return iam.TagPage{}, err
 	}

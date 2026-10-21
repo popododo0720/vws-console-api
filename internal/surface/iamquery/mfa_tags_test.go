@@ -238,3 +238,61 @@ func TestListMFADeviceTagsParameterErrors(t *testing.T) {
 	unsupported.Set("PathPrefix", "/")
 	has(t, call(t, h, root, sigv4.ServiceIAM, unsupported), http.StatusBadRequest, `<Code>InvalidInput</Code>`)
 }
+
+// A principal allowed on every serial must not reach a device by sending a
+// serial with another partition, region or path. The exact serial stays
+// covered by an explicit Deny.
+func TestMFADeviceTagSerialVariantsStayInScope(t *testing.T) {
+	h, f, _, root := harness(t)
+	serial := seedMfaDevice(t, f, root, "scope-phone")
+	ctx := t.Context()
+	if _, err := f.CreateUser(ctx, root.Account, "bob", "/"); err != nil {
+		t.Fatal(err)
+	}
+	actions := `["iam:TagMFADevice","iam:UntagMFADevice","iam:ListMFADeviceTags"]`
+	allow := `{"Statement":[{"Effect":"Allow","Action":` + actions + `,"Resource":"*"}]}`
+	deny := `{"Statement":[{"Effect":"Deny","Action":` + actions + `,"Resource":"` + serial + `"}]}`
+	if err := f.PutInlinePolicy(ctx, root.Account, iam.EntityUser, "bob", "allow", allow); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.PutInlinePolicy(ctx, root.Account, iam.EntityUser, "bob", "deny", deny); err != nil {
+		t.Fatal(err)
+	}
+	k, err := f.CreateAccessKey(ctx, root.Account, "bob")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bob := sigv4.Credential{AccessKey: k.AccessKeyID, Secret: k.Secret}
+	variants := []string{
+		"arn:aws:iam::" + root.Account.String() + ":mfa/scope-phone",
+		"arn:vws:iam:us-east-1:" + root.Account.String() + ":mfa/scope-phone",
+		"arn:vws:iam::" + root.Account.String() + ":mfa/admin/scope-phone",
+	}
+	for _, wrong := range variants {
+		has(t, call(t, h, bob, sigv4.ServiceIAM, url.Values{
+			"Action": {"TagMFADevice"}, "SerialNumber": {wrong},
+			"Tags.member.1.Key": {"k"}, "Tags.member.1.Value": {"v"},
+		}), http.StatusNotFound, `<Code>NoSuchEntity</Code>`)
+		has(t, call(t, h, bob, sigv4.ServiceIAM, url.Values{
+			"Action": {"UntagMFADevice"}, "SerialNumber": {wrong}, "TagKeys.member.1": {"k"},
+		}), http.StatusNotFound, `<Code>NoSuchEntity</Code>`)
+		has(t, call(t, h, bob, sigv4.ServiceIAM, url.Values{
+			"Action": {"ListMFADeviceTags"}, "SerialNumber": {wrong},
+		}), http.StatusNotFound, `<Code>NoSuchEntity</Code>`)
+	}
+	// The exact serial is denied before the backend runs.
+	for _, action := range []string{"TagMFADevice", "UntagMFADevice", "ListMFADeviceTags"} {
+		form := url.Values{"Action": {action}, "SerialNumber": {serial}}
+		switch action {
+		case "TagMFADevice":
+			form.Set("Tags.member.1.Key", "k")
+			form.Set("Tags.member.1.Value", "v")
+		case "UntagMFADevice":
+			form.Set("TagKeys.member.1", "k")
+		}
+		has(t, call(t, h, bob, sigv4.ServiceIAM, form), http.StatusForbidden, `<Code>AccessDenied</Code>`)
+	}
+	has(t, call(t, h, root, sigv4.ServiceIAM, url.Values{
+		"Action": {"ListMFADeviceTags"}, "SerialNumber": {serial},
+	}), http.StatusOK, `<Tags></Tags>`)
+}

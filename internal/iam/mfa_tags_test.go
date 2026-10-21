@@ -140,3 +140,36 @@ func TestAddMfaDeviceSerial(t *testing.T) {
 		t.Fatalf("serial %q, want %q", serial, want)
 	}
 }
+
+// The fake keys a device by its exact serial number, so a serial with another
+// partition, region or path does not exist, as the gRPC client now agrees.
+func TestFakeMFADeviceTagWrongSerialIsNotFound(t *testing.T) {
+	ctx := t.Context()
+	a := account(t)
+	f := NewFake()
+	serial := f.AddMfaDevice(a, "scope-phone")
+	if err := f.TagMFADevice(ctx, a, serial, []Tag{{Key: "k", Value: "v"}}); err != nil {
+		t.Fatal(err)
+	}
+	variants := []string{
+		"arn:aws:iam::" + a.String() + ":mfa/scope-phone",
+		"arn:vws:iam:us-east-1:" + a.String() + ":mfa/scope-phone",
+		"arn:vws:iam::" + a.String() + ":mfa/admin/scope-phone",
+	}
+	for _, wrong := range variants {
+		err := f.TagMFADevice(ctx, a, wrong, []Tag{{Key: "other", Value: "v"}})
+		if resource.CodeOf(err) != resource.CodeNotFound {
+			t.Fatalf("wrong serial %q tag mapped to %v", wrong, err)
+		}
+		if err := f.UntagMFADevice(ctx, a, wrong, []string{"k"}); resource.CodeOf(err) != resource.CodeNotFound {
+			t.Fatalf("wrong serial %q untag mapped to %v", wrong, err)
+		}
+		if _, err := f.ListMFADeviceTags(ctx, a, wrong, "", 0); resource.CodeOf(err) != resource.CodeNotFound {
+			t.Fatalf("wrong serial %q list mapped to %v", wrong, err)
+		}
+	}
+	page, err := f.ListMFADeviceTags(ctx, a, serial, "", 0)
+	if err != nil || len(page.Tags) != 1 || page.Tags[0] != (Tag{Key: "k", Value: "v"}) {
+		t.Fatalf("wrong-serial calls changed the device: %+v %v", page, err)
+	}
+}

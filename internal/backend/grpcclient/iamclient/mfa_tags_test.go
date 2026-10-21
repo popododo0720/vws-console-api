@@ -131,3 +131,79 @@ func TestMFADeviceTagOtherAccountIsNotFound(t *testing.T) {
 		t.Fatalf("a cross-account call reached vws-iam: %v %v", s.tagMfa, s.listMfaTags)
 	}
 }
+
+// A device is addressed by the name in its resource on the vws-iam wire, so
+// the client must check that the stored serial number is the serial number the
+// caller sent. Otherwise a serial for another partition, region or path
+// reaches the same device.
+func TestMFADeviceTagWrongSerialIsNotFound(t *testing.T) {
+	c, s := harness(t)
+	admin := STSAdmin{Client: c}
+	s.getMfaRes = &iamv1.MfaDevice{
+		Name:   "projects/123456789012/mfaDevices/alice-phone",
+		Status: &iamv1.MfaDeviceStatus{SerialNumber: mfaSerial},
+	}
+	variants := []struct {
+		name   string
+		serial string
+	}{
+		{"partition", "arn:aws:iam::123456789012:mfa/alice-phone"},
+		{"region", "arn:vws:iam:us-east-1:123456789012:mfa/alice-phone"},
+		{"path", "arn:vws:iam::123456789012:mfa/admin/alice-phone"},
+	}
+	ctx := t.Context()
+	for _, v := range variants {
+		t.Run(v.name, func(t *testing.T) {
+			tags := []iam.Tag{{Key: "k", Value: "v"}}
+			if err := admin.TagMFADevice(ctx, accountID(t), v.serial, tags); resource.CodeOf(err) != resource.CodeNotFound {
+				t.Fatalf("wrong serial tag mapped to %v", err)
+			}
+			err := admin.UntagMFADevice(ctx, accountID(t), v.serial, []string{"k"})
+			if resource.CodeOf(err) != resource.CodeNotFound {
+				t.Fatalf("wrong serial untag mapped to %v", err)
+			}
+			_, err = admin.ListMFADeviceTags(ctx, accountID(t), v.serial, "", 0)
+			if resource.CodeOf(err) != resource.CodeNotFound {
+				t.Fatalf("wrong serial list mapped to %v", err)
+			}
+		})
+	}
+	if len(s.tagMfa)+len(s.untagMfa)+len(s.listMfaTags) != 0 {
+		t.Fatalf("a wrong-serial call reached a tag action: %v %v %v", s.tagMfa, s.untagMfa, s.listMfaTags)
+	}
+	if len(s.getMfa) != 3*len(variants) {
+		t.Fatalf("looked the device up %d times, want %d", len(s.getMfa), 3*len(variants))
+	}
+	for _, req := range s.getMfa {
+		if got := req.GetName(); got != "projects/123456789012/mfaDevices/alice-phone" {
+			t.Fatalf("looked up %q", got)
+		}
+	}
+}
+
+// A vws-iam NotFound on the device lookup is the same NoSuchEntity answer as a
+// serial that does not match, and no tag action runs.
+func TestMFADeviceTagLookupNotFoundIsNotFound(t *testing.T) {
+	c, s := harness(t)
+	admin := STSAdmin{Client: c}
+	ctx := t.Context()
+	s.getMfaErr = awsErr(codes.NotFound, "RESOURCE_NOT_FOUND", "NoSuchEntity")
+	tags := []iam.Tag{{Key: "k", Value: "v"}}
+	if err := admin.TagMFADevice(ctx, accountID(t), mfaSerial, tags); resource.CodeOf(err) != resource.CodeNotFound {
+		t.Fatalf("missing device tag mapped to %v", err)
+	}
+	err := admin.UntagMFADevice(ctx, accountID(t), mfaSerial, []string{"k"})
+	if resource.CodeOf(err) != resource.CodeNotFound {
+		t.Fatalf("missing device untag mapped to %v", err)
+	}
+	_, err = admin.ListMFADeviceTags(ctx, accountID(t), mfaSerial, "", 0)
+	if resource.CodeOf(err) != resource.CodeNotFound {
+		t.Fatalf("missing device list mapped to %v", err)
+	}
+	if len(s.tagMfa)+len(s.untagMfa)+len(s.listMfaTags) != 0 {
+		t.Fatalf("a missing-device call reached a tag action: %v %v %v", s.tagMfa, s.untagMfa, s.listMfaTags)
+	}
+	if len(s.getMfa) != 3 {
+		t.Fatalf("looked the device up %d times, want 3", len(s.getMfa))
+	}
+}
