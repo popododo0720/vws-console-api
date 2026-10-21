@@ -867,6 +867,9 @@ func (c computeClient) DescribeVolumes(ctx context.Context, s backend.Scope, q r
 	for _, item := range out.GetVolumes() {
 		vol, err := volumeModel(item)
 		if err != nil {
+			if c.skipBadRecord(ctx, item.GetName(), err) {
+				continue
+			}
 			return resource.Page[resource.Volume]{}, err
 		}
 		items = append(items, vol)
@@ -1255,15 +1258,15 @@ func volumeModel(in *storagev1.Volume) (resource.Volume, error) {
 	}
 	parts := splitSlash(in.GetName())
 	if len(parts) != 6 || parts[4] != "volumes" {
-		return resource.Volume{}, resource.Internal(errors.New("bad volume name"))
+		return resource.Volume{}, resource.Internal(&badRecordNameError{errors.New("bad volume name")})
 	}
 	id, err := resource.Parse[resource.VolumeID](parts[5])
 	if err != nil {
-		return resource.Volume{}, resource.Internal(err)
+		return resource.Volume{}, resource.Internal(&badRecordNameError{err})
 	}
 	owner, err := accountOf(parts[1])
 	if err != nil {
-		return resource.Volume{}, err
+		return resource.Volume{}, resource.Internal(&badRecordNameError{err})
 	}
 	state := volumeStateOf(in)
 	var inst resource.InstanceID

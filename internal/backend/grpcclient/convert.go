@@ -1,7 +1,9 @@
 package grpcclient
 
 import (
+	"context"
 	"errors"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -324,21 +326,41 @@ func instanceObserved(st resource.InstanceState) (commonv1.ReconciliationState, 
 	}
 }
 
+// badRecordNameError marks a backend record whose resource name does not name an
+// id. A listing skips it and logs; an explicit id read still fails.
+type badRecordNameError struct{ err error }
+
+func (e *badRecordNameError) Error() string { return e.err.Error() }
+
+func (e *badRecordNameError) Unwrap() error { return e.err }
+
+// skipBadRecord reports whether err marks a record a listing must leave out.
+// It logs the record's name so a skipped resource stays auditable.
+func (a *api) skipBadRecord(ctx context.Context, name string, err error) bool {
+	var bad *badRecordNameError
+	if !errors.As(err, &bad) {
+		return false
+	}
+	a.logger().WarnContext(ctx, "skipping a record with an invalid resource name",
+		slog.String("name", name), slog.Any("err", err))
+	return true
+}
+
 func instanceModel(in *computev1.Instance) (resource.Instance, error) {
 	if in == nil {
 		return resource.Instance{}, resource.Internal(errors.New("missing instance"))
 	}
 	parts := splitSlash(in.GetName())
 	if len(parts) != 6 || parts[2] != "zones" || parts[4] != "instances" {
-		return resource.Instance{}, resource.Internal(errors.New("bad instance name"))
+		return resource.Instance{}, resource.Internal(&badRecordNameError{errors.New("bad instance name")})
 	}
 	id, err := resource.Parse[resource.InstanceID](parts[5])
 	if err != nil {
-		return resource.Instance{}, resource.Internal(err)
+		return resource.Instance{}, resource.Internal(&badRecordNameError{err})
 	}
 	owner, err := accountOf(parts[1])
 	if err != nil {
-		return resource.Instance{}, err
+		return resource.Instance{}, resource.Internal(&badRecordNameError{err})
 	}
 	resID, err := resource.Parse[resource.ReservationID](in.GetLabels()[labelReservation])
 	if err != nil {

@@ -101,6 +101,7 @@ func run(ctx context.Context, args []string) (err error) {
 			return dialErr
 		}
 		defer func() { err = errors.Join(err, client.Close()) }()
+		client.SetLogger(logger)
 		set = client.Set()
 	default:
 		return fmt.Errorf("unknown -backend %q", *backendKind)
