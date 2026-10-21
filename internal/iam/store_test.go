@@ -164,6 +164,7 @@ func TestUpdateGroup(t *testing.T) {
 		t.Fatal(err)
 	}
 	must(t, f.AttachPolicy(ctx, a, EntityGroup, "dev", p.ARN))
+	must(t, f.PutInlinePolicy(ctx, a, EntityGroup, "dev", "inline", describeOnly))
 	must(t, f.AddUserToGroup(ctx, a, "dev", "bob"))
 	if _, err := f.CreateGroup(ctx, a, "taken", "/"); err != nil {
 		t.Fatal(err)
@@ -224,6 +225,10 @@ func TestUpdateGroup(t *testing.T) {
 	attached, err := f.ListAttachedPolicies(ctx, a, EntityGroup, "platform")
 	if err != nil || len(attached) != 1 || attached[0].ARN != p.ARN {
 		t.Errorf("attached policies after rename %v, want %s: %v", attached, p.ARN, err)
+	}
+	inline, err := f.ListInlinePolicies(ctx, a, EntityGroup, "platform")
+	if err != nil || len(inline) != 1 || inline[0] != "inline" {
+		t.Errorf("inline policies after rename %v, want inline: %v", inline, err)
 	}
 
 	must(t, f.UpdateGroup(ctx, a, "platform", "", ""))
