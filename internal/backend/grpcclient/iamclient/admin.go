@@ -76,6 +76,11 @@ func (STSAdmin) ListGroups(_ context.Context, _ resource.AccountID, _ string) ([
 	return nil, notServed("ListGroups")
 }
 
+// UpdateGroup implements iam.Admin.
+func (STSAdmin) UpdateGroup(_ context.Context, _ resource.AccountID, _, _, _ string) error {
+	return notServed("UpdateGroup")
+}
+
 // DeleteGroup implements iam.Admin.
 func (STSAdmin) DeleteGroup(_ context.Context, _ resource.AccountID, _ string) error {
 	return notServed("DeleteGroup")

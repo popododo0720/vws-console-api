@@ -104,6 +104,104 @@ func TestPolicyDocumentsAreURLEncoded(t *testing.T) {
 	has(t, res, http.StatusOK, `<Document>`+strings.ReplaceAll(url.QueryEscape(doc), "+", "%20")+`</Document>`, `<IsDefaultVersion>true</IsDefaultVersion>`)
 }
 
+func TestUpdateGroup(t *testing.T) {
+	h, f, rec, root := harness(t)
+	ctx := t.Context()
+	if _, err := f.CreateGroup(ctx, root.Account, "dev", "/old/"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.CreateGroup(ctx, root.Account, "taken", "/"); err != nil {
+		t.Fatal(err)
+	}
+	res := call(t, h, root, sigv4.ServiceIAM, url.Values{
+		"Action": {"UpdateGroup"}, "GroupName": {"dev"}, "NewPath": {"/new/"}, "NewGroupName": {"ops"},
+	})
+	has(t, res, http.StatusOK, `<UpdateGroupResponse>`, `<ResponseMetadata><RequestId>`)
+	if strings.Contains(res.Body.String(), "UpdateGroupResult") {
+		t.Errorf("empty result has an UpdateGroupResult: %s", res.Body.String())
+	}
+	group, _, err := f.GetGroup(ctx, root.Account, "ops")
+	if err != nil || group.Path != "/new/" {
+		t.Fatalf("stored group %+v, want path /new/: %v", group, err)
+	}
+	wantOld := "iam:UpdateGroup arn:vws:iam::123456789012:group/old/dev"
+	wantNew := "iam:UpdateGroup arn:vws:iam::123456789012:group/new/ops"
+	if len(rec.seen) < 2 || rec.seen[len(rec.seen)-2] != wantOld || rec.seen[len(rec.seen)-1] != wantNew {
+		t.Errorf("authorized %v, want last %q then %q", rec.seen, wantOld, wantNew)
+	}
+	res = call(t, h, root, sigv4.ServiceIAM, url.Values{
+		"Action": {"UpdateGroup"}, "GroupName": {"none"}, "NewPath": {"/new/"},
+	})
+	has(t, res, http.StatusNotFound, `<Code>NoSuchEntity</Code>`)
+	res = call(t, h, root, sigv4.ServiceIAM, url.Values{
+		"Action": {"UpdateGroup"}, "GroupName": {"ops"}, "NewGroupName": {"taken"},
+	})
+	has(t, res, http.StatusConflict, `<Code>EntityAlreadyExists</Code>`)
+	res = call(t, h, root, sigv4.ServiceIAM, url.Values{
+		"Action": {"UpdateGroup"}, "GroupName": {"ops"}, "NewPath": {""},
+	})
+	has(t, res, http.StatusBadRequest, `<Code>ValidationError</Code>`)
+	res = call(t, h, root, sigv4.ServiceIAM, url.Values{
+		"Action": {"UpdateGroup"}, "GroupName": {"ops"}, "NewGroupName": {""},
+	})
+	has(t, res, http.StatusBadRequest, `<Code>ValidationError</Code>`)
+	res = call(t, h, root, sigv4.ServiceIAM, url.Values{
+		"Action": {"UpdateGroup"}, "NewPath": {"/new/"},
+	})
+	has(t, res, http.StatusBadRequest, `<Code>ValidationError</Code>`, `Value null at`)
+	res = call(t, h, root, sigv4.ServiceIAM, url.Values{
+		"Action": {"UpdateGroup"}, "GroupName": {"ops"}, "NewPath": {"new"},
+	})
+	has(t, res, http.StatusBadRequest, `<Code>ValidationError</Code>`)
+}
+
+func TestUpdateGroupAuthorizesTheNewARN(t *testing.T) {
+	h, f, rec, root := harness(t)
+	ctx := t.Context()
+	if _, err := f.CreateGroup(ctx, root.Account, "scoped", "/old/"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.CreateUser(ctx, root.Account, "bob", "/"); err != nil {
+		t.Fatal(err)
+	}
+	key, err := f.CreateAccessKey(ctx, root.Account, "bob")
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := "arn:vws:iam::123456789012:group/old/scoped"
+	moved := "arn:vws:iam::123456789012:group/new/scoped"
+	allow := func(resources string) string {
+		return `{"Statement":[{"Effect":"Allow","Action":"iam:UpdateGroup","Resource":` + resources + `}]}`
+	}
+	if err := f.PutInlinePolicy(ctx, root.Account, iam.EntityUser, "bob", "update", allow(`"`+old+`"`)); err != nil {
+		t.Fatal(err)
+	}
+	bob := sigv4.Credential{AccessKey: key.AccessKeyID, Secret: key.Secret}
+	res := call(t, h, bob, sigv4.ServiceIAM, url.Values{
+		"Action": {"UpdateGroup"}, "GroupName": {"scoped"}, "NewPath": {"/new/"},
+	})
+	has(t, res, http.StatusForbidden, `<Code>AccessDenied</Code>`)
+	if group, _, err := f.GetGroup(ctx, root.Account, "scoped"); err != nil || group.Path != "/old/" {
+		t.Fatalf("denied update changed the group to %+v: %v", group, err)
+	}
+	both := allow(`["` + old + `","` + moved + `"]`)
+	if err := f.PutInlinePolicy(ctx, root.Account, iam.EntityUser, "bob", "update", both); err != nil {
+		t.Fatal(err)
+	}
+	res = call(t, h, bob, sigv4.ServiceIAM, url.Values{
+		"Action": {"UpdateGroup"}, "GroupName": {"scoped"}, "NewPath": {"/new/"},
+	})
+	has(t, res, http.StatusOK, `<UpdateGroupResponse>`, `<ResponseMetadata><RequestId>`)
+	if group, _, err := f.GetGroup(ctx, root.Account, "scoped"); err != nil || group.Path != "/new/" {
+		t.Fatalf("allowed update left the group at %+v: %v", group, err)
+	}
+	wantOld := "iam:UpdateGroup " + old
+	wantNew := "iam:UpdateGroup " + moved
+	if len(rec.seen) < 2 || rec.seen[len(rec.seen)-2] != wantOld || rec.seen[len(rec.seen)-1] != wantNew {
+		t.Errorf("authorized %v, want last %q then %q", rec.seen, wantOld, wantNew)
+	}
+}
+
 func TestUpdateAssumeRolePolicy(t *testing.T) {
 	h, f, rec, root := harness(t)
 	ctx := t.Context()

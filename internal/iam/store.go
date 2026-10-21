@@ -106,12 +106,15 @@ func checkName(rule *regexp.Regexp, field, v string) error {
 	return nil
 }
 
-func normPath(p string) (string, error) {
+func normPath(p string) (string, error) { return normPathAs(p, "Path") }
+
+func normPathAs(p, field string) (string, error) {
 	if p == "" {
 		return "/", nil
 	}
 	if len(p) > 512 || !pathRule.MatchString(p) {
-		return "", resource.Invalid("Path", "The specified value for path is invalid. It must begin and end with / and contain only alphanumeric characters and/or / characters.")
+		return "", resource.Invalid(field, "The specified value for path is invalid. "+
+			"It must begin and end with / and contain only alphanumeric characters and/or / characters.")
 	}
 	return p, nil
 }
@@ -382,6 +385,54 @@ func (f *Fake) ListGroups(_ context.Context, a resource.AccountID, prefix string
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out, nil
+}
+
+// UpdateGroup implements Admin. A rename moves the group and its memberships;
+// the id stays the same.
+func (f *Fake) UpdateGroup(_ context.Context, a resource.AccountID, name, newPath, newName string) error {
+	if err := checkName(groupName, "groupName", name); err != nil {
+		return err
+	}
+	path := ""
+	if newPath != "" {
+		p, err := normPathAs(newPath, "newPath")
+		if err != nil {
+			return err
+		}
+		path = p
+	}
+	if newName != "" {
+		if err := checkName(groupName, "newGroupName", newName); err != nil {
+			return err
+		}
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	st := f.account(a)
+	g := st.groups[name]
+	if g == nil {
+		return notFound("group", name)
+	}
+	target := name
+	if newName != "" {
+		target = newName
+	}
+	if target != name && st.groups[target] != nil {
+		return exists("Group", target)
+	}
+	if path == "" {
+		path = g.Path
+	}
+	if target != name {
+		delete(st.groups, name)
+		for user := range g.members {
+			delete(st.users[user].groups, name)
+			st.users[user].groups[target] = true
+		}
+		st.groups[target] = g
+	}
+	g.Name, g.Path, g.ARN = target, path, iamARN(a, "group", path, target)
+	return nil
 }
 
 // DeleteGroup implements Admin.
