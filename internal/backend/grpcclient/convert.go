@@ -365,12 +365,9 @@ func instanceModel(in *computev1.Instance) (resource.Instance, error) {
 		}
 	}
 	observed := in.GetStatus().GetObserved().GetState()
-	state, err := instanceStateOf(observed, in.GetStatus().GetPower())
-	if err != nil {
-		return resource.Instance{}, err
-	}
+	state := instanceStateOf(observed, in.GetStatus().GetPower())
 	var reason resource.StateReason
-	if observed == commonv1.ReconciliationState_RECONCILIATION_STATE_ERROR {
+	if reconcileFailed(observed) {
 		reason = resource.StateReason{
 			Code:    resource.ServerInternalError,
 			Message: resource.ServerInternalErrorMessage,
@@ -411,29 +408,46 @@ func instanceModel(in *computev1.Instance) (resource.Instance, error) {
 	}, nil
 }
 
-func instanceStateOf(obs commonv1.ReconciliationState, power computev1.InstancePower) (resource.InstanceState, error) {
+func instanceStateOf(obs commonv1.ReconciliationState, power computev1.InstancePower) resource.InstanceState {
 	switch obs {
 	case commonv1.ReconciliationState_RECONCILIATION_STATE_PENDING:
-		return resource.InstancePending, nil
+		return resource.InstancePending
 	case commonv1.ReconciliationState_RECONCILIATION_STATE_RECONCILING:
 		if power == computev1.InstancePower_INSTANCE_POWER_STOPPED {
-			return resource.InstanceStopping, nil
+			return resource.InstanceStopping
 		}
-		return resource.InstancePending, nil
+		return resource.InstancePending
 	case commonv1.ReconciliationState_RECONCILIATION_STATE_READY:
 		if power == computev1.InstancePower_INSTANCE_POWER_STOPPED {
-			return resource.InstanceStopped, nil
+			return resource.InstanceStopped
 		}
-		return resource.InstanceRunning, nil
+		return resource.InstanceRunning
 	case commonv1.ReconciliationState_RECONCILIATION_STATE_DELETING:
-		return resource.InstanceShuttingDown, nil
-	case commonv1.ReconciliationState_RECONCILIATION_STATE_ERROR:
+		return resource.InstanceShuttingDown
+	case commonv1.ReconciliationState_RECONCILIATION_STATE_ERROR,
+		commonv1.ReconciliationState_RECONCILIATION_STATE_UNSPECIFIED:
 		// EC2 has no error instance state. An internal launch failure is terminated.
-		return resource.InstanceTerminated, nil
-	case commonv1.ReconciliationState_RECONCILIATION_STATE_UNSPECIFIED:
-		return 0, resource.Internal(errors.New("bad instance state"))
+		return resource.InstanceTerminated
 	default:
-		return 0, resource.Internal(errors.New("bad instance state"))
+		return resource.InstanceTerminated
+	}
+}
+
+// reconcileFailed reports a record whose service failed it or cannot name its
+// state. Compute and storage send UNSPECIFIED only for a lifecycle they do not
+// know. Such a record is listed as failed so it cannot fail the listing (#191).
+func reconcileFailed(obs commonv1.ReconciliationState) bool {
+	switch obs {
+	case commonv1.ReconciliationState_RECONCILIATION_STATE_PENDING,
+		commonv1.ReconciliationState_RECONCILIATION_STATE_RECONCILING,
+		commonv1.ReconciliationState_RECONCILIATION_STATE_READY,
+		commonv1.ReconciliationState_RECONCILIATION_STATE_DELETING:
+		return false
+	case commonv1.ReconciliationState_RECONCILIATION_STATE_ERROR,
+		commonv1.ReconciliationState_RECONCILIATION_STATE_UNSPECIFIED:
+		return true
+	default:
+		return true
 	}
 }
 

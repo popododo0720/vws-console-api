@@ -1265,10 +1265,7 @@ func volumeModel(in *storagev1.Volume) (resource.Volume, error) {
 	if err != nil {
 		return resource.Volume{}, err
 	}
-	state, err := volumeStateOf(in)
-	if err != nil {
-		return resource.Volume{}, err
-	}
+	state := volumeStateOf(in)
 	var inst resource.InstanceID
 	if name := in.GetStatus().GetInstance(); name != "" {
 		parsed, err := resource.Parse[resource.InstanceID](lastSegment(name))
@@ -1310,25 +1307,27 @@ func volumeModel(in *storagev1.Volume) (resource.Volume, error) {
 	return vol, nil
 }
 
-func volumeStateOf(in *storagev1.Volume) (resource.VolumeState, error) {
+func volumeStateOf(in *storagev1.Volume) resource.VolumeState {
 	obs := in.GetStatus().GetObserved().GetState()
-	// An attachment is in-use, except a failed volume, which EC2 reports as error.
-	if in.GetStatus().GetInstance() != "" && obs != commonv1.ReconciliationState_RECONCILIATION_STATE_ERROR {
-		return resource.VolumeInUse, nil
+	// A failed volume is error, which EC2 reports even for an attached volume.
+	if reconcileFailed(obs) {
+		return resource.VolumeError
+	}
+	if in.GetStatus().GetInstance() != "" {
+		return resource.VolumeInUse
 	}
 	switch obs {
 	case commonv1.ReconciliationState_RECONCILIATION_STATE_PENDING, commonv1.ReconciliationState_RECONCILIATION_STATE_RECONCILING:
-		return resource.VolumeCreating, nil
+		return resource.VolumeCreating
 	case commonv1.ReconciliationState_RECONCILIATION_STATE_READY:
-		return resource.VolumeAvailable, nil
+		return resource.VolumeAvailable
 	case commonv1.ReconciliationState_RECONCILIATION_STATE_DELETING:
-		return resource.VolumeDeleting, nil
-	case commonv1.ReconciliationState_RECONCILIATION_STATE_ERROR:
-		return resource.VolumeError, nil
-	case commonv1.ReconciliationState_RECONCILIATION_STATE_UNSPECIFIED:
-		return "", resource.Internal(errors.New("bad volume state"))
+		return resource.VolumeDeleting
+	case commonv1.ReconciliationState_RECONCILIATION_STATE_ERROR,
+		commonv1.ReconciliationState_RECONCILIATION_STATE_UNSPECIFIED:
+		return resource.VolumeError
 	default:
-		return "", resource.Internal(errors.New("bad volume state"))
+		return resource.VolumeError
 	}
 }
 

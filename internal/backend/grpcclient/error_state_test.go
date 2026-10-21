@@ -75,6 +75,17 @@ func (s *errorWorld) ListVolumes(
 	return &storagev1.ListVolumesResponse{Volumes: s.vol}, nil
 }
 
+func (s *errorWorld) GetVolume(_ context.Context, req *storagev1.GetVolumeRequest) (*storagev1.Volume, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, vol := range s.vol {
+		if vol.GetName() == req.GetName() {
+			return vol, nil
+		}
+	}
+	return nil, status.Error(codes.NotFound, "missing volume")
+}
+
 func (s *errorWorld) deleteCount() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -273,35 +284,118 @@ func TestTerminateErrorInstanceIsIdempotent(t *testing.T) {
 	}
 }
 
-func TestUnspecifiedReconcileStaysInternal(t *testing.T) {
+// TestUnreadableReconcileIsAFailedRecord pins #191: a reconciliation state
+// this process cannot read is a failed record, not a failed listing. Compute
+// and storage emit UNSPECIFIED only for a lifecycle they do not know, so the
+// record is listed the way ERROR is: a terminated instance with state reason
+// Server.InternalError, and a volume in state error.
+func TestUnreadableReconcileIsAFailedRecord(t *testing.T) {
 	account := mustAccount(t)
 	projectID := project(account)
+	const healthyID = "i-0123456789abcdef0"
+	const brokenID = "i-0fedcba9876543210"
 	for _, state := range []commonv1.ReconciliationState{
 		commonv1.ReconciliationState_RECONCILIATION_STATE_UNSPECIFIED,
 		99,
 	} {
 		world := &errorWorld{
 			inst: []*computev1.Instance{
-				observedInstance(projectID, "i-0123456789abcdef0",
+				observedInstance(projectID, healthyID,
 					commonv1.ReconciliationState_RECONCILIATION_STATE_READY,
 					computev1.InstancePower_INSTANCE_POWER_RUNNING),
-				observedInstance(projectID, "i-0fedcba9876543210", state,
-					computev1.InstancePower_INSTANCE_POWER_UNSPECIFIED),
+				observedInstance(projectID, brokenID, state,
+					computev1.InstancePower_INSTANCE_POWER_RUNNING),
 			},
 			vol: []*storagev1.Volume{
-				observedVolume(projectID, "vol-0123456789abcdef0", state, ""),
+				observedVolume(projectID, "vol-0123456789abcdef0",
+					commonv1.ReconciliationState_RECONCILIATION_STATE_READY, ""),
+				observedVolume(projectID, "vol-0fedcba9876543210", state, ""),
+				observedVolume(projectID, "vol-0abcdef0123456789", state, brokenID),
 			},
 		}
 		client := dialErrorWorld(t, world)
 		ctx := context.Background()
 		scope := backend.Scope{Account: account}
-		_, err := client.DescribeInstances(ctx, scope, resource.InstanceQuery{})
-		if resource.CodeOf(err) != resource.CodeInternal {
-			t.Fatalf("instances state %d: %v", state, err)
+
+		page, err := client.DescribeInstances(ctx, scope, resource.InstanceQuery{})
+		if err != nil {
+			t.Fatalf("state %d: DescribeInstances: %v", state, err)
 		}
-		_, err = client.DescribeVolumes(ctx, scope, resource.VolumeQuery{})
-		if resource.CodeOf(err) != resource.CodeInternal {
-			t.Fatalf("volumes state %d: %v", state, err)
+		byID := map[string]resource.Instance{}
+		for _, inst := range page.Items {
+			byID[inst.ID.String()] = inst
+		}
+		if len(page.Items) != 2 || byID[healthyID].State != resource.InstanceRunning {
+			t.Fatalf("state %d: instances %+v", state, page.Items)
+		}
+		broken := byID[brokenID]
+		if broken.State != resource.InstanceTerminated || broken.StateReason.Code != "Server.InternalError" ||
+			broken.StateReason.Message != internalErrorMessage {
+			t.Fatalf("state %d: broken %s %+v", state, broken.State, broken.StateReason)
+		}
+		id, err := resource.Parse[resource.InstanceID](brokenID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		one, err := client.DescribeInstances(ctx, scope, resource.InstanceQuery{IDs: []resource.InstanceID{id}})
+		if err != nil || len(one.Items) != 1 || one.Items[0].State != resource.InstanceTerminated {
+			t.Fatalf("state %d: describe one: %v %+v", state, err, one.Items)
+		}
+
+		volumes, err := client.DescribeVolumes(ctx, scope, resource.VolumeQuery{})
+		if err != nil {
+			t.Fatalf("state %d: DescribeVolumes: %v", state, err)
+		}
+		volByID := map[string]resource.Volume{}
+		for _, vol := range volumes.Items {
+			volByID[vol.ID.String()] = vol
+		}
+		if len(volumes.Items) != 3 || volByID["vol-0123456789abcdef0"].State != resource.VolumeAvailable {
+			t.Fatalf("state %d: volumes %+v", state, volumes.Items)
+		}
+		for _, vid := range []string{"vol-0fedcba9876543210", "vol-0abcdef0123456789"} {
+			if volByID[vid].State != resource.VolumeError {
+				t.Fatalf("state %d: volume %s state %q", state, vid, volByID[vid].State)
+			}
+		}
+		vid, err := resource.Parse[resource.VolumeID]("vol-0fedcba9876543210")
+		if err != nil {
+			t.Fatal(err)
+		}
+		named, err := client.DescribeVolumes(ctx, scope, resource.VolumeQuery{IDs: []resource.VolumeID{vid}})
+		if err != nil || len(named.Items) != 1 || named.Items[0].State != resource.VolumeError {
+			t.Fatalf("state %d: describe one volume: %v %+v", state, err, named.Items)
+		}
+	}
+}
+
+// TestOrphanBootVolumeFromRefusedLaunchIsListed pins the #197 record: the boot
+// volume a refused RunInstances left before #199, failed by storage, with the
+// image source and the instance label but no attachment. DescribeVolumes lists
+// it in state error beside a healthy volume.
+func TestOrphanBootVolumeFromRefusedLaunchIsListed(t *testing.T) {
+	account := mustAccount(t)
+	projectID := project(account)
+	orphan := observedVolume(projectID, "vol-031ea7c88bfbff2cd",
+		commonv1.ReconciliationState_RECONCILIATION_STATE_ERROR, "")
+	orphan.Spec.Source = &storagev1.VolumeSpec_Image{Image: imageName(projectID, "ami-0b1900000000dead1")}
+	orphan.Labels = map[string]string{labelInstance: "i-0fedcba9876543210"}
+	world := &errorWorld{vol: []*storagev1.Volume{
+		observedVolume(projectID, "vol-0123456789abcdef0",
+			commonv1.ReconciliationState_RECONCILIATION_STATE_READY, ""),
+		orphan,
+	}}
+	client := dialErrorWorld(t, world)
+	page, err := client.DescribeVolumes(context.Background(), backend.Scope{Account: account}, resource.VolumeQuery{})
+	if err != nil {
+		t.Fatalf("DescribeVolumes: %v", err)
+	}
+	if len(page.Items) != 2 {
+		t.Fatalf("volumes %+v", page.Items)
+	}
+	for _, vol := range page.Items {
+		if vol.ID.String() == "vol-031ea7c88bfbff2cd" && vol.State != resource.VolumeError {
+			t.Fatalf("orphan %+v", vol)
 		}
 	}
 }
