@@ -614,3 +614,23 @@ func KnownImages(owner AccountID) []Image {
 		ID: id, OwnerID: owner, Name: "vws-1", State: "available",
 	}}
 }
+
+// CanLaunchImage reports whether KnownImages for owner names id in RegionName.
+func CanLaunchImage(owner AccountID, id ImageID) bool {
+	for _, img := range KnownImages(owner) {
+		if img.ID == id && img.Name == RegionName {
+			return true
+		}
+	}
+	return false
+}
+
+// ImageNotFound reports an image id this process cannot launch in RegionName.
+// EC2 answers this pair with 400 InvalidAMIID.NotFound.
+func ImageNotFound(id ImageID) *Error {
+	return &Error{
+		Code:    CodeNotFound,
+		Kind:    KindImage,
+		Message: "The image id '[" + id.String() + "]' does not exist",
+	}
+}
