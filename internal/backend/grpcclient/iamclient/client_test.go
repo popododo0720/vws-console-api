@@ -61,6 +61,25 @@ type server struct {
 	tagErr       error
 	tagPolicyRes *longrunningpb.Operation
 	listTagsRes  *iamv1.ListPolicyTagsResponse
+	getPolicy    []*iamv1.GetPolicyRequest
+	getPolicyRes *iamv1.Policy
+	getPolicyErr error
+}
+
+func (s *server) GetPolicy(ctx context.Context, req *iamv1.GetPolicyRequest) (*iamv1.Policy, error) {
+	if err := s.enter(ctx); err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.getPolicy = append(s.getPolicy, req)
+	if s.getPolicyErr != nil {
+		return nil, s.getPolicyErr
+	}
+	if s.getPolicyRes != nil {
+		return s.getPolicyRes, nil
+	}
+	return &iamv1.Policy{Name: req.GetName(), Status: &iamv1.PolicyStatus{Arn: policyARN}}, nil
 }
 
 func (s *server) TagPolicy(ctx context.Context, req *iamv1.TagPolicyRequest) (*longrunningpb.Operation, error) {

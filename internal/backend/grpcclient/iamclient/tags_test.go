@@ -138,3 +138,65 @@ func TestPolicyTagOtherAccountIsNotFound(t *testing.T) {
 		t.Fatalf("a cross-account call reached vws-iam: %v %v", s.tagPolicy, s.listTags)
 	}
 }
+
+// A policy is addressed by name on the vws-iam wire, so the client must check
+// that the stored policy ARN, path included, is the ARN the caller sent.
+// Otherwise an ARN for one path reaches a policy at another path.
+func TestPolicyTagWrongPathIsNotFound(t *testing.T) {
+	c, s := harness(t)
+	admin := STSAdmin{Client: c}
+	ctx := t.Context()
+	stored := "arn:vws:iam::123456789012:policy/admin/tagged"
+	wrong := "arn:vws:iam::123456789012:policy/team/tagged"
+	s.getPolicyRes = &iamv1.Policy{
+		Name:   "projects/123456789012/policies/tagged",
+		Status: &iamv1.PolicyStatus{Arn: stored},
+	}
+	tags := []iam.Tag{{Key: "k", Value: "v"}}
+	if err := admin.TagPolicy(ctx, accountID(t), wrong, tags); resource.CodeOf(err) != resource.CodeNotFound {
+		t.Fatalf("wrong path tag mapped to %v", err)
+	}
+	if err := admin.UntagPolicy(ctx, accountID(t), wrong, []string{"k"}); resource.CodeOf(err) != resource.CodeNotFound {
+		t.Fatalf("wrong path untag mapped to %v", err)
+	}
+	if _, err := admin.ListPolicyTags(ctx, accountID(t), wrong, "", 0); resource.CodeOf(err) != resource.CodeNotFound {
+		t.Fatalf("wrong path list mapped to %v", err)
+	}
+	if len(s.tagPolicy)+len(s.untagPolicy)+len(s.listTags) != 0 {
+		t.Fatalf("a wrong-path call reached a mutation: %v %v %v", s.tagPolicy, s.untagPolicy, s.listTags)
+	}
+	if len(s.getPolicy) != 3 {
+		t.Fatalf("looked the policy up %d times, want 3", len(s.getPolicy))
+	}
+	if got := s.getPolicy[0].GetName(); got != "projects/123456789012/policies/tagged" {
+		t.Fatalf("looked up %q", got)
+	}
+	// The stored ARN, path included, is accepted and reaches the backend.
+	if err := admin.TagPolicy(ctx, accountID(t), stored, tags); err != nil {
+		t.Fatal(err)
+	}
+	if len(s.tagPolicy) != 1 || s.tagPolicy[0].GetName() != "projects/123456789012/policies/tagged" {
+		t.Fatalf("right path tag sent %v", s.tagPolicy)
+	}
+}
+
+func TestPolicyTagMissingPolicyIsNotFound(t *testing.T) {
+	c, s := harness(t)
+	admin := STSAdmin{Client: c}
+	ctx := t.Context()
+	s.getPolicyErr = awsErr(codes.NotFound, "RESOURCE_NOT_FOUND", "NoSuchEntity")
+	tags := []iam.Tag{{Key: "k", Value: "v"}}
+	if err := admin.TagPolicy(ctx, accountID(t), policyARN, tags); resource.CodeOf(err) != resource.CodeNotFound {
+		t.Fatalf("missing policy tag mapped to %v", err)
+	}
+	keys := []string{"k"}
+	if err := admin.UntagPolicy(ctx, accountID(t), policyARN, keys); resource.CodeOf(err) != resource.CodeNotFound {
+		t.Fatalf("missing policy untag mapped to %v", err)
+	}
+	if _, err := admin.ListPolicyTags(ctx, accountID(t), policyARN, "", 0); resource.CodeOf(err) != resource.CodeNotFound {
+		t.Fatalf("missing policy list mapped to %v", err)
+	}
+	if len(s.tagPolicy)+len(s.untagPolicy)+len(s.listTags) != 0 {
+		t.Fatalf("a missing-policy call reached a mutation: %v %v %v", s.tagPolicy, s.untagPolicy, s.listTags)
+	}
+}

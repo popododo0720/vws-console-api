@@ -229,3 +229,51 @@ func TestTagPolicyRequiresTagMembers(t *testing.T) {
 	has(t, call(t, h, root, sigv4.ServiceIAM, url.Values{"Action": {"ListPolicyTags"}, "PolicyArn": {policyTagARN}}),
 		http.StatusOK, `<Tags><member><Key>empty</Key><Value></Value></member></Tags>`)
 }
+
+// A user allowed only on policy/team/* must not reach a policy at another
+// path by sending an ARN for the path it is allowed on. The fake keys a
+// policy by its full ARN, so the wrong path is NoSuchEntity.
+func TestPolicyTagWrongPathScopedUser(t *testing.T) {
+	h, f, _, root := harness(t)
+	ctx := t.Context()
+	doc := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"s3:*","Resource":"*"}]}`
+	has(t, call(t, h, root, sigv4.ServiceIAM, url.Values{
+		"Action": {"CreatePolicy"}, "PolicyName": {"secret"},
+		"Path": {"/admin/"}, "PolicyDocument": {doc},
+	}), http.StatusOK)
+	if _, err := f.CreateUser(ctx, root.Account, "bob", "/"); err != nil {
+		t.Fatal(err)
+	}
+	allow := `{"Statement":[{"Effect":"Allow","Action":["iam:TagPolicy","iam:UntagPolicy","iam:ListPolicyTags"],` +
+		`"Resource":"arn:vws:iam::123456789012:policy/team/*"}]}`
+	if err := f.PutInlinePolicy(ctx, root.Account, iam.EntityUser, "bob", "team", allow); err != nil {
+		t.Fatal(err)
+	}
+	k, err := f.CreateAccessKey(ctx, root.Account, "bob")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bob := sigv4.Credential{AccessKey: k.AccessKeyID, Secret: k.Secret}
+	// The sent ARN is inside the user's scope, but the stored policy is at /admin/.
+	wrong := "arn:vws:iam::123456789012:policy/team/secret"
+	has(t, call(t, h, bob, sigv4.ServiceIAM, url.Values{
+		"Action": {"TagPolicy"}, "PolicyArn": {wrong},
+		"Tags.member.1.Key": {"k"}, "Tags.member.1.Value": {"v"},
+	}), http.StatusNotFound, `<Code>NoSuchEntity</Code>`)
+	has(t, call(t, h, bob, sigv4.ServiceIAM, url.Values{
+		"Action": {"UntagPolicy"}, "PolicyArn": {wrong},
+		"TagKeys.member.1": {"k"},
+	}), http.StatusNotFound, `<Code>NoSuchEntity</Code>`)
+	has(t, call(t, h, bob, sigv4.ServiceIAM, url.Values{"Action": {"ListPolicyTags"}, "PolicyArn": {wrong}}),
+		http.StatusNotFound, `<Code>NoSuchEntity</Code>`)
+	// A policy under the path the user is scoped to works.
+	has(t, call(t, h, root, sigv4.ServiceIAM, url.Values{
+		"Action": {"CreatePolicy"}, "PolicyName": {"own"},
+		"Path": {"/team/"}, "PolicyDocument": {doc},
+	}), http.StatusOK)
+	right := "arn:vws:iam::123456789012:policy/team/own"
+	has(t, call(t, h, bob, sigv4.ServiceIAM, url.Values{
+		"Action": {"TagPolicy"}, "PolicyArn": {right},
+		"Tags.member.1.Key": {"k"}, "Tags.member.1.Value": {"v"},
+	}), http.StatusOK, `<TagPolicyResponse>`)
+}
