@@ -355,6 +355,19 @@ func iamActions() map[string]spec {
 				Role roleXML `xml:"Role"`
 			}{toRole(r)}, err
 		}),
+		"UpdateRoleDescription": admin(
+			[]string{"RoleName", "Description"}, roleARN,
+			func(h *handler, c *exchange) (any, error) {
+				if err := required(c, "RoleName", "Description"); err != nil {
+					return nil, err
+				}
+				r, err := h.cfg.Admin.UpdateRoleDescription(
+					c.r.Context(), c.caller.Account, c.form("RoleName"), c.form("Description"))
+				return struct {
+					Role roleXML `xml:"Role"`
+				}{toRole(r)}, err
+			},
+		),
 		"ListRoles": lister(nil, func(h *handler, c *exchange) (any, error) {
 			rs, err := h.cfg.Admin.ListRoles(c.r.Context(), c.caller.Account, c.form("PathPrefix"))
 			out := rolesResult{Roles: []roleXML{}}

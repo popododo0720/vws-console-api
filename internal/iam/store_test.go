@@ -2,6 +2,7 @@ package iam
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -145,6 +146,47 @@ func TestAssumeRole(t *testing.T) {
 	f.Now = func() time.Time { return now.Add(16 * time.Minute) }
 	if _, err := f.Authenticate(context.Background(), authReq(t, got.Key.AccessKey, got.Key.Secret, got.Key.SessionToken)); resource.CodeOf(err) != resource.CodeUnauthenticated {
 		t.Errorf("expired session: %v", err)
+	}
+}
+
+func TestUpdateRoleDescription(t *testing.T) {
+	ctx := t.Context()
+	a := account(t)
+	f := NewFake()
+	trust := `{"Statement":[{"Effect":"Allow","Action":"sts:AssumeRole","Principal":{"AWS":"*"}}]}`
+	r, err := f.CreateRole(ctx, a, RoleInput{Name: "ops", Path: "/", TrustPolicy: trust, Description: "old"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := f.UpdateRoleDescription(ctx, a, "ops", "new")
+	if err != nil || got.Description != "new" || got.ARN != r.ARN {
+		t.Fatalf("update description %+v %v", got, err)
+	}
+	if stored, _ := f.GetRole(ctx, a, "ops"); stored.Description != "new" {
+		t.Errorf("stored description %q, want new", stored.Description)
+	}
+	if _, err := f.UpdateRoleDescription(ctx, a, "none", "new"); resource.CodeOf(err) != resource.CodeNotFound {
+		t.Errorf("missing role: %v", err)
+	}
+	long := strings.Repeat("x", MaxRoleDescription+1)
+	if _, err := f.UpdateRoleDescription(ctx, a, "ops", long); resource.CodeOf(err) != resource.CodeInvalidArgument {
+		t.Errorf("oversized description: %v", err)
+	}
+	if stored, _ := f.GetRole(ctx, a, "ops"); stored.Description != "new" {
+		t.Errorf("a rejected update changed the description to %q", stored.Description)
+	}
+	if _, err := f.CreateRole(ctx, a, RoleInput{
+		Name: "svc", Path: serviceLinkedRolePath + "compute.vws/", TrustPolicy: trust,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	_, err = f.UpdateRoleDescription(ctx, a, "svc", "new")
+	if resource.CodeOf(err) != resource.CodeConflict {
+		t.Errorf("service-linked role: %v", err)
+	}
+	var e *resource.Error
+	if !errors.As(err, &e) || e.Field != "UnmodifiableEntity" {
+		t.Errorf("service-linked role field: %+v", err)
 	}
 }
 

@@ -104,6 +104,60 @@ func TestPolicyDocumentsAreURLEncoded(t *testing.T) {
 	has(t, res, http.StatusOK, `<Document>`+strings.ReplaceAll(url.QueryEscape(doc), "+", "%20")+`</Document>`, `<IsDefaultVersion>true</IsDefaultVersion>`)
 }
 
+func TestUpdateRoleDescription(t *testing.T) {
+	h, f, rec, root := harness(t)
+	ctx := t.Context()
+	trust := `{"Statement":[{"Effect":"Allow","Action":"sts:AssumeRole","Principal":{"AWS":"*"}}]}`
+	if _, err := f.CreateRole(ctx, root.Account, iam.RoleInput{
+		Name: "ops", Path: "/", TrustPolicy: trust, Description: "old",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	res := call(t, h, root, sigv4.ServiceIAM, url.Values{
+		"Action": {"UpdateRoleDescription"}, "RoleName": {"ops"}, "Description": {"new"},
+	})
+	has(t, res, http.StatusOK,
+		`<UpdateRoleDescriptionResponse><UpdateRoleDescriptionResult><Role>`,
+		`<RoleName>ops</RoleName>`, `<Description>new</Description>`,
+		`<ResponseMetadata><RequestId>`)
+	role, err := f.GetRole(ctx, root.Account, "ops")
+	if err != nil || role.Description != "new" {
+		t.Fatalf("stored description %q, want new: %v", role.Description, err)
+	}
+	want := "iam:UpdateRoleDescription arn:vws:iam::123456789012:role/ops"
+	if len(rec.seen) == 0 || rec.seen[len(rec.seen)-1] != want {
+		t.Errorf("authorized %v, want last %q", rec.seen, want)
+	}
+	res = call(t, h, root, sigv4.ServiceIAM, url.Values{
+		"Action": {"UpdateRoleDescription"}, "RoleName": {"ops"}, "Description": {"new"},
+	})
+	has(t, res, http.StatusOK, `<Description>new</Description>`)
+
+	res = call(t, h, root, sigv4.ServiceIAM, url.Values{
+		"Action": {"UpdateRoleDescription"}, "RoleName": {"none"}, "Description": {"new"},
+	})
+	has(t, res, http.StatusNotFound, `<Code>NoSuchEntity</Code>`)
+	res = call(t, h, root, sigv4.ServiceIAM, url.Values{
+		"Action": {"UpdateRoleDescription"}, "RoleName": {"ops"},
+	})
+	has(t, res, http.StatusBadRequest, `<Code>ValidationError</Code>`)
+	long := strings.Repeat("x", 1001)
+	res = call(t, h, root, sigv4.ServiceIAM, url.Values{
+		"Action": {"UpdateRoleDescription"}, "RoleName": {"ops"}, "Description": {long},
+	})
+	has(t, res, http.StatusBadRequest, `<Code>ValidationError</Code>`)
+
+	if _, err := f.CreateRole(ctx, root.Account, iam.RoleInput{
+		Name: "svc", Path: "/aws-service-role/compute.vws/", TrustPolicy: trust,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	res = call(t, h, root, sigv4.ServiceIAM, url.Values{
+		"Action": {"UpdateRoleDescription"}, "RoleName": {"svc"}, "Description": {"new"},
+	})
+	has(t, res, http.StatusBadRequest, `<Code>UnmodifiableEntity</Code>`)
+}
+
 func TestLimitedUserAndSTS(t *testing.T) {
 	h, f, rec, root := harness(t)
 	ctx := t.Context()

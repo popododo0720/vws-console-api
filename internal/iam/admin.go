@@ -50,6 +50,19 @@ type RoleInput struct {
 	MaxSessionDuration int
 }
 
+// MaxRoleDescription is AWS's limit on a role description.
+const MaxRoleDescription = 1000
+
+// ValidateRoleDescription reports a description over the AWS limit.
+func ValidateRoleDescription(description string) error {
+	if len(description) > MaxRoleDescription {
+		return resource.Invalid("description",
+			"1 validation error detected: Value at 'description' failed to satisfy constraint: "+
+				"Member must have length less than or equal to 1000")
+	}
+	return nil
+}
+
 // Role is an IAM role.
 type Role struct {
 	Name, Path, ID, ARN, TrustPolicy, Description string
@@ -113,6 +126,7 @@ type Admin interface {
 
 	CreateRole(ctx context.Context, a resource.AccountID, in RoleInput) (Role, error)
 	GetRole(ctx context.Context, a resource.AccountID, name string) (Role, error)
+	UpdateRoleDescription(ctx context.Context, a resource.AccountID, name, description string) (Role, error)
 	ListRoles(ctx context.Context, a resource.AccountID, pathPrefix string) ([]Role, error)
 	DeleteRole(ctx context.Context, a resource.AccountID, name string) error
 
