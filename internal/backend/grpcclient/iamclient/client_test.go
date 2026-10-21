@@ -37,6 +37,7 @@ type server struct {
 	iamv1.UnimplementedAuthServiceServer
 	iamv1.UnimplementedTokenServiceServer
 	iamv1.UnimplementedPolicyServiceServer
+	iamv1.UnimplementedMfaDeviceServiceServer
 	mu          sync.Mutex
 	authn       []*iamv1.AuthenticateRequest
 	authz       []*iamv1.AuthorizeRequest
@@ -61,6 +62,13 @@ type server struct {
 	tagErr       error
 	tagPolicyRes *longrunningpb.Operation
 	listTagsRes  *iamv1.ListPolicyTagsResponse
+	// Virtual MFA device tag calls.
+	tagMfa        []*iamv1.TagMFADeviceRequest
+	untagMfa      []*iamv1.UntagMFADeviceRequest
+	listMfaTags   []*iamv1.ListMFADeviceTagsRequest
+	mfaTagErr     error
+	tagMfaRes     *longrunningpb.Operation
+	listMfaTagRes *iamv1.ListMFADeviceTagsResponse
 }
 
 func (s *server) TagPolicy(ctx context.Context, req *iamv1.TagPolicyRequest) (*longrunningpb.Operation, error) {
@@ -105,6 +113,52 @@ func (s *server) ListPolicyTags(
 		return nil, s.tagErr
 	}
 	return s.listTagsRes, nil
+}
+
+func (s *server) TagMFADevice(ctx context.Context, req *iamv1.TagMFADeviceRequest) (*longrunningpb.Operation, error) {
+	if err := s.enter(ctx); err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.tagMfa = append(s.tagMfa, req)
+	if s.mfaTagErr != nil {
+		return nil, s.mfaTagErr
+	}
+	if s.tagMfaRes != nil {
+		return s.tagMfaRes, nil
+	}
+	return &longrunningpb.Operation{Done: true}, nil
+}
+
+func (s *server) UntagMFADevice(
+	ctx context.Context, req *iamv1.UntagMFADeviceRequest,
+) (*longrunningpb.Operation, error) {
+	if err := s.enter(ctx); err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.untagMfa = append(s.untagMfa, req)
+	if s.mfaTagErr != nil {
+		return nil, s.mfaTagErr
+	}
+	return &longrunningpb.Operation{Done: true}, nil
+}
+
+func (s *server) ListMFADeviceTags(
+	ctx context.Context, req *iamv1.ListMFADeviceTagsRequest,
+) (*iamv1.ListMFADeviceTagsResponse, error) {
+	if err := s.enter(ctx); err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.listMfaTags = append(s.listMfaTags, req)
+	if s.mfaTagErr != nil {
+		return nil, s.mfaTagErr
+	}
+	return s.listMfaTagRes, nil
 }
 
 func (s *server) enter(ctx context.Context) error {
@@ -193,6 +247,7 @@ func harness(t *testing.T) (*Client, *server) {
 	iamv1.RegisterAuthServiceServer(g, s)
 	iamv1.RegisterTokenServiceServer(g, s)
 	iamv1.RegisterPolicyServiceServer(g, s)
+	iamv1.RegisterMfaDeviceServiceServer(g, s)
 	go func() { _ = g.Serve(lis) }()
 	t.Cleanup(g.Stop)
 	conn, err := grpc.NewClient("passthrough:///bufnet",

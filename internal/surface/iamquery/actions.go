@@ -469,6 +469,64 @@ func iamActions() map[string]spec {
 				return out, err
 			},
 		},
+		"TagMFADevice": {
+			params: []string{"SerialNumber"}, prefixes: []string{"Tags.member."}, needsAdmin: true,
+			resource: mfaDeviceARN,
+			run: func(h *handler, c *exchange) (any, error) {
+				if err := requireMFADevice(c, h, "iam:TagMFADevice"); err != nil {
+					return nil, err
+				}
+				tags, err := parseTagMembers(c)
+				if err != nil {
+					return nil, err
+				}
+				if err := iam.ValidateTags(tags); err != nil {
+					return nil, err
+				}
+				return nil, h.cfg.Admin.TagMFADevice(c.r.Context(), c.caller.Account, c.form("SerialNumber"), tags)
+			},
+		},
+		"UntagMFADevice": {
+			params: []string{"SerialNumber"}, prefixes: []string{"TagKeys.member."}, needsAdmin: true,
+			resource: mfaDeviceARN,
+			run: func(h *handler, c *exchange) (any, error) {
+				if err := requireMFADevice(c, h, "iam:UntagMFADevice"); err != nil {
+					return nil, err
+				}
+				keys, err := parseTagKeys(c)
+				if err != nil {
+					return nil, err
+				}
+				for _, key := range keys {
+					if err := iam.ValidateTagKey(key); err != nil {
+						return nil, err
+					}
+				}
+				return nil, h.cfg.Admin.UntagMFADevice(c.r.Context(), c.caller.Account, c.form("SerialNumber"), keys)
+			},
+		},
+		"ListMFADeviceTags": {
+			params: []string{"SerialNumber", "Marker", "MaxItems"}, needsAdmin: true, resource: mfaDeviceARN,
+			run: func(h *handler, c *exchange) (any, error) {
+				if err := requireMFADevice(c, h, "iam:ListMFADeviceTags"); err != nil {
+					return nil, err
+				}
+				maxItems, err := maxItemsParam(c)
+				if err != nil {
+					return nil, err
+				}
+				if err := markerParam(c); err != nil {
+					return nil, err
+				}
+				page, err := h.cfg.Admin.ListMFADeviceTags(
+					c.r.Context(), c.caller.Account, c.form("SerialNumber"), c.form("Marker"), maxItems)
+				out := tagsResult{Tags: []tagXML{}, IsTruncated: page.IsTruncated, Marker: page.Marker}
+				for _, tag := range page.Tags {
+					out.Tags = append(out.Tags, tagXML{Key: tag.Key, Value: tag.Value})
+				}
+				return out, err
+			},
+		},
 	}
 	for kind, e := range map[iam.Entity]struct {
 		word, key string

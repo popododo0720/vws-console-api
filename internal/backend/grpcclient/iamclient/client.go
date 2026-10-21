@@ -44,13 +44,14 @@ type Options struct {
 }
 
 // Client implements the per-request half of iam.Client, AssumeRole and the
-// policy tag calls of iam.Admin.
+// policy and virtual MFA device tag calls of iam.Admin.
 type Client struct {
-	auth     iamv1.AuthServiceClient
-	tokens   iamv1.TokenServiceClient
-	policies iamv1.PolicyServiceClient
-	backoff  time.Duration
-	close    func() error
+	auth       iamv1.AuthServiceClient
+	tokens     iamv1.TokenServiceClient
+	policies   iamv1.PolicyServiceClient
+	mfaDevices iamv1.MfaDeviceServiceClient
+	backoff    time.Duration
+	close      func() error
 }
 
 // Dial connects to vws-iam at target. The connection is lazy; the first call
@@ -73,8 +74,8 @@ func New(conn grpc.ClientConnInterface, o Options) *Client {
 	}
 	return &Client{
 		auth: iamv1.NewAuthServiceClient(conn), tokens: iamv1.NewTokenServiceClient(conn),
-		policies: iamv1.NewPolicyServiceClient(conn), backoff: o.Backoff,
-		close: func() error { return nil },
+		policies: iamv1.NewPolicyServiceClient(conn), mfaDevices: iamv1.NewMfaDeviceServiceClient(conn),
+		backoff: o.Backoff, close: func() error { return nil },
 	}
 }
 

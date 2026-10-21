@@ -215,6 +215,29 @@ func policyResource(a resource.AccountID, arn string) (string, error) {
 	return "projects/" + parts[4] + "/policies/" + name, nil
 }
 
+// mfaDeviceResource turns arn:vws:iam::{project}:mfa/{name} into
+// projects/{project}/mfaDevices/{name}. A serial number that names no device
+// of the caller, as in AWS, does not exist.
+func mfaDeviceResource(a resource.AccountID, serial string) (string, error) {
+	parts := strings.SplitN(serial, ":", 6)
+	if len(parts) != 6 || parts[0] != "arn" || parts[2] != "iam" {
+		return "", mfaDeviceNotFound()
+	}
+	account, err := resource.Parse[resource.AccountID](parts[4])
+	if err != nil {
+		return "", mfaDeviceNotFound()
+	}
+	name, ok := strings.CutPrefix(parts[5], "mfa/")
+	if !ok || name == "" || strings.Contains(name, "/") || account != a {
+		return "", mfaDeviceNotFound()
+	}
+	return "projects/" + parts[4] + "/mfaDevices/" + name, nil
+}
+
+func mfaDeviceNotFound() error {
+	return &resource.Error{Code: resource.CodeNotFound, Message: "The specified MFA device does not exist."}
+}
+
 // operationResult maps a finished vws-iam operation to an error. vws-iam
 // answers IAM mutations synchronously, so a running operation is a fault.
 func operationResult(op *longrunningpb.Operation) error {
@@ -273,6 +296,60 @@ func (a STSAdmin) ListPolicyTags(
 		req.PageSize = int32(maxItems) //nolint:gosec // the surface bounds MaxItems to 1..1000.
 	}
 	resp, err := retry(ctx, a.backoff, a.policies.ListPolicyTags, req)
+	if err != nil {
+		return iam.TagPage{}, authError(err)
+	}
+	page := iam.TagPage{Tags: []iam.Tag{}, IsTruncated: resp.GetNextPageToken() != "", Marker: resp.GetNextPageToken()}
+	for _, tag := range resp.GetTags() {
+		page.Tags = append(page.Tags, iam.Tag{Key: tag.GetKey(), Value: tag.GetValue()})
+	}
+	return page, nil
+}
+
+// TagMFADevice implements iam.Admin over MfaDeviceService.TagMFADevice.
+func (a STSAdmin) TagMFADevice(ctx context.Context, account resource.AccountID, serial string, tags []iam.Tag) error {
+	name, err := mfaDeviceResource(account, serial)
+	if err != nil {
+		return err
+	}
+	req := &iamv1.TagMFADeviceRequest{Name: name, Tags: make([]*iamv1.Tag, 0, len(tags))}
+	for _, tag := range tags {
+		req.Tags = append(req.Tags, &iamv1.Tag{Key: tag.Key, Value: tag.Value})
+	}
+	op, err := call(ctx, a.mfaDevices.TagMFADevice, req)
+	if err != nil {
+		return authError(err)
+	}
+	return operationResult(op)
+}
+
+// UntagMFADevice implements iam.Admin over MfaDeviceService.UntagMFADevice.
+func (a STSAdmin) UntagMFADevice(ctx context.Context, account resource.AccountID, serial string, keys []string) error {
+	name, err := mfaDeviceResource(account, serial)
+	if err != nil {
+		return err
+	}
+	op, err := call(ctx, a.mfaDevices.UntagMFADevice, &iamv1.UntagMFADeviceRequest{Name: name, TagKeys: keys})
+	if err != nil {
+		return authError(err)
+	}
+	return operationResult(op)
+}
+
+// ListMFADeviceTags implements iam.Admin over MfaDeviceService.ListMFADeviceTags.
+// The AWS Marker is the proto page token: both are opaque to the caller.
+func (a STSAdmin) ListMFADeviceTags(
+	ctx context.Context, account resource.AccountID, serial, marker string, maxItems int,
+) (iam.TagPage, error) {
+	name, err := mfaDeviceResource(account, serial)
+	if err != nil {
+		return iam.TagPage{}, err
+	}
+	req := &iamv1.ListMFADeviceTagsRequest{Name: name, PageToken: marker}
+	if maxItems > 0 {
+		req.PageSize = int32(maxItems) //nolint:gosec // the surface bounds MaxItems to 1..1000.
+	}
+	resp, err := retry(ctx, a.backoff, a.mfaDevices.ListMFADeviceTags, req)
 	if err != nil {
 		return iam.TagPage{}, authError(err)
 	}
