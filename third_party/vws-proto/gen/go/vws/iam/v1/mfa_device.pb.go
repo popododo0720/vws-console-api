@@ -836,14 +836,16 @@ func (x *DeactivateMfaDeviceResponse) GetMfaDevice() *MfaDevice {
 }
 
 // TagMFADevice adds or overwrites tags on a virtual MFA device. The whole
-// request fails and stores nothing when one tag is invalid, a key repeats, or
-// the device would keep more than 50 tags. The response is the MfaDevice.
-// console-api resolves the AWS SerialNumber to this resource name.
+// request fails and stores nothing when one tag is invalid, the request has
+// more than 50 tags, or the device would keep more than 50 tags. The response
+// is the MfaDevice. console-api resolves the AWS SerialNumber to this resource
+// name.
 type TagMFADeviceRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	Name  string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	// 1-50 tags. A key that repeats is the same as naming it twice: the last
-	// value wins.
+	// 1-50 tags. AWS TagMFADevice: "If a tag with the same key name already
+	// exists, then that tag is overwritten with the new value." A key that
+	// repeats within one request keeps the last value.
 	Tags          []*Tag `protobuf:"bytes,2,rep,name=tags,proto3" json:"tags,omitempty"`
 	RequestId     string `protobuf:"bytes,3,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
 	ValidateOnly  bool   `protobuf:"varint,4,opt,name=validate_only,json=validateOnly,proto3" json:"validate_only,omitempty"`

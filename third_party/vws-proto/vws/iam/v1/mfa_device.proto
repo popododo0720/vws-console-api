@@ -247,16 +247,18 @@ message DeactivateMfaDeviceResponse {
 }
 
 // TagMFADevice adds or overwrites tags on a virtual MFA device. The whole
-// request fails and stores nothing when one tag is invalid, a key repeats, or
-// the device would keep more than 50 tags. The response is the MfaDevice.
-// console-api resolves the AWS SerialNumber to this resource name.
+// request fails and stores nothing when one tag is invalid, the request has
+// more than 50 tags, or the device would keep more than 50 tags. The response
+// is the MfaDevice. console-api resolves the AWS SerialNumber to this resource
+// name.
 message TagMFADeviceRequest {
   string name = 1 [
     (google.api.field_behavior) = REQUIRED,
     (google.api.resource_reference).type = "vws.iam/MfaDevice"
   ];
-  // 1-50 tags. A key that repeats is the same as naming it twice: the last
-  // value wins.
+  // 1-50 tags. AWS TagMFADevice: "If a tag with the same key name already
+  // exists, then that tag is overwritten with the new value." A key that
+  // repeats within one request keeps the last value.
   repeated Tag tags = 2 [(google.api.field_behavior) = REQUIRED];
   string request_id = 3 [
     (google.api.field_info).format = UUID4,

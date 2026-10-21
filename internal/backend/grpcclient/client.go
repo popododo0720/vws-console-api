@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	longrunningpb "cloud.google.com/go/longrunning/autogen/longrunningpb"
@@ -26,8 +27,9 @@ type Addrs struct {
 
 // Client is a backend.Set backed by three gRPC connections.
 type Client struct {
-	conns []*grpc.ClientConn
-	set   backend.Set
+	conns  []*grpc.ClientConn
+	set    backend.Set
+	shared *api
 }
 
 // Dial opens the three connections. RPC failures surface on the first call.
@@ -63,13 +65,25 @@ func Dial(ctx context.Context, addrs Addrs) (*Client, error) {
 		networkOps: longrunningpb.NewOperationsClient(networkConn),
 	}
 	return &Client{
-		conns: []*grpc.ClientConn{computeConn, storageConn, networkConn},
+		conns:  []*grpc.ClientConn{computeConn, storageConn, networkConn},
+		shared: shared,
 		set: backend.Set{
 			Compute: computeClient{shared},
 			Storage: storageClient{shared},
 			Network: networkClient{shared},
 		},
 	}, nil
+}
+
+// SetLogger sets the logger for records a listing leaves out. Call it after
+// Dial and before serving. Without one, the messages are dropped.
+func (c *Client) SetLogger(log *slog.Logger) { c.shared.log = log }
+
+func (a *api) logger() *slog.Logger {
+	if a.log == nil {
+		return slog.New(slog.DiscardHandler)
+	}
+	return a.log
 }
 
 // MaxMessageBytes is the gRPC frame size. ObjectService promises 8MiB

@@ -703,7 +703,7 @@ func (f *Fake) ListPolicyTags(
 
 // --- virtual MFA device tags ---
 
-func mfaDeviceNotFound(serial string) error {
+func mfaDeviceNotFound() error {
 	return &resource.Error{Code: resource.CodeNotFound, Message: "The specified MFA device does not exist."}
 }
 
@@ -711,7 +711,7 @@ func mfaDeviceNotFound(serial string) error {
 func (st *store) mfaDevice(serial string) (*mfaDeviceRec, error) {
 	d := st.mfa[serial]
 	if d == nil {
-		return nil, mfaDeviceNotFound(serial)
+		return nil, mfaDeviceNotFound()
 	}
 	return d, nil
 }

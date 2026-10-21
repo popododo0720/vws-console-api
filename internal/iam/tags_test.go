@@ -198,3 +198,31 @@ func TestFakePolicyTagsKeepUpdateDate(t *testing.T) {
 		t.Fatalf("untagging moved UpdateDate to %v, want %v", after.Updated, created)
 	}
 }
+
+// The fake keys policies by their full ARN, so the path is part of the
+// identity. A policy at another path does not exist for the caller.
+func TestFakePolicyTagsWrongPathIsNotFound(t *testing.T) {
+	ctx := t.Context()
+	a := account(t)
+	f := NewFake()
+	p, err := f.CreatePolicy(ctx, a, "tagged", "/team/", describeOnly, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "arn:vws:iam::123456789012:policy/team/tagged"; p.ARN != want {
+		t.Fatalf("ARN %q, want %q", p.ARN, want)
+	}
+	wrong := "arn:vws:iam::123456789012:policy/admin/tagged"
+	if err := f.TagPolicy(ctx, a, wrong, []Tag{{Key: "k", Value: "v"}}); resource.CodeOf(err) != resource.CodeNotFound {
+		t.Fatalf("wrong path tag mapped to %v", err)
+	}
+	if err := f.UntagPolicy(ctx, a, wrong, []string{"k"}); resource.CodeOf(err) != resource.CodeNotFound {
+		t.Fatalf("wrong path untag mapped to %v", err)
+	}
+	if _, err := f.ListPolicyTags(ctx, a, wrong, "", 0); resource.CodeOf(err) != resource.CodeNotFound {
+		t.Fatalf("wrong path list mapped to %v", err)
+	}
+	if err := f.TagPolicy(ctx, a, p.ARN, []Tag{{Key: "k", Value: "v"}}); err != nil {
+		t.Fatalf("right path tag: %v", err)
+	}
+}

@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"io"
+	"log/slog"
 	"slices"
 	"strconv"
 	"time"
@@ -39,6 +40,7 @@ type api struct {
 	computeOps longrunningpb.OperationsClient
 	storageOps longrunningpb.OperationsClient
 	networkOps longrunningpb.OperationsClient
+	log        *slog.Logger
 }
 
 type computeClient struct{ *api }
@@ -280,6 +282,9 @@ func (c computeClient) DescribeInstances(ctx context.Context, s backend.Scope, q
 	for _, item := range out.GetInstances() {
 		inst, err := instanceModel(item)
 		if err != nil {
+			if c.skipBadRecord(ctx, item.GetName(), err) {
+				continue
+			}
 			return resource.Page[resource.Instance]{}, err
 		}
 		if stateWanted(inst.State, q.States) {

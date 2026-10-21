@@ -62,6 +62,9 @@ type server struct {
 	tagErr       error
 	tagPolicyRes *longrunningpb.Operation
 	listTagsRes  *iamv1.ListPolicyTagsResponse
+	getPolicy    []*iamv1.GetPolicyRequest
+	getPolicyRes *iamv1.Policy
+	getPolicyErr error
 	// Virtual MFA device tag calls.
 	tagMfa        []*iamv1.TagMFADeviceRequest
 	untagMfa      []*iamv1.UntagMFADeviceRequest
@@ -69,6 +72,25 @@ type server struct {
 	mfaTagErr     error
 	tagMfaRes     *longrunningpb.Operation
 	listMfaTagRes *iamv1.ListMFADeviceTagsResponse
+	getMfa        []*iamv1.GetMfaDeviceRequest
+	getMfaRes     *iamv1.MfaDevice
+	getMfaErr     error
+}
+
+func (s *server) GetPolicy(ctx context.Context, req *iamv1.GetPolicyRequest) (*iamv1.Policy, error) {
+	if err := s.enter(ctx); err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.getPolicy = append(s.getPolicy, req)
+	if s.getPolicyErr != nil {
+		return nil, s.getPolicyErr
+	}
+	if s.getPolicyRes != nil {
+		return s.getPolicyRes, nil
+	}
+	return &iamv1.Policy{Name: req.GetName(), Status: &iamv1.PolicyStatus{Arn: policyARN}}, nil
 }
 
 func (s *server) TagPolicy(ctx context.Context, req *iamv1.TagPolicyRequest) (*longrunningpb.Operation, error) {
@@ -113,6 +135,25 @@ func (s *server) ListPolicyTags(
 		return nil, s.tagErr
 	}
 	return s.listTagsRes, nil
+}
+
+func (s *server) GetMfaDevice(ctx context.Context, req *iamv1.GetMfaDeviceRequest) (*iamv1.MfaDevice, error) {
+	if err := s.enter(ctx); err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.getMfa = append(s.getMfa, req)
+	if s.getMfaErr != nil {
+		return nil, s.getMfaErr
+	}
+	if s.getMfaRes != nil {
+		return s.getMfaRes, nil
+	}
+	return &iamv1.MfaDevice{
+		Name:   req.GetName(),
+		Status: &iamv1.MfaDeviceStatus{SerialNumber: mfaSerial},
+	}, nil
 }
 
 func (s *server) TagMFADevice(ctx context.Context, req *iamv1.TagMFADeviceRequest) (*longrunningpb.Operation, error) {

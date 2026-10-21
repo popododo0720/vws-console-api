@@ -215,6 +215,36 @@ func policyResource(a resource.AccountID, arn string) (string, error) {
 	return "projects/" + parts[4] + "/policies/" + name, nil
 }
 
+// policyNotFound is the AWS NoSuchEntity answer for a policy the caller may
+// not address. It is the same for a missing policy and for an ARN whose path
+// does not match the stored policy.
+func policyNotFound(arn string) error {
+	return &resource.Error{Code: resource.CodeNotFound, Message: "Policy " + arn + " does not exist or is not attachable."}
+}
+
+// policyFor resolves a policy ARN to a resource name and checks that the
+// stored policy's full ARN, including its path, equals the ARN the caller
+// sent. vws-iam addresses a policy by name, and its name does not carry the
+// path, so without this check an ARN for one path would reach the policy at
+// another path the caller is not authorized on.
+func (a STSAdmin) policyFor(ctx context.Context, account resource.AccountID, arn string) (string, error) {
+	name, err := policyResource(account, arn)
+	if err != nil {
+		return "", err
+	}
+	pol, err := retry(ctx, a.backoff, a.policies.GetPolicy, &iamv1.GetPolicyRequest{Name: name})
+	if err != nil {
+		if resource.CodeOf(authError(err)) == resource.CodeNotFound {
+			return "", policyNotFound(arn)
+		}
+		return "", authError(err)
+	}
+	if pol.GetStatus().GetArn() != arn {
+		return "", policyNotFound(arn)
+	}
+	return name, nil
+}
+
 // mfaDeviceResource turns arn:vws:iam::{project}:mfa/{name} into
 // projects/{project}/mfaDevices/{name}. A serial number that names no device
 // of the caller, as in AWS, does not exist.
@@ -254,7 +284,7 @@ func operationResult(op *longrunningpb.Operation) error {
 
 // TagPolicy implements iam.Admin over PolicyService.TagPolicy.
 func (a STSAdmin) TagPolicy(ctx context.Context, account resource.AccountID, arn string, tags []iam.Tag) error {
-	name, err := policyResource(account, arn)
+	name, err := a.policyFor(ctx, account, arn)
 	if err != nil {
 		return err
 	}
@@ -271,7 +301,7 @@ func (a STSAdmin) TagPolicy(ctx context.Context, account resource.AccountID, arn
 
 // UntagPolicy implements iam.Admin over PolicyService.UntagPolicy.
 func (a STSAdmin) UntagPolicy(ctx context.Context, account resource.AccountID, arn string, keys []string) error {
-	name, err := policyResource(account, arn)
+	name, err := a.policyFor(ctx, account, arn)
 	if err != nil {
 		return err
 	}
@@ -287,7 +317,7 @@ func (a STSAdmin) UntagPolicy(ctx context.Context, account resource.AccountID, a
 func (a STSAdmin) ListPolicyTags(
 	ctx context.Context, account resource.AccountID, arn, marker string, maxItems int,
 ) (iam.TagPage, error) {
-	name, err := policyResource(account, arn)
+	name, err := a.policyFor(ctx, account, arn)
 	if err != nil {
 		return iam.TagPage{}, err
 	}

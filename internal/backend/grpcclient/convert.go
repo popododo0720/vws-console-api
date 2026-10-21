@@ -1,7 +1,9 @@
 package grpcclient
 
 import (
+	"context"
 	"errors"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -324,21 +326,41 @@ func instanceObserved(st resource.InstanceState) (commonv1.ReconciliationState, 
 	}
 }
 
+// badRecordNameError marks a backend record whose resource name does not name an
+// id. A listing skips it and logs; an explicit id read still fails.
+type badRecordNameError struct{ err error }
+
+func (e *badRecordNameError) Error() string { return e.err.Error() }
+
+func (e *badRecordNameError) Unwrap() error { return e.err }
+
+// skipBadRecord reports whether err marks a record a listing must leave out.
+// It logs the record's name so a skipped resource stays auditable.
+func (a *api) skipBadRecord(ctx context.Context, name string, err error) bool {
+	var bad *badRecordNameError
+	if !errors.As(err, &bad) {
+		return false
+	}
+	a.logger().WarnContext(ctx, "skipping a record with an invalid resource name",
+		slog.String("name", name), slog.Any("err", err))
+	return true
+}
+
 func instanceModel(in *computev1.Instance) (resource.Instance, error) {
 	if in == nil {
 		return resource.Instance{}, resource.Internal(errors.New("missing instance"))
 	}
 	parts := splitSlash(in.GetName())
 	if len(parts) != 6 || parts[2] != "zones" || parts[4] != "instances" {
-		return resource.Instance{}, resource.Internal(errors.New("bad instance name"))
+		return resource.Instance{}, resource.Internal(&badRecordNameError{errors.New("bad instance name")})
 	}
 	id, err := resource.Parse[resource.InstanceID](parts[5])
 	if err != nil {
-		return resource.Instance{}, resource.Internal(err)
+		return resource.Instance{}, resource.Internal(&badRecordNameError{err})
 	}
 	owner, err := accountOf(parts[1])
 	if err != nil {
-		return resource.Instance{}, err
+		return resource.Instance{}, resource.Internal(&badRecordNameError{err})
 	}
 	resID, err := resource.Parse[resource.ReservationID](in.GetLabels()[labelReservation])
 	if err != nil {
@@ -365,12 +387,9 @@ func instanceModel(in *computev1.Instance) (resource.Instance, error) {
 		}
 	}
 	observed := in.GetStatus().GetObserved().GetState()
-	state, err := instanceStateOf(observed, in.GetStatus().GetPower())
-	if err != nil {
-		return resource.Instance{}, err
-	}
+	state := instanceStateOf(observed, in.GetStatus().GetPower())
 	var reason resource.StateReason
-	if observed == commonv1.ReconciliationState_RECONCILIATION_STATE_ERROR {
+	if reconcileFailed(observed) {
 		reason = resource.StateReason{
 			Code:    resource.ServerInternalError,
 			Message: resource.ServerInternalErrorMessage,
@@ -411,29 +430,46 @@ func instanceModel(in *computev1.Instance) (resource.Instance, error) {
 	}, nil
 }
 
-func instanceStateOf(obs commonv1.ReconciliationState, power computev1.InstancePower) (resource.InstanceState, error) {
+func instanceStateOf(obs commonv1.ReconciliationState, power computev1.InstancePower) resource.InstanceState {
 	switch obs {
 	case commonv1.ReconciliationState_RECONCILIATION_STATE_PENDING:
-		return resource.InstancePending, nil
+		return resource.InstancePending
 	case commonv1.ReconciliationState_RECONCILIATION_STATE_RECONCILING:
 		if power == computev1.InstancePower_INSTANCE_POWER_STOPPED {
-			return resource.InstanceStopping, nil
+			return resource.InstanceStopping
 		}
-		return resource.InstancePending, nil
+		return resource.InstancePending
 	case commonv1.ReconciliationState_RECONCILIATION_STATE_READY:
 		if power == computev1.InstancePower_INSTANCE_POWER_STOPPED {
-			return resource.InstanceStopped, nil
+			return resource.InstanceStopped
 		}
-		return resource.InstanceRunning, nil
+		return resource.InstanceRunning
 	case commonv1.ReconciliationState_RECONCILIATION_STATE_DELETING:
-		return resource.InstanceShuttingDown, nil
-	case commonv1.ReconciliationState_RECONCILIATION_STATE_ERROR:
+		return resource.InstanceShuttingDown
+	case commonv1.ReconciliationState_RECONCILIATION_STATE_ERROR,
+		commonv1.ReconciliationState_RECONCILIATION_STATE_UNSPECIFIED:
 		// EC2 has no error instance state. An internal launch failure is terminated.
-		return resource.InstanceTerminated, nil
-	case commonv1.ReconciliationState_RECONCILIATION_STATE_UNSPECIFIED:
-		return 0, resource.Internal(errors.New("bad instance state"))
+		return resource.InstanceTerminated
 	default:
-		return 0, resource.Internal(errors.New("bad instance state"))
+		return resource.InstanceTerminated
+	}
+}
+
+// reconcileFailed reports a record whose service failed it or cannot name its
+// state. Compute and storage send UNSPECIFIED only for a lifecycle they do not
+// know. Such a record is listed as failed so it cannot fail the listing (#191).
+func reconcileFailed(obs commonv1.ReconciliationState) bool {
+	switch obs {
+	case commonv1.ReconciliationState_RECONCILIATION_STATE_PENDING,
+		commonv1.ReconciliationState_RECONCILIATION_STATE_RECONCILING,
+		commonv1.ReconciliationState_RECONCILIATION_STATE_READY,
+		commonv1.ReconciliationState_RECONCILIATION_STATE_DELETING:
+		return false
+	case commonv1.ReconciliationState_RECONCILIATION_STATE_ERROR,
+		commonv1.ReconciliationState_RECONCILIATION_STATE_UNSPECIFIED:
+		return true
+	default:
+		return true
 	}
 }
 
