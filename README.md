@@ -199,10 +199,11 @@ error.
 
 ## Error status by listener
 
-The console listener is this service's JSON API. A missing resource is HTTP
-404 and the body code is `NotFound`.
+The console listener is this service's JSON API, not an AWS protocol. The web
+console reads HTTP 404 with the body code `NotFound` as a missing resource, so
+the console keeps 404. A 400 would surface the same absence as an error.
 
-The protocol listeners use the status on the AWS page for that API.
+The AWS protocol listeners use the status on the AWS page for that API.
 
 | Listener | Missing resource | Status | AWS page |
 | --- | --- | --- | --- |

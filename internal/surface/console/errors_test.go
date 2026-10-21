@@ -45,3 +45,28 @@ func TestEveryCodeHasAConsoleStatus(t *testing.T) {
 		}
 	}
 }
+
+// TestImageNotFoundIsHTTP404 pins the console half of the per-surface split.
+// EC2 Query answers the same NotFound of KindImage as HTTP 400
+// InvalidAMIID.NotFound; the console keeps HTTP 404 for its client.
+func TestImageNotFoundIsHTTP404(t *testing.T) {
+	const msg = "The image id '[ami-00000000000000000]' does not exist"
+	rec := httptest.NewRecorder()
+	writeErr(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v1/images", nil), &resource.Error{
+		Code: resource.CodeNotFound, Kind: resource.KindImage, Message: msg,
+	})
+	var body struct {
+		Error struct {
+			Code    string `json:"code"`
+			Kind    string `json:"kind"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if rec.Code != http.StatusNotFound || body.Error.Code != "NotFound" ||
+		body.Error.Kind != "image" || body.Error.Message != msg {
+		t.Fatalf("image not found = %d %+v", rec.Code, body.Error)
+	}
+}
