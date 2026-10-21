@@ -294,6 +294,9 @@ def key_launch():
         step("RunInstances unknown KeyName is InvalidKeyPair.NotFound", lambda: ec2_error("InvalidKeyPair.NotFound", lambda: ec2.run_instances(
             ImageId="ami-0123456789abcdef0", InstanceType="t3.micro", MinCount=1, MaxCount=1,
             SubnetId=S["subnet"], ClientToken="tok-nokey", KeyName="e2e-missing")), "vm")
+        step("RunInstances other-region AMI is InvalidAMIID.NotFound", lambda: ec2_error("InvalidAMIID.NotFound", lambda: ec2.run_instances(
+            ImageId="ami-fedcba9876543210", InstanceType="t3.micro", MinCount=1, MaxCount=1,
+            SubnetId=S["subnet"], ClientToken="tok-other-region")), "vm")
         step("TerminateInstances keyed instance", lambda: ec2.terminate_instances(InstanceIds=[iid]), "vm")
 
     def delete_key(name):

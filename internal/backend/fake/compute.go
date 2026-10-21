@@ -39,6 +39,9 @@ func (c compute) RunInstances(ctx context.Context, m backend.Mutation, req resou
 			return resource.Accepted[resource.Instance]{}, resource.NotFound(resource.KindKeyPair, req.KeyName)
 		}
 	}
+	if !resource.CanLaunchImage(m.Account, req.ImageID) {
+		return resource.Accepted[resource.Instance]{}, resource.ImageNotFound(req.ImageID)
+	}
 	resID, err := resource.Mint[resource.ReservationID](c.w.entropy)
 	if err != nil {
 		return resource.Accepted[resource.Instance]{}, err

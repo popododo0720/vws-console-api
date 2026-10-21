@@ -4,6 +4,7 @@ package backendtest
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"maps"
 	"strings"
@@ -46,6 +47,7 @@ func Run(t *testing.T, newSet Harness) {
 	if _, err := set.Network.GetOperation(ctx, backend.Scope{Account: account}, created.Operation.ID); err != nil {
 		t.Fatal(err)
 	}
+	exerciseImageRegion(ctx, t, set, account, created.Items[0].ID)
 	networkTags(t, set, account)
 	req := resource.RunInstancesRequest{
 		ImageID: img, InstanceType: "vws.small", SubnetID: created.Items[0].ID, Count: 1,
@@ -307,6 +309,51 @@ func Run(t *testing.T, newSet Harness) {
 	exerciseEC2(ctx, t, set, account, first.Items[0].ID)
 	exerciseKeyLaunch(ctx, t, set, account, created.Items[0].ID, img)
 	exerciseRootDevice(ctx, t, set, account, created.Items[0].ID, img)
+}
+
+// exerciseImageRegion checks that a launch refuses an image the process cannot
+// prove is in this region, and that the refusal creates no volume or instance.
+func exerciseImageRegion(
+	ctx context.Context, t *testing.T, set backend.Set, account resource.AccountID, subnet resource.SubnetID,
+) {
+	t.Helper()
+	foreign, err := resource.Parse[resource.ImageID]("ami-fedcba9876543210")
+	if err != nil {
+		t.Fatal(err)
+	}
+	scope := backend.Scope{Account: account}
+	page := resource.PageRequest{Size: 50}
+	beforeVolumes, err := set.Compute.DescribeVolumes(ctx, scope, resource.VolumeQuery{Page: page})
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeInstances, err := set.Compute.DescribeInstances(ctx, scope, resource.InstanceQuery{Page: page})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mut := backend.Mutation{Scope: scope, Key: "k-foreign-image", Fingerprint: "fp-foreign-image"}
+	req := resource.RunInstancesRequest{
+		ImageID: foreign, InstanceType: "vws.small", SubnetID: subnet, Count: 1,
+	}
+	_, err = set.Compute.RunInstances(ctx, mut, req)
+	var got *resource.Error
+	want := "The image id '[" + foreign.String() + "]' does not exist"
+	if !errors.As(err, &got) || got.Code != resource.CodeNotFound ||
+		got.Kind != resource.KindImage || got.Message != want {
+		t.Fatalf("other-region image: %v", err)
+	}
+	afterVolumes, err := set.Compute.DescribeVolumes(ctx, scope, resource.VolumeQuery{Page: page})
+	if err != nil {
+		t.Fatal(err)
+	}
+	afterInstances, err := set.Compute.DescribeInstances(ctx, scope, resource.InstanceQuery{Page: page})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(afterVolumes.Items) != len(beforeVolumes.Items) || len(afterInstances.Items) != len(beforeInstances.Items) {
+		t.Fatalf("refused launch created volumes %d->%d instances %d->%d",
+			len(beforeVolumes.Items), len(afterVolumes.Items), len(beforeInstances.Items), len(afterInstances.Items))
+	}
 }
 
 // networkTags checks that VPC and subnet tags survive create, describe, and a
