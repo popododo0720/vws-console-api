@@ -959,6 +959,9 @@ func statusOf(c resource.Code) int {
 }
 
 func ec2Code(e *resource.Error) string {
+	if e.EC2Code != "" {
+		return e.EC2Code
+	}
 	switch e.Code {
 	case resource.CodeNotFound:
 		if resource.IsAssociationNotFound(e) {

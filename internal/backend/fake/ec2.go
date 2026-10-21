@@ -577,17 +577,18 @@ func (n network) AuthorizeSecurityGroupIngress(ctx context.Context, m backend.Mu
 	}
 	group, ok := n.w.sg[req.ID]
 	if !ok || group.OwnerID != m.Account {
-		return resource.Accepted[resource.SecurityGroup]{}, resource.NotFound(resource.KindSecurityGroup, req.ID.String())
+		return resource.Accepted[resource.SecurityGroup]{}, resource.GroupNotFound(req.ID.String())
 	}
-	for _, rule := range group.Rules {
-		if rule == req.Rule {
-			return resource.Accepted[resource.SecurityGroup]{}, resource.AlreadyExists(resource.KindSecurityGroup, req.ID.String())
-		}
+	if err := resource.CheckIngressBatch(req.ID.String(), group.Rules, req.Rules); err != nil {
+		return resource.Accepted[resource.SecurityGroup]{}, err
 	}
-	group.Rules = append(group.Rules, req.Rule)
+	prev := len(group.Rules)
+	for _, rule := range req.Rules {
+		group.Rules = append(group.Rules, rule.IngressRule)
+	}
 	op, err := n.w.newOp(m.Account, resource.ServiceNetwork, resource.ActionAuthorizeSecurityGroupIngress, []resource.Ref{group.ID.Ref()}, func(time.Time) {})
 	if err != nil {
-		group.Rules = group.Rules[:len(group.Rules)-1]
+		group.Rules = group.Rules[:prev]
 		return resource.Accepted[resource.SecurityGroup]{}, err
 	}
 	item := *group

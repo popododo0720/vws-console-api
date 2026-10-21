@@ -317,7 +317,7 @@ func (h *handler) authorizeIngress(w http.ResponseWriter, r *http.Request, c res
 		return
 	}
 	if _, err := h.svc.AuthorizeSecurityGroupIngress(r.Context(), c, token, resource.AuthorizeSecurityGroupIngressRequest{
-		ID: id, Rule: rule,
+		ID: id, Rules: []resource.IngressChange{{IngressRule: rule}},
 	}); err != nil {
 		writeErr(w, r, err)
 		return

@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"maps"
+	"strconv"
 	"strings"
 	"time"
 
@@ -292,7 +293,7 @@ func (c computeClient) attachOnce(
 	return resource.Accepted[resource.Volume]{Operation: op, Items: []resource.Volume{vol}}, nil
 }
 
-// etagMismatchError is a stale instance etag. DetachVolume rereads and tries again.
+// etagMismatchError is a stale resource etag. The caller rereads and tries again.
 type etagMismatchError struct{}
 
 func (etagMismatchError) Error() string { return "etag mismatch" }
@@ -1114,47 +1115,173 @@ func (c networkClient) CreateSecurityGroup(ctx context.Context, m backend.Mutati
 }
 
 func (c networkClient) AuthorizeSecurityGroupIngress(ctx context.Context, m backend.Mutation, req resource.AuthorizeSecurityGroupIngressRequest) (resource.Accepted[resource.SecurityGroup], error) {
+	var zero resource.Accepted[resource.SecurityGroup]
 	projectID := project(m.Account)
-	current, err := c.findGroup(ctx, projectID, req.ID.String())
+	rec, found, err := c.findIngressReplay(ctx, projectID, m.Key)
 	if err != nil {
-		return resource.Accepted[resource.SecurityGroup]{}, err
+		return zero, err
 	}
-	for _, have := range current.Rules {
-		if have == req.Rule {
-			return resource.Accepted[resource.SecurityGroup]{}, resource.AlreadyExists(resource.KindSecurityGroup, current.ID.String())
+	if found {
+		if rec.groupID != req.ID.String() || !detachFingerprintMatches(rec.fp, m.Fingerprint) {
+			return zero, resource.IdempotencyMismatch()
 		}
+		return c.replayIngress(ctx, m, rec)
 	}
-	rules := append(append([]resource.IngressRule{}, current.Rules...), req.Rule)
+	msg, err := c.findGroupMessage(ctx, projectID, req.ID.String())
+	if err != nil {
+		if resource.CodeOf(err) == resource.CodeNotFound {
+			return zero, resource.GroupNotFound(req.ID.String())
+		}
+		return zero, err
+	}
+	rec, found, err = ingressReplayFrom(msg, m.Key)
+	if err != nil {
+		return zero, err
+	}
+	if found {
+		if rec.groupID != req.ID.String() || !detachFingerprintMatches(rec.fp, m.Fingerprint) {
+			return zero, resource.IdempotencyMismatch()
+		}
+		return c.replayIngress(ctx, m, rec)
+	}
+	current, err := groupModel(msg)
+	if err != nil {
+		return zero, err
+	}
+	if err := resource.CheckIngressBatch(current.ID.String(), current.Rules, req.Rules); err != nil {
+		return zero, err
+	}
+	rules := append([]resource.IngressRule{}, current.Rules...)
+	for _, rule := range req.Rules {
+		rules = append(rules, rule.IngressRule)
+	}
+	return c.writeIngress(ctx, m, msg, current, rules)
+}
+
+type ingressReplay struct {
+	groupID string
+	fp      string
+	msg     *networkv1.SecurityGroup
+}
+
+func (c networkClient) writeIngress(
+	ctx context.Context, m backend.Mutation, msg *networkv1.SecurityGroup,
+	current resource.SecurityGroup, rules []resource.IngressRule,
+) (resource.Accepted[resource.SecurityGroup], error) {
+	var zero resource.Accepted[resource.SecurityGroup]
 	protoRules := make([]*networkv1.SecurityGroupRule, 0, len(rules))
 	for i, rule := range rules {
-		protoRule, err := ruleProto(rule, derivedID("r", m.Key, "rule", hex.EncodeToString([]byte{byte(i)})))
+		protoRule, err := ruleProto(rule, derivedID("r", m.Key, "rule", strconv.Itoa(i)))
 		if err != nil {
-			return resource.Accepted[resource.SecurityGroup]{}, err
+			return zero, err
 		}
 		protoRules = append(protoRules, protoRule)
 	}
-	updated, err := c.groups.UpdateSecurityGroup(ctx, &networkv1.UpdateSecurityGroupRequest{
+	labels := maps.Clone(msg.GetLabels())
+	if labels == nil {
+		labels = map[string]string{}
+	}
+	tokenKey := ingressTokenLabel(m.Key)
+	if _, ok := labels[tokenKey]; !ok && len(labels) >= labelMax {
+		return zero, resource.Invalid("clientToken", "replay records fill the label limit")
+	}
+	labels[tokenKey] = detachFPToken(m.Fingerprint) + " " + current.ID.String()
+	updated, callErr := c.groups.UpdateSecurityGroup(ctx, &networkv1.UpdateSecurityGroupRequest{
 		RequestId:  requestUUID(m.Key, "ingress"),
-		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.rules"}},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.rules", "labels"}},
 		SecurityGroup: &networkv1.SecurityGroup{
-			Name: securityGroupName(projectID, current.VpcID.String(), current.ID.String()),
-			Spec: &networkv1.SecurityGroupSpec{Rules: protoRules},
+			Name:   msg.GetName(),
+			Labels: labels,
+			Spec:   &networkv1.SecurityGroupSpec{Rules: protoRules},
 		},
 	})
-	if err := rpcErr(updated, err); err != nil {
-		return resource.Accepted[resource.SecurityGroup]{}, err
+	if err := rpcErr(updated, callErr); err != nil {
+		return zero, err
 	}
 	op, err := operationFrom(updated, resource.ServiceNetwork)
 	if err != nil {
-		return resource.Accepted[resource.SecurityGroup]{}, err
+		return zero, err
 	}
-	got, err := c.findGroup(ctx, projectID, req.ID.String())
+	got, err := c.findGroup(ctx, project(m.Account), current.ID.String())
 	if err != nil {
-		return resource.Accepted[resource.SecurityGroup]{}, err
+		return zero, err
 	}
 	op.Action = resource.ActionAuthorizeSecurityGroupIngress
 	op.Targets = []resource.Ref{got.ID.Ref()}
 	return resource.Accepted[resource.SecurityGroup]{Operation: op, Items: []resource.SecurityGroup{got}}, nil
+}
+
+func (c networkClient) replayIngress(
+	ctx context.Context, m backend.Mutation, rec ingressReplay,
+) (resource.Accepted[resource.SecurityGroup], error) {
+	var zero resource.Accepted[resource.SecurityGroup]
+	current, err := groupModel(rec.msg)
+	if err != nil {
+		return zero, err
+	}
+	return c.writeIngress(ctx, m, rec.msg, current, current.Rules)
+}
+
+func ingressReplayFrom(msg *networkv1.SecurityGroup, key string) (ingressReplay, bool, error) {
+	raw, ok := msg.GetLabels()[ingressTokenLabel(key)]
+	if !ok {
+		return ingressReplay{}, false, nil
+	}
+	fp, groupID, cut := strings.Cut(raw, " ")
+	if !cut || fp == "" || groupID == "" {
+		return ingressReplay{}, false, resource.Internal(errors.New("bad ingress replay label"))
+	}
+	return ingressReplay{groupID: groupID, fp: fp, msg: msg}, true, nil
+}
+
+func (c networkClient) findIngressReplay(ctx context.Context, projectID, key string) (ingressReplay, bool, error) {
+	var zero ingressReplay
+	page := ""
+	for vpcPage := 0; vpcPage < 50; vpcPage++ {
+		out, err := c.vpcs.ListVpcs(ctx, &networkv1.ListVpcsRequest{
+			Parent: regionParent(projectID), PageSize: 100, PageToken: page,
+		})
+		if err != nil {
+			return zero, false, fromRPC(err)
+		}
+		for _, vpc := range out.GetVpcs() {
+			groupToken := ""
+			for groupPage := 0; groupPage < 50; groupPage++ {
+				listed, err := c.groups.ListSecurityGroups(ctx, &networkv1.ListSecurityGroupsRequest{
+					Parent: vpc.GetName(), PageSize: 100, PageToken: groupToken,
+				})
+				if err != nil {
+					return zero, false, fromRPC(err)
+				}
+				for _, item := range listed.GetSecurityGroups() {
+					rec, ok, err := ingressReplayFrom(item, key)
+					if err != nil {
+						return zero, false, err
+					}
+					if !ok {
+						continue
+					}
+					return rec, true, nil
+				}
+				groupToken = listed.GetNextPageToken()
+				if groupToken == "" {
+					break
+				}
+			}
+		}
+		page = out.GetNextPageToken()
+		if page == "" {
+			break
+		}
+	}
+	return zero, false, nil
+}
+
+func ingressTokenLabel(key string) string { return labelIngressPrefix + ingressLabelHex(key) }
+
+func ingressLabelHex(key string) string {
+	sum := sha256.Sum256([]byte(key))
+	return hex.EncodeToString(sum[:8])
 }
 
 func (c computeClient) getVolume(ctx context.Context, projectID, id string) (resource.Volume, error) {
@@ -1176,13 +1303,21 @@ func (c networkClient) getVpc(ctx context.Context, projectID, id string) (resour
 }
 
 func (c networkClient) findGroup(ctx context.Context, projectID, id string) (resource.SecurityGroup, error) {
+	msg, err := c.findGroupMessage(ctx, projectID, id)
+	if err != nil {
+		return resource.SecurityGroup{}, err
+	}
+	return groupModel(msg)
+}
+
+func (c networkClient) findGroupMessage(ctx context.Context, projectID, id string) (*networkv1.SecurityGroup, error) {
 	token := ""
 	for page := 0; page < 20; page++ {
 		out, err := c.vpcs.ListVpcs(ctx, &networkv1.ListVpcsRequest{
 			Parent: regionParent(projectID), PageSize: 100, PageToken: token,
 		})
 		if err != nil {
-			return resource.SecurityGroup{}, fromRPC(err)
+			return nil, fromRPC(err)
 		}
 		for _, vpc := range out.GetVpcs() {
 			got, err := c.groups.GetSecurityGroup(ctx, &networkv1.GetSecurityGroupRequest{
@@ -1192,16 +1327,16 @@ func (c networkClient) findGroup(ctx context.Context, projectID, id string) (res
 				if resource.CodeOf(fromRPC(err)) == resource.CodeNotFound {
 					continue
 				}
-				return resource.SecurityGroup{}, fromRPC(err)
+				return nil, fromRPC(err)
 			}
-			return groupModel(got)
+			return got, nil
 		}
 		token = out.GetNextPageToken()
 		if token == "" {
 			break
 		}
 	}
-	return resource.SecurityGroup{}, resource.NotFound(resource.KindSecurityGroup, id)
+	return nil, resource.NotFound(resource.KindSecurityGroup, id)
 }
 
 func acceptedVolume(op *longrunningpb.Operation, req resource.CreateVolumeRequest, state resource.VolumeState) (resource.Accepted[resource.Volume], error) {
