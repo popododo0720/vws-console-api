@@ -25,7 +25,7 @@ that claims this project is someone else's cloud.
 | `internal/surface/s3rest` | Path-style object codec. |
 | `internal/surface/interop` | Tests that drive more than one surface against one world. |
 | `internal/server` | One listener per surface, request IDs, shutdown. |
-| `third_party/vws-proto` | Vendored `github.com/popododo0720/vws-proto` (see the vws-proto pull request for the current commit; today `feat/iam-policy-tags` 8fa2ce8, re-pin after vws-proto#50 merges). Imported through a `replace` directive. |
+| `third_party/vws-proto` | Vendored `github.com/popododo0720/vws-proto` (see the vws-proto pull request for the current commit; today main e92f6b1, the vws-proto#50 squash merge; no release tag yet). Imported through a `replace` directive. |
 
 ## Rules
 
