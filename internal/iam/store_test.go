@@ -313,7 +313,7 @@ func TestUpdateRoleDescription(t *testing.T) {
 		t.Errorf("a rejected update changed the description to %q", stored.Description)
 	}
 	if _, err := f.CreateRole(ctx, a, RoleInput{
-		Name: "svc", Path: serviceLinkedRolePath + "compute.vws/", TrustPolicy: trust,
+		Name: "svc", Path: ServiceLinkedRolePath + "compute.vws/", TrustPolicy: trust,
 	}); err != nil {
 		t.Fatal(err)
 	}

@@ -343,6 +343,20 @@ func TestUpdateRoleDescription(t *testing.T) {
 	})
 	has(t, res, http.StatusOK, `<Description>new</Description>`)
 
+	if _, err := f.CreateRole(ctx, root.Account, iam.RoleInput{
+		Name: "team", Path: "/team/", TrustPolicy: trust,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	res = call(t, h, root, sigv4.ServiceIAM, url.Values{
+		"Action": {"UpdateRoleDescription"}, "RoleName": {"team"}, "Description": {"new"},
+	})
+	has(t, res, http.StatusOK, `<RoleName>team</RoleName>`, `<Path>/team/</Path>`)
+	want = "iam:UpdateRoleDescription arn:vws:iam::123456789012:role/team/team"
+	if len(rec.seen) == 0 || rec.seen[len(rec.seen)-1] != want {
+		t.Errorf("authorized %v, want last %q", rec.seen, want)
+	}
+
 	res = call(t, h, root, sigv4.ServiceIAM, url.Values{
 		"Action": {"UpdateRoleDescription"}, "RoleName": {"none"}, "Description": {"new"},
 	})
@@ -358,7 +372,7 @@ func TestUpdateRoleDescription(t *testing.T) {
 	has(t, res, http.StatusBadRequest, `<Code>ValidationError</Code>`)
 
 	if _, err := f.CreateRole(ctx, root.Account, iam.RoleInput{
-		Name: "svc", Path: "/aws-service-role/compute.vws/", TrustPolicy: trust,
+		Name: "svc", Path: iam.ServiceLinkedRolePath + "compute.vws/", TrustPolicy: trust,
 	}); err != nil {
 		t.Fatal(err)
 	}

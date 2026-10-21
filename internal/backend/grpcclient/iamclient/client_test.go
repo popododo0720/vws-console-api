@@ -77,9 +77,25 @@ type server struct {
 	getMfaRes     *iamv1.MfaDevice
 	getMfaErr     error
 	// Role calls.
+	getRole       []*iamv1.GetRoleRequest
+	getRoleRes    *iamv1.Role
+	getRoleErr    error
 	updateRole    []*iamv1.UpdateRoleRequest
 	updateRoleRes *longrunningpb.Operation
 	updateRoleErr error
+}
+
+func (s *server) GetRole(ctx context.Context, req *iamv1.GetRoleRequest) (*iamv1.Role, error) {
+	if err := s.enter(ctx); err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.getRole = append(s.getRole, req)
+	if s.getRoleErr != nil {
+		return nil, s.getRoleErr
+	}
+	return s.getRoleRes, nil
 }
 
 func (s *server) UpdateRole(ctx context.Context, req *iamv1.UpdateRoleRequest) (*longrunningpb.Operation, error) {

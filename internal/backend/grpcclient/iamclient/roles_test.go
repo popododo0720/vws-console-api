@@ -26,10 +26,38 @@ func roleOperation(t *testing.T, role *iamv1.Role) *longrunningpb.Operation {
 	return &longrunningpb.Operation{Done: true, Result: &longrunningpb.Operation_Response{Response: response}}
 }
 
+func TestGetRole(t *testing.T) {
+	c, s := harness(t)
+	admin := STSAdmin{Client: c}
+	s.getRoleRes = &iamv1.Role{
+		Name:   "projects/123456789012/roles/ops",
+		Spec:   &iamv1.RoleSpec{Path: "/team/", AssumeRolePolicy: `{"Statement":[]}`, Description: "old"},
+		Status: &iamv1.RoleStatus{Arn: "arn:vws:iam::123456789012:role/team/ops", UniqueId: "AROAOPS"},
+	}
+	got, err := admin.GetRole(t.Context(), accountID(t), "ops")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(s.getRole) != 1 || s.getRole[0].GetName() != "projects/123456789012/roles/ops" {
+		t.Fatalf("GetRole calls %v", s.getRole)
+	}
+	if got.Path != "/team/" || got.ARN != "arn:vws:iam::123456789012:role/team/ops" || got.Description != "old" {
+		t.Errorf("role %+v", got)
+	}
+	s.getRoleErr = awsErr(codes.NotFound, "NOT_FOUND", "NoSuchEntity")
+	if _, err := admin.GetRole(t.Context(), accountID(t), "none"); resource.CodeOf(err) != resource.CodeNotFound {
+		t.Errorf("missing role: %v", err)
+	}
+}
+
 func TestUpdateRoleDescription(t *testing.T) {
 	c, s := harness(t)
 	admin := STSAdmin{Client: c}
 	created := time.Date(2026, 10, 14, 7, 0, 0, 0, time.UTC)
+	s.getRoleRes = &iamv1.Role{
+		Name: "projects/123456789012/roles/ops",
+		Spec: &iamv1.RoleSpec{Path: "/", Description: "old"},
+	}
 	s.updateRoleRes = roleOperation(t, &iamv1.Role{
 		Name: "projects/123456789012/roles/ops",
 		Spec: &iamv1.RoleSpec{
@@ -63,6 +91,23 @@ func TestUpdateRoleDescription(t *testing.T) {
 	}
 	if got != want {
 		t.Errorf("role %+v, want %+v", got, want)
+	}
+}
+
+func TestUpdateRoleDescriptionRejectsServiceLinkedRole(t *testing.T) {
+	c, s := harness(t)
+	admin := STSAdmin{Client: c}
+	s.getRoleRes = &iamv1.Role{
+		Name: "projects/123456789012/roles/svc",
+		Spec: &iamv1.RoleSpec{Path: iam.ServiceLinkedRolePath + "compute.vws/"},
+	}
+	_, err := admin.UpdateRoleDescription(t.Context(), accountID(t), "svc", "new")
+	var re *resource.Error
+	if !errors.As(err, &re) || re.Code != resource.CodeConflict || re.Field != "UnmodifiableEntity" {
+		t.Errorf("service-linked role: %+v", err)
+	}
+	if len(s.updateRole) != 0 {
+		t.Errorf("a service-linked role reached UpdateRole: %v", s.updateRole)
 	}
 }
 
