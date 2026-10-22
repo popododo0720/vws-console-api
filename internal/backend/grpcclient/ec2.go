@@ -1538,21 +1538,28 @@ func protocolName(p networkv1.Protocol) string {
 	}
 }
 
-// keyPairID names the key pair a create asks compute for. Compute creates
-// atomically per id, so an id derived from the account and the name turns a
-// second create of a live name into ALREADY_EXISTS, even when two creates
-// race (#273). A key pair made before that id carries an id derived from its
-// client token. When a key pair already holds the name, the create targets
-// its id, so compute still refuses the name or replays the same request.
+// keyPairID names the key pair a create asks compute for. It is always the
+// id derived from the account and the name, so compute's atomic create of
+// that id is the one reservation of the name: two creates of a live name
+// cannot both succeed, even when they race (#273).
+//
+// A key pair made before #273 carries an id derived from its client token,
+// which that reservation cannot see. Such a key pair still holds its name,
+// so a create that finds it is InvalidKeyPair.Duplicate. The create never
+// targets the legacy id: a create that did would succeed once the legacy
+// key pair was deleted, while another create took the derived id (#278).
+// No new legacy id is ever made, so a legacy key pair that is gone stays
+// gone, and the name-derived id is the only id a create can win.
 func (c computeClient) keyPairID(
 	ctx context.Context, projectID string, account resource.AccountID, name string,
 ) (string, error) {
+	id := derivedID("key-", account.String(), "key-name", name)
 	held, err := c.findKey(ctx, projectID, resource.DeleteKeyPairRequest{Name: name})
 	switch {
-	case err == nil:
-		return held.ID.String(), nil
-	case missingResource(err):
-		return derivedID("key-", account.String(), "key-name", name), nil
+	case err == nil && held.ID.String() != id:
+		return "", resource.AlreadyExists(resource.KindKeyPair, name)
+	case err == nil, missingResource(err):
+		return id, nil
 	default:
 		return "", err
 	}
