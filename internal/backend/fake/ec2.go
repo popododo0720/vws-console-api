@@ -404,13 +404,22 @@ func (c compute) CreateKeyPair(ctx context.Context, m backend.Mutation, req reso
 	c.w.mu.Lock()
 	defer c.w.mu.Unlock()
 	c.w.settle(c.w.now())
-	// EC2 CreateKeyPair takes no client token and returns the private key
-	// once. A generated create is judged by the name alone: a live name is
-	// InvalidKeyPair.Duplicate, a free one is a new key pair, whatever the
-	// token did before (#268). An import keeps the token replay.
+	// EC2 CreateKeyPair and ImportKeyPair take no client token. A create is
+	// judged by the name alone: a live name is InvalidKeyPair.Duplicate, a
+	// free one is a new key pair, whatever the token did before (#268). An
+	// import retried under its token replays only while the key pair it made
+	// still lives, so an in-flight retry makes no second key pair. After that
+	// key pair is deleted, or for another key, it is judged by the name too
+	// (#279).
 	if req.PublicKey != "" {
-		if acc, ok, err := replay[resource.Accepted[resource.KeyPair]](c.w, m.Key, m.Fingerprint); err != nil || ok {
+		acc, ok, err := replay[resource.Accepted[resource.KeyPair]](c.w, m.Key, m.Fingerprint)
+		if err != nil && resource.CodeOf(err) != resource.CodeIdempotencyMismatch {
 			return acc, err
+		}
+		if ok && len(acc.Items) == 1 {
+			if _, live := c.w.key[acc.Items[0].ID]; live {
+				return acc, nil
+			}
 		}
 	}
 	for _, existing := range c.w.key {

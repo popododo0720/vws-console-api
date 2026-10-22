@@ -25,6 +25,9 @@ const (
 	// labelKeySHA1 holds EC2's fingerprint of a created RSA key: the hex
 	// SHA-1 of its PKCS#8 private key.
 	labelKeySHA1 = "vws-key-sha1"
+	// labelImport holds the random nonce in the request id of an import, so
+	// a retry can name the same compute request while the key pair lives.
+	labelImport = "vws-import"
 	// labelInstance on a boot volume names the instance it was made for.
 	labelInstance = "vws-instance"
 	// labelNameTag carries the EC2 Name tag. Label keys are lowercase, so the

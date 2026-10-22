@@ -939,6 +939,15 @@ func (c computeClient) CreateKeyPair(ctx context.Context, m backend.Mutation, re
 		// compute's record of an earlier create under the token never answers
 		// it. A gRPC retry of this attempt resends the same request id.
 		requestID = requestUUID(m.Key, "key", pair.Public)
+	} else {
+		nonce, err := c.importNonce(ctx, projectID, keyPairID)
+		if err != nil {
+			return resource.Accepted[resource.KeyPair]{}, err
+		}
+		if nonce != "" {
+			labels[labelImport] = nonce
+			requestID = requestUUID(m.Key, "key", nonce)
+		}
 	}
 	created, err := c.keys.CreateKeyPair(ctx, &computev1.CreateKeyPairRequest{
 		Parent:    regionParent(projectID),
@@ -950,7 +959,11 @@ func (c computeClient) CreateKeyPair(ctx context.Context, m backend.Mutation, re
 		},
 	})
 	if err := rpcErr(created, err); err != nil {
-		if resource.CodeOf(err) == resource.CodeAlreadyExists {
+		// IDEMPOTENCY_CONFLICT on an import means the live key pair's request
+		// carried another body under this token. EC2 ImportKeyPair takes no
+		// token, so that is a second import of a live name.
+		conflict := req.PublicKey != "" && resource.CodeOf(err) == resource.CodeIdempotencyMismatch
+		if conflict || resource.CodeOf(err) == resource.CodeAlreadyExists {
 			return resource.Accepted[resource.KeyPair]{}, resource.AlreadyExists(resource.KindKeyPair, req.Name)
 		}
 		return resource.Accepted[resource.KeyPair]{}, err
@@ -1563,6 +1576,30 @@ func (c computeClient) keyPairID(
 	default:
 		return "", err
 	}
+}
+
+// importNonce picks the nonce of an import's compute request id (#279). EC2
+// ImportKeyPair takes no client token, but an in-flight retry must not make a
+// second key pair. While a key pair lives at id, the retry reuses its nonce,
+// so the same token and body name the same compute request and compute
+// replays it; any other import of the live name is refused. A key pair made
+// before #279 has no nonce, so its retry keeps the old request id. When id is
+// free, the import gets a new random nonce: compute's retained record of an
+// import whose key pair was deleted can no longer answer it.
+func (c computeClient) importNonce(ctx context.Context, projectID, id string) (string, error) {
+	name := keyPairName(projectID, id)
+	held, err := c.keys.GetKeyPair(ctx, &computev1.GetKeyPairRequest{Name: name})
+	switch {
+	case err == nil:
+		return held.GetLabels()[labelImport], nil
+	case !missingResource(fromNamedRPC(name, err)):
+		return "", fromNamedRPC(name, err)
+	}
+	var raw [16]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return "", resource.Internal(err)
+	}
+	return hex.EncodeToString(raw[:]), nil
 }
 
 // storageType maps an EC2 volume type to the storage tier. The storage proto
