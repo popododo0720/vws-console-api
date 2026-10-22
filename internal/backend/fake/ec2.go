@@ -404,18 +404,21 @@ func (c compute) CreateKeyPair(ctx context.Context, m backend.Mutation, req reso
 	c.w.mu.Lock()
 	defer c.w.mu.Unlock()
 	c.w.settle(c.w.now())
-	if acc, ok, err := replay[resource.Accepted[resource.KeyPair]](c.w, m.Key, m.Fingerprint); err != nil || ok {
-		if err != nil || req.PublicKey != "" {
-			return acc, err
-		}
-		// EC2 returns a created private key once. A retry is a second create
-		// of the name, which is InvalidKeyPair.Duplicate while the name lives.
+	acc, ok, err := replay[resource.Accepted[resource.KeyPair]](c.w, m.Key, m.Fingerprint)
+	if req.PublicKey == "" && (ok || resource.CodeOf(err) == resource.CodeIdempotencyMismatch) {
+		// EC2 returns a created private key once and takes no client token.
+		// A create under a used token is a second create of the name, which
+		// is InvalidKeyPair.Duplicate while the name lives, whatever key type
+		// or format it asks for. The gRPC client answers the same (#269).
 		for _, existing := range c.w.key {
 			if existing.OwnerID == m.Account && existing.Name == req.Name {
 				return resource.Accepted[resource.KeyPair]{}, resource.AlreadyExists(resource.KindKeyPair, req.Name)
 			}
 		}
 		return resource.Accepted[resource.KeyPair]{}, resource.IdempotencyMismatch()
+	}
+	if err != nil || ok {
+		return acc, err
 	}
 	for _, existing := range c.w.key {
 		if existing.OwnerID == m.Account && existing.Name == req.Name {

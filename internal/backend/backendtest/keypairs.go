@@ -2,6 +2,7 @@ package backendtest
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -103,4 +104,48 @@ func exerciseKeyLaunch(ctx context.Context, t *testing.T, set backend.Set, accou
 		}
 	}
 	t.Fatalf("list lost keyName: %+v", all.Items)
+}
+
+// exerciseKeyRetry covers #269. EC2 CreateKeyPair takes no client token, so
+// a create under a used token is a second create of the name. While the name
+// lives that is InvalidKeyPair.Duplicate with no private key, whatever key
+// type or format the retry asks for. The fake and the gRPC client run this
+// one table and must agree.
+func exerciseKeyRetry(ctx context.Context, t *testing.T, set backend.Set, account resource.AccountID) {
+	t.Helper()
+	scope := backend.Scope{Account: account}
+	mut := func(fingerprint string) backend.Mutation {
+		return backend.Mutation{Scope: scope, Key: "k-retry-shape", Fingerprint: fingerprint}
+	}
+	const name = "retry-shape"
+	rsa, ed := resource.KeyTypeRSA, resource.KeyTypeEd25519
+	ppk := resource.KeyFormatPPK
+	created := resource.CreateKeyPairRequest{Name: name, Type: ed}
+	first, err := set.Compute.CreateKeyPair(ctx, mut("fp-ed25519-pem"), created)
+	if err != nil || len(first.Items) != 1 || first.Items[0].Material == "" {
+		t.Fatalf("retry-shape create: %v %+v", err, first.Items)
+	}
+	for _, tc := range []struct {
+		name        string
+		fingerprint string
+		req         resource.CreateKeyPairRequest
+	}{
+		{"same request", "fp-ed25519-pem", created},
+		{"other type", "fp-rsa-pem", resource.CreateKeyPairRequest{Name: name, Type: rsa}},
+		{"other format", "fp-ed25519-ppk", resource.CreateKeyPairRequest{Name: name, Type: ed, Format: ppk}},
+		{"other type and format", "fp-rsa-ppk", resource.CreateKeyPairRequest{Name: name, Type: rsa, Format: ppk}},
+	} {
+		got, err := set.Compute.CreateKeyPair(ctx, mut(tc.fingerprint), tc.req)
+		var re *resource.Error
+		duplicate := errors.As(err, &re) && re.Code == resource.CodeAlreadyExists && re.Kind == resource.KindKeyPair
+		if !duplicate || len(got.Items) != 0 {
+			t.Fatalf("key retry, %s: want AlreadyExists of KindKeyPair and no items, got %v, %d items",
+				tc.name, err, len(got.Items))
+		}
+	}
+	q := resource.KeyPairQuery{Names: []string{name}, Page: resource.PageRequest{Size: 50}}
+	listed, err := set.Compute.DescribeKeyPairs(ctx, scope, q)
+	if err != nil || len(listed.Items) != 1 || listed.Items[0].ID != first.Items[0].ID || listed.Items[0].Type != ed {
+		t.Fatalf("retries changed the key pair: %v %+v", err, listed.Items)
+	}
 }
