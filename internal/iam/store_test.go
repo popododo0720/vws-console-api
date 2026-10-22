@@ -466,6 +466,33 @@ func TestSetDefaultPolicyVersion(t *testing.T) {
 	}
 }
 
+func TestDeletePolicyVersion(t *testing.T) {
+	ctx := t.Context()
+	a := account(t)
+	f := NewFake()
+	p, err := f.CreatePolicy(ctx, a, "d", "/", describeOnly, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	missing := "arn:vws:iam::123456789012:policy/none"
+	if err := f.DeletePolicyVersion(ctx, a, missing, "v1"); resource.CodeOf(err) != resource.CodeNotFound {
+		t.Errorf("missing policy: %v", err)
+	}
+	if err := f.DeletePolicyVersion(ctx, a, p.ARN, "v1"); resource.CodeOf(err) != resource.CodeConflict {
+		t.Errorf("default version: %v", err)
+	}
+	if err := f.DeletePolicyVersion(ctx, a, p.ARN, "v2"); resource.CodeOf(err) != resource.CodeNotFound {
+		t.Errorf("missing version: %v", err)
+	}
+	other, err := resource.Parse[resource.AccountID]("210987654321")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.DeletePolicyVersion(ctx, other, p.ARN, "v1"); resource.CodeOf(err) != resource.CodeNotFound {
+		t.Errorf("policy visible from another account: %v", err)
+	}
+}
+
 func TestListPolicyVersions(t *testing.T) {
 	ctx := t.Context()
 	a := account(t)

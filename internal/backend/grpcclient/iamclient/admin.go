@@ -19,9 +19,9 @@ import (
 // STSAdmin serves the IAM Query surface's STS calls over vws-iam. Most IAM
 // management calls are not mapped to vws-iam's User, Group, Role, Policy and
 // AccessKey services yet; each answers Unimplemented, which the surface
-// returns as InvalidAction. ListPolicyVersions, SetDefaultPolicyVersion, the
-// policy and MFA device tag calls, GetRole and UpdateRoleDescription are
-// mapped.
+// returns as InvalidAction. ListPolicyVersions, SetDefaultPolicyVersion,
+// DeletePolicyVersion, the policy and MFA device tag calls, GetRole and
+// UpdateRoleDescription are mapped.
 type STSAdmin struct{ *Client }
 
 var _ iam.Admin = STSAdmin{}
@@ -278,6 +278,24 @@ func (a STSAdmin) SetDefaultPolicyVersion(
 		UpdateMask: &fieldmaskpb.FieldMask{
 			Paths: []string{"spec.default_version"},
 		},
+	})
+	if err != nil {
+		return authError(err)
+	}
+	return operationResult(op)
+}
+
+// DeletePolicyVersion implements iam.Admin over
+// PolicyService.DeletePolicyVersion.
+func (a STSAdmin) DeletePolicyVersion(
+	ctx context.Context, account resource.AccountID, arn, versionID string,
+) error {
+	name, err := a.policyFor(ctx, account, arn)
+	if err != nil {
+		return err
+	}
+	op, err := call(ctx, a.policies.DeletePolicyVersion, &iamv1.DeletePolicyVersionRequest{
+		Name: name + "/versions/" + versionID,
 	})
 	if err != nil {
 		return authError(err)

@@ -188,6 +188,9 @@ type Admin interface {
 	DeletePolicy(ctx context.Context, a resource.AccountID, arn string) error
 	// SetDefaultPolicyVersion makes version the policy's operative version.
 	SetDefaultPolicyVersion(ctx context.Context, a resource.AccountID, arn, version string) error
+	// DeletePolicyVersion removes a non-default version. The default version
+	// is Conflict.
+	DeletePolicyVersion(ctx context.Context, a resource.AccountID, arn, versionID string) error
 	AttachPolicy(ctx context.Context, a resource.AccountID, kind Entity, name, arn string) error
 	DetachPolicy(ctx context.Context, a resource.AccountID, kind Entity, name, arn string) error
 	ListAttachedPolicies(ctx context.Context, a resource.AccountID, kind Entity, name string) ([]ManagedPolicy, error)

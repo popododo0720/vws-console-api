@@ -445,6 +445,83 @@ func TestSetDefaultPolicyVersionAuthorizes(t *testing.T) {
 	}), http.StatusOK, `<SetDefaultPolicyVersionResponse>`)
 }
 
+func TestDeletePolicyVersion(t *testing.T) {
+	h, f, rec, root := harness(t)
+	ctx := t.Context()
+	doc := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"ec2:Describe*","Resource":"*"}]}`
+	p, err := f.CreatePolicy(ctx, root.Account, "d", "/", doc, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	authorized := func(want string) {
+		t.Helper()
+		if len(rec.seen) == 0 || rec.seen[len(rec.seen)-1] != want {
+			t.Errorf("authorized %v, want last %q", rec.seen, want)
+		}
+	}
+	want := "iam:DeletePolicyVersion " + p.ARN
+	res := call(t, h, root, sigv4.ServiceIAM, url.Values{
+		"Action": {"DeletePolicyVersion"}, "PolicyArn": {p.ARN}, "VersionId": {"v1"},
+	})
+	has(t, res, http.StatusConflict, `<Code>DeleteConflict</Code>`)
+	authorized(want)
+	res = call(t, h, root, sigv4.ServiceIAM, url.Values{
+		"Action": {"DeletePolicyVersion"}, "PolicyArn": {p.ARN}, "VersionId": {"v2"},
+	})
+	has(t, res, http.StatusNotFound, `<Code>NoSuchEntity</Code>`)
+	authorized(want)
+	res = call(t, h, root, sigv4.ServiceIAM, url.Values{
+		"Action": {"DeletePolicyVersion"}, "PolicyArn": {p.ARN}, "VersionId": {"1"},
+	})
+	has(t, res, http.StatusBadRequest, `<Code>InvalidInput</Code>`)
+	authorized(want)
+	res = call(t, h, root, sigv4.ServiceIAM, url.Values{
+		"Action": {"DeletePolicyVersion"}, "PolicyArn": {"not-an-arn"}, "VersionId": {"v1"},
+	})
+	has(t, res, http.StatusBadRequest, `<Code>ValidationError</Code>`)
+	authorized("iam:DeletePolicyVersion not-an-arn")
+	res = call(t, h, root, sigv4.ServiceIAM, url.Values{
+		"Action": {"DeletePolicyVersion"}, "PolicyArn": {"arn:vws:iam::123456789012:policy/none"}, "VersionId": {"v1"},
+	})
+	has(t, res, http.StatusNotFound, `<Code>NoSuchEntity</Code>`)
+	authorized("iam:DeletePolicyVersion arn:vws:iam::123456789012:policy/none")
+	res = call(t, h, root, sigv4.ServiceIAM, url.Values{
+		"Action": {"DeletePolicyVersion"}, "VersionId": {"v1"},
+	})
+	has(t, res, http.StatusBadRequest, `<Code>ValidationError</Code>`)
+}
+
+// versionDeleter succeeds without the fake, which stores only the default
+// version, so the success response needs a backend that can delete one.
+type versionDeleter struct {
+	iam.Admin
+	deleted []string
+}
+
+func (d *versionDeleter) DeletePolicyVersion(_ context.Context, _ resource.AccountID, arn, versionID string) error {
+	d.deleted = append(d.deleted, arn+" "+versionID)
+	return nil
+}
+
+func TestDeletePolicyVersionSuccess(t *testing.T) {
+	admin := &versionDeleter{}
+	h, _, _, root := harnessWith(t, func(base iam.Admin) iam.Admin {
+		admin.Admin = base
+		return admin
+	})
+	const arn = "arn:vws:iam::123456789012:policy/eng/d"
+	res := call(t, h, root, sigv4.ServiceIAM, url.Values{
+		"Action": {"DeletePolicyVersion"}, "PolicyArn": {arn}, "VersionId": {"v2"},
+	})
+	has(t, res, http.StatusOK, `<DeletePolicyVersionResponse>`, `<ResponseMetadata><RequestId>`)
+	if strings.Contains(res.Body.String(), "DeletePolicyVersionResult") {
+		t.Errorf("empty result has a DeletePolicyVersionResult: %s", res.Body.String())
+	}
+	if len(admin.deleted) != 1 || admin.deleted[0] != arn+" v2" {
+		t.Errorf("deleted %v, want %q", admin.deleted, arn+" v2")
+	}
+}
+
 func TestListPolicyVersions(t *testing.T) {
 	h, f, rec, root := harness(t)
 	ctx := t.Context()
