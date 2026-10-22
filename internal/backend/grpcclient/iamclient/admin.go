@@ -20,7 +20,7 @@ import (
 // STSAdmin serves the IAM Query surface's STS calls over vws-iam. Most IAM
 // management calls are not mapped to vws-iam's User, Group, Role, Policy and
 // AccessKey services yet; each answers Unimplemented, which the surface
-// returns as InvalidAction. CreatePolicyVersion, GetPolicyVersion,
+// returns as InvalidAction. GetUser, CreatePolicyVersion, GetPolicyVersion,
 // ListPolicyVersions, SetDefaultPolicyVersion, DeletePolicyVersion, the policy
 // and MFA device tag calls, ListVirtualMFADevices, GetRole, UpdateRole,
 // UpdateRoleDescription and GetAccessKeyLastUsed are mapped.
@@ -37,9 +37,11 @@ func (STSAdmin) CreateUser(_ context.Context, _ resource.AccountID, _, _ string)
 	return iam.User{}, notServed("CreateUser")
 }
 
-// GetUser implements iam.Admin.
-func (STSAdmin) GetUser(_ context.Context, _ resource.AccountID, _ string) (iam.User, error) {
-	return iam.User{}, notServed("GetUser")
+// GetUser implements iam.Admin over UserService.GetUser. The surface uses it
+// to authorize a user-scoped action on the user's real ARN, including its
+// path.
+func (a STSAdmin) GetUser(ctx context.Context, account resource.AccountID, name string) (iam.User, error) {
+	return a.userFor(ctx, account, "projects/"+account.String()+"/users/"+name)
 }
 
 // ListUsers implements iam.Admin.
@@ -596,25 +598,21 @@ func (a STSAdmin) policyFor(ctx context.Context, account resource.AccountID, arn
 func mfaDeviceResource(a resource.AccountID, serial string) (string, error) {
 	parts := strings.SplitN(serial, ":", 6)
 	if len(parts) != 6 || parts[0] != "arn" || parts[2] != "iam" {
-		return "", mfaDeviceNotFound()
+		return "", iam.MFADeviceNotFound()
 	}
 	account, err := resource.Parse[resource.AccountID](parts[4])
 	if err != nil {
-		return "", mfaDeviceNotFound()
+		return "", iam.MFADeviceNotFound()
 	}
 	rest, ok := strings.CutPrefix(parts[5], "mfa/")
 	if !ok || rest == "" || account != a {
-		return "", mfaDeviceNotFound()
+		return "", iam.MFADeviceNotFound()
 	}
 	name := rest[strings.LastIndex(rest, "/")+1:]
 	if name == "" {
-		return "", mfaDeviceNotFound()
+		return "", iam.MFADeviceNotFound()
 	}
 	return "projects/" + parts[4] + "/mfaDevices/" + name, nil
-}
-
-func mfaDeviceNotFound() error {
-	return &resource.Error{Code: resource.CodeNotFound, Message: "The specified MFA device does not exist."}
 }
 
 // mfaDeviceFor resolves a device serial number to a resource name and checks
@@ -632,12 +630,12 @@ func (a STSAdmin) mfaDeviceFor(ctx context.Context, account resource.AccountID, 
 	dev, err := retry(ctx, a.backoff, a.mfaDevices.GetMfaDevice, &iamv1.GetMfaDeviceRequest{Name: name})
 	if err != nil {
 		if resource.CodeOf(authError(err)) == resource.CodeNotFound {
-			return "", mfaDeviceNotFound()
+			return "", iam.MFADeviceNotFound()
 		}
 		return "", authError(err)
 	}
 	if dev.GetStatus().GetSerialNumber() != serial {
-		return "", mfaDeviceNotFound()
+		return "", iam.MFADeviceNotFound()
 	}
 	return name, nil
 }

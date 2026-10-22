@@ -168,6 +168,22 @@ func AccessKeyNotFound(keyID string) error {
 	}
 }
 
+// MFADevice is a FIDO security key as GetMFADevice reports it. No backend
+// holds FIDO keys yet (popododo0720/vws-iam#133), so GetMFADevice answers
+// NoSuchEntity for every serial number and this type only fixes the result
+// shape.
+type MFADevice struct {
+	UserName     string
+	SerialNumber string
+	Enabled      time.Time
+}
+
+// MFADeviceNotFound is the NoSuchEntity answer for a device the account does
+// not hold.
+func MFADeviceNotFound() error {
+	return &resource.Error{Code: resource.CodeNotFound, Message: "The specified MFA device does not exist."}
+}
+
 // AssumedRole is the result of AssumeRole.
 type AssumedRole struct {
 	Key           Key

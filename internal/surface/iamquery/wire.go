@@ -119,6 +119,23 @@ func toAccessKeyLastUsed(u iam.AccessKeyLastUsed) accessKeyLastUsedResult {
 	return accessKeyLastUsedResult{AccessKeyLastUsed: used, UserName: u.UserName}
 }
 
+// mfaDeviceXML is the GetMFADevice result. vws-iam carries no FIDO
+// certification levels, so Certifications is present and empty.
+type mfaDeviceXML struct {
+	UserName       string   `xml:"UserName,omitempty"`
+	SerialNumber   string   `xml:"SerialNumber"`
+	EnableDate     string   `xml:"EnableDate,omitempty"`
+	Certifications struct{} `xml:"Certifications"`
+}
+
+func toMFADevice(d iam.MFADevice) mfaDeviceXML {
+	out := mfaDeviceXML{UserName: d.UserName, SerialNumber: d.SerialNumber}
+	if !d.Enabled.IsZero() {
+		out.EnableDate = stamp(d.Enabled)
+	}
+	return out
+}
+
 type policyVersionXML struct {
 	Document         string `xml:"Document,omitempty"`
 	VersionID        string `xml:"VersionId"`

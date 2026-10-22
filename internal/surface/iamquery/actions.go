@@ -110,6 +110,28 @@ func groupARN(h *handler, c *exchange) string {
 	return arnOf(c, "group", "/", name)
 }
 
+// getMFADeviceARN authorizes on the named user's real ARN, or the caller's
+// when UserName is absent. A user the backend cannot read for a reason other
+// than NoSuchEntity fails closed, because a guessed path would let a policy
+// for one path cover another. A missing user is authorized on user/<name>, the
+// name the caller requested, as in AWS, and the action then answers
+// NoSuchEntity.
+func getMFADeviceARN(h *handler, c *exchange) string {
+	name := c.form("UserName")
+	if name == "" {
+		return c.caller.Principal
+	}
+	u, err := h.cfg.Admin.GetUser(c.r.Context(), c.caller.Account, name)
+	if err == nil {
+		return u.ARN
+	}
+	if resource.CodeOf(err) != resource.CodeNotFound {
+		c.resourceErr = err
+		return "*"
+	}
+	return arnOf(c, "user", "/", name)
+}
+
 // authorizeMovedGroup checks iam:UpdateGroup on the group's new ARN too, as
 // AWS does when a request changes its name or path. A missing group is left
 // for UpdateGroup to report.
@@ -796,6 +818,19 @@ func iamActions() map[string]spec {
 					out.VirtualMFADevices = append(out.VirtualMFADevices, toVirtualMFADevice(d))
 				}
 				return out, err
+			},
+		},
+		"GetMFADevice": {
+			params: []string{"SerialNumber", "UserName"}, needsAdmin: true, resource: getMFADeviceARN,
+			run: func(h *handler, c *exchange) (any, error) {
+				if err := requireMFADevice(c, h, "iam:GetMFADevice"); err != nil {
+					return nil, err
+				}
+				// AWS accepts only FIDO security key serial numbers, and no
+				// backend holds FIDO keys yet (popododo0720/vws-iam#133), so
+				// every serial number, a virtual mfa/ device included, is a
+				// device the account does not hold.
+				return nil, iam.MFADeviceNotFound()
 			},
 		},
 		"TagMFADevice": {

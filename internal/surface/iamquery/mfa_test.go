@@ -1,0 +1,184 @@
+package iamquery
+
+import (
+	"context"
+	"encoding/xml"
+	"net/http"
+	"net/url"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/popododo0720/vws-console-api/internal/iam"
+	"github.com/popododo0720/vws-console-api/internal/resource"
+	"github.com/popododo0720/vws-console-api/internal/sigv4"
+)
+
+// noSuchMFADevice is the AWS error shape for a device the account does not
+// hold.
+const noSuchMFADevice = `<ErrorResponse><Error><Type>Sender</Type><Code>NoSuchEntity</Code>` +
+	`<Message>The specified MFA device does not exist.</Message></Error><RequestId>`
+
+// userLookupError makes every user read fail, like a vws-iam outage.
+type userLookupError struct {
+	iam.Admin
+	err error
+}
+
+func (a userLookupError) GetUser(context.Context, resource.AccountID, string) (iam.User, error) {
+	return iam.User{}, a.err
+}
+
+// AWS GetMFADevice accepts only FIDO security key serial numbers, and no
+// backend holds FIDO keys, so an authorized call is NoSuchEntity for a u2f/
+// serial and for an enabled virtual mfa/ device alike.
+func TestGetMFADevice(t *testing.T) {
+	h, f, rec, root := harness(t)
+	ctx := t.Context()
+	alice, err := f.CreateUser(ctx, root.Account, "alice", "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	virtual := seedMfaDevice(t, f, root, "alice-phone")
+	if err := f.AssignMfaDevice(root.Account, virtual, "alice", now); err != nil {
+		t.Fatal(err)
+	}
+	// The virtual device exists and is enabled: ListVirtualMFADevices shows it.
+	has(t, call(t, h, root, sigv4.ServiceIAM, url.Values{
+		"Action": {"ListVirtualMFADevices"}, "AssignmentStatus": {"Assigned"},
+	}), http.StatusOK, `<SerialNumber>`+virtual+`</SerialNumber>`, `<UserName>alice</UserName>`)
+	fido := "arn:vws:iam::" + root.Account.String() + ":u2f/alice/testFidoKey-R1234"
+	for _, tc := range []struct {
+		name, serial, user, authorized string
+	}{
+		{"a FIDO security key", fido, "", "arn:vws:iam::" + root.Account.String() + ":root"},
+		{"a FIDO security key of a named user", fido, "alice", alice.ARN},
+		{"an enabled virtual device", virtual, "", "arn:vws:iam::" + root.Account.String() + ":root"},
+		{"an enabled virtual device of its owner", virtual, "alice", alice.ARN},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			form := url.Values{"Action": {"GetMFADevice"}, "SerialNumber": {tc.serial}}
+			if tc.user != "" {
+				form.Set("UserName", tc.user)
+			}
+			has(t, call(t, h, root, sigv4.ServiceIAM, form), http.StatusNotFound, noSuchMFADevice)
+			if want := "iam:GetMFADevice " + tc.authorized; len(rec.seen) == 0 || rec.seen[len(rec.seen)-1] != want {
+				t.Errorf("authorized %v, want last %q", rec.seen, want)
+			}
+		})
+	}
+}
+
+// The result shape stays the AWS one for when a backend holds FIDO keys.
+func TestGetMFADeviceResultShape(t *testing.T) {
+	enabled := time.Date(2023, 4, 27, 20, 58, 13, 0, time.UTC)
+	out, err := xml.Marshal(toMFADevice(iam.MFADevice{
+		UserName: "Bob", SerialNumber: "arn:vws:iam::123456789012:u2f/root/testFidoKey-R1234", Enabled: enabled,
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `<UserName>Bob</UserName><SerialNumber>arn:vws:iam::123456789012:u2f/root/testFidoKey-R1234</SerialNumber>` +
+		`<EnableDate>2023-04-27T20:58:13Z</EnableDate><Certifications></Certifications>`
+	if !strings.Contains(string(out), want) {
+		t.Fatalf("result %s, want %s", out, want)
+	}
+}
+
+func TestGetMFADeviceErrors(t *testing.T) {
+	h, f, _, root := harness(t)
+	serial := seedMfaDevice(t, f, root, "error-phone")
+	ghost := "arn:vws:iam::" + root.Account.String() + ":mfa/ghost"
+	foreign := "arn:vws:iam::210987654321:u2f/alice/testFidoKey-R1234"
+	has(t, call(t, h, root, sigv4.ServiceIAM, url.Values{"Action": {"GetMFADevice"}}),
+		http.StatusBadRequest, `<Code>ValidationError</Code>`)
+	for _, badSerial := range []string{"short", "arn vws:iam::123456789012:u2f/x"} {
+		has(t, call(t, h, root, sigv4.ServiceIAM, url.Values{
+			"Action": {"GetMFADevice"}, "SerialNumber": {badSerial},
+		}), http.StatusBadRequest, `<Code>ValidationError</Code>`)
+	}
+	// A missing, foreign or unassigned device is the same answer.
+	for _, missing := range []string{ghost, foreign, serial} {
+		has(t, call(t, h, root, sigv4.ServiceIAM, url.Values{
+			"Action": {"GetMFADevice"}, "SerialNumber": {missing},
+		}), http.StatusNotFound, noSuchMFADevice)
+	}
+	// PathPrefix is not an input of this action.
+	unsupported := url.Values{"Action": {"GetMFADevice"}, "SerialNumber": {serial}, "PathPrefix": {"/"}}
+	has(t, call(t, h, root, sigv4.ServiceIAM, unsupported), http.StatusBadRequest, `<Code>InvalidInput</Code>`)
+}
+
+// A principal needs iam:GetMFADevice on the user's real ARN, as in AWS: the
+// named user, or the caller when UserName is absent. A user at a path is never
+// authorized on a guessed root path. Only an authorized call answers
+// NoSuchEntity.
+func TestGetMFADeviceNeedsPermission(t *testing.T) {
+	h, f, _, root := harness(t)
+	ctx := t.Context()
+	alice, err := f.CreateUser(ctx, root.Account, "alice", "/restricted/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	virtual := seedMfaDevice(t, f, root, "alice-phone")
+	if err := f.AssignMfaDevice(root.Account, virtual, "alice", now); err != nil {
+		t.Fatal(err)
+	}
+	bobUser, err := f.CreateUser(ctx, root.Account, "bob", "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	k, err := f.CreateAccessKey(ctx, root.Account, "bob")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bob := sigv4.Credential{AccessKey: k.AccessKeyID, Secret: k.Secret}
+	fido := "arn:vws:iam::" + root.Account.String() + ":u2f/alice/testFidoKey-R1234"
+	forAlice := url.Values{"Action": {"GetMFADevice"}, "SerialNumber": {fido}, "UserName": {"alice"}}
+	self := url.Values{"Action": {"GetMFADevice"}, "SerialNumber": {fido}}
+	enabledForAlice := url.Values{"Action": {"GetMFADevice"}, "SerialNumber": {virtual}, "UserName": {"alice"}}
+	has(t, call(t, h, bob, sigv4.ServiceIAM, forAlice), http.StatusForbidden, `<Code>AccessDenied</Code>`)
+	has(t, call(t, h, bob, sigv4.ServiceIAM, self), http.StatusForbidden, `<Code>AccessDenied</Code>`)
+	// Permission on bob's own ARN covers bob, not alice.
+	policy := `{"Statement":[{"Effect":"Allow","Action":["iam:GetMFADevice"],"Resource":"` + bobUser.ARN + `"}]}`
+	if err := f.PutInlinePolicy(ctx, root.Account, iam.EntityUser, "bob", "get", policy); err != nil {
+		t.Fatal(err)
+	}
+	has(t, call(t, h, bob, sigv4.ServiceIAM, forAlice), http.StatusForbidden, `<Code>AccessDenied</Code>`)
+	has(t, call(t, h, bob, sigv4.ServiceIAM, self), http.StatusNotFound, noSuchMFADevice)
+	// The guessed root path does not cover alice at /restricted/.
+	guessed := "arn:vws:iam::" + root.Account.String() + ":user/alice"
+	policy = `{"Statement":[{"Effect":"Allow","Action":["iam:GetMFADevice"],"Resource":"` + guessed + `"}]}`
+	if err := f.PutInlinePolicy(ctx, root.Account, iam.EntityUser, "bob", "get", policy); err != nil {
+		t.Fatal(err)
+	}
+	has(t, call(t, h, bob, sigv4.ServiceIAM, forAlice), http.StatusForbidden, `<Code>AccessDenied</Code>`)
+	// Permission on alice's real ARN covers alice, not bob.
+	policy = `{"Statement":[{"Effect":"Allow","Action":["iam:GetMFADevice"],"Resource":"` + alice.ARN + `"}]}`
+	if err := f.PutInlinePolicy(ctx, root.Account, iam.EntityUser, "bob", "get", policy); err != nil {
+		t.Fatal(err)
+	}
+	has(t, call(t, h, bob, sigv4.ServiceIAM, forAlice), http.StatusNotFound, noSuchMFADevice)
+	has(t, call(t, h, bob, sigv4.ServiceIAM, enabledForAlice), http.StatusNotFound, noSuchMFADevice)
+	has(t, call(t, h, bob, sigv4.ServiceIAM, self), http.StatusForbidden, `<Code>AccessDenied</Code>`)
+}
+
+// A user lookup that fails for any reason other than NoSuchEntity must not
+// authorize on a guessed ARN.
+func TestGetMFADeviceFailsClosedWhenTheUserLookupFails(t *testing.T) {
+	lookup := &resource.Error{Code: resource.CodeUnavailable, Message: "vws-iam is unavailable"}
+	h, f, rec, root := harnessWith(t, func(a iam.Admin) iam.Admin {
+		return userLookupError{Admin: a, err: lookup}
+	})
+	if _, err := f.CreateUser(t.Context(), root.Account, "alice", "/restricted/"); err != nil {
+		t.Fatal(err)
+	}
+	before := len(rec.seen)
+	has(t, call(t, h, root, sigv4.ServiceIAM, url.Values{
+		"Action":       {"GetMFADevice"},
+		"UserName":     {"alice"},
+		"SerialNumber": {"arn:vws:iam::" + root.Account.String() + ":u2f/alice/testFidoKey-R1234"},
+	}), http.StatusServiceUnavailable, `<Code>ServiceUnavailable</Code>`)
+	if len(rec.seen) != before {
+		t.Fatalf("authorized on a guessed ARN: %v", rec.seen[before:])
+	}
+}
