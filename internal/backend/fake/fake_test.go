@@ -81,3 +81,13 @@ func TestRepeatedEntropyDoesNotOverwrite(t *testing.T) {
 		t.Fatalf("collision published %+v", page.Items)
 	}
 }
+
+// TestAttachLifecycleContract runs the #214 attach table on the fake. The
+// world settles an operation one second after it is accepted.
+func TestAttachLifecycleContract(t *testing.T) {
+	backendtest.AttachLifecycle(t, func() (backend.Set, func()) {
+		now := time.Unix(1_700_000_000, 0).UTC()
+		set := New(Options{Now: func() time.Time { return now }, Latency: time.Second, Entropy: &Sequence{}}).Set()
+		return set, func() { now = now.Add(2 * time.Second) }
+	})
+}

@@ -34,6 +34,19 @@ import (
 )
 
 func TestContractOverGRPC(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0).UTC()
+	world := fake.New(fake.Options{
+		Now:     func() time.Time { return now },
+		Entropy: &fake.Sequence{},
+	})
+	backendtest.Run(t, dialLoopback(t, world, now))
+}
+
+// dialLoopback serves world through the loopback resource API on bufconn,
+// compute and storage on separate listeners, and returns a harness of
+// clients for it. now stamps the operations the loopback mints.
+func dialLoopback(t *testing.T, world *fake.World, now time.Time) backendtest.Harness {
+	t.Helper()
 	computeLis := bufconn.Listen(MaxMessageBytes())
 	storageLis := bufconn.Listen(MaxMessageBytes())
 	computeSrv := grpc.NewServer(
@@ -44,11 +57,6 @@ func TestContractOverGRPC(t *testing.T) {
 		grpc.MaxRecvMsgSize(MaxMessageBytes()),
 		grpc.MaxSendMsgSize(MaxMessageBytes()),
 	)
-	now := time.Unix(1_700_000_000, 0).UTC()
-	world := fake.New(fake.Options{
-		Now:     func() time.Time { return now },
-		Entropy: &fake.Sequence{},
-	})
 	loop := newLoopWorld(world.Set(), now)
 	computev1.RegisterInstanceServiceServer(computeSrv, &instanceSrv{w: loop})
 	computev1.RegisterKeyPairServiceServer(computeSrv, &keySrv{w: loop})
@@ -102,13 +110,13 @@ func TestContractOverGRPC(t *testing.T) {
 		storageOps: longrunningpb.NewOperationsClient(storageConn),
 		networkOps: longrunningpb.NewOperationsClient(computeConn),
 	}
-	backendtest.Run(t, func() backend.Set {
+	return func() backend.Set {
 		return backend.Set{
 			Compute: computeClient{shared},
 			Storage: storageClient{shared},
 			Network: networkClient{shared},
 		}
-	})
+	}
 }
 
 // opsGate hides volume operations from the compute listener and every other

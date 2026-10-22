@@ -94,6 +94,7 @@ func (c compute) RunInstances(ctx context.Context, m backend.Mutation, req resou
 			ID: volID, OwnerID: m.Account, SizeGiB: 8, Zone: resource.ZoneName, Type: resource.VolumeGP2,
 			State: resource.VolumeInUse, InstanceID: id, Device: resource.RootDeviceName,
 			CreateTime: launched, AttachTime: launched, DeleteOnTermination: true,
+			AttachState: resource.AttachmentAttached,
 		})
 		items = append(items, inst)
 		targets = append(targets, id.Ref())

@@ -290,6 +290,7 @@ func (c computeClient) attachOnce(
 	vol.State = resource.VolumeInUse
 	vol.InstanceID = req.InstanceID
 	vol.Device = req.Device
+	vol.AttachState = resource.AttachmentAttaching
 	op.Action = resource.ActionAttachVolume
 	op.Targets = []resource.Ref{vol.ID.Ref()}
 	return resource.Accepted[resource.Volume]{Operation: op, Items: []resource.Volume{vol}}, nil
@@ -858,6 +859,9 @@ func (c computeClient) DescribeVolumes(ctx context.Context, s backend.Scope, q r
 			}
 			items = append(items, vol)
 		}
+		if err := c.markAttaching(ctx, s.Account, items); err != nil {
+			return resource.Page[resource.Volume]{}, err
+		}
 		return pageByID(items, q.Page, func(item resource.Volume) string { return item.ID.String() })
 	}
 	out, err := c.volumes.ListVolumes(ctx, &storagev1.ListVolumesRequest{
@@ -877,7 +881,104 @@ func (c computeClient) DescribeVolumes(ctx context.Context, s backend.Scope, q r
 		}
 		items = append(items, vol)
 	}
+	if err := c.markAttaching(ctx, s.Account, items); err != nil {
+		return resource.Page[resource.Volume]{}, err
+	}
 	return resource.Page[resource.Volume]{Items: items, NextToken: out.GetNextPageToken()}, nil
+}
+
+// markAttaching shows an accepted attach that storage does not report yet.
+// AttachVolume writes the volume into the instance spec, and storage names
+// the instance only once compute has put the disk on the machine, so for a
+// while the volume reads as available. The spec is the attachment, as for
+// DetachVolume: a volume that storage reports with no instance and that a
+// live instance spec names is in-use, attaching. It lists instances only when
+// some volume reads as available, and fails rather than show such a volume
+// as available when compute cannot be read.
+func (c computeClient) markAttaching(ctx context.Context, account resource.AccountID, items []resource.Volume) error {
+	free := 0
+	for _, v := range items {
+		if v.State == resource.VolumeAvailable && v.InstanceID.IsZero() {
+			free++
+		}
+	}
+	if free == 0 {
+		return nil
+	}
+	binds, err := c.specBinds(ctx, account)
+	if err != nil {
+		return err
+	}
+	for i := range items {
+		v := &items[i]
+		if v.State != resource.VolumeAvailable || !v.InstanceID.IsZero() {
+			continue
+		}
+		bind, ok := binds[v.ID]
+		if !ok || bind.Boot {
+			continue
+		}
+		v.State = resource.VolumeInUse
+		v.InstanceID = bind.InstanceID
+		v.Device = bind.Device
+		v.AttachState = resource.AttachmentAttaching
+	}
+	return nil
+}
+
+// specBinds maps each volume a live instance spec names to that bind. It
+// pages all of the caller's instances; a repeated page token is an error.
+// A terminated instance holds no volume. A record owned by another account
+// is an internal error, never the caller's attachment. A list that runs out
+// of time is Unavailable, so the read can be retried.
+func (c computeClient) specBinds(
+	ctx context.Context, account resource.AccountID,
+) (map[resource.VolumeID]backend.VolumeBind, error) {
+	projectID := project(account)
+	out := map[resource.VolumeID]backend.VolumeBind{}
+	token := ""
+	seen := map[string]struct{}{}
+	for {
+		if token != "" {
+			if _, ok := seen[token]; ok {
+				return nil, resource.Internal(errors.New("instance page token repeated"))
+			}
+			seen[token] = struct{}{}
+		}
+		page, err := c.instances.ListInstances(ctx, &computev1.ListInstancesRequest{
+			Parent: instanceParent(projectID), PageSize: 100, PageToken: token,
+		})
+		if status.Code(err) == codes.DeadlineExceeded {
+			return nil, &resource.Error{Code: resource.CodeUnavailable, Message: "instance list timed out"}
+		}
+		if err != nil {
+			return nil, fromRPC(err)
+		}
+		for _, item := range page.GetInstances() {
+			model, err := instanceModel(item)
+			if err != nil {
+				if c.skipBadRecord(ctx, item.GetName(), err) {
+					continue
+				}
+				return nil, err
+			}
+			if model.OwnerID != account {
+				return nil, resource.Internal(errors.New("instance " + item.GetName() + " is owned by another account"))
+			}
+			if model.State == resource.InstanceTerminated {
+				continue
+			}
+			for _, block := range model.BlockDevices {
+				if bind, ok := backend.BindOf(model, block.VolumeID); ok {
+					out[block.VolumeID] = bind
+				}
+			}
+		}
+		token = page.GetNextPageToken()
+		if token == "" {
+			return out, nil
+		}
+	}
 }
 
 func (c computeClient) DescribeImages(ctx context.Context, s backend.Scope, q resource.ImageQuery) (resource.Page[resource.Image], error) {
@@ -1375,6 +1476,10 @@ func volumeModel(in *storagev1.Volume) (resource.Volume, error) {
 			}
 		}
 	}
+	if !vol.InstanceID.IsZero() {
+		// Storage names the instance once the disk is on the machine.
+		vol.AttachState = resource.AttachmentAttached
+	}
 	return vol, nil
 }
 
@@ -1418,7 +1523,9 @@ func volumeProto(v resource.Volume, projectID string) *storagev1.Volume {
 		Observed:   &commonv1.ObservedState{State: obs},
 		DeviceName: v.Device,
 	}
-	if !v.InstanceID.IsZero() {
+	// Storage reports the instance once compute has put the disk on the
+	// machine, not when the attach is accepted.
+	if !v.InstanceID.IsZero() && v.AttachState != resource.AttachmentAttaching {
 		status.Instance = instanceName(projectID, v.InstanceID.String())
 	}
 	var created *timestamppb.Timestamp

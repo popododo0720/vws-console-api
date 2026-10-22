@@ -209,9 +209,15 @@ func (h *handler) attachVolume(w http.ResponseWriter, r *http.Request, c resourc
 		return
 	}
 	item := acc.Items[0]
+	// EC2 answers an accepted attach as attaching; DescribeVolumes moves it
+	// to attached.
+	status := item.AttachState
+	if status == "" {
+		status = resource.AttachmentAttaching
+	}
 	writeXML(w, attachVolumeXML{
 		RequestID: requestID(r), VolumeID: item.ID.String(), InstanceID: item.InstanceID.String(),
-		Device: item.Device, Status: "attached",
+		Device: item.Device, Status: string(status),
 	})
 }
 
