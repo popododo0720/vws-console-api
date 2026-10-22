@@ -61,8 +61,12 @@ type policyXML struct {
 }
 
 func toPolicy(p iam.ManagedPolicy) policyXML {
+	version := p.DefaultVersion
+	if version == "" {
+		version = "v1"
+	}
 	return policyXML{
-		PolicyName: p.Name, PolicyID: p.ID, Arn: p.ARN, Path: p.Path, DefaultVersionID: "v1",
+		PolicyName: p.Name, PolicyID: p.ID, Arn: p.ARN, Path: p.Path, DefaultVersionID: version,
 		AttachmentCount: p.AttachmentCount, IsAttachable: true, Description: p.Description,
 		CreateDate: stamp(p.Created), UpdateDate: stamp(p.Updated),
 	}

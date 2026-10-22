@@ -19,9 +19,9 @@ import (
 // STSAdmin serves the IAM Query surface's STS calls over vws-iam. Most IAM
 // management calls are not mapped to vws-iam's User, Group, Role, Policy and
 // AccessKey services yet; each answers Unimplemented, which the surface
-// returns as InvalidAction. ListPolicyVersions, SetDefaultPolicyVersion, the
-// policy and MFA device tag calls, GetRole, UpdateRole and
-// UpdateRoleDescription are mapped.
+// returns as InvalidAction. CreatePolicyVersion, ListPolicyVersions,
+// SetDefaultPolicyVersion, the policy and MFA device tag calls, GetRole,
+// UpdateRole and UpdateRoleDescription are mapped.
 type STSAdmin struct{ *Client }
 
 var _ iam.Admin = STSAdmin{}
@@ -267,6 +267,46 @@ func (STSAdmin) GetPolicy(_ context.Context, _ resource.AccountID, _ string) (ia
 	return iam.ManagedPolicy{}, notServed("GetPolicy")
 }
 
+// CreatePolicyVersion implements iam.Admin over
+// PolicyService.CreatePolicyVersion. The version id and default flag come
+// from the stored policy, as AWS assigns v<n> in order.
+func (a STSAdmin) CreatePolicyVersion(
+	ctx context.Context, account resource.AccountID, arn, document string, setAsDefault bool,
+) (iam.PolicyVersion, error) {
+	name, err := a.policyFor(ctx, account, arn)
+	if err != nil {
+		return iam.PolicyVersion{}, err
+	}
+	op, err := call(ctx, a.policies.CreatePolicyVersion, &iamv1.CreatePolicyVersionRequest{
+		Parent: name,
+		PolicyVersion: &iamv1.PolicyVersion{
+			Spec: &iamv1.PolicyVersionSpec{Document: document, SetAsDefault: setAsDefault},
+		},
+	})
+	if err != nil {
+		return iam.PolicyVersion{}, authError(err)
+	}
+	if err := operationResult(op); err != nil {
+		return iam.PolicyVersion{}, err
+	}
+	resp := op.GetResponse()
+	if resp == nil {
+		return iam.PolicyVersion{}, resource.Internal(errors.New("vws-iam CreatePolicyVersion returned no version"))
+	}
+	var created iamv1.PolicyVersion
+	if err := resp.UnmarshalTo(&created); err != nil {
+		return iam.PolicyVersion{}, resource.Internal(fmt.Errorf("decode CreatePolicyVersion response: %w", err))
+	}
+	out := iam.PolicyVersion{
+		ID:               created.GetName()[strings.LastIndex(created.GetName(), "/")+1:],
+		IsDefaultVersion: created.GetStatus().GetDefaultVersion(),
+	}
+	if t := created.GetCreateTime(); t != nil {
+		out.Created = t.AsTime()
+	}
+	return out, nil
+}
+
 // ListPolicyVersions implements iam.Admin over
 // PolicyService.ListPolicyVersions. The AWS Marker is the proto page token:
 // both are opaque to the caller.
@@ -291,11 +331,14 @@ func (a STSAdmin) ListPolicyVersions(
 		Marker:      resp.GetNextPageToken(),
 	}
 	for _, v := range resp.GetPolicyVersions() {
-		page.Versions = append(page.Versions, iam.PolicyVersion{
+		version := iam.PolicyVersion{
 			ID:               v.GetName()[strings.LastIndex(v.GetName(), "/")+1:],
 			IsDefaultVersion: v.GetStatus().GetDefaultVersion(),
-			Created:          v.GetCreateTime().AsTime(),
-		})
+		}
+		if t := v.GetCreateTime(); t != nil {
+			version.Created = t.AsTime()
+		}
+		page.Versions = append(page.Versions, version)
 	}
 	return page, nil
 }

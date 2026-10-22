@@ -113,9 +113,10 @@ type Role struct {
 	Created                                       time.Time
 }
 
-// ManagedPolicy is a customer managed policy. Only version v1 exists.
+// ManagedPolicy is a customer managed policy. Document is version v1.
 type ManagedPolicy struct {
 	Name, Path, ID, ARN, Description, Document string
+	DefaultVersion                             string
 	AttachmentCount                            int
 	Created, Updated                           time.Time
 }
@@ -197,6 +198,11 @@ type Admin interface {
 
 	CreatePolicy(ctx context.Context, a resource.AccountID, name, path, document, description string) (ManagedPolicy, error)
 	GetPolicy(ctx context.Context, a resource.AccountID, arn string) (ManagedPolicy, error)
+	// CreatePolicyVersion adds the next version, v<n>, and can make it the
+	// default. A sixth version is ResourceExhausted.
+	CreatePolicyVersion(
+		ctx context.Context, a resource.AccountID, arn, document string, setAsDefault bool,
+	) (PolicyVersion, error)
 	ListPolicyVersions(
 		ctx context.Context, a resource.AccountID, arn, marker string, maxItems int,
 	) (PolicyVersionPage, error)

@@ -555,8 +555,34 @@ func iamActions() map[string]spec {
 			}
 			return struct {
 				PolicyVersion policyVersionXML `xml:"PolicyVersion"`
-			}{policyVersionXML{Document: policyDoc(p.Document), VersionID: "v1", IsDefaultVersion: true, CreateDate: stamp(p.Created)}}, nil
+			}{policyVersionXML{
+				Document: policyDoc(p.Document), VersionID: "v1",
+				IsDefaultVersion: p.DefaultVersion == "" || p.DefaultVersion == "v1",
+				CreateDate:       stamp(p.Created),
+			}}, nil
 		}),
+		"CreatePolicyVersion": admin([]string{"PolicyArn", "PolicyDocument", "SetAsDefault"}, policyARN,
+			func(h *handler, c *exchange) (any, error) {
+				if err := required(c, "PolicyArn", "PolicyDocument"); err != nil {
+					return nil, err
+				}
+				setAsDefault := false
+				switch c.form("SetAsDefault") {
+				case "", "false":
+				case "true":
+					setAsDefault = true
+				default:
+					return nil, resource.Invalid("SetAsDefault", "The specified value for setAsDefault is invalid.")
+				}
+				v, err := h.cfg.Admin.CreatePolicyVersion(
+					c.r.Context(), c.caller.Account, c.form("PolicyArn"), c.form("PolicyDocument"), setAsDefault)
+				return struct {
+					PolicyVersion policyVersionXML `xml:"PolicyVersion"`
+				}{policyVersionXML{
+					VersionID: v.ID, IsDefaultVersion: v.IsDefaultVersion, CreateDate: stamp(v.Created),
+				}}, err
+			},
+		),
 		"ListPolicyVersions": {
 			params: []string{"PolicyArn", "Marker", "MaxItems"}, needsAdmin: true, resource: policyARN,
 			run: func(h *handler, c *exchange) (any, error) {
