@@ -312,6 +312,15 @@ func TestUpdateRoleDescription(t *testing.T) {
 	if stored, _ := f.GetRole(ctx, a, "ops"); stored.Description != "new" {
 		t.Errorf("a rejected update changed the description to %q", stored.Description)
 	}
+	for _, invalid := range []string{"\u007f", "\u0080", "\u00a0"} {
+		if _, err := f.UpdateRoleDescription(ctx, a, "ops", invalid); resource.CodeOf(err) != resource.CodeInvalidArgument {
+			t.Errorf("description %q outside the AWS pattern: %v", invalid, err)
+		}
+	}
+	wide := strings.Repeat("\u00ff", MaxRoleDescription)
+	if got, err := f.UpdateRoleDescription(ctx, a, "ops", wide); err != nil || got.Description != wide {
+		t.Errorf("1000-character description: %+v %v", got, err)
+	}
 	if _, err := f.CreateRole(ctx, a, RoleInput{
 		Name: "svc", Path: ServiceLinkedRolePath + "compute.vws/", TrustPolicy: trust,
 	}); err != nil {
