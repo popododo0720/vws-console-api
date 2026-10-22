@@ -23,7 +23,8 @@ import (
 // returns as InvalidAction. CreatePolicyVersion, GetPolicyVersion,
 // ListPolicyVersions, SetDefaultPolicyVersion, DeletePolicyVersion, the policy
 // and MFA device tag calls, ListVirtualMFADevices, GetRole, UpdateRole,
-// UpdateRoleDescription and GetAccessKeyLastUsed are mapped.
+// UpdateRoleDescription and GetAccessKeyLastUsed are mapped. GetMFADevice
+// answers NoSuchEntity without a call (see GetMFADevice).
 type STSAdmin struct{ *Client }
 
 var _ iam.Admin = STSAdmin{}
@@ -37,9 +38,30 @@ func (STSAdmin) CreateUser(_ context.Context, _ resource.AccountID, _, _ string)
 	return iam.User{}, notServed("CreateUser")
 }
 
-// GetUser implements iam.Admin.
-func (STSAdmin) GetUser(_ context.Context, _ resource.AccountID, _ string) (iam.User, error) {
-	return iam.User{}, notServed("GetUser")
+// GetUser implements iam.Admin over UserService.GetUser. The IAM Query
+// surface also uses it to authorize on a user's real ARN, path included.
+func (a STSAdmin) GetUser(ctx context.Context, account resource.AccountID, name string) (iam.User, error) {
+	if !entityName(name) {
+		return iam.User{}, entityNotFound("user", name)
+	}
+	u, err := a.userFor(ctx, account, "projects/"+account.String()+"/users/"+name)
+	if resource.CodeOf(err) == resource.CodeNotFound {
+		return iam.User{}, entityNotFound("user", name)
+	}
+	return u, err
+}
+
+// entityName reports whether name can be a vws-iam user or group: one
+// resource name segment. Anything else addresses another resource and is
+// answered as missing without a call.
+func entityName(name string) bool {
+	return name != "" && !strings.Contains(name, "/")
+}
+
+// entityNotFound is the AWS NoSuchEntity answer for a user or group.
+func entityNotFound(what, name string) error {
+	msg := "The " + what + " with name " + name + " cannot be found."
+	return &resource.Error{Code: resource.CodeNotFound, Message: msg}
 }
 
 // ListUsers implements iam.Admin.
@@ -142,9 +164,56 @@ func (STSAdmin) CreateGroup(_ context.Context, _ resource.AccountID, _, _ string
 	return iam.Group{}, notServed("CreateGroup")
 }
 
-// GetGroup implements iam.Admin.
-func (STSAdmin) GetGroup(_ context.Context, _ resource.AccountID, _ string) (iam.Group, []iam.User, error) {
-	return iam.Group{}, nil, notServed("GetGroup")
+// GetGroup implements iam.Admin over GroupService.GetGroup, with each member
+// read over UserService.GetUser. A member deleted since the group was read is
+// left out. The IAM Query surface also uses it to authorize on a group's real
+// ARN, path included.
+func (a STSAdmin) GetGroup(
+	ctx context.Context, account resource.AccountID, name string,
+) (iam.Group, []iam.User, error) {
+	if !entityName(name) {
+		return iam.Group{}, nil, entityNotFound("group", name)
+	}
+	resourceName := "projects/" + account.String() + "/groups/" + name
+	g, err := retry(ctx, a.backoff, a.groups.GetGroup, &iamv1.GetGroupRequest{Name: resourceName})
+	if err != nil {
+		if err = authError(err); resource.CodeOf(err) == resource.CodeNotFound {
+			return iam.Group{}, nil, entityNotFound("group", name)
+		}
+		return iam.Group{}, nil, err
+	}
+	if g.GetName() != resourceName {
+		return iam.Group{}, nil, resource.Internal(
+			errors.New("vws-iam GetGroup returned " + g.GetName() + ", want " + resourceName))
+	}
+	arn := g.GetStatus().GetArn()
+	if !strings.HasPrefix(arn, "arn:vws:iam::"+account.String()+":group/") {
+		return iam.Group{}, nil, resource.Internal(
+			errors.New("vws-iam GetGroup returned a group outside the caller's account"))
+	}
+	out := iam.Group{Name: name, Path: g.GetSpec().GetPath(), ID: g.GetStatus().GetUniqueId(), ARN: arn}
+	if out.Path == "" {
+		out.Path = "/"
+	}
+	if t := g.GetCreateTime(); t != nil {
+		out.Created = t.AsTime()
+	}
+	members := make([]iam.User, 0, len(g.GetSpec().GetMembers()))
+	for _, m := range g.GetSpec().GetMembers() {
+		if !userResourceInAccount(account, m) {
+			return iam.Group{}, nil, resource.Internal(
+				errors.New("vws-iam GetGroup returned a member outside the caller's account"))
+		}
+		u, err := a.userFor(ctx, account, m)
+		if resource.CodeOf(err) == resource.CodeNotFound {
+			continue
+		}
+		if err != nil {
+			return iam.Group{}, nil, err
+		}
+		members = append(members, u)
+	}
+	return out, members, nil
 }
 
 // ListGroups implements iam.Admin.
@@ -596,25 +665,21 @@ func (a STSAdmin) policyFor(ctx context.Context, account resource.AccountID, arn
 func mfaDeviceResource(a resource.AccountID, serial string) (string, error) {
 	parts := strings.SplitN(serial, ":", 6)
 	if len(parts) != 6 || parts[0] != "arn" || parts[2] != "iam" {
-		return "", mfaDeviceNotFound()
+		return "", iam.MFADeviceNotFound()
 	}
 	account, err := resource.Parse[resource.AccountID](parts[4])
 	if err != nil {
-		return "", mfaDeviceNotFound()
+		return "", iam.MFADeviceNotFound()
 	}
 	rest, ok := strings.CutPrefix(parts[5], "mfa/")
 	if !ok || rest == "" || account != a {
-		return "", mfaDeviceNotFound()
+		return "", iam.MFADeviceNotFound()
 	}
 	name := rest[strings.LastIndex(rest, "/")+1:]
 	if name == "" {
-		return "", mfaDeviceNotFound()
+		return "", iam.MFADeviceNotFound()
 	}
 	return "projects/" + parts[4] + "/mfaDevices/" + name, nil
-}
-
-func mfaDeviceNotFound() error {
-	return &resource.Error{Code: resource.CodeNotFound, Message: "The specified MFA device does not exist."}
 }
 
 // mfaDeviceFor resolves a device serial number to a resource name and checks
@@ -632,14 +697,24 @@ func (a STSAdmin) mfaDeviceFor(ctx context.Context, account resource.AccountID, 
 	dev, err := retry(ctx, a.backoff, a.mfaDevices.GetMfaDevice, &iamv1.GetMfaDeviceRequest{Name: name})
 	if err != nil {
 		if resource.CodeOf(authError(err)) == resource.CodeNotFound {
-			return "", mfaDeviceNotFound()
+			return "", iam.MFADeviceNotFound()
 		}
 		return "", authError(err)
 	}
 	if dev.GetStatus().GetSerialNumber() != serial {
-		return "", mfaDeviceNotFound()
+		return "", iam.MFADeviceNotFound()
 	}
 	return name, nil
+}
+
+// GetMFADevice implements iam.Admin. AWS GetMFADevice accepts only FIDO
+// security key serial numbers (u2f/), and vws-iam keeps no FIDO keys
+// (popododo0720/vws-iam#133), so every serial number, a virtual mfa/ device
+// included, is a device the account does not hold. vws-iam is not called:
+// MfaDeviceService.GetMfaDevice reads virtual devices, which this action does
+// not serve.
+func (STSAdmin) GetMFADevice(context.Context, resource.AccountID, string) (iam.MFADevice, error) {
+	return iam.MFADevice{}, iam.MFADeviceNotFound()
 }
 
 // operationResult maps a finished vws-iam operation to an error. vws-iam

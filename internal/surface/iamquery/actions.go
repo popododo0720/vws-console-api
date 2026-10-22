@@ -3,6 +3,7 @@ package iamquery
 import (
 	"encoding/xml"
 	"errors"
+	"fmt"
 	"regexp"
 	"strconv"
 	"strings"
@@ -85,27 +86,56 @@ func userName(c *exchange) string {
 }
 
 // userARN is the user's real ARN when it exists, so policies on paths apply.
+// Without UserName the call is about the caller, authorized on its own
+// authenticated ARN (path included) with no lookup, as AWS does. A named user
+// that does not exist is authorized on the name the caller gave, as AWS
+// evaluates it. Any other lookup failure fails closed: a guessed path-less
+// ARN would skip a Deny on the user's real path.
 func userARN(h *handler, c *exchange) string {
-	name := userName(c)
+	name := c.form("UserName")
 	if name == "" {
 		return c.caller.Principal
 	}
 	if c.action == "CreateUser" {
 		return arnOf(c, "user", pathOr(c.form("Path")), name)
 	}
-	if u, err := h.cfg.Admin.GetUser(c.r.Context(), c.caller.Account, name); err == nil {
+	u, err := h.cfg.Admin.GetUser(c.r.Context(), c.caller.Account, name)
+	if err == nil {
 		return u.ARN
+	}
+	if resource.CodeOf(err) != resource.CodeNotFound {
+		c.resourceErr = lookupError(err)
 	}
 	return arnOf(c, "user", "/", name)
 }
 
+// lookupError is a failed user or group lookup that is not NoSuchEntity. An
+// IAM error is answered as it is; anything else (vws-iam down or timing out)
+// answers ServiceUnavailable, as iam.Check does for authorization, and never
+// echoes the backend's message. The cause stays in the chain for the log.
+func lookupError(err error) error {
+	var re *resource.Error
+	if errors.As(err, &re) {
+		return err
+	}
+	unavailable := &resource.Error{Code: resource.CodeUnavailable, Message: "identity lookup unavailable"}
+	return fmt.Errorf("%w: %w", unavailable, err)
+}
+
+// groupARN is the group's real ARN when it exists. As in userARN, a missing
+// group is authorized on the requested name, and any other lookup failure
+// fails closed.
 func groupARN(h *handler, c *exchange) string {
 	name := c.form("GroupName")
 	if c.action == "CreateGroup" {
 		return arnOf(c, "group", pathOr(c.form("Path")), name)
 	}
-	if g, _, err := h.cfg.Admin.GetGroup(c.r.Context(), c.caller.Account, name); err == nil {
+	g, _, err := h.cfg.Admin.GetGroup(c.r.Context(), c.caller.Account, name)
+	if err == nil {
 		return g.ARN
+	}
+	if resource.CodeOf(err) != resource.CodeNotFound {
+		c.resourceErr = lookupError(err)
 	}
 	return arnOf(c, "group", "/", name)
 }
@@ -796,6 +826,29 @@ func iamActions() map[string]spec {
 					out.VirtualMFADevices = append(out.VirtualMFADevices, toVirtualMFADevice(d))
 				}
 				return out, err
+			},
+		},
+		// AWS GetMFADevice is authorized on the user, the named one or else the
+		// caller, and accepts only FIDO security key serial numbers. No
+		// backend holds FIDO keys yet, so an authorized call answers
+		// NoSuchEntity for every serial number, a virtual mfa/ device
+		// included.
+		"GetMFADevice": {
+			params: []string{"SerialNumber", "UserName"}, needsAdmin: true, resource: getMFADeviceARN,
+			run: func(h *handler, c *exchange) (any, error) {
+				if err := requireMFADevice(c, h, "iam:GetMFADevice"); err != nil {
+					return nil, err
+				}
+				dev, err := h.cfg.Admin.GetMFADevice(c.r.Context(), c.caller.Account, c.form("SerialNumber"))
+				if err != nil {
+					return nil, err
+				}
+				// AWS names the device's user in the answer; a UserName that
+				// names another user does not have this device.
+				if user := c.form("UserName"); user != "" && user != dev.UserName {
+					return nil, iam.MFADeviceNotFound()
+				}
+				return toMFADevice(dev), nil
 			},
 		},
 		"TagMFADevice": {
