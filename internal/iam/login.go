@@ -139,7 +139,17 @@ func (f *Fake) Login(ctx context.Context, req LoginRequest) (Session, error) {
 		return Session{}, errLogin()
 	}
 	f.guard.succeed(req)
-	return f.sessions.open(p, now)
+	// Open under the same lock a rename takes. A rename either moves this
+	// session, or the user is already moved and the session opens with the
+	// new ARN. The hash must still be the one just verified, so a replaced
+	// record or a changed password cannot inherit this sign-in.
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	current := f.accounts[req.Account].user(req.UserName)
+	if current == nil || current.login == nil || current.login.hash != hash {
+		return Session{}, errLogin()
+	}
+	return f.sessions.open(Principal{Account: req.Account, ARN: current.ARN}, now)
 }
 
 // ValidateSession implements Sessions.
