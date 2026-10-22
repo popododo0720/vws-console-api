@@ -859,7 +859,7 @@ func (c computeClient) DescribeVolumes(ctx context.Context, s backend.Scope, q r
 			}
 			items = append(items, vol)
 		}
-		if err := c.markAttaching(ctx, projectID, items); err != nil {
+		if err := c.markAttaching(ctx, s.Account, items); err != nil {
 			return resource.Page[resource.Volume]{}, err
 		}
 		return pageByID(items, q.Page, func(item resource.Volume) string { return item.ID.String() })
@@ -881,7 +881,7 @@ func (c computeClient) DescribeVolumes(ctx context.Context, s backend.Scope, q r
 		}
 		items = append(items, vol)
 	}
-	if err := c.markAttaching(ctx, projectID, items); err != nil {
+	if err := c.markAttaching(ctx, s.Account, items); err != nil {
 		return resource.Page[resource.Volume]{}, err
 	}
 	return resource.Page[resource.Volume]{Items: items, NextToken: out.GetNextPageToken()}, nil
@@ -895,7 +895,7 @@ func (c computeClient) DescribeVolumes(ctx context.Context, s backend.Scope, q r
 // live instance spec names is in-use, attaching. It lists instances only when
 // some volume reads as available, and fails rather than show such a volume
 // as available when compute cannot be read.
-func (c computeClient) markAttaching(ctx context.Context, projectID string, items []resource.Volume) error {
+func (c computeClient) markAttaching(ctx context.Context, account resource.AccountID, items []resource.Volume) error {
 	free := 0
 	for _, v := range items {
 		if v.State == resource.VolumeAvailable && v.InstanceID.IsZero() {
@@ -905,7 +905,7 @@ func (c computeClient) markAttaching(ctx context.Context, projectID string, item
 	if free == 0 {
 		return nil
 	}
-	binds, err := c.specBinds(ctx, projectID)
+	binds, err := c.specBinds(ctx, account)
 	if err != nil {
 		return err
 	}
@@ -928,10 +928,13 @@ func (c computeClient) markAttaching(ctx context.Context, projectID string, item
 
 // specBinds maps each volume a live instance spec names to that bind. It
 // pages all of the caller's instances; a repeated page token is an error.
-// A terminated instance holds no volume.
+// A terminated instance holds no volume. A record owned by another account
+// is an internal error, never the caller's attachment. A list that runs out
+// of time is Unavailable, so the read can be retried.
 func (c computeClient) specBinds(
-	ctx context.Context, projectID string,
+	ctx context.Context, account resource.AccountID,
 ) (map[resource.VolumeID]backend.VolumeBind, error) {
+	projectID := project(account)
 	out := map[resource.VolumeID]backend.VolumeBind{}
 	token := ""
 	seen := map[string]struct{}{}
@@ -945,6 +948,9 @@ func (c computeClient) specBinds(
 		page, err := c.instances.ListInstances(ctx, &computev1.ListInstancesRequest{
 			Parent: instanceParent(projectID), PageSize: 100, PageToken: token,
 		})
+		if status.Code(err) == codes.DeadlineExceeded {
+			return nil, &resource.Error{Code: resource.CodeUnavailable, Message: "instance list timed out"}
+		}
 		if err != nil {
 			return nil, fromRPC(err)
 		}
@@ -955,6 +961,9 @@ func (c computeClient) specBinds(
 					continue
 				}
 				return nil, err
+			}
+			if model.OwnerID != account {
+				return nil, resource.Internal(errors.New("instance " + item.GetName() + " is owned by another account"))
 			}
 			if model.State == resource.InstanceTerminated {
 				continue
