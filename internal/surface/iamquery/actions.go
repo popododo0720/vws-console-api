@@ -818,7 +818,7 @@ func iamActions() map[string]spec {
 		// NoSuchEntity for every serial number, a virtual mfa/ device
 		// included.
 		"GetMFADevice": {
-			params: []string{"SerialNumber", "UserName"}, needsAdmin: true, resource: userARN,
+			params: []string{"SerialNumber", "UserName"}, needsAdmin: true, resource: getMFADeviceARN,
 			run: func(h *handler, c *exchange) (any, error) {
 				if err := requireMFADevice(c, h, "iam:GetMFADevice"); err != nil {
 					return nil, err

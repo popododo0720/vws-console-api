@@ -66,7 +66,8 @@ func TestEntityActionsFailClosedWhenTheLookupFails(t *testing.T) {
 	}{
 		{
 			name: "user",
-			res:  []func(*handler, *exchange) string{userARN}, key: "UserName",
+			// GetMFADevice checks its serial first, then authorizes on the user.
+			res: []func(*handler, *exchange) string{userARN, getMFADeviceARN}, key: "UserName",
 			wrap: func(a iam.Admin) iam.Admin { return userLookupError{Admin: a, err: lookupErr} },
 			// CreateUser authorizes on the ARN it is about to create.
 			skip: []string{"CreateUser"},

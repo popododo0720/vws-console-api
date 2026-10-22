@@ -192,3 +192,36 @@ func TestGetMFADeviceNeedsPermission(t *testing.T) {
 		has(t, call(t, h, bob, sigv4.ServiceIAM, casper), http.StatusNotFound, noSuchMFADevice)
 	})
 }
+
+// AWS validates SerialNumber before it authorizes, so a malformed serial is
+// a 400 even for a caller without iam:GetMFADevice.
+func TestGetMFADeviceValidatesBeforeAuthorization(t *testing.T) {
+	h, f, rec, root := harness(t)
+	ctx := t.Context()
+	if _, err := f.CreateUser(ctx, root.Account, "bob", "/"); err != nil {
+		t.Fatal(err)
+	}
+	k, err := f.CreateAccessKey(ctx, root.Account, "bob")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bob := sigv4.Credential{AccessKey: k.AccessKeyID, Secret: k.Secret}
+	for _, tc := range []struct{ name, serial, msg string }{
+		{"missing", "", "failed to satisfy constraint: Member must not be null"},
+		{"too short", "u2f/abc", "Member must have length between 9 and 256"},
+		{"too long", strings.Repeat("a", 257), "Member must have length between 9 and 256"},
+		{"bad character", "arn:vws:iam::123456789012:u2f/alice/key#1", `Member must satisfy regular expression pattern`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec.seen = nil
+			form := url.Values{"Action": {"GetMFADevice"}, "UserName": {"bob"}}
+			if tc.serial != "" {
+				form.Set("SerialNumber", tc.serial)
+			}
+			has(t, call(t, h, bob, sigv4.ServiceIAM, form), http.StatusBadRequest, `<Code>ValidationError</Code>`, tc.msg)
+			if len(rec.seen) != 0 {
+				t.Errorf("authorized before validating: %v", rec.seen)
+			}
+		})
+	}
+}
