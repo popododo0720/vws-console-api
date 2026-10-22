@@ -46,6 +46,11 @@ func (STSAdmin) DeleteUser(_ context.Context, _ resource.AccountID, _ string) er
 	return notServed("DeleteUser")
 }
 
+// UpdateUser implements iam.Admin.
+func (STSAdmin) UpdateUser(_ context.Context, _ resource.AccountID, _, _, _, _ string) error {
+	return notServed("UpdateUser")
+}
+
 // CreateAccessKey implements iam.Admin.
 func (STSAdmin) CreateAccessKey(_ context.Context, _ resource.AccountID, _ string) (iam.NewAccessKey, error) {
 	return iam.NewAccessKey{}, notServed("CreateAccessKey")

@@ -225,6 +225,9 @@ func (c *exchange) wire(e *resource.Error) (int, string) {
 	case resource.CodeAlreadyExists:
 		return http.StatusConflict, "EntityAlreadyExists"
 	case resource.CodeConflict:
+		if c.action == "UpdateUser" {
+			return http.StatusConflict, "EntityTemporarilyUnmodifiable"
+		}
 		return http.StatusConflict, "DeleteConflict"
 	case resource.CodeResourceExhausted:
 		return http.StatusConflict, "LimitExceeded"

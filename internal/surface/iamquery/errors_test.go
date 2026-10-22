@@ -17,9 +17,14 @@ type wireErr struct {
 
 func iamWire(t *testing.T, service sigv4.Service, e *resource.Error) wireErr {
 	t.Helper()
+	return iamWireAction(t, service, "", e)
+}
+
+func iamWireAction(t *testing.T, service sigv4.Service, action string, e *resource.Error) wireErr {
+	t.Helper()
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/", nil)
-	(&exchange{w: rec, r: req, service: service}).fail(e)
+	(&exchange{w: rec, r: req, service: service, action: action}).fail(e)
 	var body errorXML
 	if err := xml.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatalf("%v: %v", e.Code, err)
@@ -114,5 +119,17 @@ func TestIAMErrorByField(t *testing.T) {
 				t.Errorf("%+v, want %+v", got, tc.want)
 			}
 		})
+	}
+}
+
+// TestUpdateUserConflictIsUnmodifiable pins the AWS code for a change that
+// races the authorization snapshot. Every other action keeps DeleteConflict.
+func TestUpdateUserConflictIsUnmodifiable(t *testing.T) {
+	e := &resource.Error{Code: resource.CodeConflict, Message: "busy"}
+	if got := iamWireAction(t, sigv4.ServiceIAM, "UpdateUser", e); got != (wireErr{409, "EntityTemporarilyUnmodifiable"}) {
+		t.Errorf("UpdateUser conflict = %+v", got)
+	}
+	if got := iamWireAction(t, sigv4.ServiceIAM, "DeleteUser", e); got != (wireErr{409, "DeleteConflict"}) {
+		t.Errorf("DeleteUser conflict = %+v", got)
 	}
 }

@@ -202,6 +202,97 @@ func TestUpdateGroupAuthorizesTheNewARN(t *testing.T) {
 	}
 }
 
+func TestUpdateUser(t *testing.T) {
+	h, f, rec, root := harness(t)
+	ctx := t.Context()
+	if _, err := f.CreateUser(ctx, root.Account, "bob", "/old/"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.CreateUser(ctx, root.Account, "taken", "/"); err != nil {
+		t.Fatal(err)
+	}
+	res := call(t, h, root, sigv4.ServiceIAM, url.Values{
+		"Action": {"UpdateUser"}, "UserName": {"bob"}, "NewPath": {"/new/"}, "NewUserName": {"robert"},
+	})
+	has(t, res, http.StatusOK, `<UpdateUserResponse>`, `<ResponseMetadata><RequestId>`)
+	if strings.Contains(res.Body.String(), "UpdateUserResult") {
+		t.Errorf("empty result has an UpdateUserResult: %s", res.Body.String())
+	}
+	u, err := f.GetUser(ctx, root.Account, "robert")
+	if err != nil || u.Path != "/new/" || u.ARN != "arn:vws:iam::123456789012:user/new/robert" {
+		t.Fatalf("stored user %+v: %v", u, err)
+	}
+	wantOld := "iam:UpdateUser arn:vws:iam::123456789012:user/old/bob"
+	wantNew := "iam:UpdateUser arn:vws:iam::123456789012:user/new/robert"
+	if len(rec.seen) < 2 || rec.seen[len(rec.seen)-2] != wantOld || rec.seen[len(rec.seen)-1] != wantNew {
+		t.Errorf("authorized %v, want last %q then %q", rec.seen, wantOld, wantNew)
+	}
+	res = call(t, h, root, sigv4.ServiceIAM, url.Values{
+		"Action": {"UpdateUser"}, "UserName": {"none"}, "NewPath": {"/new/"},
+	})
+	has(t, res, http.StatusNotFound, `<Code>NoSuchEntity</Code>`)
+	res = call(t, h, root, sigv4.ServiceIAM, url.Values{
+		"Action": {"UpdateUser"}, "UserName": {"robert"}, "NewUserName": {"taken"},
+	})
+	has(t, res, http.StatusConflict, `<Code>EntityAlreadyExists</Code>`)
+	for _, form := range []url.Values{
+		{"Action": {"UpdateUser"}, "UserName": {"robert"}, "NewPath": {""}},
+		{"Action": {"UpdateUser"}, "UserName": {"robert"}, "NewUserName": {""}},
+		{"Action": {"UpdateUser"}, "NewPath": {"/new/"}},
+		{"Action": {"UpdateUser"}, "UserName": {"robert"}, "NewPath": {"new"}},
+	} {
+		res = call(t, h, root, sigv4.ServiceIAM, form)
+		has(t, res, http.StatusBadRequest, `<Code>ValidationError</Code>`)
+	}
+}
+
+func TestUpdateUserAuthorizesTheNewARN(t *testing.T) {
+	h, f, rec, root := harness(t)
+	ctx := t.Context()
+	if _, err := f.CreateUser(ctx, root.Account, "scoped", "/old/"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.CreateUser(ctx, root.Account, "bob", "/"); err != nil {
+		t.Fatal(err)
+	}
+	key, err := f.CreateAccessKey(ctx, root.Account, "bob")
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := "arn:vws:iam::123456789012:user/old/scoped"
+	moved := "arn:vws:iam::123456789012:user/new/scoped"
+	allow := func(resources string) string {
+		return `{"Statement":[{"Effect":"Allow","Action":"iam:UpdateUser","Resource":` + resources + `}]}`
+	}
+	if err := f.PutInlinePolicy(ctx, root.Account, iam.EntityUser, "bob", "update", allow(`"`+old+`"`)); err != nil {
+		t.Fatal(err)
+	}
+	bob := sigv4.Credential{AccessKey: key.AccessKeyID, Secret: key.Secret}
+	res := call(t, h, bob, sigv4.ServiceIAM, url.Values{
+		"Action": {"UpdateUser"}, "UserName": {"scoped"}, "NewPath": {"/new/"},
+	})
+	has(t, res, http.StatusForbidden, `<Code>AccessDenied</Code>`)
+	if u, err := f.GetUser(ctx, root.Account, "scoped"); err != nil || u.Path != "/old/" {
+		t.Fatalf("denied update changed the user to %+v: %v", u, err)
+	}
+	both := allow(`["` + old + `","` + moved + `"]`)
+	if err := f.PutInlinePolicy(ctx, root.Account, iam.EntityUser, "bob", "update", both); err != nil {
+		t.Fatal(err)
+	}
+	res = call(t, h, bob, sigv4.ServiceIAM, url.Values{
+		"Action": {"UpdateUser"}, "UserName": {"scoped"}, "NewPath": {"/new/"},
+	})
+	has(t, res, http.StatusOK, `<UpdateUserResponse>`, `<ResponseMetadata><RequestId>`)
+	if u, err := f.GetUser(ctx, root.Account, "scoped"); err != nil || u.Path != "/new/" {
+		t.Fatalf("allowed update left the user at %+v: %v", u, err)
+	}
+	wantOld := "iam:UpdateUser " + old
+	wantNew := "iam:UpdateUser " + moved
+	if len(rec.seen) < 2 || rec.seen[len(rec.seen)-2] != wantOld || rec.seen[len(rec.seen)-1] != wantNew {
+		t.Errorf("authorized %v, want last %q then %q", rec.seen, wantOld, wantNew)
+	}
+}
+
 func TestUpdateAssumeRolePolicy(t *testing.T) {
 	h, f, rec, root := harness(t)
 	ctx := t.Context()

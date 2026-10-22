@@ -237,6 +237,167 @@ func TestUpdateGroup(t *testing.T) {
 	}
 }
 
+func TestUpdateUser(t *testing.T) {
+	ctx := t.Context()
+	a := account(t)
+	f := NewFake()
+	u, err := f.CreateUser(ctx, a, "bob", "/old/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.CreateUser(ctx, a, "taken", "/"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.CreateGroup(ctx, a, "dev", "/"); err != nil {
+		t.Fatal(err)
+	}
+	p, err := f.CreatePolicy(ctx, a, "describe", "/", describeOnly, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	must(t, f.AddUserToGroup(ctx, a, "dev", "bob"))
+	must(t, f.AttachPolicy(ctx, a, EntityUser, "bob", p.ARN))
+	must(t, f.PutInlinePolicy(ctx, a, EntityUser, "bob", "inline", describeOnly))
+
+	for _, tc := range []struct {
+		name             string
+		source, path, to string
+		want             resource.Code
+	}{
+		{"missing user", "missing", "/new/", "ops", resource.CodeNotFound},
+		{"duplicate name", "bob", "/new/", "taken", resource.CodeAlreadyExists},
+		{"case-insensitive name", "bob", "", "TAKEN", resource.CodeAlreadyExists},
+		{"bad path", "bob", "new", "", resource.CodeInvalidArgument},
+		{"bad new name", "bob", "", "bad name!", resource.CodeInvalidArgument},
+		{"reserved name", "bob", "", RootUserName, resource.CodeInvalidArgument},
+		{"bad source", "bad name!", "", "", resource.CodeInvalidArgument},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := f.UpdateUser(ctx, a, tc.source, tc.path, tc.to, ""); resource.CodeOf(err) != tc.want {
+				t.Errorf("UpdateUser(%q, %q, %q) = %v, want %v", tc.source, tc.path, tc.to, err, tc.want)
+			}
+		})
+	}
+	if got, err := f.GetUser(ctx, a, "bob"); err != nil || got.Path != "/old/" {
+		t.Fatalf("a rejected update changed the user to %+v: %v", got, err)
+	}
+	if _, users, err := f.GetGroup(ctx, a, "dev"); err != nil || len(users) != 1 || users[0].Name != "bob" {
+		t.Fatalf("a rejected update changed the members to %v: %v", users, err)
+	}
+
+	must(t, f.UpdateUser(ctx, a, "bob", "/moved/", "", ""))
+	must(t, f.UpdateUser(ctx, a, "bob", "/moved/", "", "")) // the same request again is a no-op
+	got, err := f.GetUser(ctx, a, "bob")
+	if err != nil || got.Path != "/moved/" || got.ARN != "arn:vws:iam::123456789012:user/moved/bob" {
+		t.Fatalf("path-only update %+v: %v", got, err)
+	}
+	must(t, f.UpdateUser(ctx, a, "bob", "", "robert", ""))
+	if got, err := f.GetUser(ctx, a, "robert"); err != nil || got.Path != "/moved/" {
+		t.Fatalf("name-only update %+v: %v", got, err)
+	}
+	if _, err := f.GetUser(ctx, a, "bob"); resource.CodeOf(err) != resource.CodeNotFound {
+		t.Errorf("old name still found: %v", err)
+	}
+	must(t, f.UpdateUser(ctx, a, "robert", "/new/", "platform", ""))
+	if _, err := f.GetUser(ctx, a, "robert"); resource.CodeOf(err) != resource.CodeNotFound {
+		t.Errorf("old name still found: %v", err)
+	}
+	got, err = f.GetUser(ctx, a, "platform")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Path != "/new/" || got.ARN != "arn:vws:iam::123456789012:user/new/platform" ||
+		got.ID != u.ID || !got.Created.Equal(u.Created) {
+		t.Errorf("renamed user %+v, want /new/, a new ARN and id %s", got, u.ID)
+	}
+	_, users, err := f.GetGroup(ctx, a, "dev")
+	if err != nil || len(users) != 1 || users[0].Name != "platform" {
+		t.Errorf("members after rename %v: %v", users, err)
+	}
+	groups, err := f.ListGroupsForUser(ctx, a, "platform")
+	if err != nil || len(groups) != 1 || groups[0].Name != "dev" {
+		t.Errorf("groups for platform %v: %v", groups, err)
+	}
+	attached, err := f.ListAttachedPolicies(ctx, a, EntityUser, "platform")
+	if err != nil || len(attached) != 1 || attached[0].ARN != p.ARN {
+		t.Errorf("attached policies after rename %v: %v", attached, err)
+	}
+	inline, err := f.ListInlinePolicies(ctx, a, EntityUser, "platform")
+	if err != nil || len(inline) != 1 || inline[0] != "inline" {
+		t.Errorf("inline policies after rename %v: %v", inline, err)
+	}
+	must(t, f.UpdateUser(ctx, a, "platform", "", "", ""))
+	if got, err := f.GetUser(ctx, a, "platform"); err != nil || got.Path != "/new/" {
+		t.Errorf("empty update changed the user to %+v: %v", got, err)
+	}
+}
+
+func TestUpdateUserKeepsKeysAndSessions(t *testing.T) {
+	ctx := t.Context()
+	a := account(t)
+	f := NewFake()
+	f.Now = func() time.Time { return now }
+	if _, err := f.CreateUser(ctx, a, "bob", "/old/"); err != nil {
+		t.Fatal(err)
+	}
+	must(t, f.PutInlinePolicy(ctx, a, EntityUser, "bob", "describe", describeOnly))
+	k, err := f.CreateAccessKey(ctx, a, "bob")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.CreateLoginProfile(ctx, a, "bob", "correct horse 1"); err != nil {
+		t.Fatal(err)
+	}
+	sess, err := f.Login(ctx, LoginRequest{Account: a, UserName: "bob", Password: "correct horse 1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	check := func(t *testing.T, wantARN string) {
+		t.Helper()
+		c, err := verifyContext(ctx, t, f, credOf(k.AccessKeyID, k.Secret, ""))
+		if err != nil || c.Principal != wantARN {
+			t.Fatalf("key principal %+v: %v, want %s", c, err, wantARN)
+		}
+		d, err := f.Authorize(ctx, Request{
+			Principal: Principal{Account: a, ARN: c.Principal}, Action: "ec2:DescribeVpcs", Resource: "*",
+		})
+		if err != nil || !d.Allowed {
+			t.Errorf("policy after rename %+v: %v", d, err)
+		}
+		s, err := f.ValidateSession(ctx, sess.Token)
+		if err != nil || s.Principal.ARN != wantARN {
+			t.Errorf("session principal %+v: %v, want %s", s.Principal, err, wantARN)
+		}
+	}
+
+	must(t, f.UpdateUser(ctx, a, "bob", "/moved/", "", ""))
+	check(t, "arn:vws:iam::123456789012:user/moved/bob")
+	must(t, f.UpdateUser(ctx, a, "bob", "", "robert", ""))
+	check(t, "arn:vws:iam::123456789012:user/moved/robert")
+	must(t, f.UpdateUser(ctx, a, "robert", "/new/", "platform", ""))
+	check(t, "arn:vws:iam::123456789012:user/new/platform")
+	if _, err := f.GetLoginProfile(ctx, a, "platform"); err != nil {
+		t.Errorf("login profile after rename: %v", err)
+	}
+}
+
+func TestUpdateUserRejectsAStaleARN(t *testing.T) {
+	ctx := t.Context()
+	a := account(t)
+	f := NewFake()
+	u, err := f.CreateUser(ctx, a, "bob", "/old/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	must(t, f.UpdateUser(ctx, a, "bob", "/new/", "", u.ARN))
+	if err := f.UpdateUser(ctx, a, "bob", "/other/", "", u.ARN); resource.CodeOf(err) != resource.CodeConflict {
+		t.Errorf("stale update: %v", err)
+	}
+	if got, err := f.GetUser(ctx, a, "bob"); err != nil || got.Path != "/new/" {
+		t.Errorf("a stale update changed the user to %+v: %v", got, err)
+	}
+}
+
 func TestUpdateAssumeRolePolicy(t *testing.T) {
 	ctx := t.Context()
 	a := account(t)

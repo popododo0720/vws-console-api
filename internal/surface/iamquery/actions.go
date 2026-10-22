@@ -127,6 +127,39 @@ func authorizeMovedGroup(h *handler, c *exchange) error {
 	return iam.Check(c.r.Context(), h.cfg.Authorizer, c.caller, "iam:"+c.action, target)
 }
 
+// authorizeMovedUser checks iam:UpdateUser on the user's current and target
+// ARN, as AWS requires. It returns the snapshot both checks used, so
+// UpdateUser can refuse a concurrent change. A missing user is left for
+// UpdateUser to report.
+func authorizeMovedUser(h *handler, c *exchange) (iam.User, error) {
+	u, err := h.cfg.Admin.GetUser(c.r.Context(), c.caller.Account, c.form("UserName"))
+	if err != nil {
+		if resource.CodeOf(err) == resource.CodeNotFound {
+			return iam.User{}, nil
+		}
+		return iam.User{}, err
+	}
+	if err := iam.Check(c.r.Context(), h.cfg.Authorizer, c.caller, "iam:"+c.action, u.ARN); err != nil {
+		return iam.User{}, err
+	}
+	newPath, newName := c.form("NewPath"), c.form("NewUserName")
+	if newPath == "" && newName == "" {
+		return u, nil
+	}
+	path, name := u.Path, u.Name
+	if newPath != "" {
+		path = newPath
+	}
+	if newName != "" {
+		name = newName
+	}
+	target := arnOf(c, "user", path, name)
+	if target == u.ARN {
+		return u, nil
+	}
+	return u, iam.Check(c.r.Context(), h.cfg.Authorizer, c.caller, "iam:"+c.action, target)
+}
+
 func roleARN(h *handler, c *exchange) string {
 	name := c.form("RoleName")
 	if c.action == "CreateRole" {
@@ -244,6 +277,24 @@ func iamActions() map[string]spec {
 			}
 			return out, err
 		}),
+		"UpdateUser": admin(
+			[]string{"UserName", "NewPath", "NewUserName"}, userARN,
+			func(h *handler, c *exchange) (any, error) {
+				if err := required(c, "UserName"); err != nil {
+					return nil, err
+				}
+				if err := rejectEmpty(c, "NewPath", "NewUserName"); err != nil {
+					return nil, err
+				}
+				u, err := authorizeMovedUser(h, c)
+				if err != nil {
+					return nil, err
+				}
+				return nil, h.cfg.Admin.UpdateUser(
+					c.r.Context(), c.caller.Account, c.form("UserName"),
+					c.form("NewPath"), c.form("NewUserName"), u.ARN)
+			},
+		),
 		"DeleteUser": admin([]string{"UserName"}, userARN, func(h *handler, c *exchange) (any, error) {
 			if err := required(c, "UserName"); err != nil {
 				return nil, err
