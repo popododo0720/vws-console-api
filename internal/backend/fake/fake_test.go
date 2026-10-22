@@ -35,6 +35,15 @@ func TestKeyTokenMixContract(t *testing.T) {
 	})
 }
 
+// TestKeyImportConcurrentContract runs the #287 concurrent import table on
+// the fake, which serves each call under one lock.
+func TestKeyImportConcurrentContract(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0).UTC()
+	backendtest.KeyImportConcurrent(t, func(int) backend.Set {
+		return New(Options{Now: func() time.Time { return now }, Entropy: &Sequence{}}).Set()
+	})
+}
+
 func TestRepeatedEntropyDoesNotOverwrite(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0).UTC()
 	set := New(Options{
