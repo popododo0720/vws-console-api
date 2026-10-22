@@ -14,6 +14,9 @@ import (
 	computev1 "github.com/popododo0720/vws-proto/gen/go/vws/compute/v1"
 	networkv1 "github.com/popododo0720/vws-proto/gen/go/vws/network/v1"
 	storagev1 "github.com/popododo0720/vws-proto/gen/go/vws/storage/v1"
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
@@ -991,17 +994,17 @@ func (c computeClient) CreateKeyPair(ctx context.Context, m backend.Mutation, re
 		}
 		created, err = submit()
 	}
-	if err := rpcErr(created, err); err != nil {
+	if rerr := rpcErr(created, err); rerr != nil {
 		// Only a name collision is InvalidKeyPair.Duplicate (#284). The key
 		// pair id is derived from the name, so ALREADY_EXISTS is one. An
 		// import's IDEMPOTENCY_CONFLICT is one only when it named the request
 		// of the key pair live at that id: the token's other body for a live
 		// name. Any other conflict keeps its own code.
-		code := resource.CodeOf(err)
+		code := resource.CodeOf(rerr)
 		if code == resource.CodeAlreadyExists || (reused && code == resource.CodeIdempotencyMismatch) {
 			return resource.Accepted[resource.KeyPair]{}, resource.AlreadyExists(resource.KindKeyPair, req.Name)
 		}
-		return resource.Accepted[resource.KeyPair]{}, err
+		return resource.Accepted[resource.KeyPair]{}, keyPairConflict(created, err, rerr, req.Name)
 	}
 	op, err := operationFrom(created, resource.ServiceCompute)
 	if err != nil {
@@ -1641,6 +1644,51 @@ func newImportNonce() (string, error) {
 		return "", resource.Internal(err)
 	}
 	return hex.EncodeToString(raw[:]), nil
+}
+
+// keyPairConflict names the EC2 error for a compute conflict on a key pair
+// create (#291). mapped is the client's reading of compute's answer, which
+// is the gRPC error rpc or the error of the finished operation op.
+//
+// ETAG_MISMATCH, GENERATION_CONFLICT and Aborted without a reason mean
+// compute lost an optimistic concurrency race. That is transient, so it is
+// Unavailable, which EC2 documents as a retryable server error. Every other
+// conflict (DEPENDENCY_NOT_READY, DEPENDENCY_MISSING, FailedPrecondition
+// without a reason) refuses the create in the current state, which EC2
+// documents as IncorrectState. Both name the key pair, so neither reads as
+// an instance error. Other errors are returned as they are.
+func keyPairConflict(op *longrunningpb.Operation, rpc, mapped error, name string) error {
+	if resource.CodeOf(mapped) != resource.CodeConflict {
+		return mapped
+	}
+	raw := rpc
+	if raw == nil && op.GetError() != nil {
+		raw = status.ErrorProto(op.GetError())
+	}
+	st, _ := status.FromError(raw)
+	out := &resource.Error{Code: resource.CodeConflict, Kind: resource.KindKeyPair, ID: name, Message: st.Message()}
+	if out.Message == "" {
+		out.Message = "the key pair cannot be created in its current state"
+	}
+	switch vwsReason(st) {
+	case "ETAG_MISMATCH", "GENERATION_CONFLICT":
+		out.Code = resource.CodeUnavailable
+	case "":
+		if st.Code() == codes.Aborted {
+			out.Code = resource.CodeUnavailable
+		}
+	}
+	return out
+}
+
+// vwsReason is the vws.dev ErrorInfo reason of st, or "" when it has none.
+func vwsReason(st *status.Status) string {
+	for _, detail := range st.Details() {
+		if info, ok := detail.(*errdetails.ErrorInfo); ok && info.GetDomain() == "vws.dev" {
+			return info.GetReason()
+		}
+	}
+	return ""
 }
 
 // staleImport reports whether compute answered an import that reused a live
