@@ -70,3 +70,60 @@ func TestCreateBucketInFlightForAnotherRequestIsOwned(t *testing.T) {
 		t.Fatalf("request ids sent %v", stub.sent)
 	}
 }
+
+// TestBucketRequestIDsAreFreshPerCall covers #315's request-id bug. vws-storage
+// returns the stored operation for any request id it has seen, so a create
+// or delete that sends a fixed id per bucket name answers a second create or
+// delete with the first one's operation and changes nothing: within 24 hours
+// create, delete, create left no bucket, and a second delete left the bucket.
+func TestBucketRequestIDsAreFreshPerCall(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0).UTC()
+	world := fake.New(fake.Options{Now: func() time.Time { return now }, Entropy: &fake.Sequence{}})
+	set := dialLoopback(t, world, now)()
+	ctx := t.Context()
+	scope := backend.Scope{Account: mustAccount(t)}
+	name, err := resource.Parse[resource.BucketName]("again-and-again")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for round := 1; round <= 2; round++ {
+		if _, err := set.Storage.CreateBucket(ctx, scope, name); err != nil {
+			t.Fatalf("round %d create: %v", round, err)
+		}
+		if _, err := set.Storage.GetBucket(ctx, scope, name); err != nil {
+			t.Fatalf("round %d: bucket missing after create: %v", round, err)
+		}
+		if err := set.Storage.DeleteBucket(ctx, scope, name); err != nil {
+			t.Fatalf("round %d delete: %v", round, err)
+		}
+		if _, err := set.Storage.GetBucket(ctx, scope, name); resource.CodeOf(err) != resource.CodeNotFound {
+			t.Fatalf("round %d: bucket still there after delete: %v", round, err)
+		}
+	}
+}
+
+// TestDeleteBucketAfterRecreateDeletesAgain isolates DeleteBucket from the
+// create path: the bucket is made again in the store directly, and a second
+// delete through the client must remove it, not replay the first delete.
+func TestDeleteBucketAfterRecreateDeletesAgain(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0).UTC()
+	world := fake.New(fake.Options{Now: func() time.Time { return now }, Entropy: &fake.Sequence{}})
+	set := dialLoopback(t, world, now)()
+	ctx := t.Context()
+	scope := backend.Scope{Account: mustAccount(t)}
+	name, err := resource.Parse[resource.BucketName]("deleted-twice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for round := 1; round <= 2; round++ {
+		if _, err := world.Set().Storage.CreateBucket(ctx, scope, name); err != nil {
+			t.Fatalf("round %d store create: %v", round, err)
+		}
+		if err := set.Storage.DeleteBucket(ctx, scope, name); err != nil {
+			t.Fatalf("round %d delete: %v", round, err)
+		}
+		if _, err := world.Set().Storage.GetBucket(ctx, scope, name); resource.CodeOf(err) != resource.CodeNotFound {
+			t.Fatalf("round %d: bucket still there after delete: %v", round, err)
+		}
+	}
+}

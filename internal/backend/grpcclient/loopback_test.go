@@ -1129,8 +1129,9 @@ func (s *subnetSrv) ListSubnets(ctx context.Context, req *networkv1.ListSubnetsR
 	return &networkv1.ListSubnetsResponse{Subnets: items}, nil
 }
 
-// bucketSrv answers CreateBucket as vws-storage does (#315): a request id
-// it has seen returns that request's operation (storage.Service.Submit), and
+// bucketSrv answers CreateBucket and DeleteBucket as vws-storage does
+// (#315): a request id it has seen returns that request's operation
+// (storage.Service.Submit), and
 // a create for a bucket the project already holds returns a succeeded
 // operation for that bucket (vws-proto operation.proto, Create). Unlike
 // vws-storage, names stay global as in the fake, so another project's name
@@ -1219,10 +1220,25 @@ func (s *bucketSrv) DeleteBucket(ctx context.Context, req *storagev1.DeleteBucke
 	if err != nil {
 		return nil, toStatus(err)
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	token := projectID + "/" + req.GetRequestId()
+	if op, ok := s.ops[token]; ok {
+		return op, nil
+	}
 	if err := s.w.set.Storage.DeleteBucket(ctx, backend.Scope{Account: account}, name); err != nil {
 		return nil, toStatus(err)
 	}
-	return doneResource(projectID, req.GetRequestId(), req.GetName(), bucketProto(resource.Bucket{Name: name, OwnerID: account}, projectID), s.w.now)
+	gone := bucketProto(resource.Bucket{Name: name, OwnerID: account}, projectID)
+	op, err := doneResource(projectID, req.GetRequestId(), req.GetName(), gone, s.w.now)
+	if err != nil {
+		return nil, err
+	}
+	if s.ops == nil {
+		s.ops = map[string]*longrunningpb.Operation{}
+	}
+	s.ops[token] = op
+	return op, nil
 }
 
 type objectSrv struct {
