@@ -20,8 +20,8 @@ import (
 // management calls are not mapped to vws-iam's User, Group, Role, Policy and
 // AccessKey services yet; each answers Unimplemented, which the surface
 // returns as InvalidAction. ListPolicyVersions, SetDefaultPolicyVersion, the
-// policy and MFA device tag calls, GetRole and UpdateRoleDescription are
-// mapped.
+// policy and MFA device tag calls, GetRole, UpdateRole and
+// UpdateRoleDescription are mapped.
 type STSAdmin struct{ *Client }
 
 var _ iam.Admin = STSAdmin{}
@@ -137,6 +137,52 @@ func (a STSAdmin) role(ctx context.Context, account resource.AccountID, name str
 // roleName is the vws-iam resource name of a role.
 func roleName(account resource.AccountID, name string) string {
 	return "projects/" + account.String() + "/roles/" + name
+}
+
+// UpdateRole implements iam.Admin over RoleService.UpdateRole with a mask on
+// the fields the caller set.
+func (a STSAdmin) UpdateRole(
+	ctx context.Context, account resource.AccountID, name string, in iam.RoleUpdate,
+) error {
+	if in.Description != nil {
+		if err := iam.ValidateRoleDescription(*in.Description); err != nil {
+			return err
+		}
+	}
+	if in.MaxSessionDuration != nil {
+		if err := iam.ValidateMaxSessionDuration(*in.MaxSessionDuration); err != nil {
+			return err
+		}
+	}
+	existing, err := a.role(ctx, account, name)
+	if err != nil {
+		return err
+	}
+	if iam.IsServiceLinkedRole(existing.GetSpec().GetPath()) {
+		return iam.UnmodifiableRole(name)
+	}
+	if in.Description == nil && in.MaxSessionDuration == nil {
+		return nil
+	}
+	spec := &iamv1.RoleSpec{}
+	paths := make([]string, 0, 2)
+	if in.Description != nil {
+		spec.Description = *in.Description
+		paths = append(paths, "spec.description")
+	}
+	if in.MaxSessionDuration != nil {
+		spec.MaxSessionDurationSeconds = int32(*in.MaxSessionDuration)
+		paths = append(paths, "spec.max_session_duration_seconds")
+	}
+	req := &iamv1.UpdateRoleRequest{
+		Role:       &iamv1.Role{Name: roleName(account, name), Spec: spec},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: paths},
+	}
+	op, err := call(ctx, a.roles.UpdateRole, req)
+	if err != nil {
+		return authError(err)
+	}
+	return operationResult(op)
 }
 
 // UpdateRoleDescription implements iam.Admin over RoleService.UpdateRole with
