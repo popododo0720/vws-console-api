@@ -76,31 +76,40 @@ func queryHarness(t *testing.T) (http.Handler, *server) {
 			Status: &iamv1.GroupStatus{Arn: devsARN, UniqueId: "AGPADEVS000000000001"}, CreateTime: created,
 		},
 	}
+	verifier := func(svc sigv4.Service) *sigv4.Verifier {
+		return sigv4.NewVerifier(sigv4.Verifier{
+			Service: svc, Region: resource.RegionName,
+			Now: func() time.Time { return queryNow }, Auth: iam.Authenticator(c),
+		})
+	}
 	h := iamquery.New(iamquery.Config{
 		Admin: STSAdmin{Client: c}, Authorizer: c,
-		IAM: sigv4.NewVerifier(sigv4.Verifier{
-			Service: sigv4.ServiceIAM, Region: resource.RegionName,
-			Now: func() time.Time { return queryNow }, Auth: iam.Authenticator(c),
-		}),
+		IAM: verifier(sigv4.ServiceIAM), STS: verifier(sigv4.ServiceSTS),
 	})
 	s.client = c
 	return h, s
 }
 
-// queryCall signs form as bob and serves it.
+// queryCall signs an IAM form as bob and serves it.
 func queryCall(t *testing.T, h http.Handler, form url.Values) *httptest.ResponseRecorder {
+	t.Helper()
+	form.Set("Version", iamquery.IAMVersion)
+	return signedCall(t, h, sigv4.ServiceIAM, form)
+}
+
+// signedCall signs form for svc as bob and serves it.
+func signedCall(t *testing.T, h http.Handler, svc sigv4.Service, form url.Values) *httptest.ResponseRecorder {
 	t.Helper()
 	account, err := resource.Parse[resource.AccountID]("123456789012")
 	if err != nil {
 		t.Fatal(err)
 	}
-	form.Set("Version", iamquery.IAMVersion)
 	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "http://127.0.0.1:8084/",
 		strings.NewReader(form.Encode()))
 	req.Host = req.URL.Host
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded; charset=utf-8")
 	cred := sigv4.Credential{AccessKey: "AKIABOB", Secret: "bobsecret", Account: account}
-	if err := sigv4.Sign(req, cred, sigv4.ServiceIAM, resource.RegionName, queryNow); err != nil {
+	if err := sigv4.Sign(req, cred, svc, resource.RegionName, queryNow); err != nil {
 		t.Fatal(err)
 	}
 	rec := httptest.NewRecorder()
@@ -313,5 +322,17 @@ func TestGetUserAndGetGroupThroughTheQuerySurfaceOverGRPC(t *testing.T) {
 				t.Errorf("lists a deleted member: %s", rec.Body)
 			}
 		})
+	}
+}
+
+// With GetUser served, STS GetCallerIdentity names an IAM user by vws-iam's
+// unique id, as AWS does, not by the access key id the caller signed with.
+func TestGetCallerIdentityNamesTheUserByItsUniqueIDOverGRPC(t *testing.T) {
+	h, _ := queryHarness(t)
+	form := url.Values{"Action": {"GetCallerIdentity"}, "Version": {iamquery.STSVersion}}
+	rec := signedCall(t, h, sigv4.ServiceSTS, form)
+	expect(t, rec, http.StatusOK, "<UserId>AIDABOB0000000000001</UserId>", "<Arn>"+bobARN+"</Arn>")
+	if strings.Contains(rec.Body.String(), "AKIABOB") {
+		t.Errorf("UserId is the access key id: %s", rec.Body)
 	}
 }
