@@ -19,8 +19,8 @@ import (
 // STSAdmin serves the IAM Query surface's STS calls over vws-iam. Most IAM
 // management calls are not mapped to vws-iam's User, Group, Role, Policy and
 // AccessKey services yet; each answers Unimplemented, which the surface
-// returns as InvalidAction. The policy tag calls, GetRole and
-// UpdateRoleDescription are mapped.
+// returns as InvalidAction. SetDefaultPolicyVersion, the policy and MFA
+// device tag calls, GetRole and UpdateRoleDescription are mapped.
 type STSAdmin struct{ *Client }
 
 var _ iam.Admin = STSAdmin{}
@@ -223,6 +223,27 @@ func (STSAdmin) ListPolicies(_ context.Context, _ resource.AccountID, _ string) 
 // DeletePolicy implements iam.Admin.
 func (STSAdmin) DeletePolicy(_ context.Context, _ resource.AccountID, _ string) error {
 	return notServed("DeletePolicy")
+}
+
+// SetDefaultPolicyVersion implements iam.Admin over PolicyService.UpdatePolicy.
+// vws-iam changes spec.default_version and rejects a version it does not store.
+func (a STSAdmin) SetDefaultPolicyVersion(
+	ctx context.Context, account resource.AccountID, arn, version string,
+) error {
+	name, err := a.policyFor(ctx, account, arn)
+	if err != nil {
+		return err
+	}
+	op, err := call(ctx, a.policies.UpdatePolicy, &iamv1.UpdatePolicyRequest{
+		Policy: &iamv1.Policy{Name: name, Spec: &iamv1.PolicySpec{DefaultVersion: version}},
+		UpdateMask: &fieldmaskpb.FieldMask{
+			Paths: []string{"spec.default_version"},
+		},
+	})
+	if err != nil {
+		return authError(err)
+	}
+	return operationResult(op)
 }
 
 // AttachPolicy implements iam.Admin.
