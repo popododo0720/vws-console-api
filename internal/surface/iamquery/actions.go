@@ -2,6 +2,7 @@ package iamquery
 
 import (
 	"encoding/xml"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -151,6 +152,13 @@ func pathOr(p string) string {
 	}
 	return p
 }
+
+// policyVersionID is the AWS VersionId shape.
+var policyVersionID = regexp.MustCompile(`^v[1-9][0-9]*(\.[A-Za-z0-9-]*)?$`)
+
+// policyARNShape is the AWS policy ARN shape. A well-formed ARN for another
+// account is left for the backend to report as missing.
+var policyARNShape = regexp.MustCompile(`^arn:[^:]+:iam::[0-9]{12}:policy/.+$`)
 
 func required(c *exchange, keys ...string) error {
 	for _, k := range keys {
@@ -461,6 +469,24 @@ func iamActions() map[string]spec {
 				PolicyVersion policyVersionXML `xml:"PolicyVersion"`
 			}{policyVersionXML{Document: policyDoc(p.Document), VersionID: "v1", IsDefaultVersion: true, CreateDate: stamp(p.Created)}}, nil
 		}),
+		"DeletePolicyVersion": admin(
+			[]string{"PolicyArn", "VersionId"}, policyARN,
+			func(h *handler, c *exchange) (any, error) {
+				if err := required(c, "PolicyArn", "VersionId"); err != nil {
+					return nil, err
+				}
+				if !policyARNShape.MatchString(c.form("PolicyArn")) {
+					return nil, resource.Invalid("policyArn", "The policy ARN '"+c.form("PolicyArn")+"' is not valid.")
+				}
+				if !policyVersionID.MatchString(c.form("VersionId")) {
+					// The capital field name makes the surface answer InvalidInput,
+					// as the AWS reference documents for this action.
+					return nil, resource.Invalid("VersionId", "The policy version id '"+c.form("VersionId")+"' is not valid.")
+				}
+				return nil, h.cfg.Admin.DeletePolicyVersion(
+					c.r.Context(), c.caller.Account, c.form("PolicyArn"), c.form("VersionId"))
+			},
+		),
 		"ListPolicies": {params: []string{"Scope", "OnlyAttached", "PolicyUsageFilter"}, list: true, needsAdmin: true, run: func(h *handler, c *exchange) (any, error) {
 			out := policiesResult{Policies: []policyXML{}}
 			if c.form("Scope") == "AWS" { // no AWS managed policies exist here

@@ -65,6 +65,10 @@ type server struct {
 	getPolicy    []*iamv1.GetPolicyRequest
 	getPolicyRes *iamv1.Policy
 	getPolicyErr error
+	// Policy version delete calls.
+	deleteVersion    []*iamv1.DeletePolicyVersionRequest
+	deleteVersionErr error
+	deleteVersionRes *longrunningpb.Operation
 	// Virtual MFA device tag calls.
 	tagMfa        []*iamv1.TagMFADeviceRequest
 	untagMfa      []*iamv1.UntagMFADeviceRequest
@@ -135,6 +139,24 @@ func (s *server) ListPolicyTags(
 		return nil, s.tagErr
 	}
 	return s.listTagsRes, nil
+}
+
+func (s *server) DeletePolicyVersion(
+	ctx context.Context, req *iamv1.DeletePolicyVersionRequest,
+) (*longrunningpb.Operation, error) {
+	if err := s.enter(ctx); err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.deleteVersion = append(s.deleteVersion, req)
+	if s.deleteVersionErr != nil {
+		return nil, s.deleteVersionErr
+	}
+	if s.deleteVersionRes != nil {
+		return s.deleteVersionRes, nil
+	}
+	return &longrunningpb.Operation{Done: true}, nil
 }
 
 func (s *server) GetMfaDevice(ctx context.Context, req *iamv1.GetMfaDeviceRequest) (*iamv1.MfaDevice, error) {

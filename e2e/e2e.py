@@ -629,6 +629,12 @@ def identity():
     step("IAM GetPolicyVersion returns the document", lambda: check(
         iam.get_policy_version(PolicyArn=S["policy_arn"], VersionId="v1")["PolicyVersion"]["Document"]["Statement"][0]["Effect"] == "Allow",
         "document"))
+    step("IAM DeletePolicyVersion default is DeleteConflict", lambda: aws_error(
+        "DeleteConflict", lambda: iam.delete_policy_version(PolicyArn=S["policy_arn"], VersionId="v1")))
+    step("IAM DeletePolicyVersion unknown version is NoSuchEntity", lambda: aws_error(
+        "NoSuchEntity", lambda: iam.delete_policy_version(PolicyArn=S["policy_arn"], VersionId="v2")))
+    step("IAM DeletePolicyVersion malformed version is InvalidInput", lambda: aws_error(
+        "InvalidInput", lambda: iam.delete_policy_version(PolicyArn=S["policy_arn"], VersionId="1")))
     step("IAM CreateGroup", lambda: iam.create_group(GroupName="e2e-readers"))
     step("IAM AttachGroupPolicy", lambda: iam.attach_group_policy(GroupName="e2e-readers", PolicyArn=S["policy_arn"]))
     step("IAM AddUserToGroup", lambda: iam.add_user_to_group(GroupName="e2e-readers", UserName="e2e-bob"))

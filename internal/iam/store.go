@@ -677,6 +677,24 @@ func (f *Fake) DeletePolicy(_ context.Context, a resource.AccountID, arn string)
 	return nil
 }
 
+// DeletePolicyVersion implements Admin. The fake keeps only the default
+// version v1, so any other version does not exist.
+func (f *Fake) DeletePolicyVersion(_ context.Context, a resource.AccountID, arn, versionID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	p, err := f.account(a).policy(arn)
+	if err != nil {
+		return err
+	}
+	if versionID == "v1" {
+		return conflict("the default version cannot be deleted")
+	}
+	return &resource.Error{
+		Code:    resource.CodeNotFound,
+		Message: "Policy " + p.ARN + " version " + versionID + " does not exist or is not attachable.",
+	}
+}
+
 // --- policy tags ---
 
 // TagPolicy implements Admin. A named key is overwritten; the whole request

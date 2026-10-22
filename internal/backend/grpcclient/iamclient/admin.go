@@ -14,10 +14,10 @@ import (
 	"github.com/popododo0720/vws-console-api/internal/resource"
 )
 
-// STSAdmin serves the IAM Query surface's STS calls over vws-iam. The IAM
-// management calls are not mapped to vws-iam's User, Group, Role, Policy and
-// AccessKey services yet; each answers Unimplemented, which the surface
-// returns as InvalidAction.
+// STSAdmin serves the IAM Query surface's STS calls and DeletePolicyVersion
+// over vws-iam. The other IAM management calls are not mapped to vws-iam's
+// User, Group, Role, Policy and AccessKey services yet; each answers
+// Unimplemented, which the surface returns as InvalidAction.
 type STSAdmin struct{ *Client }
 
 var _ iam.Admin = STSAdmin{}
@@ -373,6 +373,20 @@ func (a STSAdmin) ListPolicyTags(
 		page.Tags = append(page.Tags, iam.Tag{Key: tag.GetKey(), Value: tag.GetValue()})
 	}
 	return page, nil
+}
+
+// DeletePolicyVersion implements iam.Admin over PolicyService.DeletePolicyVersion.
+func (a STSAdmin) DeletePolicyVersion(ctx context.Context, account resource.AccountID, arn, versionID string) error {
+	name, err := a.policyFor(ctx, account, arn)
+	if err != nil {
+		return err
+	}
+	req := &iamv1.DeletePolicyVersionRequest{Name: name + "/versions/" + versionID}
+	op, err := call(ctx, a.policies.DeletePolicyVersion, req)
+	if err != nil {
+		return authError(err)
+	}
+	return operationResult(op)
 }
 
 // TagMFADevice implements iam.Admin over MfaDeviceService.TagMFADevice.

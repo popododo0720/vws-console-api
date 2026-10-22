@@ -28,6 +28,13 @@ func (r *recorder) Authorize(ctx context.Context, req iam.Request) (iam.Decision
 
 func harness(t *testing.T) (http.Handler, *iam.Fake, *recorder, sigv4.Credential) {
 	t.Helper()
+	return harnessWithAdmin(t, nil)
+}
+
+func harnessWithAdmin(
+	t *testing.T, wrap func(iam.Admin) iam.Admin,
+) (http.Handler, *iam.Fake, *recorder, sigv4.Credential) {
+	t.Helper()
 	account, err := resource.Parse[resource.AccountID]("123456789012")
 	if err != nil {
 		t.Fatal(err)
@@ -38,7 +45,11 @@ func harness(t *testing.T) (http.Handler, *iam.Fake, *recorder, sigv4.Credential
 	verifier := func(s sigv4.Service) *sigv4.Verifier {
 		return sigv4.NewVerifier(sigv4.Verifier{Service: s, Region: resource.RegionName, Now: func() time.Time { return now }, Auth: iam.Authenticator(rec)})
 	}
-	h := New(Config{Admin: f, Authorizer: rec, IAM: verifier(sigv4.ServiceIAM), STS: verifier(sigv4.ServiceSTS)})
+	var admin iam.Admin = f
+	if wrap != nil {
+		admin = wrap(admin)
+	}
+	h := New(Config{Admin: admin, Authorizer: rec, IAM: verifier(sigv4.ServiceIAM), STS: verifier(sigv4.ServiceSTS)})
 	return h, f, rec, sigv4.Credential{AccessKey: "AKIDEXAMPLE", Secret: "secret", Account: account}
 }
 
@@ -102,6 +113,83 @@ func TestPolicyDocumentsAreURLEncoded(t *testing.T) {
 	has(t, res, http.StatusOK, `<Arn>arn:vws:iam::123456789012:policy/d</Arn>`, `<DefaultVersionId>v1</DefaultVersionId>`, `<AttachmentCount>0</AttachmentCount>`)
 	res = call(t, h, root, sigv4.ServiceIAM, url.Values{"Action": {"GetPolicyVersion"}, "PolicyArn": {"arn:vws:iam::123456789012:policy/d"}, "VersionId": {"v1"}})
 	has(t, res, http.StatusOK, `<Document>`+strings.ReplaceAll(url.QueryEscape(doc), "+", "%20")+`</Document>`, `<IsDefaultVersion>true</IsDefaultVersion>`)
+}
+
+func TestDeletePolicyVersion(t *testing.T) {
+	h, f, rec, root := harness(t)
+	ctx := t.Context()
+	doc := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"ec2:Describe*","Resource":"*"}]}`
+	p, err := f.CreatePolicy(ctx, root.Account, "d", "/", doc, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	authorized := func(want string) {
+		t.Helper()
+		if len(rec.seen) == 0 || rec.seen[len(rec.seen)-1] != want {
+			t.Errorf("authorized %v, want last %q", rec.seen, want)
+		}
+	}
+	want := "iam:DeletePolicyVersion " + p.ARN
+	res := call(t, h, root, sigv4.ServiceIAM, url.Values{
+		"Action": {"DeletePolicyVersion"}, "PolicyArn": {p.ARN}, "VersionId": {"v1"},
+	})
+	has(t, res, http.StatusConflict, `<Code>DeleteConflict</Code>`)
+	authorized(want)
+	res = call(t, h, root, sigv4.ServiceIAM, url.Values{
+		"Action": {"DeletePolicyVersion"}, "PolicyArn": {p.ARN}, "VersionId": {"v2"},
+	})
+	has(t, res, http.StatusNotFound, `<Code>NoSuchEntity</Code>`)
+	authorized(want)
+	res = call(t, h, root, sigv4.ServiceIAM, url.Values{
+		"Action": {"DeletePolicyVersion"}, "PolicyArn": {p.ARN}, "VersionId": {"1"},
+	})
+	has(t, res, http.StatusBadRequest, `<Code>InvalidInput</Code>`)
+	authorized(want)
+	res = call(t, h, root, sigv4.ServiceIAM, url.Values{
+		"Action": {"DeletePolicyVersion"}, "PolicyArn": {"not-an-arn"}, "VersionId": {"v1"},
+	})
+	has(t, res, http.StatusBadRequest, `<Code>ValidationError</Code>`)
+	authorized("iam:DeletePolicyVersion not-an-arn")
+	res = call(t, h, root, sigv4.ServiceIAM, url.Values{
+		"Action": {"DeletePolicyVersion"}, "PolicyArn": {"arn:vws:iam::123456789012:policy/none"}, "VersionId": {"v1"},
+	})
+	has(t, res, http.StatusNotFound, `<Code>NoSuchEntity</Code>`)
+	authorized("iam:DeletePolicyVersion arn:vws:iam::123456789012:policy/none")
+	res = call(t, h, root, sigv4.ServiceIAM, url.Values{
+		"Action": {"DeletePolicyVersion"}, "VersionId": {"v1"},
+	})
+	has(t, res, http.StatusBadRequest, `<Code>ValidationError</Code>`)
+}
+
+// versionDeleter succeeds without the fake, which stores only the default
+// version, so the success response needs a backend that can delete one.
+type versionDeleter struct {
+	iam.Admin
+	deleted []string
+}
+
+func (d *versionDeleter) DeletePolicyVersion(_ context.Context, _ resource.AccountID, arn, versionID string) error {
+	d.deleted = append(d.deleted, arn+" "+versionID)
+	return nil
+}
+
+func TestDeletePolicyVersionSuccess(t *testing.T) {
+	admin := &versionDeleter{}
+	h, _, _, root := harnessWithAdmin(t, func(base iam.Admin) iam.Admin {
+		admin.Admin = base
+		return admin
+	})
+	const arn = "arn:vws:iam::123456789012:policy/eng/d"
+	res := call(t, h, root, sigv4.ServiceIAM, url.Values{
+		"Action": {"DeletePolicyVersion"}, "PolicyArn": {arn}, "VersionId": {"v2"},
+	})
+	has(t, res, http.StatusOK, `<DeletePolicyVersionResponse>`, `<ResponseMetadata><RequestId>`)
+	if strings.Contains(res.Body.String(), "DeletePolicyVersionResult") {
+		t.Errorf("empty result has a DeletePolicyVersionResult: %s", res.Body.String())
+	}
+	if len(admin.deleted) != 1 || admin.deleted[0] != arn+" v2" {
+		t.Errorf("deleted %v, want %q", admin.deleted, arn+" v2")
+	}
 }
 
 func TestUpdateGroup(t *testing.T) {

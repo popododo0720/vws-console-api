@@ -43,8 +43,9 @@ type Options struct {
 	Backoff time.Duration
 }
 
-// Client implements the per-request half of iam.Client, AssumeRole and the
-// policy and virtual MFA device tag calls of iam.Admin.
+// Client implements the per-request half of iam.Client, AssumeRole, and the
+// policy tag, policy version delete and virtual MFA device tag calls of
+// iam.Admin.
 type Client struct {
 	auth       iamv1.AuthServiceClient
 	tokens     iamv1.TokenServiceClient
@@ -295,6 +296,11 @@ func authError(err error) error {
 		return &resource.Error{Code: resource.CodeNotFound, Message: st.Message()}
 	case codes.InvalidArgument:
 		return &resource.Error{Code: resource.CodeInvalidArgument, Message: st.Message()}
+	case codes.FailedPrecondition:
+		if aws == "DeleteConflict" {
+			return &resource.Error{Code: resource.CodeConflict, Message: st.Message()}
+		}
+		return fmt.Errorf("vws-iam: %w", errors.New(st.Code().String()))
 	case codes.ResourceExhausted:
 		return &resource.Error{Code: resource.CodeResourceExhausted, Message: st.Message()}
 	default:
