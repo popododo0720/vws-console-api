@@ -38,9 +38,29 @@ func (STSAdmin) CreateUser(_ context.Context, _ resource.AccountID, _, _ string)
 	return iam.User{}, notServed("CreateUser")
 }
 
-// GetUser implements iam.Admin.
-func (STSAdmin) GetUser(_ context.Context, _ resource.AccountID, _ string) (iam.User, error) {
-	return iam.User{}, notServed("GetUser")
+// GetUser implements iam.Admin over UserService.GetUser. The IAM Query
+// surface also uses it to authorize on a user's real ARN, path included.
+func (a STSAdmin) GetUser(ctx context.Context, account resource.AccountID, name string) (iam.User, error) {
+	if !entityName(name) {
+		return iam.User{}, entityNotFound("user", name)
+	}
+	u, err := a.userFor(ctx, account, "projects/"+account.String()+"/users/"+name)
+	if resource.CodeOf(err) == resource.CodeNotFound {
+		return iam.User{}, entityNotFound("user", name)
+	}
+	return u, err
+}
+
+// entityName reports whether name can be a vws-iam user or group: one
+// resource name segment. Anything else addresses another resource and is
+// answered as missing without a call.
+func entityName(name string) bool {
+	return name != "" && !strings.Contains(name, "/")
+}
+
+// entityNotFound is the AWS NoSuchEntity answer for a user or group.
+func entityNotFound(what, name string) error {
+	return &resource.Error{Code: resource.CodeNotFound, Message: "The " + what + " with name " + name + " cannot be found."}
 }
 
 // ListUsers implements iam.Admin.
@@ -143,9 +163,54 @@ func (STSAdmin) CreateGroup(_ context.Context, _ resource.AccountID, _, _ string
 	return iam.Group{}, notServed("CreateGroup")
 }
 
-// GetGroup implements iam.Admin.
-func (STSAdmin) GetGroup(_ context.Context, _ resource.AccountID, _ string) (iam.Group, []iam.User, error) {
-	return iam.Group{}, nil, notServed("GetGroup")
+// GetGroup implements iam.Admin over GroupService.GetGroup, with each member
+// read over UserService.GetUser. A member deleted since the group was read is
+// left out. The IAM Query surface also uses it to authorize on a group's real
+// ARN, path included.
+func (a STSAdmin) GetGroup(ctx context.Context, account resource.AccountID, name string) (iam.Group, []iam.User, error) {
+	if !entityName(name) {
+		return iam.Group{}, nil, entityNotFound("group", name)
+	}
+	resourceName := "projects/" + account.String() + "/groups/" + name
+	g, err := retry(ctx, a.backoff, a.groups.GetGroup, &iamv1.GetGroupRequest{Name: resourceName})
+	if err != nil {
+		if err = authError(err); resource.CodeOf(err) == resource.CodeNotFound {
+			return iam.Group{}, nil, entityNotFound("group", name)
+		}
+		return iam.Group{}, nil, err
+	}
+	if g.GetName() != resourceName {
+		return iam.Group{}, nil, resource.Internal(
+			errors.New("vws-iam GetGroup returned " + g.GetName() + ", want " + resourceName))
+	}
+	arn := g.GetStatus().GetArn()
+	if !strings.HasPrefix(arn, "arn:vws:iam::"+account.String()+":group/") {
+		return iam.Group{}, nil, resource.Internal(
+			errors.New("vws-iam GetGroup returned a group outside the caller's account"))
+	}
+	out := iam.Group{Name: name, Path: g.GetSpec().GetPath(), ID: g.GetStatus().GetUniqueId(), ARN: arn}
+	if out.Path == "" {
+		out.Path = "/"
+	}
+	if t := g.GetCreateTime(); t != nil {
+		out.Created = t.AsTime()
+	}
+	members := make([]iam.User, 0, len(g.GetSpec().GetMembers()))
+	for _, m := range g.GetSpec().GetMembers() {
+		if !userResourceInAccount(account, m) {
+			return iam.Group{}, nil, resource.Internal(
+				errors.New("vws-iam GetGroup returned a member outside the caller's account"))
+		}
+		u, err := a.userFor(ctx, account, m)
+		if resource.CodeOf(err) == resource.CodeNotFound {
+			continue
+		}
+		if err != nil {
+			return iam.Group{}, nil, err
+		}
+		members = append(members, u)
+	}
+	return out, members, nil
 }
 
 // ListGroups implements iam.Admin.
