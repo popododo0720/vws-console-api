@@ -45,7 +45,8 @@ type Options struct {
 }
 
 // Client implements the per-request half of iam.Client, AssumeRole, the
-// policy and virtual MFA device tag calls, and the role calls of iam.Admin.
+// policy default version, policy and virtual MFA device tag calls, and the
+// role calls of iam.Admin.
 type Client struct {
 	auth       iamv1.AuthServiceClient
 	tokens     iamv1.TokenServiceClient
