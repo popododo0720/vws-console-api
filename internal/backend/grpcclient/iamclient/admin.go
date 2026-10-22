@@ -7,6 +7,7 @@ import (
 
 	"cloud.google.com/go/longrunning/autogen/longrunningpb"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	iamv1 "github.com/popododo0720/vws-proto/gen/go/vws/iam/v1"
 
@@ -14,10 +15,11 @@ import (
 	"github.com/popododo0720/vws-console-api/internal/resource"
 )
 
-// STSAdmin serves the IAM Query surface's STS calls over vws-iam. The IAM
+// STSAdmin serves the IAM Query surface's STS calls over vws-iam. Most IAM
 // management calls are not mapped to vws-iam's User, Group, Role, Policy and
 // AccessKey services yet; each answers Unimplemented, which the surface
-// returns as InvalidAction.
+// returns as InvalidAction. SetDefaultPolicyVersion and the policy and MFA
+// device tag calls are mapped.
 type STSAdmin struct{ *Client }
 
 var _ iam.Admin = STSAdmin{}
@@ -144,6 +146,27 @@ func (STSAdmin) ListPolicies(_ context.Context, _ resource.AccountID, _ string) 
 // DeletePolicy implements iam.Admin.
 func (STSAdmin) DeletePolicy(_ context.Context, _ resource.AccountID, _ string) error {
 	return notServed("DeletePolicy")
+}
+
+// SetDefaultPolicyVersion implements iam.Admin over PolicyService.UpdatePolicy.
+// vws-iam changes spec.default_version and rejects a version it does not store.
+func (a STSAdmin) SetDefaultPolicyVersion(
+	ctx context.Context, account resource.AccountID, arn, version string,
+) error {
+	name, err := a.policyFor(ctx, account, arn)
+	if err != nil {
+		return err
+	}
+	op, err := call(ctx, a.policies.UpdatePolicy, &iamv1.UpdatePolicyRequest{
+		Policy: &iamv1.Policy{Name: name, Spec: &iamv1.PolicySpec{DefaultVersion: version}},
+		UpdateMask: &fieldmaskpb.FieldMask{
+			Paths: []string{"spec.default_version"},
+		},
+	})
+	if err != nil {
+		return authError(err)
+	}
+	return operationResult(op)
 }
 
 // AttachPolicy implements iam.Admin.

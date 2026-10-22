@@ -278,6 +278,32 @@ func TestUpdateAssumeRolePolicy(t *testing.T) {
 	}
 }
 
+func TestSetDefaultPolicyVersion(t *testing.T) {
+	ctx := t.Context()
+	a := account(t)
+	f := NewFake()
+	p, err := f.CreatePolicy(ctx, a, "versioned", "/", describeOnly, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// v1 is the default and the only version, so setting it again is a no-op.
+	must(t, f.SetDefaultPolicyVersion(ctx, a, p.ARN, "v1"))
+	must(t, f.SetDefaultPolicyVersion(ctx, a, p.ARN, "v1"))
+	if err := f.SetDefaultPolicyVersion(ctx, a, p.ARN, "v2"); resource.CodeOf(err) != resource.CodeNotFound {
+		t.Errorf("missing version: %v", err)
+	}
+	other, err := resource.Parse[resource.AccountID]("210987654321")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.SetDefaultPolicyVersion(ctx, other, p.ARN, "v1"); resource.CodeOf(err) != resource.CodeNotFound {
+		t.Errorf("policy from another account: %v", err)
+	}
+	if err := f.SetDefaultPolicyVersion(ctx, a, "not-an-arn", "v1"); resource.CodeOf(err) != resource.CodeNotFound {
+		t.Errorf("unknown policy ARN: %v", err)
+	}
+}
+
 func must(t *testing.T, err error) {
 	t.Helper()
 	if err != nil {

@@ -43,8 +43,9 @@ type Options struct {
 	Backoff time.Duration
 }
 
-// Client implements the per-request half of iam.Client, AssumeRole and the
-// policy and virtual MFA device tag calls of iam.Admin.
+// Client implements the per-request half of iam.Client, AssumeRole, and the
+// policy default version and policy and virtual MFA device tag calls of
+// iam.Admin.
 type Client struct {
 	auth       iamv1.AuthServiceClient
 	tokens     iamv1.TokenServiceClient

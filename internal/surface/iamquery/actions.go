@@ -2,6 +2,7 @@ package iamquery
 
 import (
 	"encoding/xml"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -10,6 +11,9 @@ import (
 	"github.com/popododo0720/vws-console-api/internal/resource"
 	"github.com/popododo0720/vws-console-api/internal/sigv4"
 )
+
+// policyVersionRE is the AWS VersionId pattern.
+var policyVersionRE = regexp.MustCompile(`^v[1-9][0-9]*(\.[A-Za-z0-9-]*)?$`)
 
 // spec is one action: the form keys it reads, the ARN it is authorized on
 // (nil means "*"), and what it does.
@@ -461,6 +465,18 @@ func iamActions() map[string]spec {
 				PolicyVersion policyVersionXML `xml:"PolicyVersion"`
 			}{policyVersionXML{Document: policyDoc(p.Document), VersionID: "v1", IsDefaultVersion: true, CreateDate: stamp(p.Created)}}, nil
 		}),
+		"SetDefaultPolicyVersion": admin([]string{"PolicyArn", "VersionId"}, policyARN,
+			func(h *handler, c *exchange) (any, error) {
+				if err := required(c, "PolicyArn", "VersionId"); err != nil {
+					return nil, err
+				}
+				if !policyVersionRE.MatchString(c.form("VersionId")) {
+					return nil, resource.Invalid("VersionId", "The specified value for versionId is invalid.")
+				}
+				return nil, h.cfg.Admin.SetDefaultPolicyVersion(
+					c.r.Context(), c.caller.Account, c.form("PolicyArn"), c.form("VersionId"))
+			},
+		),
 		"ListPolicies": {params: []string{"Scope", "OnlyAttached", "PolicyUsageFilter"}, list: true, needsAdmin: true, run: func(h *handler, c *exchange) (any, error) {
 			out := policiesResult{Policies: []policyXML{}}
 			if c.form("Scope") == "AWS" { // no AWS managed policies exist here
