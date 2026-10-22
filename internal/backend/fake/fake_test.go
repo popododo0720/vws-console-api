@@ -26,6 +26,15 @@ func TestKeyImportContract(t *testing.T) {
 	})
 }
 
+// TestKeyTokenMixContract runs the #281 create and import token table on
+// the fake.
+func TestKeyTokenMixContract(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0).UTC()
+	backendtest.KeyTokenMix(t, func() backend.Set {
+		return New(Options{Now: func() time.Time { return now }, Entropy: &Sequence{}}).Set()
+	})
+}
+
 func TestRepeatedEntropyDoesNotOverwrite(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0).UTC()
 	set := New(Options{

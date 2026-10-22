@@ -23,6 +23,15 @@ func TestKeyImportContract(t *testing.T) {
 	})
 }
 
+// TestKeyTokenMixContract runs the #281 create and import token table over
+// the gRPC client against keyWorld.
+func TestKeyTokenMixContract(t *testing.T) {
+	backendtest.KeyTokenMix(t, func() backend.Set {
+		client, _ := dialKeyWorld(t)
+		return backend.Set{Compute: client}
+	})
+}
+
 // TestImportRetryOfAKeyPairWithoutANonceStillReplays covers key pairs
 // imported before #279. Their compute request id is the token's alone and
 // they carry no import nonce, so a retry under the token must still send
