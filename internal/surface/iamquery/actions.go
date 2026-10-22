@@ -900,6 +900,33 @@ func iamActions() map[string]spec {
 				return out, err
 			},
 		},
+		"ListMFADevices": {
+			params: []string{"UserName", "Marker", "MaxItems"}, needsAdmin: true,
+			run: func(h *handler, c *exchange) (any, error) {
+				user, err := listMFADevicesUserName(c)
+				if err != nil {
+					return nil, err
+				}
+				maxItems, err := maxItemsParam(c)
+				if err != nil {
+					return nil, err
+				}
+				if err := mfaDeviceMarkerParam(c); err != nil {
+					return nil, err
+				}
+				page, err := h.cfg.Admin.ListMFADevices(
+					c.r.Context(), c.caller.Account, user, c.form("Marker"), maxItems)
+				out := mfaDevicesResult{
+					MFADevices:  []listedMFADeviceXML{},
+					IsTruncated: page.IsTruncated,
+					Marker:      page.Marker,
+				}
+				for _, d := range page.Devices {
+					out.MFADevices = append(out.MFADevices, toListedMFADevice(d))
+				}
+				return out, err
+			},
+		},
 		// AWS GetMFADevice is authorized on the user, the named one or else the
 		// caller, and accepts only FIDO security key serial numbers. No
 		// backend holds FIDO keys yet, so an authorized call answers
