@@ -629,6 +629,10 @@ def identity():
     step("IAM GetPolicyVersion returns the document", lambda: check(
         iam.get_policy_version(PolicyArn=S["policy_arn"], VersionId="v1")["PolicyVersion"]["Document"]["Statement"][0]["Effect"] == "Allow",
         "document"))
+    step("IAM SetDefaultPolicyVersion", lambda: iam.set_default_policy_version(
+        PolicyArn=S["policy_arn"], VersionId="v1"))
+    step("IAM SetDefaultPolicyVersion missing version is NoSuchEntity", lambda: aws_error(
+        "NoSuchEntity", lambda: iam.set_default_policy_version(PolicyArn=S["policy_arn"], VersionId="v2")))
     step("IAM CreateGroup", lambda: iam.create_group(GroupName="e2e-readers"))
     step("IAM AttachGroupPolicy", lambda: iam.attach_group_policy(GroupName="e2e-readers", PolicyArn=S["policy_arn"]))
     step("IAM AddUserToGroup", lambda: iam.add_user_to_group(GroupName="e2e-readers", UserName="e2e-bob"))
