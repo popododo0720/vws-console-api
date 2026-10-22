@@ -9,6 +9,7 @@ import (
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	iamv1 "github.com/popododo0720/vws-proto/gen/go/vws/iam/v1"
@@ -80,6 +81,163 @@ func TestListPolicyVersionsErrorsOverGRPC(t *testing.T) {
 	}
 	if len(s.listVersions) != 0 {
 		t.Errorf("a wrong-path call reached ListPolicyVersions: %v", s.listVersions)
+	}
+}
+
+func TestCreatePolicyVersionOverGRPC(t *testing.T) {
+	c, s := harness(t)
+	admin := STSAdmin{Client: c}
+	created := time.Date(2026, 10, 14, 7, 0, 0, 0, time.UTC)
+	version := &iamv1.PolicyVersion{
+		Name:       "projects/123456789012/policies/tagged/versions/v2",
+		Spec:       &iamv1.PolicyVersionSpec{Document: "{}"},
+		Status:     &iamv1.PolicyVersionStatus{DefaultVersion: true},
+		CreateTime: timestamppb.New(created),
+	}
+	response, err := anypb.New(version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.createVersionRes = &longrunningpb.Operation{
+		Done: true, Result: &longrunningpb.Operation_Response{Response: response},
+	}
+	got, err := admin.CreatePolicyVersion(t.Context(), accountID(t), policyARN, "{}", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(s.createVersion) != 1 {
+		t.Fatalf("sent %v", s.createVersion)
+	}
+	sent := s.createVersion[0]
+	if got := sent.GetParent(); got != "projects/123456789012/policies/tagged" {
+		t.Errorf("parent %q", got)
+	}
+	if sent.GetPolicyVersion().GetSpec().GetDocument() != "{}" || !sent.GetPolicyVersion().GetSpec().GetSetAsDefault() {
+		t.Errorf("version spec %v", sent.GetPolicyVersion().GetSpec())
+	}
+	if got.ID != "v2" || !got.IsDefaultVersion || !got.Created.Equal(created) {
+		t.Errorf("version %+v", got)
+	}
+	if len(s.getPolicy) != 1 {
+		t.Errorf("policy lookups %v, want one", s.getPolicy)
+	}
+}
+
+func TestCreatePolicyVersionErrorsOverGRPC(t *testing.T) {
+	c, _ := harness(t)
+	admin := STSAdmin{Client: c}
+	_, err := admin.CreatePolicyVersion(t.Context(), accountID(t), "not-an-arn", "{}", false)
+	if resource.CodeOf(err) != resource.CodeInvalidArgument {
+		t.Errorf("malformed ARN: %v", err)
+	}
+	c, s := harness(t)
+	admin = STSAdmin{Client: c}
+	s.getPolicyErr = awsErr(codes.NotFound, "RESOURCE_NOT_FOUND", "NoSuchEntity")
+	_, err = admin.CreatePolicyVersion(t.Context(), accountID(t), policyARN, "{}", false)
+	if resource.CodeOf(err) != resource.CodeNotFound {
+		t.Errorf("missing policy: %v", err)
+	}
+	c, s = harness(t)
+	admin = STSAdmin{Client: c}
+	s.createVersionErr = awsErr(codes.InvalidArgument, "INVALID_SPEC", "MalformedPolicyDocument")
+	_, err = admin.CreatePolicyVersion(t.Context(), accountID(t), policyARN, "{", false)
+	if re := resource.AsError(err); re == nil || re.Code != resource.CodeInvalidArgument || re.Field != "PolicyDocument" {
+		t.Errorf("malformed document: %v, want PolicyDocument", err)
+	}
+	c, s = harness(t)
+	admin = STSAdmin{Client: c}
+	s.createVersionErr = awsErr(codes.ResourceExhausted, "QUOTA_EXCEEDED", "LimitExceeded")
+	_, err = admin.CreatePolicyVersion(t.Context(), accountID(t), policyARN, "{}", false)
+	if resource.CodeOf(err) != resource.CodeResourceExhausted {
+		t.Errorf("sixth version: %v", err)
+	}
+	// A running operation is a fault, and a finished one with no version is too.
+	c, s = harness(t)
+	admin = STSAdmin{Client: c}
+	s.createVersionRes = &longrunningpb.Operation{}
+	_, err = admin.CreatePolicyVersion(t.Context(), accountID(t), policyARN, "{}", false)
+	if resource.CodeOf(err) != resource.CodeInternal {
+		t.Errorf("running operation: %v", err)
+	}
+	c, s = harness(t)
+	admin = STSAdmin{Client: c}
+	s.createVersionRes = &longrunningpb.Operation{Done: true}
+	_, err = admin.CreatePolicyVersion(t.Context(), accountID(t), policyARN, "{}", false)
+	if resource.CodeOf(err) != resource.CodeInternal {
+		t.Errorf("missing version: %v", err)
+	}
+	// vws-iam addresses a policy by name, so a wrong path in the ARN must not
+	// reach the policy behind it.
+	c, s = harness(t)
+	admin = STSAdmin{Client: c}
+	s.getPolicyRes = &iamv1.Policy{
+		Name:   "projects/123456789012/policies/tagged",
+		Status: &iamv1.PolicyStatus{Arn: "arn:vws:iam::123456789012:policy/admin/tagged"},
+	}
+	wrong := "arn:vws:iam::123456789012:policy/team/tagged"
+	_, err = admin.CreatePolicyVersion(t.Context(), accountID(t), wrong, "{}", false)
+	if resource.CodeOf(err) != resource.CodeNotFound {
+		t.Errorf("wrong path: %v", err)
+	}
+	if len(s.createVersion) != 0 {
+		t.Errorf("a wrong-path call reached CreatePolicyVersion: %v", s.createVersion)
+	}
+}
+
+func TestGetPolicyVersionOverGRPC(t *testing.T) {
+	c, s := harness(t)
+	admin := STSAdmin{Client: c}
+	created := time.Date(2026, 10, 14, 7, 0, 0, 0, time.UTC)
+	s.getVersionRes = &iamv1.PolicyVersion{
+		Name:       "projects/123456789012/policies/tagged/versions/v2",
+		Spec:       &iamv1.PolicyVersionSpec{Document: "{not json"},
+		Status:     &iamv1.PolicyVersionStatus{DefaultVersion: true},
+		CreateTime: timestamppb.New(created),
+	}
+	got, err := admin.GetPolicyVersion(t.Context(), accountID(t), policyARN, "v2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(s.getVersion) != 1 {
+		t.Fatalf("sent %v", s.getVersion)
+	}
+	if want := "projects/123456789012/policies/tagged/versions/v2"; s.getVersion[0].GetName() != want {
+		t.Errorf("name %q, want %q", s.getVersion[0].GetName(), want)
+	}
+	if got.ID != "v2" || got.Document != "{not json" || !got.IsDefaultVersion || !got.Created.Equal(created) {
+		t.Errorf("version %+v", got)
+	}
+}
+
+func TestGetPolicyVersionErrorsOverGRPC(t *testing.T) {
+	c, _ := harness(t)
+	admin := STSAdmin{Client: c}
+	_, err := admin.GetPolicyVersion(t.Context(), accountID(t), "not-an-arn", "v1")
+	if resource.CodeOf(err) != resource.CodeInvalidArgument {
+		t.Errorf("malformed ARN: %v", err)
+	}
+	c, s := harness(t)
+	admin = STSAdmin{Client: c}
+	s.getVersionErr = awsErr(codes.NotFound, "RESOURCE_NOT_FOUND", "NoSuchEntity")
+	_, err = admin.GetPolicyVersion(t.Context(), accountID(t), policyARN, "v9")
+	if resource.CodeOf(err) != resource.CodeNotFound {
+		t.Errorf("missing version: %v", err)
+	}
+	// vws-iam addresses a policy by name, so a wrong path in the ARN must not
+	// reach the policy behind it.
+	c, s = harness(t)
+	admin = STSAdmin{Client: c}
+	s.getPolicyRes = &iamv1.Policy{
+		Name:   "projects/123456789012/policies/tagged",
+		Status: &iamv1.PolicyStatus{Arn: "arn:vws:iam::123456789012:policy/admin/tagged"},
+	}
+	wrong := "arn:vws:iam::123456789012:policy/team/tagged"
+	_, err = admin.GetPolicyVersion(t.Context(), accountID(t), wrong, "v1")
+	if resource.CodeOf(err) != resource.CodeNotFound {
+		t.Errorf("wrong path: %v", err)
+	}
+	if len(s.getVersion) != 0 {
+		t.Errorf("a wrong-path call reached GetPolicyVersion: %v", s.getVersion)
 	}
 }
 

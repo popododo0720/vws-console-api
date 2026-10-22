@@ -301,6 +301,9 @@ func authError(err error) error {
 	case codes.NotFound:
 		return &resource.Error{Code: resource.CodeNotFound, Message: st.Message()}
 	case codes.InvalidArgument:
+		if aws == "MalformedPolicyDocument" {
+			return resource.Invalid("PolicyDocument", st.Message())
+		}
 		return &resource.Error{Code: resource.CodeInvalidArgument, Message: st.Message()}
 	case codes.ResourceExhausted:
 		return &resource.Error{Code: resource.CodeResourceExhausted, Message: st.Message()}
