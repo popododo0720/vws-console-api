@@ -40,13 +40,16 @@ type store struct {
 	mfa      map[string]*mfaDeviceRec // by serial number
 }
 
-// mfaDeviceRec is a virtual MFA device in the fake. The device keeps its tags
-// only: the IAM Query surface has no action that manages devices yet, so the
-// tags are reachable only on a device added with AddMfaDevice.
+// mfaDeviceRec is a virtual MFA device in the fake. A device added with
+// AddMfaDevice has no owner until EnableMfaDevice attaches it to a user.
 type mfaDeviceRec struct {
 	// tags are the AWS tags of the device, keyed by tag key. AWS tag keys are
 	// case sensitive for a virtual MFA device, so the map is not folded.
 	tags map[string]string
+	// user is the device's owner, empty while the device is not enabled.
+	user string
+	// enabled is when the device was enabled; zero while it is not.
+	enabled time.Time
 }
 
 type holder struct {
@@ -188,6 +191,24 @@ func (f *Fake) AddMfaDevice(a resource.AccountID, name string) string {
 	serial := iamARN(a, "mfa", "/", name)
 	st.mfa[serial] = &mfaDeviceRec{tags: map[string]string{}}
 	return serial
+}
+
+// EnableMfaDevice attaches a device to user and returns the enable time, as
+// EnableMFADevice does. It is for tests and for a fake seeded with the devices
+// of an account: the IAM Query surface does not enable MFA devices yet.
+func (f *Fake) EnableMfaDevice(a resource.AccountID, serial, user string) (time.Time, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	st := f.account(a)
+	d, err := st.mfaDevice(serial)
+	if err != nil {
+		return time.Time{}, err
+	}
+	if st.users[user] == nil {
+		return time.Time{}, notFound("user", user)
+	}
+	d.user, d.enabled = user, f.now()
+	return d.enabled, nil
 }
 
 func iamARN(a resource.AccountID, kind, path, name string) string {
@@ -377,6 +398,11 @@ func (f *Fake) UpdateUser(_ context.Context, a resource.AccountID, name, newPath
 			g.members[target] = true
 		}
 		st.users[target] = u
+		for _, d := range st.mfa {
+			if d.user == name {
+				d.user = target
+			}
+		}
 	}
 	u.Name, u.Path, u.ARN = target, path, iamARN(a, "user", path, target)
 	for id, key := range f.keys {
@@ -1097,20 +1123,40 @@ func (f *Fake) ListPolicyTags(
 	return page, nil
 }
 
-// --- virtual MFA device tags ---
-
-func mfaDeviceNotFound() error {
-	return &resource.Error{Code: resource.CodeNotFound, Message: "The specified MFA device does not exist."}
-}
+// --- virtual MFA devices ---
 
 // mfaDevice returns the device with serial. The caller holds f.mu.
 func (st *store) mfaDevice(serial string) (*mfaDeviceRec, error) {
 	d := st.mfa[serial]
 	if d == nil {
-		return nil, mfaDeviceNotFound()
+		return nil, MFADeviceNotFound()
 	}
 	return d, nil
 }
+
+// GetMFADevice implements Admin. The device is read by its exact serial
+// number, the AWS SerialNumber, and only an enabled device is an answer.
+func (f *Fake) GetMFADevice(
+	_ context.Context, a resource.AccountID, serial string,
+) (MFADevice, error) {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	st := f.accounts[a]
+	if st == nil {
+		return MFADevice{}, MFADeviceNotFound()
+	}
+	d, err := st.mfaDevice(serial)
+	if err != nil {
+		return MFADevice{}, err
+	}
+	owner := st.users[d.user]
+	if owner == nil {
+		return MFADevice{}, MFADeviceNotFound()
+	}
+	return MFADevice{UserName: d.user, UserARN: owner.ARN, SerialNumber: serial, Enabled: d.enabled}, nil
+}
+
+// --- virtual MFA device tags ---
 
 // TagMFADevice implements Admin. A named key is overwritten; the whole request
 // fails and stores nothing when a tag is invalid or the device would keep more

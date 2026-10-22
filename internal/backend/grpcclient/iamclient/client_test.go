@@ -94,6 +94,10 @@ type server struct {
 	getMfa        []*iamv1.GetMfaDeviceRequest
 	getMfaRes     *iamv1.MfaDevice
 	getMfaErr     error
+	// User calls.
+	getUser    []*iamv1.GetUserRequest
+	getUserRes *iamv1.User
+	getUserErr error
 	// Role calls.
 	getRole       []*iamv1.GetRoleRequest
 	getRoleRes    *iamv1.Role
@@ -329,6 +333,28 @@ func (s *server) GetMfaDevice(ctx context.Context, req *iamv1.GetMfaDeviceReques
 	return &iamv1.MfaDevice{
 		Name:   req.GetName(),
 		Status: &iamv1.MfaDeviceStatus{SerialNumber: mfaSerial},
+	}, nil
+}
+
+func (s *server) GetUser(ctx context.Context, req *iamv1.GetUserRequest) (*iamv1.User, error) {
+	if err := s.enter(ctx); err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.getUser = append(s.getUser, req)
+	if s.getUserErr != nil {
+		return nil, s.getUserErr
+	}
+	if s.getUserRes != nil {
+		return s.getUserRes, nil
+	}
+	name := req.GetName()
+	return &iamv1.User{
+		Name: name,
+		Status: &iamv1.UserStatus{
+			Arn: "arn:vws:iam::123456789012:user/" + name[strings.LastIndex(name, "/")+1:],
+		},
 	}, nil
 }
 
