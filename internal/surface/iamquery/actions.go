@@ -129,14 +129,11 @@ func authorizeMovedGroup(h *handler, c *exchange) error {
 
 // authorizeMovedUser checks iam:UpdateUser on the user's current and target
 // ARN, as AWS requires. It returns the snapshot both checks used, so
-// UpdateUser can refuse a concurrent change. A missing user is left for
-// UpdateUser to report.
+// UpdateUser can refuse a concurrent change. A missing user is NoSuchEntity,
+// never an empty snapshot.
 func authorizeMovedUser(h *handler, c *exchange) (iam.User, error) {
 	u, err := h.cfg.Admin.GetUser(c.r.Context(), c.caller.Account, c.form("UserName"))
 	if err != nil {
-		if resource.CodeOf(err) == resource.CodeNotFound {
-			return iam.User{}, nil
-		}
 		return iam.User{}, err
 	}
 	if err := iam.Check(c.r.Context(), h.cfg.Authorizer, c.caller, "iam:"+c.action, u.ARN); err != nil {

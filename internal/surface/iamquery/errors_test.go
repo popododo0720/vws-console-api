@@ -122,11 +122,12 @@ func TestIAMErrorByField(t *testing.T) {
 	}
 }
 
-// TestUpdateUserConflictIsUnmodifiable pins the AWS code for a change that
-// races the authorization snapshot. Every other action keeps DeleteConflict.
-func TestUpdateUserConflictIsUnmodifiable(t *testing.T) {
+// TestUpdateUserConflictIsConcurrentModification pins the AWS code for a
+// change that races the authorization snapshot. Every other action keeps
+// DeleteConflict.
+func TestUpdateUserConflictIsConcurrentModification(t *testing.T) {
 	e := &resource.Error{Code: resource.CodeConflict, Message: "busy"}
-	if got := iamWireAction(t, sigv4.ServiceIAM, "UpdateUser", e); got != (wireErr{409, "EntityTemporarilyUnmodifiable"}) {
+	if got := iamWireAction(t, sigv4.ServiceIAM, "UpdateUser", e); got != (wireErr{409, "ConcurrentModification"}) {
 		t.Errorf("UpdateUser conflict = %+v", got)
 	}
 	if got := iamWireAction(t, sigv4.ServiceIAM, "DeleteUser", e); got != (wireErr{409, "DeleteConflict"}) {
