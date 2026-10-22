@@ -118,7 +118,8 @@ func lookupError(err error) error {
 	if errors.As(err, &re) {
 		return err
 	}
-	return fmt.Errorf("%w: %w", &resource.Error{Code: resource.CodeUnavailable, Message: "identity lookup unavailable"}, err)
+	unavailable := &resource.Error{Code: resource.CodeUnavailable, Message: "identity lookup unavailable"}
+	return fmt.Errorf("%w: %w", unavailable, err)
 }
 
 // groupARN is the group's real ARN when it exists. As in userARN, a missing

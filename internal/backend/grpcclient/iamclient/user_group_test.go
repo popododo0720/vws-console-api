@@ -24,7 +24,8 @@ func TestGetUserAndGetGroupOverGRPC(t *testing.T) {
 			t.Fatalf("GetUser: %+v %v", u, err)
 		}
 		g, members, err := a.GetGroup(t.Context(), account, "devs")
-		if err != nil || g.Name != "devs" || g.Path != "/team/" || g.ARN != devsARN || len(members) != 1 || members[0].ARN != aliceARN {
+		if err != nil || g.Name != "devs" || g.Path != "/team/" || g.ARN != devsARN ||
+			len(members) != 1 || members[0].ARN != aliceARN {
 			t.Fatalf("GetGroup: %+v %+v %v", g, members, err)
 		}
 		s.mu.Lock()
@@ -76,12 +77,16 @@ func TestGetUserAndGetGroupOverGRPC(t *testing.T) {
 		_, s := queryHarness(t)
 		a := STSAdmin{Client: s.client}
 		_, err := a.GetUser(t.Context(), account, "ghost")
-		if want := "The user with name ghost cannot be found."; resource.CodeOf(err) != resource.CodeNotFound || resource.AsError(err).Message != want {
+		if !noSuchEntity(err, "The user with name ghost cannot be found.") {
 			t.Errorf("GetUser: %v", err)
 		}
 		_, _, err = a.GetGroup(t.Context(), account, "ghost")
-		if want := "The group with name ghost cannot be found."; resource.CodeOf(err) != resource.CodeNotFound || resource.AsError(err).Message != want {
+		if !noSuchEntity(err, "The group with name ghost cannot be found.") {
 			t.Errorf("GetGroup: %v", err)
 		}
 	})
+}
+
+func noSuchEntity(err error, msg string) bool {
+	return resource.CodeOf(err) == resource.CodeNotFound && resource.AsError(err).Message == msg
 }

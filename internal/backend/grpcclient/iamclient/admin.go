@@ -60,7 +60,8 @@ func entityName(name string) bool {
 
 // entityNotFound is the AWS NoSuchEntity answer for a user or group.
 func entityNotFound(what, name string) error {
-	return &resource.Error{Code: resource.CodeNotFound, Message: "The " + what + " with name " + name + " cannot be found."}
+	msg := "The " + what + " with name " + name + " cannot be found."
+	return &resource.Error{Code: resource.CodeNotFound, Message: msg}
 }
 
 // ListUsers implements iam.Admin.
@@ -167,7 +168,9 @@ func (STSAdmin) CreateGroup(_ context.Context, _ resource.AccountID, _, _ string
 // read over UserService.GetUser. A member deleted since the group was read is
 // left out. The IAM Query surface also uses it to authorize on a group's real
 // ARN, path included.
-func (a STSAdmin) GetGroup(ctx context.Context, account resource.AccountID, name string) (iam.Group, []iam.User, error) {
+func (a STSAdmin) GetGroup(
+	ctx context.Context, account resource.AccountID, name string,
+) (iam.Group, []iam.User, error) {
 	if !entityName(name) {
 		return iam.Group{}, nil, entityNotFound("group", name)
 	}

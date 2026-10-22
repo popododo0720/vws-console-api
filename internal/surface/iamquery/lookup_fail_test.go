@@ -167,10 +167,18 @@ func TestLookupOutageAnswersServiceUnavailable(t *testing.T) {
 		skip string
 		wrap func(iam.Admin) iam.Admin
 	}{
-		{"UserName", []func(*handler, *exchange) string{userARN, getMFADeviceARN}, "CreateUser",
-			func(a iam.Admin) iam.Admin { return userLookupError{Admin: a, err: outage} }},
-		{"GroupName", []func(*handler, *exchange) string{groupARN}, "CreateGroup",
-			func(a iam.Admin) iam.Admin { return groupLookupError{Admin: a, err: outage} }},
+		{
+			"UserName",
+			[]func(*handler, *exchange) string{userARN, getMFADeviceARN},
+			"CreateUser",
+			func(a iam.Admin) iam.Admin { return userLookupError{Admin: a, err: outage} },
+		},
+		{
+			"GroupName",
+			[]func(*handler, *exchange) string{groupARN},
+			"CreateGroup",
+			func(a iam.Admin) iam.Admin { return groupLookupError{Admin: a, err: outage} },
+		},
 	} {
 		h, _, rec, root := harnessWith(t, tc.wrap)
 		for _, action := range actionsOn(tc.res...) {

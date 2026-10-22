@@ -268,26 +268,40 @@ func TestGetUserAndGetGroupThroughTheQuerySurfaceOverGRPC(t *testing.T) {
 		parts  []string
 	}{
 		{
-			"GetUser for the caller", url.Values{"Action": {"GetUser"}}, http.StatusOK,
-			[]string{"<UserName>bob</UserName>", "<Path>/eng/</Path>", "<Arn>" + bobARN + "</Arn>",
-				"<UserId>AIDABOB0000000000001</UserId>", "<CreateDate>2026-09-01T00:00:00Z</CreateDate>"},
+			"GetUser for the caller",
+			url.Values{"Action": {"GetUser"}},
+			http.StatusOK,
+			[]string{
+				"<UserName>bob</UserName>", "<Path>/eng/</Path>", "<Arn>" + bobARN + "</Arn>",
+				"<UserId>AIDABOB0000000000001</UserId>", "<CreateDate>2026-09-01T00:00:00Z</CreateDate>",
+			},
 		},
 		{
-			"GetUser for a named user", url.Values{"Action": {"GetUser"}, "UserName": {"alice"}}, http.StatusOK,
+			"GetUser for a named user",
+			url.Values{"Action": {"GetUser"}, "UserName": {"alice"}},
+			http.StatusOK,
 			[]string{"<UserName>alice</UserName>", "<Path>/ops/</Path>", "<Arn>" + aliceARN + "</Arn>"},
 		},
 		{
-			"GetUser for a missing user", url.Values{"Action": {"GetUser"}, "UserName": {"ghost"}}, http.StatusNotFound,
+			"GetUser for a missing user",
+			url.Values{"Action": {"GetUser"}, "UserName": {"ghost"}},
+			http.StatusNotFound,
 			[]string{"<Code>NoSuchEntity</Code>", "<Message>The user with name ghost cannot be found.</Message>"},
 		},
 		{
 			// A member deleted since is left out, as AWS lists current members.
-			"GetGroup", url.Values{"Action": {"GetGroup"}, "GroupName": {"devs"}}, http.StatusOK,
-			[]string{"<GroupName>devs</GroupName>", "<Path>/team/</Path>", "<Arn>" + devsARN + "</Arn>",
-				"<GroupId>AGPADEVS000000000001</GroupId>", "<UserName>alice</UserName>", "<Arn>" + aliceARN + "</Arn>"},
+			"GetGroup",
+			url.Values{"Action": {"GetGroup"}, "GroupName": {"devs"}},
+			http.StatusOK,
+			[]string{
+				"<GroupName>devs</GroupName>", "<Path>/team/</Path>", "<Arn>" + devsARN + "</Arn>",
+				"<GroupId>AGPADEVS000000000001</GroupId>", "<UserName>alice</UserName>", "<Arn>" + aliceARN + "</Arn>",
+			},
 		},
 		{
-			"GetGroup for a missing group", url.Values{"Action": {"GetGroup"}, "GroupName": {"ghost"}}, http.StatusNotFound,
+			"GetGroup for a missing group",
+			url.Values{"Action": {"GetGroup"}, "GroupName": {"ghost"}},
+			http.StatusNotFound,
 			[]string{"<Code>NoSuchEntity</Code>", "<Message>The group with name ghost cannot be found.</Message>"},
 		},
 	} {
