@@ -346,8 +346,13 @@ func MergeTags(base, add map[string]string) (map[string]string, error) {
 	return out, nil
 }
 
+// MaxTags is the user tag limit per resource, as in EC2 ("You can assign up
+// to 50 tags to a resource"). The gRPC backend stores tags as compute labels
+// and keeps room for them next to its own labels (#303).
+const MaxTags = 50
+
 func validTags(tags map[string]string) error {
-	if len(tags) > 20 {
+	if len(tags) > MaxTags {
 		return Invalid("tags", "too many")
 	}
 	for k, v := range tags {

@@ -45,6 +45,9 @@ type World struct {
 	buck  map[resource.BucketName]*resource.Bucket
 	obj   map[string]*storedObject
 	seqIP uint32
+	// detached is when each volume was last detached from each instance
+	// with a client token, for the DetachVolume record budget (#303).
+	detached map[resource.InstanceID]map[resource.VolumeID]time.Time
 }
 
 type idemRecord struct {
@@ -73,21 +76,22 @@ func New(opt Options) *World {
 		opt.Entropy = rand.Reader
 	}
 	return &World{
-		now:     opt.Now,
-		latency: opt.Latency,
-		entropy: opt.Entropy,
-		idem:    map[string]idemRecord{},
-		ops:     map[string]*opRecord{},
-		inst:    map[resource.InstanceID]*resource.Instance{},
-		sub:     map[resource.SubnetID]*resource.Subnet{},
-		vpc:     map[resource.VpcID]*resource.Vpc{},
-		vol:     map[resource.VolumeID]*resource.Volume{},
-		sg:      map[resource.SecurityGroupID]*resource.SecurityGroup{},
-		key:     map[resource.KeyPairID]*resource.KeyPair{},
-		addr:    map[resource.AddressID]*resource.Address{},
-		snap:    map[resource.SnapshotID]*resource.Snapshot{},
-		buck:    map[resource.BucketName]*resource.Bucket{},
-		obj:     map[string]*storedObject{},
+		now:      opt.Now,
+		latency:  opt.Latency,
+		entropy:  opt.Entropy,
+		idem:     map[string]idemRecord{},
+		detached: map[resource.InstanceID]map[resource.VolumeID]time.Time{},
+		ops:      map[string]*opRecord{},
+		inst:     map[resource.InstanceID]*resource.Instance{},
+		sub:      map[resource.SubnetID]*resource.Subnet{},
+		vpc:      map[resource.VpcID]*resource.Vpc{},
+		vol:      map[resource.VolumeID]*resource.Volume{},
+		sg:       map[resource.SecurityGroupID]*resource.SecurityGroup{},
+		key:      map[resource.KeyPairID]*resource.KeyPair{},
+		addr:     map[resource.AddressID]*resource.Address{},
+		snap:     map[resource.SnapshotID]*resource.Snapshot{},
+		buck:     map[resource.BucketName]*resource.Bucket{},
+		obj:      map[string]*storedObject{},
 	}
 }
 

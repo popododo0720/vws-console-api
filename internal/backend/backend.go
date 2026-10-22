@@ -12,7 +12,9 @@ package backend
 
 import (
 	"context"
+	"fmt"
 	"io"
+	"time"
 
 	"github.com/popododo0720/vws-console-api/internal/resource"
 )
@@ -28,6 +30,38 @@ type Mutation struct {
 	Scope
 	Key         string
 	Fingerprint string
+	// MintedToken is set when the service minted the client token because
+	// the caller sent none. No caller can send that token again, so a
+	// backend need not remember the request beyond its own idempotency
+	// record. DetachVolume uses it to skip its replay record (#303).
+	MintedToken bool
+}
+
+// ClientTokenWindow is how long a client token is remembered: a retry with
+// the same token and parameters within it returns the original result. It
+// is the vws-compute request_id window (vws-proto operation.proto, "A
+// request_id is remembered for 24 hours"), so a record console-api keeps
+// for a retry, such as a DetachVolume record, never outlives the request id
+// compute would replay. This is the one definition; #305 states and tests
+// what a retry after the window answers.
+const ClientTokenWindow = 24 * time.Hour
+
+// MaxDetachReplays is how many DetachVolume requests with a client token
+// one instance remembers within ClientTokenWindow. Each takes two of the
+// instance's 64 labels, so with resource.MaxTags user tags the records
+// always fit. One more within the window is CodeResourceExhausted; a detach
+// without a client token is not limited (#303).
+const MaxDetachReplays = 4
+
+// DetachReplaysExhausted is the error for a DetachVolume request with a
+// client token on an instance that already remembers MaxDetachReplays
+// detaches within ClientTokenWindow. Nothing has changed when it is
+// returned, so the caller may retry later or detach without a client token.
+func DetachReplaysExhausted(id resource.InstanceID) error {
+	return &resource.Error{Code: resource.CodeResourceExhausted, Message: fmt.Sprintf(
+		"instance %s already has %d detaches with a client token in the last %d hours; "+
+			"retry later, or detach without a client token",
+		id, MaxDetachReplays, int(ClientTokenWindow.Hours()))}
 }
 
 // Operations reads operations owned by one service.
