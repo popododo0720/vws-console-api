@@ -409,6 +409,7 @@ func exerciseEC2(ctx context.Context, t *testing.T, set backend.Set, account res
 		otherKey.Items[0].Material == key.Items[0].Material {
 		t.Fatalf("key token reused for a free name: %v %+v", err, otherKey.Items)
 	}
+	exerciseKeyTokenReuse(ctx, t, set, scope)
 	if _, err := set.Compute.CreateKeyPair(ctx, backend.Mutation{Scope: scope, Key: "k-key-2", Fingerprint: "fp-key-2"}, resource.CreateKeyPairRequest{Name: "admin", Type: resource.KeyTypeEd25519}); resource.CodeOf(err) != resource.CodeAlreadyExists {
 		t.Fatalf("duplicate key: %v", err)
 	}
