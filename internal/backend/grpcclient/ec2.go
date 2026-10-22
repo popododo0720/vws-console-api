@@ -933,6 +933,9 @@ func (c computeClient) CreateKeyPair(ctx context.Context, m backend.Mutation, re
 		material = pair.PPK(req.Name)
 	}
 	requestID := requestUUID(m.Key, "key")
+	// reused is an import that names the request of the key pair it found
+	// live at keyPairID, so compute may answer it from that request's record.
+	reused := false
 	if req.PublicKey == "" {
 		// EC2 CreateKeyPair takes no client token (#268). Each attempt is its
 		// own compute request, named by the token and the new public key, so
@@ -940,30 +943,57 @@ func (c computeClient) CreateKeyPair(ctx context.Context, m backend.Mutation, re
 		// it. A gRPC retry of this attempt resends the same request id.
 		requestID = requestUUID(m.Key, "key", pair.Public)
 	} else {
-		nonce, err := c.importNonce(ctx, projectID, keyPairID)
+		nonce, held, err := c.importNonce(ctx, projectID, keyPairID)
 		if err != nil {
 			return resource.Accepted[resource.KeyPair]{}, err
 		}
+		reused = held
 		if nonce != "" {
 			labels[labelImport] = nonce
 			requestID = requestUUID(m.Key, "key", nonce)
 		}
 	}
-	created, err := c.keys.CreateKeyPair(ctx, &computev1.CreateKeyPairRequest{
-		Parent:    regionParent(projectID),
-		KeyPairId: keyPairID,
-		RequestId: requestID,
-		KeyPair: &computev1.KeyPair{
-			Labels: labels,
-			Spec:   &computev1.KeyPairSpec{PublicKey: pair.Public},
-		},
-	})
+	submit := func() (*longrunningpb.Operation, error) {
+		return c.keys.CreateKeyPair(ctx, &computev1.CreateKeyPairRequest{
+			Parent:    regionParent(projectID),
+			KeyPairId: keyPairID,
+			RequestId: requestID,
+			KeyPair: &computev1.KeyPair{
+				Labels: labels,
+				Spec:   &computev1.KeyPairSpec{PublicKey: pair.Public},
+			},
+		})
+	}
+	created, err := submit()
+	answer := rpcErr(created, err)
+	if reused && (answer == nil || resource.CodeOf(answer) == resource.CodeIdempotencyMismatch) {
+		stale, serr := c.staleImport(ctx, projectID, keyPairID, labels, pair.AWSFingerprint, answer == nil)
+		if serr != nil {
+			return resource.Accepted[resource.KeyPair]{}, serr
+		}
+		if stale {
+			// The key pair whose request this retry named was deleted after
+			// the nonce read, so compute answered from a retained record. EC2
+			// ImportKeyPair takes no token: import the name again under a new
+			// nonce, which is judged by the name alone (#284).
+			nonce, nerr := newImportNonce()
+			if nerr != nil {
+				return resource.Accepted[resource.KeyPair]{}, nerr
+			}
+			labels[labelImport] = nonce
+			requestID = requestUUID(m.Key, "key", nonce)
+			reused = false
+			created, err = submit()
+		}
+	}
 	if err := rpcErr(created, err); err != nil {
-		// IDEMPOTENCY_CONFLICT on an import means the live key pair's request
-		// carried another body under this token. EC2 ImportKeyPair takes no
-		// token, so that is a second import of a live name.
-		conflict := req.PublicKey != "" && resource.CodeOf(err) == resource.CodeIdempotencyMismatch
-		if conflict || resource.CodeOf(err) == resource.CodeAlreadyExists {
+		// Only a name collision is InvalidKeyPair.Duplicate (#284). The key
+		// pair id is derived from the name, so ALREADY_EXISTS is one. An
+		// import's IDEMPOTENCY_CONFLICT is one only when it named the request
+		// of the key pair live at that id: the token's other body for a live
+		// name. Any other conflict keeps its own code.
+		code := resource.CodeOf(err)
+		if code == resource.CodeAlreadyExists || (reused && code == resource.CodeIdempotencyMismatch) {
 			return resource.Accepted[resource.KeyPair]{}, resource.AlreadyExists(resource.KindKeyPair, req.Name)
 		}
 		return resource.Accepted[resource.KeyPair]{}, err
@@ -1583,23 +1613,56 @@ func (c computeClient) keyPairID(
 // second key pair. While a key pair lives at id, the retry reuses its nonce,
 // so the same token and body name the same compute request and compute
 // replays it; any other import of the live name is refused. A key pair made
-// before #279 has no nonce, so its retry keeps the old request id. When id is
-// free, the import gets a new random nonce: compute's retained record of an
-// import whose key pair was deleted can no longer answer it.
-func (c computeClient) importNonce(ctx context.Context, projectID, id string) (string, error) {
+// before #279 has no nonce, so its retry keeps the old request id. held
+// reports that a key pair lived at id. When id is free, the import gets a new
+// random nonce: compute's retained record of an import whose key pair was
+// deleted can no longer answer it.
+func (c computeClient) importNonce(ctx context.Context, projectID, id string) (nonce string, held bool, err error) {
 	name := keyPairName(projectID, id)
-	held, err := c.keys.GetKeyPair(ctx, &computev1.GetKeyPairRequest{Name: name})
+	kp, err := c.keys.GetKeyPair(ctx, &computev1.GetKeyPairRequest{Name: name})
 	switch {
 	case err == nil:
-		return held.GetLabels()[labelImport], nil
+		return kp.GetLabels()[labelImport], true, nil
 	case !missingResource(fromNamedRPC(name, err)):
-		return "", fromNamedRPC(name, err)
+		return "", false, fromNamedRPC(name, err)
 	}
+	nonce, err = newImportNonce()
+	return nonce, false, err
+}
+
+func newImportNonce() (string, error) {
 	var raw [16]byte
 	if _, err := rand.Read(raw[:]); err != nil {
 		return "", resource.Internal(err)
 	}
 	return hex.EncodeToString(raw[:]), nil
+}
+
+// staleImport reports whether compute answered an import that reused a live
+// key pair's request from the record of a key pair deleted since (#284).
+// Such an answer is a replay or IDEMPOTENCY_CONFLICT. The import is current
+// only while a key pair still lives at id; a replay also needs it to be this
+// request's key pair: same key, same token fingerprint, same nonce.
+func (c computeClient) staleImport(
+	ctx context.Context, projectID, id string, labels map[string]string, fingerprint string, replayed bool,
+) (bool, error) {
+	name := keyPairName(projectID, id)
+	kp, err := c.keys.GetKeyPair(ctx, &computev1.GetKeyPairRequest{Name: name})
+	if err != nil {
+		named := fromNamedRPC(name, err)
+		if missingResource(named) {
+			return true, nil
+		}
+		return false, named
+	}
+	if !replayed {
+		return false, nil
+	}
+	live := kp.GetLabels()
+	held, perr := sshkey.ParsePublic(kp.GetSpec().GetPublicKey())
+	same := perr == nil && held.AWSFingerprint == fingerprint &&
+		live[labelFingerprint] == labels[labelFingerprint] && live[labelImport] == labels[labelImport]
+	return !same, nil
 }
 
 // storageType maps an EC2 volume type to the storage tier. The storage proto
