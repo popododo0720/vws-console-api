@@ -3,50 +3,52 @@ package iamquery
 import (
 	"net/http"
 	"net/url"
+	"slices"
 	"testing"
-	"time"
 
 	"github.com/popododo0720/vws-console-api/internal/iam"
 	"github.com/popododo0720/vws-console-api/internal/sigv4"
 )
 
-func TestGetMFADevice(t *testing.T) {
+// AWS accepts only FIDO security-key ARNs for GetMFADevice, and vws-iam keeps
+// no FIDO keys. A virtual device the fake holds and has enabled is not an
+// answer AWS returns, so every serial is NoSuchEntity.
+func TestGetMFADeviceAnswersNoSuchEntity(t *testing.T) {
 	h, f, rec, root := harness(t)
 	ctx := t.Context()
-	alice, err := f.CreateUser(ctx, root.Account, "alice", "/")
-	if err != nil {
+	if _, err := f.CreateUser(ctx, root.Account, "alice", "/"); err != nil {
 		t.Fatal(err)
 	}
 	serial := seedMfaDevice(t, f, root, "alice-phone")
-	if err := f.AssignMfaDevice(root.Account, serial, "alice", time.Date(2026, 10, 9, 10, 0, 0, 0, time.UTC)); err != nil {
+	if err := f.AssignMfaDevice(root.Account, serial, "alice", now); err != nil {
 		t.Fatal(err)
 	}
-	res := call(t, h, root, sigv4.ServiceIAM, url.Values{"Action": {"GetMFADevice"}, "SerialNumber": {serial}})
-	has(t, res, http.StatusOK,
-		`<GetMFADeviceResponse><GetMFADeviceResult><UserName>alice</UserName>`+
-			`<SerialNumber>`+serial+`</SerialNumber>`+
-			`<EnableDate>2026-10-09T10:00:00Z</EnableDate>`+
-			`<Certifications></Certifications></GetMFADeviceResult>`+
-			`<ResponseMetadata><RequestId>`,
-	)
-	if want := "iam:GetMFADevice " + alice.ARN; len(rec.seen) == 0 || rec.seen[len(rec.seen)-1] != want {
-		t.Errorf("authorized %v, want last %q", rec.seen, want)
+	fido := "arn:vws:iam::" + root.Account.String() + ":u2f/root/testFidoKey-R1234"
+	ghost := "arn:vws:iam::" + root.Account.String() + ":mfa/ghost"
+	for _, tc := range []struct{ name, serial string }{
+		{"enabled virtual device", serial},
+		{"FIDO security key", fido},
+		{"missing device", ghost},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			has(t, call(t, h, root, sigv4.ServiceIAM, url.Values{
+				"Action": {"GetMFADevice"}, "SerialNumber": {tc.serial},
+			}), http.StatusNotFound, `<Code>NoSuchEntity</Code>`)
+		})
 	}
-	// UserName names the device's owner.
+	// UserName is an accepted input, and it does not turn a virtual device
+	// into an answer either.
 	has(t, call(t, h, root, sigv4.ServiceIAM, url.Values{
 		"Action": {"GetMFADevice"}, "SerialNumber": {serial}, "UserName": {"alice"},
-	}), http.StatusOK, `<UserName>alice</UserName>`)
-	// Another user does not have the device.
-	has(t, call(t, h, root, sigv4.ServiceIAM, url.Values{
-		"Action": {"GetMFADevice"}, "SerialNumber": {serial}, "UserName": {"bob"},
 	}), http.StatusNotFound, `<Code>NoSuchEntity</Code>`)
+	// The action authorizes on the device ARN, the SerialNumber.
+	if want := "iam:GetMFADevice " + fido; !slices.Contains(rec.seen, want) {
+		t.Errorf("authorized %v, want %q", rec.seen, want)
+	}
 }
 
 func TestGetMFADeviceErrors(t *testing.T) {
-	h, f, _, root := harness(t)
-	serial := seedMfaDevice(t, f, root, "error-phone")
-	ghost := "arn:vws:iam::" + root.Account.String() + ":mfa/ghost"
-	foreign := "arn:vws:iam::210987654321:mfa/error-phone"
+	h, _, _, root := harness(t)
 	has(t, call(t, h, root, sigv4.ServiceIAM, url.Values{"Action": {"GetMFADevice"}}),
 		http.StatusBadRequest, `<Code>ValidationError</Code>`)
 	for _, badSerial := range []string{"short", "arn vws:iam::123456789012:mfa/x"} {
@@ -54,34 +56,17 @@ func TestGetMFADeviceErrors(t *testing.T) {
 			"Action": {"GetMFADevice"}, "SerialNumber": {badSerial},
 		}), http.StatusBadRequest, `<Code>ValidationError</Code>`)
 	}
-	for _, missing := range []string{ghost, foreign} {
-		has(t, call(t, h, root, sigv4.ServiceIAM, url.Values{
-			"Action": {"GetMFADevice"}, "SerialNumber": {missing},
-		}), http.StatusNotFound, `<Code>NoSuchEntity</Code>`)
-	}
-	// An unassigned device has no owner to answer for.
-	has(t, call(t, h, root, sigv4.ServiceIAM, url.Values{
-		"Action": {"GetMFADevice"}, "SerialNumber": {serial},
-	}), http.StatusNotFound, `<Code>NoSuchEntity</Code>`)
 	// PathPrefix is not an input of this action.
+	serial := "arn:vws:iam::" + root.Account.String() + ":mfa/alice-phone"
 	unsupported := url.Values{"Action": {"GetMFADevice"}, "SerialNumber": {serial}, "PathPrefix": {"/"}}
 	has(t, call(t, h, root, sigv4.ServiceIAM, unsupported), http.StatusBadRequest, `<Code>InvalidInput</Code>`)
 }
 
-// A principal needs iam:GetMFADevice on the owning user's ARN, as in AWS.
+// A caller needs iam:GetMFADevice on the device ARN before the action answers.
 func TestGetMFADeviceNeedsPermission(t *testing.T) {
 	h, f, _, root := harness(t)
 	ctx := t.Context()
-	alice, err := f.CreateUser(ctx, root.Account, "alice", "/")
-	if err != nil {
-		t.Fatal(err)
-	}
-	serial := seedMfaDevice(t, f, root, "alice-phone")
-	if err := f.AssignMfaDevice(root.Account, serial, "alice", time.Date(2026, 10, 9, 10, 0, 0, 0, time.UTC)); err != nil {
-		t.Fatal(err)
-	}
-	bobUser, err := f.CreateUser(ctx, root.Account, "bob", "/")
-	if err != nil {
+	if _, err := f.CreateUser(ctx, root.Account, "bob", "/"); err != nil {
 		t.Fatal(err)
 	}
 	k, err := f.CreateAccessKey(ctx, root.Account, "bob")
@@ -89,23 +74,12 @@ func TestGetMFADeviceNeedsPermission(t *testing.T) {
 		t.Fatal(err)
 	}
 	bob := sigv4.Credential{AccessKey: k.AccessKeyID, Secret: k.Secret}
+	serial := "arn:vws:iam::" + root.Account.String() + ":u2f/root/testFidoKey-R1234"
 	form := url.Values{"Action": {"GetMFADevice"}, "SerialNumber": {serial}}
 	has(t, call(t, h, bob, sigv4.ServiceIAM, form), http.StatusForbidden, `<Code>AccessDenied</Code>`)
-	// Permission on bob's own ARN does not cover alice's device.
-	policy := `{"Statement":[{"Effect":"Allow","Action":["iam:GetMFADevice"],"Resource":"` + bobUser.ARN + `"}]}`
+	policy := `{"Statement":[{"Effect":"Allow","Action":["iam:GetMFADevice"],"Resource":"` + serial + `"}]}`
 	if err := f.PutInlinePolicy(ctx, root.Account, iam.EntityUser, "bob", "get", policy); err != nil {
 		t.Fatal(err)
 	}
-	has(t, call(t, h, bob, sigv4.ServiceIAM, form), http.StatusForbidden, `<Code>AccessDenied</Code>`)
-	// Permission on the owner's ARN does.
-	policy = `{"Statement":[{"Effect":"Allow","Action":["iam:GetMFADevice"],"Resource":"` + alice.ARN + `"}]}`
-	if err := f.PutInlinePolicy(ctx, root.Account, iam.EntityUser, "bob", "get", policy); err != nil {
-		t.Fatal(err)
-	}
-	has(t, call(t, h, bob, sigv4.ServiceIAM, form), http.StatusOK, `<UserName>alice</UserName>`)
-	// A missing device is not authorized on a guessed ARN.
-	ghost := "arn:vws:iam::" + root.Account.String() + ":mfa/ghost"
-	has(t, call(t, h, bob, sigv4.ServiceIAM, url.Values{
-		"Action": {"GetMFADevice"}, "SerialNumber": {ghost},
-	}), http.StatusForbidden, `<Code>AccessDenied</Code>`)
+	has(t, call(t, h, bob, sigv4.ServiceIAM, form), http.StatusNotFound, `<Code>NoSuchEntity</Code>`)
 }

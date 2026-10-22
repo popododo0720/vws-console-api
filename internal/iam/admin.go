@@ -168,18 +168,9 @@ func AccessKeyNotFound(keyID string) error {
 	}
 }
 
-// MFADevice is a virtual MFA device as GetMFADevice reports it. UserName and
-// Enabled are empty while the device is not attached to a user. UserARN is the
-// owning user's real ARN, for authorization.
-type MFADevice struct {
-	UserName     string
-	UserARN      string
-	SerialNumber string
-	Enabled      time.Time
-}
-
 // MFADeviceNotFound is the NoSuchEntity answer for a device the account does
-// not hold.
+// not hold. GetMFADevice uses it for every serial: AWS accepts only FIDO
+// security-key ARNs there, and vws-iam keeps no FIDO keys.
 func MFADeviceNotFound() error {
 	return &resource.Error{Code: resource.CodeNotFound, Message: "The specified MFA device does not exist."}
 }
@@ -273,7 +264,6 @@ type Admin interface {
 
 	// The MFA device argument is the device serial number, the ARN the AWS
 	// Query API calls SerialNumber.
-	GetMFADevice(ctx context.Context, a resource.AccountID, serial string) (MFADevice, error)
 	TagMFADevice(ctx context.Context, a resource.AccountID, serial string, tags []Tag) error
 	UntagMFADevice(ctx context.Context, a resource.AccountID, serial string, keys []string) error
 	ListMFADeviceTags(ctx context.Context, a resource.AccountID, serial, marker string, maxItems int) (TagPage, error)

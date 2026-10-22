@@ -1172,28 +1172,6 @@ func (st *store) mfaDevice(serial string) (*mfaDeviceRec, error) {
 	return d, nil
 }
 
-// GetMFADevice implements Admin. The device is read by its exact serial
-// number, the AWS SerialNumber, and only an enabled device is an answer.
-func (f *Fake) GetMFADevice(
-	_ context.Context, a resource.AccountID, serial string,
-) (MFADevice, error) {
-	f.mu.RLock()
-	defer f.mu.RUnlock()
-	st := f.accounts[a]
-	if st == nil {
-		return MFADevice{}, MFADeviceNotFound()
-	}
-	d, err := st.mfaDevice(serial)
-	if err != nil {
-		return MFADevice{}, err
-	}
-	owner := st.users[d.user]
-	if owner == nil {
-		return MFADevice{}, MFADeviceNotFound()
-	}
-	return MFADevice{UserName: d.user, UserARN: owner.ARN, SerialNumber: serial, Enabled: d.enableTime}, nil
-}
-
 // --- virtual MFA device tags ---
 
 // TagMFADevice implements Admin. A named key is overwritten; the whole request
