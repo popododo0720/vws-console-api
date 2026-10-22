@@ -78,6 +78,9 @@ type Error struct {
 	Field   string
 	Message string
 	cause   error
+	// owned marks a bucket create refused because the caller already owns
+	// the name, as opposed to a name another account holds (#315).
+	owned bool
 }
 
 func (e *Error) Error() string {
@@ -159,6 +162,23 @@ func NotFound(kind Kind, id string) *Error {
 // AlreadyExists reports a resource the caller cannot create again.
 func AlreadyExists(kind Kind, id string) *Error {
 	return &Error{Code: CodeAlreadyExists, Kind: kind, ID: id, Message: "already exists"}
+}
+
+// BucketOwnedMessage is the text S3 sends with BucketAlreadyOwnedByYou.
+// https://docs.aws.amazon.com/AmazonS3/latest/developerguide/ErrorResponses.html
+const BucketOwnedMessage = "Your previous request to create the named bucket succeeded and you already own it."
+
+// BucketAlreadyOwned reports a bucket create for a name the caller already
+// owns. It is CodeAlreadyExists, and OwnedByCaller tells it apart from a
+// name another account holds (#315).
+func BucketAlreadyOwned(name string) *Error {
+	return &Error{Code: CodeAlreadyExists, Kind: KindBucket, ID: name, Message: BucketOwnedMessage, owned: true}
+}
+
+// OwnedByCaller reports whether err is a BucketAlreadyOwned error.
+func OwnedByCaller(err error) bool {
+	var e *Error
+	return errors.As(err, &e) && e.owned
 }
 
 // Conflict reports a lifecycle or occupancy conflict.
