@@ -965,26 +965,31 @@ func (c computeClient) CreateKeyPair(ctx context.Context, m backend.Mutation, re
 		})
 	}
 	created, err := submit()
-	answer := rpcErr(created, err)
-	if reused && (answer == nil || resource.CodeOf(answer) == resource.CodeIdempotencyMismatch) {
-		stale, serr := c.staleImport(ctx, projectID, keyPairID, labels, pair.AWSFingerprint, answer == nil)
-		if serr != nil {
-			return resource.Accepted[resource.KeyPair]{}, serr
+	for attempt := 0; req.PublicKey != ""; attempt++ {
+		answer := rpcErr(created, err)
+		next, again, nerr := c.nextImport(ctx, projectID, keyPairID, labels, pair.AWSFingerprint, reused, answer)
+		if nerr != nil {
+			return resource.Accepted[resource.KeyPair]{}, nerr
 		}
-		if stale {
-			// The key pair whose request this retry named was deleted after
-			// the nonce read, so compute answered from a retained record. EC2
-			// ImportKeyPair takes no token: import the name again under a new
-			// nonce, which is judged by the name alone (#284).
-			nonce, nerr := newImportNonce()
-			if nerr != nil {
-				return resource.Accepted[resource.KeyPair]{}, nerr
+		if !again {
+			break
+		}
+		if attempt == maxImportAttempts {
+			// Deletes and imports of the name keep landing between this
+			// import's steps. Report it as retryable rather than guess.
+			return resource.Accepted[resource.KeyPair]{}, &resource.Error{
+				Code: resource.CodeUnavailable, Kind: resource.KindKeyPair, ID: req.Name,
+				Message: "the key pair changed during the import; retry",
 			}
-			labels[labelImport] = nonce
-			requestID = requestUUID(m.Key, "key", nonce)
-			reused = false
-			created, err = submit()
 		}
+		reused = next.reused
+		requestID = requestUUID(m.Key, "key")
+		delete(labels, labelImport)
+		if next.nonce != "" {
+			labels[labelImport] = next.nonce
+			requestID = requestUUID(m.Key, "key", next.nonce)
+		}
+		created, err = submit()
 	}
 	if err := rpcErr(created, err); err != nil {
 		// Only a name collision is InvalidKeyPair.Duplicate (#284). The key
@@ -1663,6 +1668,57 @@ func (c computeClient) staleImport(
 	same := perr == nil && held.AWSFingerprint == fingerprint &&
 		live[labelFingerprint] == labels[labelFingerprint] && live[labelImport] == labels[labelImport]
 	return !same, nil
+}
+
+// maxImportAttempts bounds how often one ImportKeyPair resubmits after a
+// racing delete or import changed the key pair under it.
+const maxImportAttempts = 3
+
+// importStep is the request an import sends next: the nonce its request id
+// is named by, and whether that nonce belongs to a key pair seen live.
+type importStep struct {
+	nonce  string
+	reused bool
+}
+
+// nextImport judges compute's answer to an import and picks what, if
+// anything, to send next.
+//
+// After a request that reused a live key pair's nonce, a replay or
+// IDEMPOTENCY_CONFLICT may come from the record of a key pair deleted since;
+// then the import runs again under a new nonce (#284).
+//
+// After a request under a new nonce, ALREADY_EXISTS means another import or
+// create took the name first. An identical import under the same token that
+// raced this one is the same import, so the request is sent again under the
+// winner's nonce: compute replays the winner's request when token and body
+// match, and refuses it otherwise, so a winner under another token or with
+// another key is still InvalidKeyPair.Duplicate (#287). If the winner is
+// gone already, the name was taken when compute answered, and the answer
+// stands.
+func (c computeClient) nextImport(
+	ctx context.Context, projectID, id string, labels map[string]string, fingerprint string, reused bool, answer error,
+) (importStep, bool, error) {
+	code := resource.CodeOf(answer)
+	if reused {
+		if answer != nil && code != resource.CodeIdempotencyMismatch {
+			return importStep{}, false, nil
+		}
+		stale, err := c.staleImport(ctx, projectID, id, labels, fingerprint, answer == nil)
+		if err != nil || !stale {
+			return importStep{}, false, err
+		}
+		nonce, err := newImportNonce()
+		return importStep{nonce: nonce}, err == nil, err
+	}
+	if code != resource.CodeAlreadyExists {
+		return importStep{}, false, nil
+	}
+	nonce, held, err := c.importNonce(ctx, projectID, id)
+	if err != nil || !held {
+		return importStep{}, false, err
+	}
+	return importStep{nonce: nonce, reused: true}, true, nil
 }
 
 // storageType maps an EC2 volume type to the storage tier. The storage proto

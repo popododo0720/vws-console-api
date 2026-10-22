@@ -4,14 +4,17 @@ import (
 	"context"
 	"crypto/rand"
 	"errors"
+	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"google.golang.org/grpc/codes"
 
 	computev1 "github.com/popododo0720/vws-proto/gen/go/vws/compute/v1"
 
 	"github.com/popododo0720/vws-console-api/internal/backend"
+	"github.com/popododo0720/vws-console-api/internal/backend/backendtest"
 	"github.com/popododo0720/vws-console-api/internal/resource"
 	"github.com/popododo0720/vws-console-api/internal/sshkey"
 )
@@ -218,4 +221,88 @@ func fingerprintOf(t *testing.T, pub string) string {
 		t.Fatal(err)
 	}
 	return parsed.AWSFingerprint
+}
+
+// TestKeyImportConcurrentContract runs the #287 concurrent import table over
+// the gRPC client. keyWorld holds each caller's first GetKeyPair until every
+// caller has made one, so all of them see the name free and draw their own
+// import nonce before any create reaches compute.
+func TestKeyImportConcurrentContract(t *testing.T) {
+	backendtest.KeyImportConcurrent(t, func(callers int) backend.Set {
+		client, world := dialKeyWorld(t)
+		world.afterGet = gather(callers)
+		return backend.Set{Compute: client}
+	})
+}
+
+// gather returns a hook that holds its first n calls until all n arrived.
+// Later calls pass. A caller that never comes releases the rest after a
+// timeout, so a broken client fails the test instead of hanging it.
+func gather(n int) func() {
+	var (
+		mu      sync.Mutex
+		arrived int
+	)
+	all := make(chan struct{})
+	return func() {
+		mu.Lock()
+		arrived++
+		k := arrived
+		if k == n {
+			close(all)
+		}
+		mu.Unlock()
+		if k <= n {
+			select {
+			case <-all:
+			case <-time.After(5 * time.Second):
+			}
+		}
+	}
+}
+
+// TestImportThatKeepsLosingRacesIsRetryable bounds the #287 loop. Every
+// GetKeyPair answer is out of date by the time the import acts on it: the
+// key pair it saw live is gone when it checks, and a name it saw free is
+// taken when it creates. The import gives up after three resubmits
+// (maxImportAttempts) with a retryable error, not a guess, and makes no key
+// pair.
+func TestImportThatKeepsLosingRacesIsRetryable(t *testing.T) {
+	ctx := context.Background()
+	client, world := dialKeyWorld(t)
+	account := mustAccount(t)
+	id := derivedID("key-", account.String(), "key-name", "flapping")
+	name := keyPairName(project(account), id)
+	held := &computev1.KeyPair{
+		Name: name, Labels: map[string]string{labelImport: "held-nonce"},
+		Spec: &computev1.KeyPairSpec{PublicKey: mustPublicKey(t)},
+	}
+	world.keys[name] = held
+	world.afterGet = func() {
+		world.mu.Lock()
+		defer world.mu.Unlock()
+		if _, ok := world.keys[name]; ok {
+			delete(world.keys, name)
+		} else {
+			world.keys[name] = held
+		}
+	}
+	var sent atomic.Int32
+	world.refuse = func(req *computev1.CreateKeyPairRequest) error {
+		sent.Add(1)
+		if req.GetKeyPair().GetLabels()[labelImport] == "held-nonce" {
+			return vwsStatus(codes.Aborted, "IDEMPOTENCY_CONFLICT", "request id was used for a different request")
+		}
+		return vwsStatus(codes.AlreadyExists, "ALREADY_EXISTS", "key pair "+name+" already exists")
+	}
+	m := backend.Mutation{Scope: backend.Scope{Account: account}, Key: "flap-token", Fingerprint: "flap-fp"}
+	got, err := client.CreateKeyPair(ctx, m, resource.CreateKeyPairRequest{Name: "flapping", PublicKey: mustPublicKey(t)})
+	if resource.CodeOf(err) != resource.CodeUnavailable || len(got.Items) != 0 {
+		t.Fatalf("want a retryable Unavailable, got %v %+v", err, got.Items)
+	}
+	// The first create and three resubmits (maxImportAttempts).
+	const wantCreates = 4
+	if n := sent.Load(); n != wantCreates {
+		t.Fatalf("sent %d creates, want %d", n, wantCreates)
+	}
 }
