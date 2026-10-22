@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/popododo0720/vws-console-api/internal/resource"
 )
@@ -57,12 +58,22 @@ const MaxRoleDescription = 1000
 // ServiceLinkedRolePath is the path AWS reserves for service-linked roles.
 const ServiceLinkedRolePath = "/aws-service-role/"
 
-// ValidateRoleDescription reports a description over the AWS limit.
+// ValidateRoleDescription reports a description AWS rejects: longer than 1000
+// characters, or outside the documented character set.
 func ValidateRoleDescription(description string) error {
-	if len(description) > MaxRoleDescription {
+	if utf8.RuneCountInString(description) > MaxRoleDescription {
 		return resource.Invalid("description",
 			"1 validation error detected: Value at 'description' failed to satisfy constraint: "+
 				"Member must have length less than or equal to 1000")
+	}
+	for _, r := range description {
+		if r == '\t' || r == '\n' || r == '\r' ||
+			(r >= '\u0020' && r <= '\u007e') || (r >= '\u00a1' && r <= '\u00ff') {
+			continue
+		}
+		return resource.Invalid("description",
+			"1 validation error detected: Value at 'description' failed to satisfy constraint: "+
+				`Member must satisfy regular expression pattern: [\u0009\u000A\u000D\u0020-\u007E\u00A1-\u00FF]*`)
 	}
 	return nil
 }

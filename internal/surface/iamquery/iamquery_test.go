@@ -574,6 +574,18 @@ func TestUpdateRoleDescription(t *testing.T) {
 		"Action": {"UpdateRoleDescription"}, "RoleName": {"ops"}, "Description": {long},
 	})
 	has(t, res, http.StatusBadRequest, `<Code>ValidationError</Code>`)
+	res = call(t, h, root, sigv4.ServiceIAM, url.Values{
+		"Action": {"UpdateRoleDescription"}, "RoleName": {"ops"}, "Description": {"\u0080"},
+	})
+	has(t, res, http.StatusBadRequest, `<Code>ValidationError</Code>`)
+	wide := strings.Repeat("\u00ff", iam.MaxRoleDescription)
+	res = call(t, h, root, sigv4.ServiceIAM, url.Values{
+		"Action": {"UpdateRoleDescription"}, "RoleName": {"ops"}, "Description": {wide},
+	})
+	has(t, res, http.StatusOK, "<Description>"+wide+"</Description>")
+	if stored, err := f.GetRole(ctx, root.Account, "ops"); err != nil || stored.Description != wide {
+		t.Fatalf("1000-character description stored as %q: %v", stored.Description, err)
+	}
 
 	if _, err := f.CreateRole(ctx, root.Account, iam.RoleInput{
 		Name: "svc", Path: iam.ServiceLinkedRolePath + "compute.vws/", TrustPolicy: trust,
