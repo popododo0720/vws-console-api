@@ -819,6 +819,33 @@ func iamActions() map[string]spec {
 				return toMFADevice(dev), nil
 			},
 		},
+		"ListVirtualMFADevices": {
+			params: []string{"AssignmentStatus", "Marker", "MaxItems"}, needsAdmin: true,
+			run: func(h *handler, c *exchange) (any, error) {
+				assignment, err := assignmentStatusParam(c)
+				if err != nil {
+					return nil, err
+				}
+				maxItems, err := maxItemsParam(c)
+				if err != nil {
+					return nil, err
+				}
+				if err := mfaDeviceMarkerParam(c); err != nil {
+					return nil, err
+				}
+				page, err := h.cfg.Admin.ListVirtualMFADevices(
+					c.r.Context(), c.caller.Account, assignment, c.form("Marker"), maxItems)
+				out := virtualMFADevicesResult{
+					VirtualMFADevices: []virtualMFADeviceXML{},
+					IsTruncated:       page.IsTruncated,
+					Marker:            page.Marker,
+				}
+				for _, d := range page.Devices {
+					out.VirtualMFADevices = append(out.VirtualMFADevices, toVirtualMFADevice(d))
+				}
+				return out, err
+			},
+		},
 		"TagMFADevice": {
 			params: []string{"SerialNumber"}, prefixes: []string{"Tags.member."}, needsAdmin: true,
 			resource: mfaDeviceARN,

@@ -22,8 +22,7 @@ func TestFakeGetMFADevice(t *testing.T) {
 	if _, err := f.GetMFADevice(ctx, a, serial); resource.CodeOf(err) != resource.CodeNotFound {
 		t.Fatalf("unassigned device: %v", err)
 	}
-	enabled, err := f.EnableMfaDevice(a, serial, "alice")
-	if err != nil {
+	if err := f.AssignMfaDevice(a, serial, "alice", now); err != nil {
 		t.Fatal(err)
 	}
 	dev, err := f.GetMFADevice(ctx, a, serial)
@@ -31,7 +30,7 @@ func TestFakeGetMFADevice(t *testing.T) {
 		t.Fatal(err)
 	}
 	if dev.SerialNumber != serial || dev.UserName != "alice" || dev.UserARN != u.ARN ||
-		!dev.Enabled.Equal(enabled) || !dev.Enabled.Equal(now) {
+		!dev.Enabled.Equal(now) {
 		t.Fatalf("enabled device %+v", dev)
 	}
 	// A rename moves the device's owner with the user.
@@ -62,11 +61,11 @@ func TestFakeGetMFADevice(t *testing.T) {
 			t.Errorf("%s: %v", tc.name, err)
 		}
 	}
-	if _, err := f.EnableMfaDevice(a, serial, "nobody"); resource.CodeOf(err) != resource.CodeNotFound {
+	if err := f.AssignMfaDevice(a, serial, "nobody", now); resource.CodeOf(err) != resource.CodeNotFound {
 		t.Fatalf("enable for a missing user: %v", err)
 	}
 	ghost := "arn:vws:iam::" + a.String() + ":mfa/ghost"
-	if _, err := f.EnableMfaDevice(a, ghost, "alice"); resource.CodeOf(err) != resource.CodeNotFound {
+	if err := f.AssignMfaDevice(a, ghost, "alice", now); resource.CodeOf(err) != resource.CodeNotFound {
 		t.Fatalf("enable a missing device: %v", err)
 	}
 }

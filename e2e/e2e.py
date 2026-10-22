@@ -86,6 +86,23 @@ def check(cond, msg):
 WAIT_TIMEOUT = float(os.environ.get("VWS_E2E_WAIT_TIMEOUT", "180"))
 
 
+def wait_attached(vid, iid, device, timeout=WAIT_TIMEOUT):
+    """Polls DescribeVolumes after AttachVolume. The volume must read in-use
+    with its attachment on iid at every poll, attaching until the disk is on
+    the machine, then attached (#214)."""
+    deadline = time.monotonic() + timeout
+    while True:
+        vol = ec2.describe_volumes(VolumeIds=[vid])["Volumes"][0]
+        att = vol.get("Attachments") or []
+        check(vol["State"] == "in-use" and len(att) == 1 and att[0]["InstanceId"] == iid and att[0]["Device"] == device
+              and att[0]["State"] in ("attaching", "attached"), f"volume after attach {vol}")
+        if att[0]["State"] == "attached":
+            return
+        if time.monotonic() >= deadline:
+            raise AssertionError(f"{vid} still {att[0]['State']} after {timeout:.0f}s, want attached")
+        time.sleep(1)
+
+
 def wait_state(iid, want, timeout=WAIT_TIMEOUT):
     """Polls DescribeInstances until iid reaches want, like the boto3
     instance_stopped/instance_running waiters. Start or Stop issued before the
@@ -363,7 +380,10 @@ def vms():
         def detach_data_volume():
             vid = ec2.create_volume(AvailabilityZone="vws-1a", Size=1)["VolumeId"]
             ec2.get_waiter("volume_available").wait(VolumeIds=[vid], WaiterConfig={"Delay": 1, "MaxAttempts": 30})
-            ec2.attach_volume(VolumeId=vid, InstanceId=S["iid"], Device="/dev/sdf")
+            att = ec2.attach_volume(VolumeId=vid, InstanceId=S["iid"], Device="/dev/sdf")
+            # EC2 answers attaching; the volume is in-use from then on (#214).
+            check(att["VolumeId"] == vid and att["InstanceId"] == S["iid"] and att["State"] == "attaching", f"attach {att}")
+            wait_attached(vid, S["iid"], "/dev/sdf")
             det = ec2.detach_volume(VolumeId=vid, InstanceId=S["iid"], Device="/dev/sdf")
             check(det["VolumeId"] == vid and det["InstanceId"] == S["iid"] and det["Device"] == "/dev/sdf" and det["State"] == "detaching", f"detach {det}")
             check(isinstance(det.get("AttachTime"), datetime.datetime), f"attach time {det}")

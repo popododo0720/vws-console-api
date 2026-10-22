@@ -22,7 +22,8 @@ import (
 // AccessKey services yet; each answers Unimplemented, which the surface
 // returns as InvalidAction. CreatePolicyVersion, GetPolicyVersion,
 // ListPolicyVersions, SetDefaultPolicyVersion, DeletePolicyVersion, the policy
-// and MFA device tag calls, GetMfaDevice, GetRole, UpdateRole,
+// and MFA device tag calls, ListVirtualMFADevices, GetMFADevice, GetRole,
+// UpdateRole,
 // UpdateRoleDescription and GetAccessKeyLastUsed are mapped.
 type STSAdmin struct{ *Client }
 
@@ -762,6 +763,111 @@ func (a STSAdmin) ListPolicyTags(
 		page.Tags = append(page.Tags, iam.Tag{Key: tag.GetKey(), Value: tag.GetValue()})
 	}
 	return page, nil
+}
+
+// ListVirtualMFADevices implements iam.Admin over
+// MfaDeviceService.ListMfaDevices. vws-iam pages every device before the
+// assignment filter, so this reads every page and then filters and pages to
+// keep AWS's MaxItems and Marker semantics.
+func (a STSAdmin) ListVirtualMFADevices(
+	ctx context.Context, account resource.AccountID, assignment iam.MFADeviceAssignment, marker string, maxItems int,
+) (iam.VirtualMFADevicePage, error) {
+	var devices []iam.VirtualMFADevice
+	token := ""
+	for {
+		resp, err := retry(ctx, a.backoff, a.mfaDevices.ListMfaDevices, &iamv1.ListMfaDevicesRequest{
+			Parent: "projects/" + account.String(), PageSize: iam.MaxMFADevicePageSize, PageToken: token,
+		})
+		if err != nil {
+			return iam.VirtualMFADevicePage{}, authError(err)
+		}
+		for _, dev := range resp.GetMfaDevices() {
+			if !assignment.Matches(dev.GetStatus().GetUser() != "") {
+				continue
+			}
+			v, err := a.virtualMFADevice(ctx, account, dev)
+			if err != nil {
+				return iam.VirtualMFADevicePage{}, err
+			}
+			devices = append(devices, v)
+		}
+		token = resp.GetNextPageToken()
+		if token == "" {
+			return iam.PageVirtualMFADevices(devices, assignment, marker, maxItems), nil
+		}
+	}
+}
+
+// virtualMFADevice maps one vws-iam device to an AWS row. A device with a user
+// is assigned, and that user is read for the full AWS User structure. A device
+// or user that names another account is an internal error.
+func (a STSAdmin) virtualMFADevice(
+	ctx context.Context, account resource.AccountID, dev *iamv1.MfaDevice,
+) (iam.VirtualMFADevice, error) {
+	status := dev.GetStatus()
+	serial := status.GetSerialNumber()
+	if serial == "" {
+		return iam.VirtualMFADevice{}, resource.Internal(
+			errors.New("vws-iam ListMfaDevices returned a device with no serial number"))
+	}
+	if _, err := mfaDeviceResource(account, serial); err != nil {
+		return iam.VirtualMFADevice{}, resource.Internal(
+			errors.New("vws-iam ListMfaDevices returned a device outside the caller's account"))
+	}
+	out := iam.VirtualMFADevice{SerialNumber: serial}
+	if status.GetUser() == "" {
+		return out, nil
+	}
+	if !userResourceInAccount(account, status.GetUser()) {
+		return iam.VirtualMFADevice{}, resource.Internal(
+			errors.New("vws-iam ListMfaDevices returned a user outside the caller's account"))
+	}
+	user, err := a.userFor(ctx, account, status.GetUser())
+	if err != nil {
+		return iam.VirtualMFADevice{}, err
+	}
+	out.User = &user
+	if t := status.GetEnableTime(); t != nil {
+		out.EnableDate = t.AsTime()
+	}
+	return out, nil
+}
+
+// userResourceInAccount reports whether a vws-iam user resource name belongs to
+// account.
+func userResourceInAccount(account resource.AccountID, resourceName string) bool {
+	rest, ok := strings.CutPrefix(resourceName, "projects/"+account.String()+"/users/")
+	return ok && rest != ""
+}
+
+// userFor reads one vws-iam user for the AWS User structure a
+// ListVirtualMFADevices row carries. A user outside the caller's account is an
+// internal error.
+func (a STSAdmin) userFor(ctx context.Context, account resource.AccountID, resourceName string) (iam.User, error) {
+	u, err := retry(ctx, a.backoff, a.users.GetUser, &iamv1.GetUserRequest{Name: resourceName})
+	if err != nil {
+		return iam.User{}, authError(err)
+	}
+	if u.GetName() != resourceName {
+		return iam.User{}, resource.Internal(
+			errors.New("vws-iam GetUser returned " + u.GetName() + ", want " + resourceName))
+	}
+	arn := u.GetStatus().GetArn()
+	if !strings.HasPrefix(arn, "arn:vws:iam::"+account.String()+":user/") {
+		return iam.User{}, resource.Internal(
+			errors.New("vws-iam GetUser returned a user outside the caller's account"))
+	}
+	out := iam.User{
+		Name: resourceName[strings.LastIndex(resourceName, "/")+1:], Path: u.GetSpec().GetPath(),
+		ID: u.GetStatus().GetUniqueId(), ARN: arn,
+	}
+	if out.Path == "" {
+		out.Path = "/"
+	}
+	if t := u.GetCreateTime(); t != nil {
+		out.Created = t.AsTime()
+	}
+	return out, nil
 }
 
 // TagMFADevice implements iam.Admin over MfaDeviceService.TagMFADevice.

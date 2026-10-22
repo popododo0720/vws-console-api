@@ -22,10 +22,10 @@ func TestGetMFADeviceOverGRPC(t *testing.T) {
 			EnableTime:   timestamppb.New(authTime),
 		},
 	}
-	s.getUserRes = &iamv1.User{
+	s.getUserRes = map[string]*iamv1.User{"projects/123456789012/users/alice": {
 		Name:   "projects/123456789012/users/alice",
 		Status: &iamv1.UserStatus{Arn: "arn:vws:iam::123456789012:user/eng/alice"},
-	}
+	}}
 	dev, err := admin.GetMFADevice(t.Context(), accountID(t), mfaSerial)
 	if err != nil {
 		t.Fatal(err)
@@ -125,10 +125,10 @@ func TestGetMFADeviceOwnerErrorsOverGRPC(t *testing.T) {
 	}
 	// An owner ARN in another account is a backend fault.
 	s.getMfaRes.Status.User = "projects/123456789012/users/alice"
-	s.getUserRes = &iamv1.User{
+	s.getUserRes = map[string]*iamv1.User{"projects/123456789012/users/alice": {
 		Name:   "projects/123456789012/users/alice",
 		Status: &iamv1.UserStatus{Arn: "arn:vws:iam::210987654321:user/alice"},
-	}
+	}}
 	if _, err := admin.GetMFADevice(t.Context(), accountID(t), mfaSerial); resource.CodeOf(err) != resource.CodeInternal {
 		t.Fatalf("foreign owner ARN mapped to %v", err)
 	}
@@ -136,7 +136,9 @@ func TestGetMFADeviceOwnerErrorsOverGRPC(t *testing.T) {
 		t.Fatalf("owner reads %v", s.getUser)
 	}
 	// A user response without an ARN cannot authorize anything.
-	s.getUserRes = &iamv1.User{Name: "projects/123456789012/users/alice"}
+	s.getUserRes = map[string]*iamv1.User{"projects/123456789012/users/alice": {
+		Name: "projects/123456789012/users/alice",
+	}}
 	if _, err := admin.GetMFADevice(t.Context(), accountID(t), mfaSerial); resource.CodeOf(err) != resource.CodeInternal {
 		t.Fatalf("owner without an ARN mapped to %v", err)
 	}

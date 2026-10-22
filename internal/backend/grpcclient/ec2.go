@@ -14,6 +14,9 @@ import (
 	computev1 "github.com/popododo0720/vws-proto/gen/go/vws/compute/v1"
 	networkv1 "github.com/popododo0720/vws-proto/gen/go/vws/network/v1"
 	storagev1 "github.com/popododo0720/vws-proto/gen/go/vws/storage/v1"
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
@@ -72,6 +75,8 @@ func (c computeClient) TerminateInstances(ctx context.Context, m backend.Mutatio
 
 // CreateTags rewrites each instance's labels with the merged tags. Compute
 // serves a labels-only UpdateInstance, so power and spec do not change.
+// Compute replaces the whole label map, so the write keeps the internal
+// labels and detach records the instance carries (writeInstanceLabels).
 func (c computeClient) CreateTags(ctx context.Context, m backend.Mutation, req resource.CreateTagsRequest) (resource.Accepted[resource.Instance], error) {
 	projectID := project(m.Account)
 	insts := make([]resource.Instance, 0, len(req.IDs))
@@ -88,21 +93,25 @@ func (c computeClient) CreateTags(ctx context.Context, m backend.Mutation, req r
 	var op resource.Operation
 	targets := make([]resource.Ref, 0, len(insts))
 	for i, inst := range insts {
-		labels, err := withInternalLabels(inst.Tags, map[string]string{
-			labelAction:      resource.ActionCreateTags.String(),
-			labelFingerprint: clip(m.Fingerprint, 63),
-			labelImage:       inst.ImageID.String(),
-			labelReservation: inst.ReservationID.String(),
+		updated, _, err := c.writeInstanceLabels(ctx, projectID, inst.ID, func(
+			got *computev1.Instance, model resource.Instance,
+		) (*computev1.UpdateInstanceRequest, error) {
+			tags, err := resource.MergeTags(model.Tags, req.Tags)
+			if err != nil {
+				return nil, err
+			}
+			model.Tags = tags
+			labels, err := instanceUpdateLabels(model, got.GetLabels(), resource.ActionCreateTags, m.Fingerprint, nil)
+			if err != nil {
+				return nil, err
+			}
+			return &computev1.UpdateInstanceRequest{
+				RequestId:  requestUUID(m.Key, "tags", hex.EncodeToString([]byte{byte(i)})),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"labels"}},
+				Instance:   &computev1.Instance{Name: got.GetName(), Labels: labels},
+			}, nil
 		})
 		if err != nil {
-			return resource.Accepted[resource.Instance]{}, err
-		}
-		updated, err := c.instances.UpdateInstance(ctx, &computev1.UpdateInstanceRequest{
-			RequestId:  requestUUID(m.Key, "tags", hex.EncodeToString([]byte{byte(i)})),
-			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"labels"}},
-			Instance:   &computev1.Instance{Name: instanceName(projectID, inst.ID.String()), Labels: labels},
-		})
-		if err := rpcErr(updated, err); err != nil {
 			return resource.Accepted[resource.Instance]{}, err
 		}
 		if i == 0 {
@@ -133,38 +142,40 @@ func (c computeClient) changeInstances(ctx context.Context, m backend.Mutation, 
 	var op resource.Operation
 	items := make([]resource.InstanceStateChange, 0, len(prev))
 	for i, inst := range prev {
-		mid, _, err := resource.NextInstanceState(action, inst.State)
-		if err != nil {
-			return resource.Accepted[resource.InstanceStateChange]{}, err
-		}
-		labels, err := withInternalLabels(inst.Tags, map[string]string{
-			labelAction:      action.String(),
-			labelFingerprint: clip(m.Fingerprint, 63),
-			labelImage:       inst.ImageID.String(),
-			labelReservation: inst.ReservationID.String(),
-		})
-		if err != nil {
-			return resource.Accepted[resource.InstanceStateChange]{}, err
-		}
-		updated, err := c.instances.UpdateInstance(ctx, &computev1.UpdateInstanceRequest{
-			RequestId:  requestUUID(m.Key, action.String(), hex.EncodeToString([]byte{byte(i)})),
-			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.power", "labels"}},
-			Instance: &computev1.Instance{
-				Name:   instanceName(projectID, inst.ID.String()),
-				Labels: labels,
-				Spec: &computev1.InstanceSpec{
-					MachineType: inst.InstanceType,
-					Power:       power,
-					NetworkInterfaces: []*computev1.NetworkInterface{{
-						DeviceName: "nic0",
-						Subnet:     subnetName(projectID, "", inst.SubnetID.String()),
-					}},
+		var mid resource.InstanceState
+		updated, cur, err := c.writeInstanceLabels(ctx, projectID, inst.ID, func(
+			got *computev1.Instance, model resource.Instance,
+		) (*computev1.UpdateInstanceRequest, error) {
+			next, _, err := resource.NextInstanceState(action, model.State)
+			if err != nil {
+				return nil, err
+			}
+			mid = next
+			labels, err := instanceUpdateLabels(model, got.GetLabels(), action, m.Fingerprint, nil)
+			if err != nil {
+				return nil, err
+			}
+			return &computev1.UpdateInstanceRequest{
+				RequestId:  requestUUID(m.Key, action.String(), hex.EncodeToString([]byte{byte(i)})),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.power", "labels"}},
+				Instance: &computev1.Instance{
+					Name:   got.GetName(),
+					Labels: labels,
+					Spec: &computev1.InstanceSpec{
+						MachineType: model.InstanceType,
+						Power:       power,
+						NetworkInterfaces: []*computev1.NetworkInterface{{
+							DeviceName: "nic0",
+							Subnet:     subnetName(projectID, "", model.SubnetID.String()),
+						}},
+					},
 				},
-			},
+			}, nil
 		})
-		if err := rpcErr(updated, err); err != nil {
+		if err != nil {
 			return resource.Accepted[resource.InstanceStateChange]{}, err
 		}
+		inst = cur
 		if i == 0 {
 			op, err = operationFrom(updated, resource.ServiceCompute)
 			if err != nil {
@@ -178,6 +189,41 @@ func (c computeClient) changeInstances(ctx context.Context, m backend.Mutation, 
 	op.Action = action
 	op.Targets = stateRefs(items)
 	return resource.Accepted[resource.InstanceStateChange]{Operation: op, Items: items}, nil
+}
+
+// writeInstanceLabels sends the update build makes from the current instance
+// with that instance's etag. Compute replaces the whole label map, so build
+// starts from the labels it was given (instanceUpdateLabels), and the etag
+// keeps a detach record written in between from being dropped: a stale etag
+// rereads and builds again. The request id does not change, because compute
+// stores no request it rejected for its etag.
+func (c computeClient) writeInstanceLabels(
+	ctx context.Context, projectID string, id resource.InstanceID,
+	build func(*computev1.Instance, resource.Instance) (*computev1.UpdateInstanceRequest, error),
+) (*longrunningpb.Operation, resource.Instance, error) {
+	for attempt := 0; attempt < 5; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return nil, resource.Instance{}, err
+		}
+		got, model, err := c.detachInstance(ctx, projectID, id)
+		if err != nil {
+			return nil, resource.Instance{}, err
+		}
+		req, err := build(got, model)
+		if err != nil {
+			return nil, resource.Instance{}, err
+		}
+		req.Instance.Etag = got.GetEtag()
+		updated, callErr := c.instances.UpdateInstance(ctx, req)
+		if etagMismatch(callErr) {
+			continue
+		}
+		if err := rpcErr(updated, callErr); err != nil {
+			return nil, resource.Instance{}, err
+		}
+		return updated, model, nil
+	}
+	return nil, resource.Instance{}, resource.Conflict(resource.KindInstance, id.String(), "instance changed")
 }
 
 func (c computeClient) CreateVolume(ctx context.Context, m backend.Mutation, req resource.CreateVolumeRequest) (resource.Accepted[resource.Volume], error) {
@@ -287,6 +333,7 @@ func (c computeClient) attachOnce(
 	vol.State = resource.VolumeInUse
 	vol.InstanceID = req.InstanceID
 	vol.Device = req.Device
+	vol.AttachState = resource.AttachmentAttaching
 	op.Action = resource.ActionAttachVolume
 	op.Targets = []resource.Ref{vol.ID.Ref()}
 	return resource.Accepted[resource.Volume]{Operation: op, Items: []resource.Volume{vol}}, nil
@@ -338,6 +385,27 @@ func (c computeClient) detachOnce(
 	if err != nil {
 		return zero, err
 	}
+	requestHex := detachRequestHex(m.Key)
+	// A retry of a detach this instance already took is that detach, even if
+	// the volume was attached again since (EC2 client-token rules: the same
+	// token and parameters succeed with no further action).
+	if got != nil {
+		if rec, ok := detachReplayFrom(got.GetLabels(), vol.ID.String()); ok && rec.requestHex == requestHex {
+			rec.instanceID = model.ID
+			switch rec.opMatch(m.Fingerprint) {
+			case opSaved:
+				return c.acceptDetachReplay(ctx, m.Account, vol, model, rec)
+			case opOtherParams:
+				return zero, resource.IdempotencyMismatch()
+			case opUnknown:
+				if !bound {
+					return c.writeDetach(ctx, m, vol, got, model, backend.VolumeBind{
+						InstanceID: rec.instanceID, Device: rec.device,
+					}, false)
+				}
+			}
+		}
+	}
 	if bound {
 		if !req.InstanceID.IsZero() && req.InstanceID != bind.InstanceID {
 			return zero, resource.AttachmentNotFound(vol.ID)
@@ -362,18 +430,19 @@ func (c computeClient) detachOnce(
 			return zero, resource.AttachmentNotFound(vol.ID)
 		}
 	}
-	holder, holderModel, rec, ok, err := c.findDetachReplay(ctx, projectID, vol.ID, req.InstanceID, got, model)
+	holder, holderModel, rec, ok, err := c.findDetachReplay(ctx, projectID, vol.ID, requestHex, req.InstanceID, got)
 	if err != nil {
 		return zero, err
 	}
-	if !ok || rec.requestHex != detachRequestHex(m.Key) {
+	if !ok {
 		return zero, resource.Conflict(resource.KindVolume, vol.ID.String(), "volume is not in use")
 	}
-	if rec.opLocal != "" && !detachFingerprintMatches(rec.fingerprint, m.Fingerprint) {
-		return zero, resource.IdempotencyMismatch()
-	}
-	if rec.opLocal != "" {
+	switch rec.opMatch(m.Fingerprint) {
+	case opSaved:
 		return c.acceptDetachReplay(ctx, m.Account, vol, holderModel, rec)
+	case opOtherParams:
+		return zero, resource.IdempotencyMismatch()
+	case opUnknown:
 	}
 	return c.writeDetach(ctx, m, vol, holder, holderModel, backend.VolumeBind{
 		InstanceID: rec.instanceID, Device: rec.device,
@@ -497,21 +566,17 @@ func (c computeClient) volumeBoundElsewhere(
 	return model.ID != skip, nil
 }
 
-// findDetachReplay reads the detach record for id.
-// A named instance is the only place a named request may replay.
-// A volume-only request pages until some instance still carries the record.
+// findDetachReplay finds the record of request requestHex for volume id.
+// detachOnce has already read the hint instance. A named instance is the only
+// place a named request may replay. A volume-only request pages until an
+// instance carries that request's record. A record of another request for the
+// same volume, such as an older detach from another instance, is skipped.
 func (c computeClient) findDetachReplay(
-	ctx context.Context, projectID string, id resource.VolumeID, want resource.InstanceID,
-	hint *computev1.Instance, hintModel resource.Instance,
+	ctx context.Context, projectID string, id resource.VolumeID, requestHex string, want resource.InstanceID,
+	hint *computev1.Instance,
 ) (*computev1.Instance, resource.Instance, detachReplay, bool, error) {
-	if hint != nil {
-		if rec, ok := detachReplayFrom(hint.GetLabels(), id.String()); ok {
-			rec.instanceID = hintModel.ID
-			return hint, hintModel, rec, true, nil
-		}
-		if !want.IsZero() {
-			return nil, resource.Instance{}, detachReplay{}, false, nil
-		}
+	if hint != nil && !want.IsZero() {
+		return nil, resource.Instance{}, detachReplay{}, false, nil
 	}
 	token := ""
 	seen := map[string]struct{}{}
@@ -531,7 +596,7 @@ func (c computeClient) findDetachReplay(
 		}
 		for _, item := range out.GetInstances() {
 			rec, ok := detachReplayFrom(item.GetLabels(), id.String())
-			if !ok {
+			if !ok || rec.requestHex != requestHex {
 				continue
 			}
 			model, err := instanceModel(item)
@@ -575,6 +640,10 @@ func (c computeClient) writeDetach(
 	if err != nil {
 		return zero, err
 	}
+	// The operation id saved for this volume belongs to the previous detach.
+	// Next to this request's record it would replay that detach, so it goes.
+	// This request's own id is written by persistDetachOp.
+	delete(labels, labelDetachOpPrefix+vol.ID.String())
 	updated, callErr := c.instances.UpdateInstance(ctx, &computev1.UpdateInstanceRequest{
 		RequestId:  requestUUID(m.Key, "detach"),
 		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.volumes", "labels"}},
@@ -631,7 +700,8 @@ func (c computeClient) writeDetach(
 // read it without rebuilding the volume list that request fingerprinted.
 func (c computeClient) persistDetachOp(ctx context.Context, m backend.Mutation, name, volID, opLocal string) error {
 	key := labelDetachOpPrefix + volID
-	value := opLocal + " " + detachFPToken(m.Fingerprint)
+	requestHex := detachRequestHex(m.Key)
+	value := opLocal + " " + detachFPToken(requestHex, m.Fingerprint)
 	for attempt := 0; attempt < 5; attempt++ {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -641,6 +711,12 @@ func (c computeClient) persistDetachOp(ctx context.Context, m backend.Mutation, 
 			return fromNamedRPC(name, err)
 		}
 		if got.GetLabels()[key] == value {
+			return nil
+		}
+		// A later detach of this volume owns the record now. This id would
+		// pair with its request, so it is not written; a retry of this
+		// request then asks compute by request id (detachOnce, opUnknown).
+		if rec, ok := detachReplayFrom(got.GetLabels(), volID); !ok || rec.requestHex != requestHex {
 			return nil
 		}
 		labels := maps.Clone(got.GetLabels())
@@ -743,13 +819,46 @@ func detachRequestHex(key string) string {
 	return strings.ReplaceAll(requestUUID(key, "detach"), "-", "")
 }
 
-func detachFPToken(fingerprint string) string {
+// detachFPToken binds a saved operation id to the request and its
+// fingerprint, so it can only replay for that request. The label value stays
+// "<op> <16 hex>" and fits in 63 bytes for any operation id length.
+func detachFPToken(requestHex, fingerprint string) string {
+	sum := sha256.Sum256([]byte(requestHex + "\x00" + fingerprint))
+	return hex.EncodeToString(sum[:8])
+}
+
+// legacyFPToken is the token written before #213, bound to the fingerprint
+// only. Such a record may pair an older detach's operation with this request.
+func legacyFPToken(fingerprint string) string {
 	sum := sha256.Sum256([]byte(fingerprint))
 	return hex.EncodeToString(sum[:8])
 }
 
-func detachFingerprintMatches(token, fingerprint string) bool {
-	return token == detachFPToken(fingerprint)
+// opMatch is what a saved operation id means for a retry.
+type opMatch int
+
+const (
+	// opUnknown: no id is saved for this request, or it cannot be trusted.
+	// The retry asks compute by request id.
+	opUnknown opMatch = iota
+	// opSaved: the id is this request's, with the same parameters.
+	opSaved
+	// opOtherParams: the token was used with other parameters.
+	opOtherParams
+)
+
+// opMatch compares the saved operation token with this request's fingerprint.
+func (r detachReplay) opMatch(fingerprint string) opMatch {
+	switch {
+	case r.opLocal == "":
+		return opUnknown
+	case r.fingerprint == detachFPToken(r.requestHex, fingerprint):
+		return opSaved
+	case r.fingerprint == legacyFPToken(fingerprint):
+		return opUnknown
+	default:
+		return opOtherParams
+	}
 }
 
 func detachRecordKey(key string) bool {
@@ -855,6 +964,9 @@ func (c computeClient) DescribeVolumes(ctx context.Context, s backend.Scope, q r
 			}
 			items = append(items, vol)
 		}
+		if err := c.markAttaching(ctx, s.Account, items); err != nil {
+			return resource.Page[resource.Volume]{}, err
+		}
 		return pageByID(items, q.Page, func(item resource.Volume) string { return item.ID.String() })
 	}
 	out, err := c.volumes.ListVolumes(ctx, &storagev1.ListVolumesRequest{
@@ -874,7 +986,104 @@ func (c computeClient) DescribeVolumes(ctx context.Context, s backend.Scope, q r
 		}
 		items = append(items, vol)
 	}
+	if err := c.markAttaching(ctx, s.Account, items); err != nil {
+		return resource.Page[resource.Volume]{}, err
+	}
 	return resource.Page[resource.Volume]{Items: items, NextToken: out.GetNextPageToken()}, nil
+}
+
+// markAttaching shows an accepted attach that storage does not report yet.
+// AttachVolume writes the volume into the instance spec, and storage names
+// the instance only once compute has put the disk on the machine, so for a
+// while the volume reads as available. The spec is the attachment, as for
+// DetachVolume: a volume that storage reports with no instance and that a
+// live instance spec names is in-use, attaching. It lists instances only when
+// some volume reads as available, and fails rather than show such a volume
+// as available when compute cannot be read.
+func (c computeClient) markAttaching(ctx context.Context, account resource.AccountID, items []resource.Volume) error {
+	free := 0
+	for _, v := range items {
+		if v.State == resource.VolumeAvailable && v.InstanceID.IsZero() {
+			free++
+		}
+	}
+	if free == 0 {
+		return nil
+	}
+	binds, err := c.specBinds(ctx, account)
+	if err != nil {
+		return err
+	}
+	for i := range items {
+		v := &items[i]
+		if v.State != resource.VolumeAvailable || !v.InstanceID.IsZero() {
+			continue
+		}
+		bind, ok := binds[v.ID]
+		if !ok || bind.Boot {
+			continue
+		}
+		v.State = resource.VolumeInUse
+		v.InstanceID = bind.InstanceID
+		v.Device = bind.Device
+		v.AttachState = resource.AttachmentAttaching
+	}
+	return nil
+}
+
+// specBinds maps each volume a live instance spec names to that bind. It
+// pages all of the caller's instances; a repeated page token is an error.
+// A terminated instance holds no volume. A record owned by another account
+// is an internal error, never the caller's attachment. A list that runs out
+// of time is Unavailable, so the read can be retried.
+func (c computeClient) specBinds(
+	ctx context.Context, account resource.AccountID,
+) (map[resource.VolumeID]backend.VolumeBind, error) {
+	projectID := project(account)
+	out := map[resource.VolumeID]backend.VolumeBind{}
+	token := ""
+	seen := map[string]struct{}{}
+	for {
+		if token != "" {
+			if _, ok := seen[token]; ok {
+				return nil, resource.Internal(errors.New("instance page token repeated"))
+			}
+			seen[token] = struct{}{}
+		}
+		page, err := c.instances.ListInstances(ctx, &computev1.ListInstancesRequest{
+			Parent: instanceParent(projectID), PageSize: 100, PageToken: token,
+		})
+		if status.Code(err) == codes.DeadlineExceeded {
+			return nil, &resource.Error{Code: resource.CodeUnavailable, Message: "instance list timed out"}
+		}
+		if err != nil {
+			return nil, fromRPC(err)
+		}
+		for _, item := range page.GetInstances() {
+			model, err := instanceModel(item)
+			if err != nil {
+				if c.skipBadRecord(ctx, item.GetName(), err) {
+					continue
+				}
+				return nil, err
+			}
+			if model.OwnerID != account {
+				return nil, resource.Internal(errors.New("instance " + item.GetName() + " is owned by another account"))
+			}
+			if model.State == resource.InstanceTerminated {
+				continue
+			}
+			for _, block := range model.BlockDevices {
+				if bind, ok := backend.BindOf(model, block.VolumeID); ok {
+					out[block.VolumeID] = bind
+				}
+			}
+		}
+		token = page.GetNextPageToken()
+		if token == "" {
+			return out, nil
+		}
+	}
 }
 
 func (c computeClient) DescribeImages(ctx context.Context, s backend.Scope, q resource.ImageQuery) (resource.Page[resource.Image], error) {
@@ -991,17 +1200,17 @@ func (c computeClient) CreateKeyPair(ctx context.Context, m backend.Mutation, re
 		}
 		created, err = submit()
 	}
-	if err := rpcErr(created, err); err != nil {
+	if rerr := rpcErr(created, err); rerr != nil {
 		// Only a name collision is InvalidKeyPair.Duplicate (#284). The key
 		// pair id is derived from the name, so ALREADY_EXISTS is one. An
 		// import's IDEMPOTENCY_CONFLICT is one only when it named the request
 		// of the key pair live at that id: the token's other body for a live
 		// name. Any other conflict keeps its own code.
-		code := resource.CodeOf(err)
+		code := resource.CodeOf(rerr)
 		if code == resource.CodeAlreadyExists || (reused && code == resource.CodeIdempotencyMismatch) {
 			return resource.Accepted[resource.KeyPair]{}, resource.AlreadyExists(resource.KindKeyPair, req.Name)
 		}
-		return resource.Accepted[resource.KeyPair]{}, err
+		return resource.Accepted[resource.KeyPair]{}, keyPairConflict(created, err, rerr, req.Name)
 	}
 	op, err := operationFrom(created, resource.ServiceCompute)
 	if err != nil {
@@ -1372,6 +1581,10 @@ func volumeModel(in *storagev1.Volume) (resource.Volume, error) {
 			}
 		}
 	}
+	if !vol.InstanceID.IsZero() {
+		// Storage names the instance once the disk is on the machine.
+		vol.AttachState = resource.AttachmentAttached
+	}
 	return vol, nil
 }
 
@@ -1415,7 +1628,9 @@ func volumeProto(v resource.Volume, projectID string) *storagev1.Volume {
 		Observed:   &commonv1.ObservedState{State: obs},
 		DeviceName: v.Device,
 	}
-	if !v.InstanceID.IsZero() {
+	// Storage reports the instance once compute has put the disk on the
+	// machine, not when the attach is accepted.
+	if !v.InstanceID.IsZero() && v.AttachState != resource.AttachmentAttaching {
 		status.Instance = instanceName(projectID, v.InstanceID.String())
 	}
 	var created *timestamppb.Timestamp
@@ -1641,6 +1856,51 @@ func newImportNonce() (string, error) {
 		return "", resource.Internal(err)
 	}
 	return hex.EncodeToString(raw[:]), nil
+}
+
+// keyPairConflict names the EC2 error for a compute conflict on a key pair
+// create (#291). mapped is the client's reading of compute's answer, which
+// is the gRPC error rpc or the error of the finished operation op.
+//
+// ETAG_MISMATCH, GENERATION_CONFLICT and Aborted without a reason mean
+// compute lost an optimistic concurrency race. That is transient, so it is
+// Unavailable, which EC2 documents as a retryable server error. Every other
+// conflict (DEPENDENCY_NOT_READY, DEPENDENCY_MISSING, FailedPrecondition
+// without a reason) refuses the create in the current state, which EC2
+// documents as IncorrectState. Both name the key pair, so neither reads as
+// an instance error. Other errors are returned as they are.
+func keyPairConflict(op *longrunningpb.Operation, rpc, mapped error, name string) error {
+	if resource.CodeOf(mapped) != resource.CodeConflict {
+		return mapped
+	}
+	raw := rpc
+	if raw == nil && op.GetError() != nil {
+		raw = status.ErrorProto(op.GetError())
+	}
+	st, _ := status.FromError(raw)
+	out := &resource.Error{Code: resource.CodeConflict, Kind: resource.KindKeyPair, ID: name, Message: st.Message()}
+	if out.Message == "" {
+		out.Message = "the key pair cannot be created in its current state"
+	}
+	switch vwsReason(st) {
+	case "ETAG_MISMATCH", "GENERATION_CONFLICT":
+		out.Code = resource.CodeUnavailable
+	case "":
+		if st.Code() == codes.Aborted {
+			out.Code = resource.CodeUnavailable
+		}
+	}
+	return out
+}
+
+// vwsReason is the vws.dev ErrorInfo reason of st, or "" when it has none.
+func vwsReason(st *status.Status) string {
+	for _, detail := range st.Details() {
+		if info, ok := detail.(*errdetails.ErrorInfo); ok && info.GetDomain() == "vws.dev" {
+			return info.GetReason()
+		}
+	}
+	return ""
 }
 
 // staleImport reports whether compute answered an import that reused a live

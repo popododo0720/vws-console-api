@@ -42,6 +42,12 @@ type detachWorld struct {
 	pages       []*computev1.Instance
 	repeatToken bool
 	gate        *detachGate
+	// failSameSpec fails that many updates that leave the volume list as it
+	// is, such as the write that saves a detach's operation id.
+	failSameSpec int
+	// beforeWrite runs once, under the lock, before the next update is
+	// checked. A test uses it to land a concurrent write first.
+	beforeWrite func(inst *computev1.Instance)
 }
 
 // detachRecord is the idempotency record for one UpdateInstance request id.
@@ -164,15 +170,28 @@ func (s *detachWorld) UpdateInstance(
 	if inst == nil {
 		return nil, status.Error(codes.NotFound, "missing instance")
 	}
-	if req.GetInstance().GetEtag() != inst.GetEtag() {
+	if hook := s.beforeWrite; hook != nil {
+		s.beforeWrite = nil
+		hook(inst)
+		s.etagN++
+		inst.Etag = strconv.Itoa(s.etagN)
+	}
+	// An empty etag is no precondition, as in vws-compute checkEtag.
+	if etag := req.GetInstance().GetEtag(); etag != "" && etag != inst.GetEtag() {
 		return nil, vwsStatus(codes.Aborted, "ETAG_MISMATCH", "etag mismatch")
 	}
 	removed := removedDetachDevice(inst.GetSpec().GetVolumes(), req.GetInstance().GetSpec().GetVolumes())
+	if s.failSameSpec > 0 && len(inst.GetSpec().GetVolumes()) == len(req.GetInstance().GetSpec().GetVolumes()) {
+		s.failSameSpec--
+		return nil, status.Error(codes.Unavailable, "compute restarted")
+	}
 	inst.Labels = req.GetInstance().GetLabels()
 	if inst.Spec == nil {
 		inst.Spec = &computev1.InstanceSpec{}
 	}
-	inst.Spec.Volumes = req.GetInstance().GetSpec().GetVolumes()
+	if maskHas(req, "spec.volumes") {
+		inst.Spec.Volumes = req.GetInstance().GetSpec().GetVolumes()
+	}
 	s.etagN++
 	inst.Etag = strconv.Itoa(s.etagN)
 	s.updates++
@@ -282,6 +301,15 @@ func projectOfInstance(name string) string {
 
 func dialDetachWorld(t *testing.T, world *detachWorld) computeClient {
 	t.Helper()
+	// vws-compute always returns an etag, so every instance starts with one.
+	world.mu.Lock()
+	for _, inst := range append(append([]*computev1.Instance(nil), world.inst...), world.pages...) {
+		if inst.GetEtag() == "" {
+			world.etagN++
+			inst.Etag = strconv.Itoa(world.etagN)
+		}
+	}
+	world.mu.Unlock()
 	lis := bufconn.Listen(MaxMessageBytes())
 	srv := grpc.NewServer()
 	computev1.RegisterInstanceServiceServer(srv, world)

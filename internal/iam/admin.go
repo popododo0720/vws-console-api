@@ -265,6 +265,12 @@ type Admin interface {
 	UntagPolicy(ctx context.Context, a resource.AccountID, arn string, keys []string) error
 	ListPolicyTags(ctx context.Context, a resource.AccountID, arn, marker string, maxItems int) (TagPage, error)
 
+	// ListVirtualMFADevices lists every device of the account, filtered by
+	// assignment status. Marker is the last serial number of the previous page.
+	ListVirtualMFADevices(
+		ctx context.Context, a resource.AccountID, assignment MFADeviceAssignment, marker string, maxItems int,
+	) (VirtualMFADevicePage, error)
+
 	// The MFA device argument is the device serial number, the ARN the AWS
 	// Query API calls SerialNumber.
 	GetMFADevice(ctx context.Context, a resource.AccountID, serial string) (MFADevice, error)

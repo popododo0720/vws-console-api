@@ -68,6 +68,72 @@ type Identity struct {
 // not hold.
 var ErrUnknownKey = errors.New("unknown access key")
 
+// Failure names the SigV4 check that refused a request. Errors keep the
+// code and message every surface already speaks; the failure rides along as
+// a *RejectionError cause, so a surface can name its own AWS error for it (S3,
+// #245).
+type Failure string
+
+// The SigV4 failures.
+const (
+	// FailureUnsigned is a request without an Authorization header.
+	FailureUnsigned Failure = "unsigned"
+	// FailureMalformed is an Authorization header or credential scope that
+	// cannot be used here: unparsable, another scheme, or a scope for
+	// another date, region or service.
+	FailureMalformed Failure = "malformed"
+	// FailureSkewed is a request time outside the allowed window.
+	FailureSkewed Failure = "skewed"
+	// FailureUnknownKey is an access key nobody holds.
+	FailureUnknownKey Failure = "unknown key"
+	// FailureSignature is a signature the key's secret did not produce.
+	FailureSignature Failure = "signature"
+	// FailureInvalidToken is a session token that is wrong for the key, or
+	// one sent with a long-term key.
+	FailureInvalidToken Failure = "invalid token"
+	// FailureExpiredToken is a session token past its expiry.
+	FailureExpiredToken Failure = "expired token"
+	// FailurePayloadHash is a body whose hash is not the signed one.
+	FailurePayloadHash Failure = "payload hash"
+	// FailureDenied is a request this verifier refuses although AWS might
+	// not: no usable X-Amz-Date, UNSIGNED-PAYLOAD, an unsigned
+	// Content-Type.
+	FailureDenied Failure = "denied"
+)
+
+// RejectionError is the cause of a SigV4 error. For FailureSignature the
+// Verifier fills in what it computed from the request, which S3 returns
+// with SignatureDoesNotMatch; never the signature it expected. Error names
+// only the failure, so logs never carry request data.
+type RejectionError struct {
+	Failure           Failure
+	AccessKeyID       string
+	StringToSign      string
+	CanonicalRequest  string
+	SignatureProvided string
+}
+
+func (r *RejectionError) Error() string { return "sigv4: " + string(r.Failure) }
+
+// RejectionOf returns the RejectionError err carries, if any.
+func RejectionOf(err error) (*RejectionError, bool) {
+	var r *RejectionError
+	ok := errors.As(err, &r)
+	return r, ok
+}
+
+// Reject marks e as a SigV4 failure. Authenticators use it to say which
+// check refused a request.
+func Reject(f Failure, e *resource.Error) *resource.Error {
+	return e.WithCause(&RejectionError{Failure: f})
+}
+
+// SignatureMismatch is the error for a signature the key's secret did not
+// produce.
+func SignatureMismatch() *resource.Error {
+	return Reject(FailureSignature, resource.Unauthenticated("signature mismatch"))
+}
+
 // Authenticator checks a signature and names its principal. ErrUnknownKey and
 // *resource.Error values reach the caller as they are; any other error means
 // the authenticator could not answer.
@@ -95,15 +161,15 @@ func (req AuthRequest) VerifiedBy(secret string) bool {
 func CheckSession(want, got string, expires, now time.Time) error {
 	if want == "" {
 		if got != "" {
-			return resource.Unauthenticated("security token sent with a long-term key")
+			return Reject(FailureInvalidToken, resource.Unauthenticated("security token sent with a long-term key"))
 		}
 		return nil
 	}
 	if got == "" || !hmac.Equal([]byte(got), []byte(want)) {
-		return resource.Unauthenticated("the security token included in the request is invalid")
+		return Reject(FailureInvalidToken, resource.Unauthenticated("the security token included in the request is invalid"))
 	}
 	if !expires.IsZero() && !now.Before(expires) {
-		return resource.Unauthenticated("the security token included in the request is expired")
+		return Reject(FailureExpiredToken, resource.Unauthenticated("the security token included in the request is expired"))
 	}
 	return nil
 }
@@ -122,7 +188,7 @@ func (f Lookup) Authenticate(ctx context.Context, req AuthRequest) (Identity, er
 		return Identity{}, err
 	}
 	if !req.VerifiedBy(cred.Secret) {
-		return Identity{}, resource.Unauthenticated("signature mismatch")
+		return Identity{}, SignatureMismatch()
 	}
 	return Identity{Account: cred.Account, Principal: cred.Principal, Root: cred.Root}, nil
 }
@@ -166,7 +232,7 @@ func (v *Verifier) Verify(r *http.Request) (resource.Caller, error) {
 		return resource.Caller{}, err
 	}
 	if len(r.Header.Values("Authorization")) > 1 {
-		return resource.Caller{}, resource.Invalid("Authorization", "repeated")
+		return resource.Caller{}, Reject(FailureMalformed, resource.Invalid("Authorization", "repeated"))
 	}
 	auth, err := parseAuthorization(r.Header.Get("Authorization"))
 	if err != nil {
@@ -175,39 +241,42 @@ func (v *Verifier) Verify(r *http.Request) (resource.Caller, error) {
 	amzDate := r.Header.Get("X-Amz-Date")
 	stamp, err := time.Parse("20060102T150405Z", amzDate)
 	if err != nil {
-		return resource.Caller{}, resource.Invalid("X-Amz-Date", "malformed")
+		return resource.Caller{}, Reject(FailureDenied, resource.Invalid("X-Amz-Date", "malformed"))
 	}
 	if delta := v.Now().UTC().Sub(stamp); delta > v.Skew || delta < -v.Skew {
-		return resource.Caller{}, resource.Unauthenticated("request time is outside the allowed window")
+		return resource.Caller{}, Reject(FailureSkewed,
+			resource.Unauthenticated("request time is outside the allowed window"))
 	}
 	parts := strings.Split(auth.credential, "/")
 	if len(parts) != 5 || parts[1] != stamp.Format("20060102") || parts[2] != v.Region || parts[3] != string(v.Service) || parts[4] != "aws4_request" {
-		return resource.Caller{}, resource.Unauthenticated("credential scope rejected")
+		return resource.Caller{}, Reject(FailureMalformed, resource.Unauthenticated("credential scope rejected"))
 	}
 	if v.Auth == nil {
 		return resource.Caller{}, unknownKey()
 	}
 	if r.Header.Get("Content-Type") != "" && !headerSigned(auth.signedHeaders, "content-type") {
-		return resource.Caller{}, resource.Unauthenticated("content-type is not signed")
+		return resource.Caller{}, Reject(FailureDenied, resource.Unauthenticated("content-type is not signed"))
 	}
 
-	if _, err := hex.DecodeString(auth.signature); err != nil {
-		return resource.Caller{}, resource.Unauthenticated("signature mismatch")
-	}
 	stated := r.Header.Get("X-Amz-Content-Sha256")
 	if stated == "UNSIGNED-PAYLOAD" {
-		return resource.Caller{}, resource.Unauthenticated("unsigned payload is not accepted")
+		return resource.Caller{}, Reject(FailureDenied, resource.Unauthenticated("unsigned payload is not accepted"))
 	}
 	authenticate := func(payloadHash string) (resource.Caller, error) {
 		canon := canonicalRequest(r, auth.signedHeaders, payloadHash)
-		return v.authenticate(r, AuthRequest{
+		req := AuthRequest{
 			AccessKeyID: parts[0], Date: parts[1], Region: parts[2], Service: Service(parts[3]),
 			CanonicalRequest: canon,
 			StringToSign:     "AWS4-HMAC-SHA256\n" + amzDate + "\n" + strings.Join(parts[1:], "/") + "\n" + hexSHA256([]byte(canon)),
 			Signature:        strings.ToLower(auth.signature),
 			SessionToken:     r.Header.Get("X-Amz-Security-Token"),
 			SourceIP:         sourceIP(r),
-		})
+		}
+		if _, err := hex.DecodeString(auth.signature); err != nil {
+			// No secret produces it, so the authenticator is not asked.
+			return resource.Caller{}, mismatch(SignatureMismatch(), req, auth.signature)
+		}
+		return v.authenticate(r, req, auth.signature)
 	}
 	// A stated payload hash is part of the signature, so the signer is checked
 	// before the body is read and an unknown key costs no body. Without one
@@ -229,10 +298,10 @@ func (v *Verifier) Verify(r *http.Request) (resource.Caller, error) {
 	sum := sha256.Sum256(body)
 	payloadHash := hex.EncodeToString(sum[:])
 	if stated != "" && !hmac.Equal([]byte(stated), []byte(payloadHash)) {
-		return resource.Caller{}, resource.Unauthenticated("payload hash mismatch")
+		return resource.Caller{}, Reject(FailurePayloadHash, resource.Unauthenticated("payload hash mismatch"))
 	}
 	if v.Service == ServiceEC2 && len(body) > 0 && !headerSigned(auth.signedHeaders, "content-type") {
-		return resource.Caller{}, resource.Unauthenticated("content-type is not signed")
+		return resource.Caller{}, Reject(FailureDenied, resource.Unauthenticated("content-type is not signed"))
 	}
 	if stated == "" {
 		return authenticate(payloadHash)
@@ -240,14 +309,26 @@ func (v *Verifier) Verify(r *http.Request) (resource.Caller, error) {
 	return caller, nil
 }
 
-// authenticate asks the Authenticator and maps its answer to a caller.
-func (v *Verifier) authenticate(r *http.Request, req AuthRequest) (resource.Caller, error) {
+// authenticate asks the Authenticator and maps its answer to a caller. An
+// Unauthenticated answer that names no failure is a signature mismatch, the
+// one check left to the authenticator besides the key and session token.
+// sent is the signature as the request carried it.
+func (v *Verifier) authenticate(r *http.Request, req AuthRequest, sent string) (resource.Caller, error) {
 	id, err := v.Auth.Authenticate(r.Context(), req)
 	var re *resource.Error
 	switch {
 	case errors.Is(err, ErrUnknownKey):
 		return resource.Caller{}, unknownKey()
 	case errors.As(err, &re):
+		rej, tagged := RejectionOf(re)
+		switch {
+		case re.Code != resource.CodeUnauthenticated:
+			return resource.Caller{}, re
+		case !tagged && re.Field == "AccessKeyId":
+			return resource.Caller{}, Reject(FailureUnknownKey, re)
+		case !tagged || rej.Failure == FailureSignature:
+			return resource.Caller{}, mismatch(re, req, sent)
+		}
 		return resource.Caller{}, re
 	case err != nil:
 		return resource.Caller{}, &resource.Error{Code: resource.CodeUnavailable, Message: "authentication unavailable"}
@@ -268,7 +349,20 @@ func sourceIP(r *http.Request) string {
 }
 
 func unknownKey() *resource.Error {
-	return &resource.Error{Code: resource.CodeUnauthenticated, Field: "AccessKeyId", Message: "The access key ID you provided does not exist in our records."}
+	return Reject(FailureUnknownKey, &resource.Error{
+		Code: resource.CodeUnauthenticated, Field: "AccessKeyId",
+		Message: "The access key ID you provided does not exist in our records.",
+	})
+}
+
+// mismatch is e for a signature mismatch, carrying what the verifier
+// computed from the request: the access key, string to sign and canonical
+// request, and the signature as sent. Nothing here depends on a secret.
+func mismatch(e *resource.Error, req AuthRequest, sent string) *resource.Error {
+	return e.WithCause(&RejectionError{
+		Failure: FailureSignature, AccessKeyID: req.AccessKeyID,
+		StringToSign: req.StringToSign, CanonicalRequest: req.CanonicalRequest, SignatureProvided: sent,
+	})
 }
 
 // Sign sets the date, payload hash, and Authorization header on r.
@@ -322,19 +416,22 @@ type authorization struct {
 }
 
 func parseAuthorization(h string) (authorization, error) {
+	if h == "" {
+		return authorization{}, Reject(FailureUnsigned, resource.Unauthenticated("missing signature"))
+	}
 	scheme, rest, ok := strings.Cut(h, " ")
 	if !ok || scheme != "AWS4-HMAC-SHA256" || rest == "" {
-		return authorization{}, resource.Unauthenticated("missing signature")
+		return authorization{}, Reject(FailureMalformed, resource.Unauthenticated("missing signature"))
 	}
 	var out authorization
 	seen := map[string]bool{}
 	for _, item := range strings.Split(rest, ",") {
 		key, val, ok := strings.Cut(strings.TrimSpace(item), "=")
 		if !ok {
-			return authorization{}, resource.Invalid("Authorization", "malformed")
+			return authorization{}, Reject(FailureMalformed, resource.Invalid("Authorization", "malformed"))
 		}
 		if seen[key] {
-			return authorization{}, resource.Invalid("Authorization", "repeated field")
+			return authorization{}, Reject(FailureMalformed, resource.Invalid("Authorization", "repeated field"))
 		}
 		seen[key] = true
 		switch key {
@@ -345,18 +442,18 @@ func parseAuthorization(h string) (authorization, error) {
 		case "Signature":
 			out.signature = val
 		default:
-			return authorization{}, resource.Invalid("Authorization", "unknown field")
+			return authorization{}, Reject(FailureMalformed, resource.Invalid("Authorization", "unknown field"))
 		}
 	}
 	if out.credential == "" || len(out.signedHeaders) == 0 || len(out.signature) != 64 {
-		return authorization{}, resource.Invalid("Authorization", "incomplete")
+		return authorization{}, Reject(FailureMalformed, resource.Invalid("Authorization", "incomplete"))
 	}
 	for _, name := range out.signedHeaders {
 		if name == "host" {
 			return out, nil
 		}
 	}
-	return authorization{}, resource.Invalid("Authorization", "host is not signed")
+	return authorization{}, Reject(FailureMalformed, resource.Invalid("Authorization", "host is not signed"))
 }
 
 func canonicalRequest(r *http.Request, signed []string, payloadHash string) string {

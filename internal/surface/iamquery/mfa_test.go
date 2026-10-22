@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/url"
 	"testing"
+	"time"
 
 	"github.com/popododo0720/vws-console-api/internal/iam"
 	"github.com/popododo0720/vws-console-api/internal/sigv4"
@@ -17,7 +18,7 @@ func TestGetMFADevice(t *testing.T) {
 		t.Fatal(err)
 	}
 	serial := seedMfaDevice(t, f, root, "alice-phone")
-	if _, err := f.EnableMfaDevice(root.Account, serial, "alice"); err != nil {
+	if err := f.AssignMfaDevice(root.Account, serial, "alice", time.Date(2026, 10, 9, 10, 0, 0, 0, time.UTC)); err != nil {
 		t.Fatal(err)
 	}
 	res := call(t, h, root, sigv4.ServiceIAM, url.Values{"Action": {"GetMFADevice"}, "SerialNumber": {serial}})
@@ -76,7 +77,7 @@ func TestGetMFADeviceNeedsPermission(t *testing.T) {
 		t.Fatal(err)
 	}
 	serial := seedMfaDevice(t, f, root, "alice-phone")
-	if _, err := f.EnableMfaDevice(root.Account, serial, "alice"); err != nil {
+	if err := f.AssignMfaDevice(root.Account, serial, "alice", time.Date(2026, 10, 9, 10, 0, 0, 0, time.UTC)); err != nil {
 		t.Fatal(err)
 	}
 	bobUser, err := f.CreateUser(ctx, root.Account, "bob", "/")

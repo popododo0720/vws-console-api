@@ -34,6 +34,22 @@ import (
 )
 
 func TestContractOverGRPC(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0).UTC()
+	world := fake.New(fake.Options{
+		Now:     func() time.Time { return now },
+		Entropy: &fake.Sequence{},
+	})
+	harness := dialLoopback(t, world, now)
+	backendtest.Run(t, harness)
+	// The #213 DetachVolume client-token table, in its own account.
+	t.Run("DetachReplay", func(t *testing.T) { backendtest.DetachReplay(t, harness) })
+}
+
+// dialLoopback serves world through the loopback resource API on bufconn,
+// compute and storage on separate listeners, and returns a harness of
+// clients for it. now stamps the operations the loopback mints.
+func dialLoopback(t *testing.T, world *fake.World, now time.Time) backendtest.Harness {
+	t.Helper()
 	computeLis := bufconn.Listen(MaxMessageBytes())
 	storageLis := bufconn.Listen(MaxMessageBytes())
 	computeSrv := grpc.NewServer(
@@ -44,11 +60,6 @@ func TestContractOverGRPC(t *testing.T) {
 		grpc.MaxRecvMsgSize(MaxMessageBytes()),
 		grpc.MaxSendMsgSize(MaxMessageBytes()),
 	)
-	now := time.Unix(1_700_000_000, 0).UTC()
-	world := fake.New(fake.Options{
-		Now:     func() time.Time { return now },
-		Entropy: &fake.Sequence{},
-	})
 	loop := newLoopWorld(world.Set(), now)
 	computev1.RegisterInstanceServiceServer(computeSrv, &instanceSrv{w: loop})
 	computev1.RegisterKeyPairServiceServer(computeSrv, &keySrv{w: loop})
@@ -102,13 +113,13 @@ func TestContractOverGRPC(t *testing.T) {
 		storageOps: longrunningpb.NewOperationsClient(storageConn),
 		networkOps: longrunningpb.NewOperationsClient(computeConn),
 	}
-	backendtest.Run(t, func() backend.Set {
+	return func() backend.Set {
 		return backend.Set{
 			Compute: computeClient{shared},
 			Storage: storageClient{shared},
 			Network: networkClient{shared},
 		}
-	})
+	}
 }
 
 // opsGate hides volume operations from the compute listener and every other
@@ -186,6 +197,10 @@ func newLoopWorld(set backend.Set, now time.Time) *loopWorld {
 	}
 }
 
+// rememberDetach stores the detach records of a successful update that
+// names "labels". Compute replaces the whole label map on such an update
+// (vws-compute grpcapi metadataPatch), so a record the update leaves out is
+// gone, as it is on a real instance.
 func (w *loopWorld) rememberDetach(id string, labels map[string]string) {
 	kept := map[string]string{}
 	for key, value := range labels {
@@ -193,17 +208,13 @@ func (w *loopWorld) rememberDetach(id string, labels map[string]string) {
 			kept[key] = value
 		}
 	}
-	if len(kept) == 0 {
-		return
-	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	prev := w.detach[id]
-	if prev == nil {
-		prev = map[string]string{}
-		w.detach[id] = prev
+	if len(kept) == 0 {
+		delete(w.detach, id)
+		return
 	}
-	maps.Copy(prev, kept)
+	w.detach[id] = kept
 }
 
 func (w *loopWorld) detachOf(id string) map[string]string {
@@ -607,6 +618,7 @@ func (s *instanceSrv) changePower(ctx context.Context, req *computev1.UpdateInst
 	if actionName := req.GetInstance().GetLabels()[labelAction]; actionName != "" {
 		s.w.rememberAction(id.String(), actionName)
 	}
+	s.w.rememberDetach(id.String(), req.GetInstance().GetLabels())
 	return runningOp(projectID, acc.Operation, instanceName(projectID, id.String()), commonv1.OperationVerb_OPERATION_VERB_UPDATE, s.w.now)
 }
 
@@ -641,6 +653,7 @@ func (s *instanceSrv) retag(ctx context.Context, req *computev1.UpdateInstanceRe
 	if actionName := req.GetInstance().GetLabels()[labelAction]; actionName != "" {
 		s.w.rememberAction(id.String(), actionName)
 	}
+	s.w.rememberDetach(id.String(), req.GetInstance().GetLabels())
 	return runningOp(projectID, acc.Operation, instanceName(projectID, id.String()), commonv1.OperationVerb_OPERATION_VERB_UPDATE, s.w.now)
 }
 
@@ -671,6 +684,7 @@ func (s *instanceSrv) attachVolume(ctx context.Context, req *computev1.UpdateIns
 	if err != nil {
 		return nil, toStatus(err)
 	}
+	s.w.rememberDetach(instID.String(), req.GetInstance().GetLabels())
 	return runningOp(projectID, acc.Operation, volumeName(projectID, acc.Items[0].ID.String()), commonv1.OperationVerb_OPERATION_VERB_UPDATE, s.w.now)
 }
 

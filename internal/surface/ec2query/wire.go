@@ -574,8 +574,12 @@ func volumeXML(v resource.Volume) volumeItem {
 		Snapshot: snapshotOf(v), Created: awsTime(v.CreateTime),
 	}
 	if !v.InstanceID.IsZero() {
+		status := v.AttachState
+		if status == "" {
+			status = resource.AttachmentAttached
+		}
 		item.Attachments.Items = []attachmentItem{{
-			VolumeID: v.ID.String(), InstanceID: v.InstanceID.String(), Device: v.Device, Status: "attached",
+			VolumeID: v.ID.String(), InstanceID: v.InstanceID.String(), Device: v.Device, Status: string(status),
 			// No backend records an attach time; the volume's creation time stands in.
 			AttachTime:          awsTime(v.CreateTime),
 			DeleteOnTermination: v.DeleteOnTermination,

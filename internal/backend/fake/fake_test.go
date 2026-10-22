@@ -18,6 +18,15 @@ func TestContract(t *testing.T) {
 	})
 }
 
+// TestDetachReplayContract runs the #213 DetachVolume client-token table on
+// the fake.
+func TestDetachReplayContract(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0).UTC()
+	backendtest.DetachReplay(t, func() backend.Set {
+		return New(Options{Now: func() time.Time { return now }, Entropy: &Sequence{}}).Set()
+	})
+}
+
 // TestKeyImportContract runs the #279 ImportKeyPair table on the fake.
 func TestKeyImportContract(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0).UTC()
@@ -80,4 +89,14 @@ func TestRepeatedEntropyDoesNotOverwrite(t *testing.T) {
 	if len(page.Items) != 0 {
 		t.Fatalf("collision published %+v", page.Items)
 	}
+}
+
+// TestAttachLifecycleContract runs the #214 attach table on the fake. The
+// world settles an operation one second after it is accepted.
+func TestAttachLifecycleContract(t *testing.T) {
+	backendtest.AttachLifecycle(t, func() (backend.Set, func()) {
+		now := time.Unix(1_700_000_000, 0).UTC()
+		set := New(Options{Now: func() time.Time { return now }, Latency: time.Second, Entropy: &Sequence{}}).Set()
+		return set, func() { now = now.Add(2 * time.Second) }
+	})
 }

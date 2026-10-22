@@ -94,10 +94,14 @@ type server struct {
 	getMfa        []*iamv1.GetMfaDeviceRequest
 	getMfaRes     *iamv1.MfaDevice
 	getMfaErr     error
-	// User calls.
-	getUser    []*iamv1.GetUserRequest
-	getUserRes *iamv1.User
-	getUserErr error
+	// Virtual MFA device listing.
+	listMfaDevices      []*iamv1.ListMfaDevicesRequest
+	listMfaDevicesRes   *iamv1.ListMfaDevicesResponse
+	listMfaDevicesPages map[string]*iamv1.ListMfaDevicesResponse
+	listMfaDevicesErr   error
+	getUser             []*iamv1.GetUserRequest
+	getUserRes          map[string]*iamv1.User
+	getUserErr          error
 	// Role calls.
 	getRole       []*iamv1.GetRoleRequest
 	getRoleRes    *iamv1.Role
@@ -336,6 +340,24 @@ func (s *server) GetMfaDevice(ctx context.Context, req *iamv1.GetMfaDeviceReques
 	}, nil
 }
 
+func (s *server) ListMfaDevices(
+	ctx context.Context, req *iamv1.ListMfaDevicesRequest,
+) (*iamv1.ListMfaDevicesResponse, error) {
+	if err := s.enter(ctx); err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.listMfaDevices = append(s.listMfaDevices, req)
+	if s.listMfaDevicesErr != nil {
+		return nil, s.listMfaDevicesErr
+	}
+	if s.listMfaDevicesPages != nil {
+		return s.listMfaDevicesPages[req.GetPageToken()], nil
+	}
+	return s.listMfaDevicesRes, nil
+}
+
 func (s *server) GetUser(ctx context.Context, req *iamv1.GetUserRequest) (*iamv1.User, error) {
 	if err := s.enter(ctx); err != nil {
 		return nil, err
@@ -346,16 +368,7 @@ func (s *server) GetUser(ctx context.Context, req *iamv1.GetUserRequest) (*iamv1
 	if s.getUserErr != nil {
 		return nil, s.getUserErr
 	}
-	if s.getUserRes != nil {
-		return s.getUserRes, nil
-	}
-	name := req.GetName()
-	return &iamv1.User{
-		Name: name,
-		Status: &iamv1.UserStatus{
-			Arn: "arn:vws:iam::123456789012:user/" + name[strings.LastIndex(name, "/")+1:],
-		},
-	}, nil
+	return s.getUserRes[req.GetName()], nil
 }
 
 func (s *server) TagMFADevice(ctx context.Context, req *iamv1.TagMFADeviceRequest) (*longrunningpb.Operation, error) {
