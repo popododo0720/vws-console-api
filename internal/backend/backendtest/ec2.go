@@ -395,9 +395,17 @@ func exerciseEC2(ctx context.Context, t *testing.T, set backend.Set, account res
 	if err != nil || key.Items[0].Name != "admin" || key.Items[0].Material == "" || key.Items[0].Fingerprint == "" {
 		t.Fatalf("key: %v %+v", err, key.Items)
 	}
+	// #220: EC2 returns a created private key once. A retry under the same
+	// token is InvalidKeyPair.Duplicate and carries no key; a reused token
+	// for another name is IdempotentParameterMismatch.
 	againKey, err := set.Compute.CreateKeyPair(ctx, keyM, resource.CreateKeyPairRequest{Name: "admin", Type: resource.KeyTypeEd25519})
-	if err != nil || againKey.Items[0].Material != key.Items[0].Material || againKey.Items[0].ID != key.Items[0].ID {
-		t.Fatal("key retry")
+	if resource.CodeOf(err) != resource.CodeAlreadyExists || len(againKey.Items) != 0 {
+		t.Fatalf("key retry: %v, %d items", err, len(againKey.Items))
+	}
+	reused := backend.Mutation{Scope: scope, Key: keyM.Key, Fingerprint: "fp-key-other"}
+	other := resource.CreateKeyPairRequest{Name: "other", Type: resource.KeyTypeEd25519}
+	if _, err := set.Compute.CreateKeyPair(ctx, reused, other); resource.CodeOf(err) != resource.CodeIdempotencyMismatch {
+		t.Fatalf("key token reused for another name: %v", err)
 	}
 	if _, err := set.Compute.CreateKeyPair(ctx, backend.Mutation{Scope: scope, Key: "k-key-2", Fingerprint: "fp-key-2"}, resource.CreateKeyPairRequest{Name: "admin", Type: resource.KeyTypeEd25519}); resource.CodeOf(err) != resource.CodeAlreadyExists {
 		t.Fatalf("duplicate key: %v", err)

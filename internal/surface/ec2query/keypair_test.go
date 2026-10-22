@@ -92,3 +92,21 @@ func TestImportKeyLaunchAndUserData(t *testing.T) {
 		t.Fatalf("missing key: %s", got)
 	}
 }
+
+// #220: a CreateKeyPair retried with its ClientToken is the second create of
+// the name, which EC2 answers 400 InvalidKeyPair.Duplicate. The private key
+// is not sent again.
+func TestCreateKeyPairRetryIsDuplicate(t *testing.T) {
+	h, cred, now := harness(t)
+	f := url.Values{"Action": {"CreateKeyPair"}, "KeyName": {"once"}, "ClientToken": {"key-once"}, "Version": {Version}}
+	first := signed(t, h, cred, now, f.Encode())
+	if first.Code != http.StatusOK || !strings.Contains(first.Body.String(), "BEGIN RSA PRIVATE KEY") {
+		t.Fatalf("first: %d", first.Code)
+	}
+	again := signed(t, h, cred, now, f.Encode())
+	body := again.Body.String()
+	resent := strings.Contains(body, "PRIVATE KEY")
+	if again.Code != http.StatusBadRequest || !strings.Contains(body, "<Code>InvalidKeyPair.Duplicate</Code>") || resent {
+		t.Fatalf("retry: status %d, private key sent again: %t", again.Code, resent)
+	}
+}

@@ -2,8 +2,8 @@ package grpcclient
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
-	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"maps"
@@ -910,9 +910,11 @@ func (c computeClient) CreateKeyPair(ctx context.Context, m backend.Mutation, re
 		pair = sshkey.Pair{Public: pub.Line, AWSFingerprint: pub.AWSFingerprint}
 		req.Type = pub.Type
 	} else {
+		// The key comes from crypto/rand and nothing else, so no request
+		// input can rebuild it. It is never stored or logged.
 		var err error
-		if pair, err = derivedKey(req.Type, m.Key, "key-seed"); err != nil {
-			return resource.Accepted[resource.KeyPair]{}, err
+		if pair, err = sshkey.Generate(req.Type, rand.Reader); err != nil {
+			return resource.Accepted[resource.KeyPair]{}, resource.Internal(err)
 		}
 	}
 	projectID := project(m.Account)
@@ -936,6 +938,9 @@ func (c computeClient) CreateKeyPair(ctx context.Context, m backend.Mutation, re
 		},
 	})
 	if err := rpcErr(created, err); err != nil {
+		if req.PublicKey == "" && resource.CodeOf(err) == resource.CodeIdempotencyMismatch {
+			return resource.Accepted[resource.KeyPair]{}, c.keyRetry(ctx, projectID, req.Name)
+		}
 		return resource.Accepted[resource.KeyPair]{}, err
 	}
 	op, err := operationFrom(created, resource.ServiceCompute)
@@ -1521,38 +1526,23 @@ func protocolName(p networkv1.Protocol) string {
 	}
 }
 
-// derivedKey's domain is "key-seed". The key id and the request id use a
-// different domain, so neither published value is the private key.
-// derivedKey makes the key pair a create with this mutation key returns. A
-// retry derives the same key, so compute sees the same public key and the
-// caller gets back the private key it got the first time.
-func derivedKey(typ resource.KeyType, parts ...string) (sshkey.Pair, error) {
-	pair, err := sshkey.Generate(typ, &seedStream{seed: hashParts(parts...)})
-	if err != nil {
-		return sshkey.Pair{}, resource.Internal(err)
+// keyRetry answers a generated CreateKeyPair whose client token compute has
+// seen. Each attempt draws a new key, so compute always sees a different
+// public key and reports IDEMPOTENCY_CONFLICT. EC2 CreateKeyPair takes no
+// client token, returns the private key once, and fails a create of a live
+// name with InvalidKeyPair.Duplicate. So the retry is AlreadyExists while a
+// key pair holds the name, and IdempotencyMismatch otherwise. It never
+// returns a private key.
+func (c computeClient) keyRetry(ctx context.Context, projectID, name string) error {
+	_, err := c.findKey(ctx, projectID, resource.DeleteKeyPairRequest{Name: name})
+	switch {
+	case missingResource(err):
+		return resource.IdempotencyMismatch()
+	case err != nil:
+		return err
+	default:
+		return resource.AlreadyExists(resource.KindKeyPair, name)
 	}
-	return pair, nil
-}
-
-// seedStream is SHA-256 in counter mode over seed.
-type seedStream struct {
-	seed [32]byte
-	n    uint64
-	buf  []byte
-}
-
-func (s *seedStream) Read(p []byte) (int, error) {
-	for len(s.buf) < len(p) {
-		var block [40]byte
-		copy(block[:], s.seed[:])
-		binary.BigEndian.PutUint64(block[32:], s.n)
-		s.n++
-		sum := sha256.Sum256(block[:])
-		s.buf = append(s.buf, sum[:]...)
-	}
-	n := copy(p, s.buf)
-	s.buf = s.buf[n:]
-	return n, nil
 }
 
 // storageType maps an EC2 volume type to the storage tier. The storage proto
