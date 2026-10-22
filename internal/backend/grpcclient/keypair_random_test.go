@@ -35,13 +35,38 @@ type keyWorld struct {
 	// afterList, when set, runs after ListKeyPairs takes its snapshot and
 	// before it answers, so a test can interleave other calls there.
 	afterList func()
+	// afterGet runs after GetKeyPair answers and before the reply is sent,
+	// and afterCreate likewise after CreateKeyPair, so a test can land a call
+	// between a client's lookup and its create, or between its create and
+	// whatever it does next (#284).
+	afterGet, afterCreate func()
+	// refuse, when set, answers a CreateKeyPair before compute looks at it.
+	refuse func(*computev1.CreateKeyPairRequest) error
 }
 
 func (w *keyWorld) CreateKeyPair(
+	ctx context.Context, req *computev1.CreateKeyPairRequest,
+) (*longrunningpb.Operation, error) {
+	op, err := w.createKeyPair(ctx, req)
+	w.mu.Lock()
+	hook := w.afterCreate
+	w.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
+	return op, err
+}
+
+func (w *keyWorld) createKeyPair(
 	_ context.Context, req *computev1.CreateKeyPairRequest,
 ) (*longrunningpb.Operation, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	if w.refuse != nil {
+		if err := w.refuse(req); err != nil {
+			return nil, err
+		}
+	}
 	w.sent = append(w.sent, req.GetKeyPair().GetSpec().GetPublicKey())
 	projectID, err := projectOfName(req.GetParent())
 	if err != nil {
@@ -73,8 +98,13 @@ func (w *keyWorld) GetKeyPair(
 	_ context.Context, req *computev1.GetKeyPairRequest,
 ) (*computev1.KeyPair, error) {
 	w.mu.Lock()
-	defer w.mu.Unlock()
-	if kp, ok := w.keys[req.GetName()]; ok {
+	kp, ok := w.keys[req.GetName()]
+	hook := w.afterGet
+	w.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
+	if ok {
 		return kp, nil
 	}
 	return nil, status.Error(codes.NotFound, "key pair "+req.GetName()+" not found")
