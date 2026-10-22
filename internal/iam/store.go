@@ -551,6 +551,24 @@ func (f *Fake) GetRole(_ context.Context, a resource.AccountID, name string) (Ro
 	return r.Role, nil
 }
 
+// UpdateRoleDescription implements Admin.
+func (f *Fake) UpdateRoleDescription(_ context.Context, a resource.AccountID, name, description string) (Role, error) {
+	if err := ValidateRoleDescription(description); err != nil {
+		return Role{}, err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	r := f.account(a).roles[name]
+	if r == nil {
+		return Role{}, notFound("role", name)
+	}
+	if IsServiceLinkedRole(r.Path) {
+		return Role{}, UnmodifiableRole(name)
+	}
+	r.Description = description
+	return r.Role, nil
+}
+
 // ListRoles implements Admin.
 func (f *Fake) ListRoles(_ context.Context, a resource.AccountID, prefix string) ([]Role, error) {
 	f.mu.RLock()

@@ -89,6 +89,11 @@ func TestIAMErrorByField(t *testing.T) {
 			want: wireErr{403, "MissingAuthenticationToken"},
 		},
 		{
+			name: "unmodifiable role", service: sigv4.ServiceIAM,
+			err:  &resource.Error{Code: resource.CodeConflict, Field: "UnmodifiableEntity", Message: "service-linked"},
+			want: wireErr{400, "UnmodifiableEntity"},
+		},
+		{
 			name: "policy document", service: sigv4.ServiceIAM,
 			err:  &resource.Error{Code: resource.CodeInvalidArgument, Field: "PolicyDocument", Message: "bad"},
 			want: wireErr{400, "MalformedPolicyDocument"},
