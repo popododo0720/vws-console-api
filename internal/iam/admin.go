@@ -52,6 +52,12 @@ type RoleInput struct {
 	MaxSessionDuration int
 }
 
+// RoleUpdate is what UpdateRole changes. A nil field keeps the stored value.
+type RoleUpdate struct {
+	Description        *string
+	MaxSessionDuration *int
+}
+
 // MaxRoleDescription is AWS's limit on a role description.
 const MaxRoleDescription = 1000
 
@@ -74,6 +80,14 @@ func ValidateRoleDescription(description string) error {
 		return resource.Invalid("description",
 			"1 validation error detected: Value at 'description' failed to satisfy constraint: "+
 				`Member must satisfy regular expression pattern: [\u0009\u000A\u000D\u0020-\u007E\u00A1-\u00FF]*`)
+	}
+	return nil
+}
+
+// ValidateMaxSessionDuration reports a value outside the AWS range.
+func ValidateMaxSessionDuration(seconds int) error {
+	if seconds < defaultMaxSession || seconds > maxMaxSession {
+		return resource.Invalid("maxSessionDuration", "MaxSessionDuration must be between 3600 and 43200 seconds")
 	}
 	return nil
 }
@@ -142,9 +156,10 @@ type AssumedRole struct {
 
 // Admin is the IAM management API behind the IAM and STS Query surface. Every
 // call is scoped to one account. Errors are *resource.Error: NotFound,
-// AlreadyExists, Conflict (delete conflict), InvalidArgument (Field
-// "PolicyDocument" for a malformed policy), ResourceExhausted (a quota),
-// PermissionDenied (AssumeRole trust).
+// AlreadyExists, Conflict (delete conflict, or Field "UnmodifiableEntity" for
+// a service-linked role), InvalidArgument (Field "PolicyDocument" for a
+// malformed policy), ResourceExhausted (a quota), PermissionDenied (AssumeRole
+// trust).
 type Admin interface {
 	CreateUser(ctx context.Context, a resource.AccountID, name, path string) (User, error)
 	GetUser(ctx context.Context, a resource.AccountID, name string) (User, error)
@@ -174,6 +189,7 @@ type Admin interface {
 
 	CreateRole(ctx context.Context, a resource.AccountID, in RoleInput) (Role, error)
 	GetRole(ctx context.Context, a resource.AccountID, name string) (Role, error)
+	UpdateRole(ctx context.Context, a resource.AccountID, name string, in RoleUpdate) error
 	UpdateRoleDescription(ctx context.Context, a resource.AccountID, name, description string) (Role, error)
 	ListRoles(ctx context.Context, a resource.AccountID, pathPrefix string) ([]Role, error)
 	UpdateAssumeRolePolicy(ctx context.Context, a resource.AccountID, name, document string) error
