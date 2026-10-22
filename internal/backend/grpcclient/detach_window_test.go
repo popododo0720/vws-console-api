@@ -42,7 +42,9 @@ func stampOf(at time.Time) string { return strconv.FormatInt(at.Unix(), 36) }
 // stamps records written before #303, and drops the rest. It is idempotent,
 // so two writers that read the same labels write the same records.
 func TestPruneDetachRecords(t *testing.T) {
+	t.Run("sub-second boundary", pruneSubSecondBoundary)
 	now := time.Unix(1_700_000_000, 0).UTC()
+	const grace = time.Minute // backend.ClientTokenGrace
 	req := strings.Repeat("ab", 16)
 	longDevice := "/dev/" + strings.Repeat("x", 20) // 25 bytes: no room for a stamp
 	raw := map[string]string{
@@ -50,11 +52,11 @@ func TestPruneDetachRecords(t *testing.T) {
 		labelImage:                    "ami-0123456789abcdef0",
 		labelDetachPrefix + "vol-a":   req + " /dev/sdf " + stampOf(now.Add(-time.Hour)),
 		labelDetachOpPrefix + "vol-a": "0000000000000001 0123456789abcdef",
-		labelDetachPrefix + "vol-b":   req + " /dev/sdg " + stampOf(now.Add(-backend.ClientTokenWindow-time.Second)),
+		labelDetachPrefix + "vol-b":   req + " /dev/sdg " + stampOf(now.Add(-backend.ClientTokenWindow-grace-time.Second)),
 		labelDetachOpPrefix + "vol-b": "0000000000000002 0123456789abcdef",
 		labelDetachPrefix + "vol-c":   req + " /dev/sdh",
 		labelDetachPrefix + "vol-d":   req + " /dev/sdi " + stampOf(now.Add(time.Hour)),
-		labelDetachPrefix + "vol-e":   req + " /dev/sdj " + stampOf(now.Add(-backend.ClientTokenWindow)),
+		labelDetachPrefix + "vol-e":   req + " /dev/sdj " + stampOf(now.Add(-backend.ClientTokenWindow-grace)),
 		labelDetachOpPrefix + "vol-f": "0000000000000003 0123456789abcdef",
 		labelDetachPrefix + "vol-g":   req + " " + longDevice,
 		labelDetachPrefix + "vol-h":   "garbage",
@@ -67,7 +69,7 @@ func TestPruneDetachRecords(t *testing.T) {
 		labelDetachPrefix + "vol-c": req + " /dev/sdh " + stampOf(now),
 		// A stamp ahead of this clock is another replica's skew, not expiry.
 		labelDetachPrefix + "vol-d": raw[labelDetachPrefix+"vol-d"],
-		// Exactly the window old is still within it.
+		// Exactly the window and the grace old is still within it.
 		labelDetachPrefix + "vol-e": raw[labelDetachPrefix+"vol-e"],
 		// Too long to stamp: kept as it is, as before #303.
 		labelDetachPrefix + "vol-g": raw[labelDetachPrefix+"vol-g"],
@@ -85,6 +87,40 @@ func TestPruneDetachRecords(t *testing.T) {
 	}
 	if rec, ok := detachReplayFrom(got, "vol-g"); !ok || rec.device != longDevice {
 		t.Fatalf("unstamped record reads back as %+v %v", rec, ok)
+	}
+}
+
+// A detach accepted part way into a second is stamped with the next second,
+// so the stamp is never earlier than the time compute starts remembering the
+// request id. Pruning keeps the record until it is more than
+// backend.ClientTokenWindow and backend.ClientTokenGrace past that stamp,
+// which covers the compute call that follows the clock read (#316 review).
+func pruneSubSecondBoundary(t *testing.T) {
+	const grace = time.Minute // backend.ClientTokenGrace
+	req := strings.Repeat("cd", 16)
+	accepted := time.Unix(1_700_000_000, 999_000_000).UTC()
+	stamp := time.Unix(1_700_000_001, 0).UTC()
+	value := detachRecordValue(req, "/dev/sdf", accepted)
+	if want := req + " /dev/sdf " + stampOf(stamp); value != want {
+		t.Fatalf("record %q, want the stamp rounded up: %q", value, want)
+	}
+	if exact := detachRecordValue(req, "/dev/sdf", stamp); exact != value {
+		t.Fatalf("a whole second is its own stamp: %q, want %q", exact, value)
+	}
+	raw := map[string]string{labelDetachPrefix + "vol-a": value}
+	for _, tc := range []struct {
+		label string
+		now   time.Time
+		kept  bool
+	}{
+		{"a second past the window from the accept time", accepted.Add(backend.ClientTokenWindow + time.Second), true},
+		{"the window and the grace past the stamp", stamp.Add(backend.ClientTokenWindow + grace), true},
+		{"a nanosecond later", stamp.Add(backend.ClientTokenWindow + grace + time.Nanosecond), false},
+	} {
+		_, kept := pruneDetachRecords(raw, tc.now)[labelDetachPrefix+"vol-a"]
+		if kept != tc.kept {
+			t.Errorf("%s: kept %v, want %v", tc.label, kept, tc.kept)
+		}
 	}
 }
 
@@ -259,6 +295,7 @@ func TestDetachRecordsLeaveRoomForFiftyTags(t *testing.T) {
 // request id. Its payload must carry the record's original stamp, not the
 // retry's clock, or compute answers a fingerprint mismatch.
 func TestDetachRecoveryResendsTheOriginalStamp(t *testing.T) {
+	t.Run("a record that expired meanwhile", recoveryKeepsExpiredRecords)
 	world, client, name, vols, inst := capacityWorld(t, 1)
 	start := time.Unix(1_700_000_000, 0).UTC()
 	var offset atomic.Int64
@@ -288,5 +325,52 @@ func TestDetachRecoveryResendsTheOriginalStamp(t *testing.T) {
 	}
 	if got := world.labelsOf(name)[labelDetachPrefix+vols[0].String()]; !strings.HasSuffix(got, " "+stampOf(start)) {
 		t.Fatalf("record %q lost its original stamp %s", got, stampOf(start))
+	}
+}
+
+// A recovery resend carries every detach record exactly as the interrupted
+// write stored it. Record A expires between B's write and B's recovery; had
+// the resend pruned it, the payload would differ from B's original and
+// compute would answer a fingerprint mismatch (#316 review).
+func recoveryKeepsExpiredRecords(t *testing.T) {
+	const grace = time.Minute // backend.ClientTokenGrace
+	world, client, name, vols, inst := capacityWorld(t, 2)
+	start := time.Unix(1_700_000_000, 0).UTC()
+	var offset atomic.Int64
+	client.now = func() time.Time { return start.Add(time.Duration(offset.Load())) }
+	scope := backend.Scope{Account: mustAccount(t)}
+	ctx := context.Background()
+	mA := backend.Mutation{Scope: scope, Key: "k-expire-a", Fingerprint: "fp-expire-a"}
+	if _, err := client.DetachVolume(ctx, mA, resource.DetachVolumeRequest{VolumeID: vols[0], InstanceID: inst}); err != nil {
+		t.Fatalf("detach A: %v", err)
+	}
+	recordA := labelDetachPrefix + vols[0].String()
+	offset.Store(int64(backend.ClientTokenWindow - time.Minute))
+	mB := backend.Mutation{Scope: scope, Key: "k-expire-b", Fingerprint: "fp-expire-b"}
+	reqB := resource.DetachVolumeRequest{VolumeID: vols[1], InstanceID: inst}
+	world.mu.Lock()
+	world.failSameSpec = 1 // the write that saves B's operation id fails
+	world.mu.Unlock()
+	if _, err := client.DetachVolume(ctx, mB, reqB); resource.CodeOf(err) != resource.CodeUnavailable {
+		t.Fatalf("interrupted detach B: %v", err)
+	}
+	if _, ok := world.labelsOf(name)[recordA]; !ok {
+		t.Fatal("B's write dropped A's record while A was within the window")
+	}
+	// A is now past the window and the grace; B is a few minutes old.
+	offset.Store(int64(backend.ClientTokenWindow + grace + 2*time.Minute))
+	again, err := client.DetachVolume(ctx, mB, reqB)
+	if err != nil {
+		t.Fatalf("B's recovery after A expired: %v", err)
+	}
+	world.mu.Lock()
+	rec := world.byRequest[requestUUID(mB.Key, "detach")]
+	world.mu.Unlock()
+	op, err := operationFrom(rec.op, resource.ServiceCompute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.Operation.ID != op.ID {
+		t.Fatalf("recovery gave op %s, want B's %s", again.Operation.ID, op.ID)
 	}
 }
