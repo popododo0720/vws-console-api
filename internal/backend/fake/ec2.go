@@ -410,9 +410,12 @@ func (c compute) CreateKeyPair(ctx context.Context, m backend.Mutation, req reso
 	// import retried under its token replays only while the key pair it made
 	// still lives, so an in-flight retry makes no second key pair. After that
 	// key pair is deleted, or for another key, it is judged by the name too
-	// (#279).
+	// (#279). A generated create and an import under one token keep
+	// separate records, as their compute request ids do over gRPC, so a
+	// create never takes the record an import replays from (#281).
+	record := keyPairRecord(m.Key, req.PublicKey != "")
 	if req.PublicKey != "" {
-		acc, ok, err := replay[resource.Accepted[resource.KeyPair]](c.w, m.Key, m.Fingerprint)
+		acc, ok, err := replay[resource.Accepted[resource.KeyPair]](c.w, record, m.Fingerprint)
 		if err != nil && resource.CodeOf(err) != resource.CodeIdempotencyMismatch {
 			return acc, err
 		}
@@ -459,8 +462,18 @@ func (c compute) CreateKeyPair(ctx context.Context, m backend.Mutation, req reso
 	stored.Material = ""
 	c.w.key[id] = &stored
 	// The idempotency record keeps no private key.
-	c.w.finish(m.Key, m.Fingerprint, resource.Accepted[resource.KeyPair]{Operation: op, Items: []resource.KeyPair{stored}})
+	acc := resource.Accepted[resource.KeyPair]{Operation: op, Items: []resource.KeyPair{stored}}
+	c.w.finish(record, m.Fingerprint, acc)
 	return resource.Accepted[resource.KeyPair]{Operation: op, Items: []resource.KeyPair{key}}, nil
+}
+
+// keyPairRecord is the idempotency record key of a CreateKeyPair under
+// token. Imports and generated creates get distinct keys (#281).
+func keyPairRecord(token string, imported bool) string {
+	if imported {
+		return "key-import\x00" + token
+	}
+	return "key-create\x00" + token
 }
 
 func (n network) CreateVpc(ctx context.Context, m backend.Mutation, req resource.CreateVpcRequest) (resource.Accepted[resource.Vpc], error) {
