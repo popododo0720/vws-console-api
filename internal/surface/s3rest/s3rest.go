@@ -150,7 +150,11 @@ func (h *handler) createBucket(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, r, err, r.PathValue("bucket"))
 		return
 	}
-	if _, err := h.svc.CreateBucket(r.Context(), c, name); err != nil {
+	_, err = h.svc.CreateBucket(r.Context(), c, name)
+	if resource.OwnedByCaller(err) && ownedCreateSucceeds(resource.RegionName) {
+		err = nil // us-east-1's legacy answer for an owned bucket
+	}
+	if err != nil {
 		writeErr(w, r, err, name.String())
 		return
 	}
@@ -580,8 +584,24 @@ type errorXML struct {
 	SignatureProvided string `xml:"SignatureProvided,omitempty"`
 	CanonicalRequest  string `xml:"CanonicalRequest,omitempty"`
 	Resource          string `xml:"Resource,omitempty"`
+	BucketName        string `xml:"BucketName,omitempty"`
 	RequestID         string `xml:"RequestId"`
 }
+
+// ownedCreateSucceeds reports whether CreateBucket on a bucket the caller
+// already owns answers 200 in region. S3 does so only in us-east-1, its
+// legacy behavior (which also resets the bucket's ACLs; VWS has none), and
+// answers 409 BucketAlreadyOwnedByYou in every other region (#315).
+// https://docs.aws.amazon.com/AmazonS3/latest/API/API_CreateBucket.html
+//
+// VWS has one region, resource.RegionName (vws-1). It is not us-east-1 and
+// does not stand in for it, so VWS answers 409.
+func ownedCreateSucceeds(region string) bool { return region == "us-east-1" }
+
+// takenBucketMessage is the text S3 sends with BucketAlreadyExists.
+// https://docs.aws.amazon.com/AmazonS3/latest/developerguide/ErrorResponses.html
+const takenBucketMessage = "The requested bucket name is not available. " +
+	"The bucket namespace is shared by all users of the system. Please select a different name and try again."
 
 func writeXML(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/xml")
@@ -603,9 +623,17 @@ func writeErr(w http.ResponseWriter, r *http.Request, err error, resourceName st
 	if statusOf(e) >= http.StatusInternalServerError {
 		server.RecordFailure(w, err)
 	}
-	writeXML(w, statusOf(e), errorXML{
+	out := errorXML{
 		Code: s3Code(e), Message: e.Message, Resource: resourceName, RequestID: r.Header.Get("X-Request-Id"),
-	})
+	}
+	if e.Code == resource.CodeAlreadyExists && e.Kind == resource.KindBucket {
+		// S3 names the bucket in both create conflicts, with its own text.
+		out.BucketName = e.ID
+		if !resource.OwnedByCaller(e) {
+			out.Message = takenBucketMessage
+		}
+	}
+	writeXML(w, statusOf(e), out)
 }
 
 // authError is S3's answer to a SigV4 failure: the code and status from the
@@ -695,6 +723,9 @@ func s3Code(e *resource.Error) string {
 	case resource.CodeAlreadyExists:
 		if e.Kind == resource.KindObject {
 			return "PreconditionFailed"
+		}
+		if resource.OwnedByCaller(e) {
+			return "BucketAlreadyOwnedByYou"
 		}
 		return "BucketAlreadyExists"
 	case resource.CodeConflict:

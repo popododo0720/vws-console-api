@@ -12,7 +12,8 @@ import (
 
 // takenMessage is the text S3 sends with BucketAlreadyExists.
 // https://docs.aws.amazon.com/AmazonS3/latest/developerguide/ErrorResponses.html
-const takenMessage = "The requested bucket name is not available. The bucket namespace is shared by all users of the system. " +
+const takenMessage = "The requested bucket name is not available. " +
+	"The bucket namespace is shared by all users of the system. " +
 	"Please select a different name and try again."
 
 // TestCreateBucketTwiceIsBucketAlreadyOwnedByYou covers #315. VWS's region
@@ -21,7 +22,7 @@ const takenMessage = "The requested bucket name is not available. The bucket nam
 // https://docs.aws.amazon.com/AmazonS3/latest/API/API_CreateBucket.html
 func TestCreateBucketTwiceIsBucketAlreadyOwnedByYou(t *testing.T) {
 	h, cred, now := harness(t)
-	if res := call(t, h, cred, now, http.MethodPut, "http://127.0.0.1:8082/owned-logs", "", nil); res.Code != http.StatusOK {
+	if res := call(t, h, cred, now, http.MethodPut, "http://127.0.0.1:8082/owned-logs", "", nil); res.Code != 200 {
 		t.Fatalf("first create %d %s", res.Code, res.Body)
 	}
 	again := call(t, h, cred, now, http.MethodPut, "http://127.0.0.1:8082/owned-logs", "", nil)
@@ -61,5 +62,24 @@ func assertBucketErr(t *testing.T, rec *httptest.ResponseRecorder, code, message
 	}
 	if !strings.Contains(rec.Body.String(), "<BucketName>"+bucket+"</BucketName>") {
 		t.Errorf("body has no BucketName %s: %s", bucket, rec.Body)
+	}
+}
+
+// TestOwnedCreateRegionRule pins the documented split: 200 for an owned
+// bucket only in us-east-1, 409 BucketAlreadyOwnedByYou elsewhere, and
+// VWS's own region is elsewhere.
+func TestOwnedCreateRegionRule(t *testing.T) {
+	for region, want := range map[string]bool{
+		"us-east-1":         true,
+		"us-west-2":         false,
+		"eu-west-1":         false,
+		resource.RegionName: false,
+	} {
+		if got := ownedCreateSucceeds(region); got != want {
+			t.Errorf("%s: %v, want %v", region, got, want)
+		}
+	}
+	if got := s3Code(resource.BucketAlreadyOwned("b")); got != "BucketAlreadyOwnedByYou" {
+		t.Errorf("owned code %s", got)
 	}
 }
