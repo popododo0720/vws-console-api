@@ -27,13 +27,22 @@ func account(t *testing.T) resource.AccountID {
 // verify signs a request with c and runs it through a verifier backed by client.
 func verify(t *testing.T, client Client, c sigv4.Credential) (resource.Caller, error) {
 	t.Helper()
-	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "http://127.0.0.1:8081/", strings.NewReader("Action=DescribeVpcs"))
+	return verifyContext(t.Context(), t, client, c)
+}
+
+func verifyContext(ctx context.Context, t *testing.T, client Client, c sigv4.Credential) (resource.Caller, error) {
+	t.Helper()
+	req := httptest.NewRequestWithContext(
+		ctx, http.MethodPost, "http://127.0.0.1:8081/", strings.NewReader("Action=DescribeVpcs"))
 	req.Host = req.URL.Host
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	if err := sigv4.Sign(req, c, sigv4.ServiceEC2, resource.RegionName, now); err != nil {
 		t.Fatal(err)
 	}
-	v := sigv4.NewVerifier(sigv4.Verifier{Service: sigv4.ServiceEC2, Region: resource.RegionName, Now: func() time.Time { return now }, Auth: Authenticator(client)})
+	v := sigv4.NewVerifier(sigv4.Verifier{
+		Service: sigv4.ServiceEC2, Region: resource.RegionName, Now: func() time.Time { return now },
+		Auth: Authenticator(client),
+	})
 	return v.Verify(req)
 }
 

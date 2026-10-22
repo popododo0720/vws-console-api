@@ -3,6 +3,7 @@ package iam
 import (
 	"bytes"
 	"log/slog"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -231,5 +232,91 @@ func TestRootLoginThroughWithRoot(t *testing.T) {
 	}
 	if _, err := f.CreateUser(ctx, a, RootUserName, "/"); resource.CodeOf(err) != resource.CodeInvalidArgument {
 		t.Errorf("a user named %q would shadow root: %v", RootUserName, err)
+	}
+}
+
+// loginWhileHashing runs a login and calls during after the password hash
+// starts. The login cannot open a session until during returns and guard.mu is
+// released. The test fails if the hash always finishes first.
+func loginWhileHashing(t *testing.T, f *Fake, req LoginRequest, during func()) (Session, error) {
+	t.Helper()
+	type result struct {
+		session Session
+		err     error
+	}
+	for range 20 {
+		done := make(chan result, 1)
+		go func() {
+			s, err := f.Login(t.Context(), req)
+			done <- result{s, err}
+		}()
+		// Wait until the login holds the hash slot. It has read the user and
+		// cannot open the session until the hash returns.
+		for len(f.guard.slots) == 0 {
+			runtime.Gosched()
+		}
+		f.guard.mu.Lock()
+		if len(f.guard.slots) != 1 {
+			// The hash finished before the lock. Discard this attempt.
+			f.guard.mu.Unlock()
+			<-done
+			continue
+		}
+		during()
+		f.guard.mu.Unlock()
+		got := <-done
+		return got.session, got.err
+	}
+	t.Fatal("login never paused while hashing")
+	return Session{}, nil
+}
+
+// TestLoginDuringRenameUsesTheNewARN holds a login after it reads the old ARN
+// and moves the user before the session opens. The session must name the new
+// ARN, never the one the login snapshot held.
+func TestLoginDuringRenameUsesTheNewARN(t *testing.T) {
+	ctx := t.Context()
+	f, a := loginFake(t)
+	f.LimitHashing(1)
+	var updateErr error
+	s, err := loginWhileHashing(t, f, LoginRequest{
+		Account: a, UserName: "bob", Password: "correct horse 1", SourceIP: "192.0.2.1",
+	}, func() {
+		updateErr = f.UpdateUser(ctx, a, "bob", "/new/", "", "")
+	})
+	if updateErr != nil {
+		t.Fatal(updateErr)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := f.ValidateSession(ctx, s.Token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Principal.ARN != "arn:vws:iam::123456789012:user/new/bob" {
+		t.Errorf("session opened with %s during a rename, want the new ARN", got.Principal.ARN)
+	}
+}
+
+// TestLoginAfterPasswordChangeUsesTheVerifiedHash holds a login after it reads
+// the old hash, changes the password, then lets the session open. The old
+// password must not open a session for the updated profile.
+func TestLoginAfterPasswordChangeUsesTheVerifiedHash(t *testing.T) {
+	f, a := loginFake(t)
+	f.LimitHashing(1)
+	newHash, err := hashPassword("brand new pass 2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = loginWhileHashing(t, f, LoginRequest{
+		Account: a, UserName: "bob", Password: "correct horse 1", SourceIP: "192.0.2.1",
+	}, func() {
+		f.mu.Lock()
+		f.accounts[a].users["bob"].login.hash = newHash
+		f.mu.Unlock()
+	})
+	if resource.CodeOf(err) != resource.CodeUnauthenticated {
+		t.Fatalf("old password opened a session after the profile changed: %v", err)
 	}
 }

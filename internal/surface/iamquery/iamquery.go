@@ -228,6 +228,9 @@ func (c *exchange) wire(e *resource.Error) (int, string) {
 		if e.Field == "UnmodifiableEntity" {
 			return http.StatusBadRequest, "UnmodifiableEntity"
 		}
+		if c.action == "UpdateUser" {
+			return http.StatusConflict, "ConcurrentModification"
+		}
 		return http.StatusConflict, "DeleteConflict"
 	case resource.CodeResourceExhausted:
 		return http.StatusConflict, "LimitExceeded"

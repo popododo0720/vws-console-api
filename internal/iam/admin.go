@@ -124,6 +124,9 @@ type Admin interface {
 	GetUser(ctx context.Context, a resource.AccountID, name string) (User, error)
 	ListUsers(ctx context.Context, a resource.AccountID, pathPrefix string) ([]User, error)
 	DeleteUser(ctx context.Context, a resource.AccountID, name string) error
+	// UpdateUser moves a user's path or name. A non-empty expectARN must
+	// match the current ARN, or the update is a conflict.
+	UpdateUser(ctx context.Context, a resource.AccountID, name, newPath, newName, expectARN string) error
 
 	CreateLoginProfile(ctx context.Context, a resource.AccountID, user, password string) (LoginProfile, error)
 	GetLoginProfile(ctx context.Context, a resource.AccountID, user string) (LoginProfile, error)

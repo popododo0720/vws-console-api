@@ -102,6 +102,19 @@ func (t *sessionTable) close(token string) {
 	delete(t.byID, tokenID(token))
 }
 
+// rename moves the account's sessions from oldARN to newARN, so a rename does
+// not strip a signed-in user of its identity policies.
+func (t *sessionTable) rename(a resource.AccountID, oldARN, newARN string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for id, s := range t.byID {
+		if s.Principal.Account == a && s.Principal.ARN == oldARN {
+			s.Principal.ARN = newARN
+			t.byID[id] = s
+		}
+	}
+}
+
 // LoginFailed is the one uniform sign-in failure, for Sessions backed by
 // vws-iam: it never says which part was wrong or whether the user exists.
 func LoginFailed() error { return errLogin() }

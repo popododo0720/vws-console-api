@@ -283,6 +283,83 @@ func (f *Fake) DeleteUser(_ context.Context, a resource.AccountID, name string) 
 	return nil
 }
 
+// UpdateUser implements Admin. A rename moves the user and its group
+// memberships; the id stays the same. Live access keys and console sessions
+// keep working under the new ARN. A non-empty expectARN must match the
+// current ARN, so a change between the caller's authorization and this call
+// is a conflict rather than a move of another user or path.
+func (f *Fake) UpdateUser(_ context.Context, a resource.AccountID, name, newPath, newName, expectARN string) error {
+	if err := checkName(entityName, "userName", name); err != nil {
+		return err
+	}
+	path := ""
+	if newPath != "" {
+		p, err := normPathAs(newPath, "newPath")
+		if err != nil {
+			return err
+		}
+		path = p
+	}
+	if newName != "" {
+		if err := checkName(entityName, "newUserName", newName); err != nil {
+			return err
+		}
+		if strings.EqualFold(newName, RootUserName) {
+			return resource.Invalid("newUserName", "the user name "+RootUserName+" is reserved for the account root")
+		}
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	st := f.account(a)
+	u := st.users[name]
+	if u == nil {
+		return notFound("user", name)
+	}
+	if expectARN != "" && u.ARN != expectARN {
+		return conflict("The user changed while the request was in flight.")
+	}
+	target := name
+	if newName != "" {
+		target = newName
+	}
+	if target != name {
+		for existing := range st.users {
+			if existing != name && strings.EqualFold(existing, target) {
+				return exists("User", target)
+			}
+		}
+	}
+	if path == "" {
+		path = u.Path
+	}
+	if target == name && path == u.Path {
+		return nil
+	}
+	oldARN := u.ARN
+	if target != name {
+		delete(st.users, name)
+		for group := range u.groups {
+			g := st.groups[group]
+			if g == nil {
+				delete(u.groups, group)
+				continue
+			}
+			delete(g.members, name)
+			g.members[target] = true
+		}
+		st.users[target] = u
+	}
+	u.Name, u.Path, u.ARN = target, path, iamARN(a, "user", path, target)
+	for id, key := range f.keys {
+		if key.Principal.ARN == oldARN {
+			key.Principal.ARN = u.ARN
+			f.keys[id] = key
+		}
+	}
+	f.sessions.rename(a, oldARN, u.ARN)
+	return nil
+}
+
 // --- access keys ---
 
 // CreateAccessKey implements Admin. The secret is returned only here.
