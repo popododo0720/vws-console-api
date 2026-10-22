@@ -1163,20 +1163,40 @@ func (f *Fake) ListVirtualMFADevices(
 	return PageVirtualMFADevices(devices, assignment, marker, maxItems), nil
 }
 
-// --- virtual MFA device tags ---
-
-func mfaDeviceNotFound() error {
-	return &resource.Error{Code: resource.CodeNotFound, Message: "The specified MFA device does not exist."}
-}
+// --- virtual MFA devices ---
 
 // mfaDevice returns the device with serial. The caller holds f.mu.
 func (st *store) mfaDevice(serial string) (*mfaDeviceRec, error) {
 	d := st.mfa[serial]
 	if d == nil {
-		return nil, mfaDeviceNotFound()
+		return nil, MFADeviceNotFound()
 	}
 	return d, nil
 }
+
+// GetMFADevice implements Admin. The device is read by its exact serial
+// number, the AWS SerialNumber, and only an enabled device is an answer.
+func (f *Fake) GetMFADevice(
+	_ context.Context, a resource.AccountID, serial string,
+) (MFADevice, error) {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	st := f.accounts[a]
+	if st == nil {
+		return MFADevice{}, MFADeviceNotFound()
+	}
+	d, err := st.mfaDevice(serial)
+	if err != nil {
+		return MFADevice{}, err
+	}
+	owner := st.users[d.user]
+	if owner == nil {
+		return MFADevice{}, MFADeviceNotFound()
+	}
+	return MFADevice{UserName: d.user, UserARN: owner.ARN, SerialNumber: serial, Enabled: d.enableTime}, nil
+}
+
+// --- virtual MFA device tags ---
 
 // TagMFADevice implements Admin. A named key is overwritten; the whole request
 // fails and stores nothing when a tag is invalid or the device would keep more
