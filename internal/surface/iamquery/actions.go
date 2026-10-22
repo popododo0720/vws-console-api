@@ -550,17 +550,40 @@ func iamActions() map[string]spec {
 			}{toPolicy(p)}, err
 		}),
 		"GetPolicyVersion": admin([]string{"PolicyArn", "VersionId"}, policyARN, func(h *handler, c *exchange) (any, error) {
-			p, err := h.cfg.Admin.GetPolicy(c.r.Context(), c.caller.Account, c.form("PolicyArn"))
-			if err != nil {
-				return nil, err
-			}
-			if c.form("VersionId") != "v1" {
-				return nil, &resource.Error{Code: resource.CodeNotFound, Message: "Policy " + p.ARN + " version " + c.form("VersionId") + " does not exist or is not attachable."}
-			}
+			v, err := h.cfg.Admin.GetPolicyVersion(
+				c.r.Context(), c.caller.Account, c.form("PolicyArn"), c.form("VersionId"))
 			return struct {
 				PolicyVersion policyVersionXML `xml:"PolicyVersion"`
-			}{policyVersionXML{Document: policyDoc(p.Document), VersionID: "v1", IsDefaultVersion: true, CreateDate: stamp(p.Created)}}, nil
+			}{policyVersionXML{
+				Document: policyDoc(v.Document), VersionID: v.ID,
+				IsDefaultVersion: v.IsDefaultVersion, CreateDate: stamp(v.Created),
+			}}, err
 		}),
+		"CreatePolicyVersion": admin([]string{"PolicyArn", "PolicyDocument", "SetAsDefault"}, policyARN,
+			func(h *handler, c *exchange) (any, error) {
+				if err := required(c, "PolicyArn", "PolicyDocument"); err != nil {
+					return nil, err
+				}
+				if !policyARNRE.MatchString(c.form("PolicyArn")) {
+					return nil, resource.Invalid("policyArn", "The policy ARN '"+c.form("PolicyArn")+"' is not valid.")
+				}
+				setAsDefault := false
+				switch c.form("SetAsDefault") {
+				case "", "false":
+				case "true":
+					setAsDefault = true
+				default:
+					return nil, resource.Invalid("SetAsDefault", "The specified value for setAsDefault is invalid.")
+				}
+				v, err := h.cfg.Admin.CreatePolicyVersion(
+					c.r.Context(), c.caller.Account, c.form("PolicyArn"), c.form("PolicyDocument"), setAsDefault)
+				return struct {
+					PolicyVersion policyVersionXML `xml:"PolicyVersion"`
+				}{policyVersionXML{
+					VersionID: v.ID, IsDefaultVersion: v.IsDefaultVersion, CreateDate: stamp(v.Created),
+				}}, err
+			},
+		),
 		"ListPolicyVersions": {
 			params: []string{"PolicyArn", "Marker", "MaxItems"}, needsAdmin: true, resource: policyARN,
 			run: func(h *handler, c *exchange) (any, error) {
