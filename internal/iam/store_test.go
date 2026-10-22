@@ -491,6 +491,147 @@ func TestDeletePolicyVersion(t *testing.T) {
 	if err := f.DeletePolicyVersion(ctx, other, p.ARN, "v1"); resource.CodeOf(err) != resource.CodeNotFound {
 		t.Errorf("policy visible from another account: %v", err)
 	}
+	// A new default makes v1 a non-default version, so deleting v1 succeeds.
+	v, err := f.CreatePolicyVersion(ctx, a, p.ARN, describeOnly, true)
+	if err != nil || v.ID != "v2" || !v.IsDefaultVersion {
+		t.Fatalf("default version %+v, %v", v, err)
+	}
+	must(t, f.DeletePolicyVersion(ctx, a, p.ARN, "v1"))
+	if err := f.DeletePolicyVersion(ctx, a, p.ARN, "v2"); resource.CodeOf(err) != resource.CodeConflict {
+		t.Errorf("new default version: %v", err)
+	}
+	// The next version keeps counting past the removed v1.
+	v, err = f.CreatePolicyVersion(ctx, a, p.ARN, describeOnly, false)
+	if err != nil || v.ID != "v3" {
+		t.Fatalf("version after delete %+v, %v", v, err)
+	}
+	// A non-default version is removed on its own.
+	p2, err := f.CreatePolicy(ctx, a, "delete-non-default", "/", describeOnly, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err = f.CreatePolicyVersion(ctx, a, p2.ARN, describeOnly, false)
+	if err != nil || v.ID != "v2" || v.IsDefaultVersion {
+		t.Fatalf("non-default version %+v, %v", v, err)
+	}
+	must(t, f.DeletePolicyVersion(ctx, a, p2.ARN, "v2"))
+	page, err := f.ListPolicyVersions(ctx, a, p2.ARN, "", 0)
+	if err != nil || len(page.Versions) != 1 || page.Versions[0].ID != "v1" || !page.Versions[0].IsDefaultVersion {
+		t.Fatalf("versions after non-default delete %+v, %v", page, err)
+	}
+}
+
+func TestCreatePolicyVersion(t *testing.T) {
+	ctx := t.Context()
+	a := account(t)
+	f := NewFake()
+	p, err := f.CreatePolicy(ctx, a, "versioned", "/", describeOnly, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	readOnly := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"s3:GetObject","Resource":"*"}]}`
+	v, err := f.CreatePolicyVersion(ctx, a, p.ARN, readOnly, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.ID != "v2" || v.IsDefaultVersion {
+		t.Errorf("version %+v, want v2 not default", v)
+	}
+	page, err := f.ListPolicyVersions(ctx, a, p.ARN, "", 0)
+	if err != nil || len(page.Versions) != 2 {
+		t.Fatalf("page %+v, %v", page, err)
+	}
+	if page.Versions[0].ID != "v1" || !page.Versions[0].IsDefaultVersion ||
+		page.Versions[1].ID != "v2" || page.Versions[1].IsDefaultVersion {
+		t.Errorf("versions %+v", page.Versions)
+	}
+	v, err = f.CreatePolicyVersion(ctx, a, p.ARN, describeOnly, true)
+	if err != nil || v.ID != "v3" || !v.IsDefaultVersion {
+		t.Fatalf("default version %+v, %v", v, err)
+	}
+	page, err = f.ListPolicyVersions(ctx, a, p.ARN, "", 0)
+	if err != nil || len(page.Versions) != 3 {
+		t.Fatalf("page %+v, %v", page, err)
+	}
+	for _, got := range page.Versions {
+		if got.IsDefaultVersion != (got.ID == "v3") {
+			t.Errorf("version %+v after v3 became default", got)
+		}
+	}
+	policy, err := f.GetPolicy(ctx, a, p.ARN)
+	if err != nil || policy.DefaultVersion != "v3" {
+		t.Errorf("default policy %+v, %v", policy, err)
+	}
+	must(t, f.SetDefaultPolicyVersion(ctx, a, p.ARN, "v2"))
+	page, err = f.ListPolicyVersions(ctx, a, p.ARN, "", 0)
+	if err != nil || len(page.Versions) != 3 {
+		t.Fatalf("page %+v, %v", page, err)
+	}
+	for _, got := range page.Versions {
+		if got.IsDefaultVersion != (got.ID == "v2") {
+			t.Errorf("version %+v after v2 became default", got)
+		}
+	}
+	policy, err = f.GetPolicy(ctx, a, p.ARN)
+	if err != nil || policy.DefaultVersion != "v2" {
+		t.Errorf("default policy %+v, %v", policy, err)
+	}
+	_, err = f.CreatePolicyVersion(ctx, a, p.ARN, "{not json", false)
+	if resource.CodeOf(err) != resource.CodeInvalidArgument {
+		t.Errorf("malformed document: %v", err)
+	}
+	_, err = f.CreatePolicyVersion(ctx, a, "not-an-arn", describeOnly, false)
+	if resource.CodeOf(err) != resource.CodeNotFound {
+		t.Errorf("unknown policy: %v", err)
+	}
+	other, err := resource.Parse[resource.AccountID]("210987654321")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = f.CreatePolicyVersion(ctx, other, p.ARN, describeOnly, false)
+	if resource.CodeOf(err) != resource.CodeNotFound {
+		t.Errorf("policy from another account: %v", err)
+	}
+	for _, want := range []string{"v4", "v5"} {
+		v, err = f.CreatePolicyVersion(ctx, a, p.ARN, describeOnly, false)
+		if err != nil || v.ID != want {
+			t.Fatalf("version %+v, want %s: %v", v, want, err)
+		}
+	}
+	// The sixth version is the AWS quota.
+	_, err = f.CreatePolicyVersion(ctx, a, p.ARN, describeOnly, false)
+	if resource.CodeOf(err) != resource.CodeResourceExhausted {
+		t.Errorf("sixth version: %v", err)
+	}
+}
+
+func TestDefaultPolicyVersionChangesAuthorization(t *testing.T) {
+	ctx := t.Context()
+	a := account(t)
+	f := NewFake()
+	allow := `{"Statement":[{"Effect":"Allow","Action":"s3:GetObject","Resource":"*"}]}`
+	p, err := f.CreatePolicy(ctx, a, "readable", "/", allow, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	u, err := f.CreateUser(ctx, a, "bob", "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	must(t, f.AttachPolicy(ctx, a, EntityUser, "bob", p.ARN))
+	deny := `{"Statement":[{"Effect":"Deny","Action":"s3:GetObject","Resource":"*"}]}`
+	v, err := f.CreatePolicyVersion(ctx, a, p.ARN, deny, true)
+	if err != nil || !v.IsDefaultVersion {
+		t.Fatalf("default version %+v, %v", v, err)
+	}
+	req := Request{Principal: Principal{Account: a, ARN: u.ARN}, Action: "s3:GetObject", Resource: "*"}
+	if d, err := f.Authorize(ctx, req); err != nil || d.Allowed {
+		t.Errorf("new default version did not deny: %+v, %v", d, err)
+	}
+	must(t, f.SetDefaultPolicyVersion(ctx, a, p.ARN, "v1"))
+	if d, err := f.Authorize(ctx, req); err != nil || !d.Allowed {
+		t.Errorf("v1 default did not allow: %+v, %v", d, err)
+	}
 }
 
 func TestListPolicyVersions(t *testing.T) {

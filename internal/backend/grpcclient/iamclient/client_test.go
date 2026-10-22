@@ -70,6 +70,9 @@ type server struct {
 	updatePolicy     []*iamv1.UpdatePolicyRequest
 	updateErr        error
 	updateRes        *longrunningpb.Operation
+	createVersion    []*iamv1.CreatePolicyVersionRequest
+	createVersionRes *longrunningpb.Operation
+	createVersionErr error
 	listVersions     []*iamv1.ListPolicyVersionsRequest
 	listVersionsRes  *iamv1.ListPolicyVersionsResponse
 	listVersionsErr  error
@@ -149,6 +152,24 @@ func (s *server) UpdatePolicy(ctx context.Context, req *iamv1.UpdatePolicyReques
 	}
 	if s.updateRes != nil {
 		return s.updateRes, nil
+	}
+	return &longrunningpb.Operation{Done: true}, nil
+}
+
+func (s *server) CreatePolicyVersion(
+	ctx context.Context, req *iamv1.CreatePolicyVersionRequest,
+) (*longrunningpb.Operation, error) {
+	if err := s.enter(ctx); err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.createVersion = append(s.createVersion, req)
+	if s.createVersionErr != nil {
+		return nil, s.createVersionErr
+	}
+	if s.createVersionRes != nil {
+		return s.createVersionRes, nil
 	}
 	return &longrunningpb.Operation{Done: true}, nil
 }

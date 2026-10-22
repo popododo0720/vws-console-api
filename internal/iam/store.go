@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -17,6 +18,7 @@ const (
 	maxAccessKeysPerUser = 2
 	maxAttachedPerEntity = 10
 	maxGroupsPerUser     = 10
+	maxPolicyVersions    = 5
 	minSession           = 15 * time.Minute
 	defaultMaxSession    = 3600
 	maxMaxSession        = 43200
@@ -77,12 +79,36 @@ type roleRec struct {
 	trust []policyStatement
 }
 
+type policyVersionRec struct {
+	PolicyVersion
+	parsed []policyStatement
+}
+
 type policyRec struct {
 	ManagedPolicy
-	parsed []policyStatement
+	versions       []policyVersionRec
+	defaultVersion string
 	// tags are the AWS tags of the policy, keyed by tag key. AWS policy tag
 	// keys are case sensitive, so the map is not folded.
 	tags map[string]string
+}
+
+// current is the default version. The caller holds f.mu.
+func (p *policyRec) current() *policyVersionRec {
+	for i := range p.versions {
+		if p.versions[i].ID == p.defaultVersion {
+			return &p.versions[i]
+		}
+	}
+	return nil
+}
+
+// statements are the default version's parsed statements.
+func (p *policyRec) statements() []policyStatement {
+	if v := p.current(); v != nil {
+		return v.parsed
+	}
+	return nil
 }
 
 func notFound(what, name string) error {
@@ -175,7 +201,7 @@ func (st *store) statementsFor(arn string) []policyStatement {
 		}
 		for p := range h.attached {
 			if rec := st.policies[p]; rec != nil {
-				out = append(out, rec.parsed...)
+				out = append(out, rec.statements()...)
 			}
 		}
 	}
@@ -748,8 +774,19 @@ func (f *Fake) CreatePolicy(_ context.Context, a resource.AccountID, name, path,
 		}
 	}
 	now := f.now()
-	p := ManagedPolicy{Name: name, Path: path, ID: randID("ANPA", 17), ARN: arn, Description: description, Document: document, Created: now, Updated: now}
-	st.policies[arn] = &policyRec{ManagedPolicy: p, parsed: parsed, tags: map[string]string{}}
+	p := ManagedPolicy{
+		Name: name, Path: path, ID: randID("ANPA", 17), ARN: arn, Description: description,
+		Document: document, DefaultVersion: "v1", Created: now, Updated: now,
+	}
+	st.policies[arn] = &policyRec{
+		ManagedPolicy: p,
+		versions: []policyVersionRec{{
+			PolicyVersion: PolicyVersion{ID: "v1", IsDefaultVersion: true, Created: now},
+			parsed:        parsed,
+		}},
+		defaultVersion: "v1",
+		tags:           map[string]string{},
+	}
 	return p, nil
 }
 
@@ -772,7 +809,7 @@ func (f *Fake) GetPolicy(_ context.Context, a resource.AccountID, arn string) (M
 	return p.ManagedPolicy, nil
 }
 
-// ListPolicyVersions implements Admin. Only version v1 exists in the fake.
+// ListPolicyVersions implements Admin.
 func (f *Fake) ListPolicyVersions(
 	_ context.Context, a resource.AccountID, arn, marker string, maxItems int,
 ) (PolicyVersionPage, error) {
@@ -788,7 +825,11 @@ func (f *Fake) ListPolicyVersions(
 	if err != nil {
 		return PolicyVersionPage{}, err
 	}
-	versions := []PolicyVersion{{ID: "v1", IsDefaultVersion: true, Created: p.Created}}
+	versions := make([]PolicyVersion, len(p.versions))
+	for i, v := range p.versions {
+		v.IsDefaultVersion = v.ID == p.defaultVersion
+		versions[i] = v.PolicyVersion
+	}
 	start := 0
 	if marker != "" {
 		start = sort.Search(len(versions), func(i int) bool { return versions[i].ID > marker })
@@ -800,6 +841,41 @@ func (f *Fake) ListPolicyVersions(
 		page.Marker = versions[end-1].ID
 	}
 	return page, nil
+}
+
+// CreatePolicyVersion implements Admin. It stores the document as the next
+// version id, as vws-iam does.
+func (f *Fake) CreatePolicyVersion(
+	_ context.Context, a resource.AccountID, arn, document string, setAsDefault bool,
+) (PolicyVersion, error) {
+	parsed, err := parsePolicy(document, false)
+	if err != nil {
+		return PolicyVersion{}, err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	p, err := f.account(a).policy(arn)
+	if err != nil {
+		return PolicyVersion{}, err
+	}
+	if len(p.versions) >= maxPolicyVersions {
+		return PolicyVersion{}, quota("Cannot exceed quota for PolicyVersions: 5")
+	}
+	next := 1
+	for _, version := range p.versions {
+		if n, err := strconv.Atoi(strings.TrimPrefix(version.ID, "v")); err == nil && n >= next {
+			next = n + 1
+		}
+	}
+	now := f.now()
+	v := PolicyVersion{ID: "v" + strconv.Itoa(next), IsDefaultVersion: setAsDefault, Created: now}
+	p.versions = append(p.versions, policyVersionRec{PolicyVersion: v, parsed: parsed})
+	if setAsDefault {
+		p.defaultVersion = v.ID
+		p.DefaultVersion = v.ID
+	}
+	p.Updated = now
+	return v, nil
 }
 
 // ListPolicies implements Admin (customer managed policies only).
@@ -832,25 +908,29 @@ func (f *Fake) DeletePolicy(_ context.Context, a resource.AccountID, arn string)
 	return nil
 }
 
-// SetDefaultPolicyVersion implements Admin. Only version v1 exists in the
-// fake, so this checks the policy and the version and writes nothing.
+// SetDefaultPolicyVersion implements Admin.
 func (f *Fake) SetDefaultPolicyVersion(_ context.Context, a resource.AccountID, arn, version string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if _, err := f.account(a).policy(arn); err != nil {
+	p, err := f.account(a).policy(arn)
+	if err != nil {
 		return err
 	}
-	if version != "v1" {
-		return &resource.Error{
-			Code:    resource.CodeNotFound,
-			Message: "Policy version " + version + " does not exist or is not attachable.",
+	for i := range p.versions {
+		if p.versions[i].ID == version {
+			p.defaultVersion = version
+			p.DefaultVersion = version
+			return nil
 		}
 	}
-	return nil
+	return &resource.Error{
+		Code:    resource.CodeNotFound,
+		Message: "Policy version " + version + " does not exist or is not attachable.",
+	}
 }
 
-// DeletePolicyVersion implements Admin. The fake keeps only the default
-// version v1, so deleting it is a conflict and any other version is missing.
+// DeletePolicyVersion implements Admin. The default version cannot be
+// deleted; any other version is removed from the policy.
 func (f *Fake) DeletePolicyVersion(_ context.Context, a resource.AccountID, arn, versionID string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -858,8 +938,15 @@ func (f *Fake) DeletePolicyVersion(_ context.Context, a resource.AccountID, arn,
 	if err != nil {
 		return err
 	}
-	if versionID == "v1" {
-		return conflict("the default version cannot be deleted")
+	for i := range p.versions {
+		if p.versions[i].ID != versionID {
+			continue
+		}
+		if versionID == p.defaultVersion {
+			return conflict("the default version cannot be deleted")
+		}
+		p.versions = append(p.versions[:i], p.versions[i+1:]...)
+		return nil
 	}
 	return &resource.Error{
 		Code:    resource.CodeNotFound,
