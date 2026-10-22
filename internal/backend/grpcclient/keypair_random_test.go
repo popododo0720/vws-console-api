@@ -32,6 +32,9 @@ type keyWorld struct {
 	requests map[string][32]byte
 	keys     map[string]*computev1.KeyPair
 	sent     []string
+	// afterList, when set, runs after ListKeyPairs takes its snapshot and
+	// before it answers, so a test can interleave other calls there.
+	afterList func()
 }
 
 func (w *keyWorld) CreateKeyPair(
@@ -81,10 +84,14 @@ func (w *keyWorld) ListKeyPairs(
 	context.Context, *computev1.ListKeyPairsRequest,
 ) (*computev1.ListKeyPairsResponse, error) {
 	w.mu.Lock()
-	defer w.mu.Unlock()
 	out := &computev1.ListKeyPairsResponse{}
 	for _, kp := range w.keys {
 		out.KeyPairs = append(out.KeyPairs, kp)
+	}
+	hook := w.afterList
+	w.mu.Unlock()
+	if hook != nil {
+		hook()
 	}
 	return out, nil
 }
