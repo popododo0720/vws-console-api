@@ -36,6 +36,8 @@ var authTime = time.Date(2026, 10, 14, 7, 0, 0, 0, time.UTC)
 type server struct {
 	iamv1.UnimplementedAuthServiceServer
 	iamv1.UnimplementedTokenServiceServer
+	iamv1.UnimplementedUserServiceServer
+	iamv1.UnimplementedAccessKeyServiceServer
 	iamv1.UnimplementedPolicyServiceServer
 	iamv1.UnimplementedMfaDeviceServiceServer
 	iamv1.UnimplementedRoleServiceServer
@@ -93,6 +95,48 @@ type server struct {
 	updateRole    []*iamv1.UpdateRoleRequest
 	updateRoleRes *longrunningpb.Operation
 	updateRoleErr error
+	// Access key calls.
+	listUsers       []*iamv1.ListUsersRequest
+	listUsersRes    *iamv1.ListUsersResponse
+	listUsersPages  map[string]*iamv1.ListUsersResponse
+	listUsersErr    error
+	getAccessKey    []*iamv1.GetAccessKeyRequest
+	getAccessKeyRes *iamv1.AccessKey
+	getAccessKeyErr error
+	// getAccessKeyOwner makes GetAccessKey a NotFound for every other user.
+	getAccessKeyOwner string
+}
+
+func (s *server) ListUsers(ctx context.Context, req *iamv1.ListUsersRequest) (*iamv1.ListUsersResponse, error) {
+	if err := s.enter(ctx); err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.listUsers = append(s.listUsers, req)
+	if s.listUsersErr != nil {
+		return nil, s.listUsersErr
+	}
+	if s.listUsersPages != nil {
+		return s.listUsersPages[req.GetPageToken()], nil
+	}
+	return s.listUsersRes, nil
+}
+
+func (s *server) GetAccessKey(ctx context.Context, req *iamv1.GetAccessKeyRequest) (*iamv1.AccessKey, error) {
+	if err := s.enter(ctx); err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.getAccessKey = append(s.getAccessKey, req)
+	if s.getAccessKeyErr != nil {
+		return nil, s.getAccessKeyErr
+	}
+	if s.getAccessKeyOwner != "" && !strings.Contains(req.GetName(), "/users/"+s.getAccessKeyOwner+"/") {
+		return nil, status.Error(codes.NotFound, "no such key")
+	}
+	return s.getAccessKeyRes, nil
 }
 
 func (s *server) GetRole(ctx context.Context, req *iamv1.GetRoleRequest) (*iamv1.Role, error) {
@@ -380,6 +424,8 @@ func harness(t *testing.T) (*Client, *server) {
 	}))
 	iamv1.RegisterAuthServiceServer(g, s)
 	iamv1.RegisterTokenServiceServer(g, s)
+	iamv1.RegisterUserServiceServer(g, s)
+	iamv1.RegisterAccessKeyServiceServer(g, s)
 	iamv1.RegisterPolicyServiceServer(g, s)
 	iamv1.RegisterMfaDeviceServiceServer(g, s)
 	iamv1.RegisterRoleServiceServer(g, s)

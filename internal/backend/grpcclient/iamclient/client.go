@@ -45,11 +45,13 @@ type Options struct {
 }
 
 // Client implements the per-request half of iam.Client, AssumeRole, the
-// policy version calls, the policy and virtual MFA device tag calls, and the
-// role calls of iam.Admin.
+// policy version calls, the policy and virtual MFA device tag calls, the
+// role calls, and GetAccessKeyLastUsed of iam.Admin.
 type Client struct {
 	auth       iamv1.AuthServiceClient
 	tokens     iamv1.TokenServiceClient
+	users      iamv1.UserServiceClient
+	accessKeys iamv1.AccessKeyServiceClient
 	policies   iamv1.PolicyServiceClient
 	mfaDevices iamv1.MfaDeviceServiceClient
 	roles      iamv1.RoleServiceClient
@@ -77,6 +79,7 @@ func New(conn grpc.ClientConnInterface, o Options) *Client {
 	}
 	return &Client{
 		auth: iamv1.NewAuthServiceClient(conn), tokens: iamv1.NewTokenServiceClient(conn),
+		users: iamv1.NewUserServiceClient(conn), accessKeys: iamv1.NewAccessKeyServiceClient(conn),
 		policies: iamv1.NewPolicyServiceClient(conn), mfaDevices: iamv1.NewMfaDeviceServiceClient(conn),
 		roles:   iamv1.NewRoleServiceClient(conn),
 		backoff: o.Backoff, close: func() error { return nil },

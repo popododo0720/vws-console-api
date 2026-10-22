@@ -88,6 +88,33 @@ type accessKeyXML struct {
 	CreateDate      string `xml:"CreateDate"`
 }
 
+type accessKeyLastUsedXML struct {
+	LastUsedDate string `xml:"LastUsedDate,omitempty"`
+	ServiceName  string `xml:"ServiceName"`
+	Region       string `xml:"Region"`
+}
+
+type accessKeyLastUsedResult struct {
+	AccessKeyLastUsed accessKeyLastUsedXML `xml:"AccessKeyLastUsed"`
+	UserName          string               `xml:"UserName"`
+}
+
+func toAccessKeyLastUsed(u iam.AccessKeyLastUsed) accessKeyLastUsedResult {
+	used := accessKeyLastUsedXML{ServiceName: "N/A", Region: "N/A"}
+	if !u.LastUsed.IsZero() {
+		used.LastUsedDate = stamp(u.LastUsed)
+		used.ServiceName = u.Service
+		used.Region = u.Region
+	}
+	if used.ServiceName == "" {
+		used.ServiceName = "N/A"
+	}
+	if used.Region == "" {
+		used.Region = "N/A"
+	}
+	return accessKeyLastUsedResult{AccessKeyLastUsed: used, UserName: u.UserName}
+}
+
 type policyVersionXML struct {
 	Document         string `xml:"Document,omitempty"`
 	VersionID        string `xml:"VersionId"`

@@ -41,6 +41,16 @@ func (a *vanishedUserAdmin) GetUser(ctx context.Context, account resource.Accoun
 	return a.Admin.GetUser(ctx, account, name)
 }
 
+// noARNAdmin finds a key but gives its owner no ARN, which the surface must
+// reject instead of authorizing on "*".
+type noARNAdmin struct{ iam.Admin }
+
+func (a noARNAdmin) GetAccessKeyLastUsed(
+	_ context.Context, _ resource.AccountID, _ string,
+) (iam.AccessKeyLastUsed, error) {
+	return iam.AccessKeyLastUsed{UserName: "bob"}, nil
+}
+
 func harness(t *testing.T) (http.Handler, *iam.Fake, *recorder, sigv4.Credential) {
 	return harnessWith(t, nil)
 }
@@ -593,6 +603,91 @@ func TestListPolicyVersionsAuthorizes(t *testing.T) {
 	has(t, call(t, h, bob, sigv4.ServiceIAM, url.Values{
 		"Action": {"ListPolicyVersions"}, "PolicyArn": {p.ARN},
 	}), http.StatusOK, `<ListPolicyVersionsResponse>`)
+}
+
+func TestGetAccessKeyLastUsed(t *testing.T) {
+	h, f, rec, root := harness(t)
+	ctx := t.Context()
+	bob, err := f.CreateUser(ctx, root.Account, "bob", "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	used, err := f.CreateAccessKey(ctx, root.Account, "bob")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fresh, err := f.CreateAccessKey(ctx, root.Account, "bob")
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := call(t, h, root, sigv4.ServiceIAM, url.Values{
+		"Action": {"GetAccessKeyLastUsed"}, "AccessKeyId": {fresh.AccessKeyID},
+	})
+	has(t, res, http.StatusOK,
+		`<GetAccessKeyLastUsedResponse><GetAccessKeyLastUsedResult>`,
+		`<AccessKeyLastUsed><ServiceName>N/A</ServiceName><Region>N/A</Region></AccessKeyLastUsed><UserName>bob</UserName>`)
+	if strings.Contains(res.Body.String(), "LastUsedDate") {
+		t.Errorf("unused key has a LastUsedDate: %s", res.Body.String())
+	}
+	bobCred := sigv4.Credential{AccessKey: used.AccessKeyID, Secret: used.Secret}
+	has(t, call(t, h, bobCred, sigv4.ServiceSTS, url.Values{"Action": {"GetCallerIdentity"}}), http.StatusOK)
+	res = call(t, h, root, sigv4.ServiceIAM, url.Values{
+		"Action": {"GetAccessKeyLastUsed"}, "AccessKeyId": {used.AccessKeyID},
+	})
+	has(t, res, http.StatusOK,
+		`<AccessKeyLastUsed><LastUsedDate>2026-10-09T10:00:00Z</LastUsedDate>`,
+		`<ServiceName>sts</ServiceName><Region>vws-1</Region></AccessKeyLastUsed>`,
+		`<UserName>bob</UserName>`)
+	if strings.Contains(res.Body.String(), "Secret") {
+		t.Errorf("response carries a secret: %s", res.Body.String())
+	}
+	has(t, call(t, h, root, sigv4.ServiceIAM, url.Values{
+		"Action": {"GetAccessKeyLastUsed"}, "AccessKeyId": {"AKIANOSUCHKEY0000000"},
+	}), http.StatusNotFound, `<Code>NoSuchEntity</Code>`)
+	for _, id := range []string{"short", ""} {
+		has(t, call(t, h, root, sigv4.ServiceIAM, url.Values{
+			"Action": {"GetAccessKeyLastUsed"}, "AccessKeyId": {id},
+		}), http.StatusBadRequest, `<Code>ValidationError</Code>`)
+	}
+
+	// A limited user may read only the key whose owner ARN its policy names.
+	if _, err := f.CreateUser(ctx, root.Account, "alice", "/"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.CreateUser(ctx, root.Account, "carol", "/"); err != nil {
+		t.Fatal(err)
+	}
+	aliceKey, err := f.CreateAccessKey(ctx, root.Account, "alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	carolKey, err := f.CreateAccessKey(ctx, root.Account, "carol")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.PutInlinePolicy(ctx, root.Account, iam.EntityUser, "alice", "lastused",
+		`{"Statement":[{"Effect":"Allow","Action":"iam:GetAccessKeyLastUsed","Resource":"`+bob.ARN+`"}]}`); err != nil {
+		t.Fatal(err)
+	}
+	alice := sigv4.Credential{AccessKey: aliceKey.AccessKeyID, Secret: aliceKey.Secret}
+	has(t, call(t, h, alice, sigv4.ServiceIAM, url.Values{
+		"Action": {"GetAccessKeyLastUsed"}, "AccessKeyId": {used.AccessKeyID},
+	}), http.StatusOK, `<UserName>bob</UserName>`)
+	has(t, call(t, h, alice, sigv4.ServiceIAM, url.Values{
+		"Action": {"GetAccessKeyLastUsed"}, "AccessKeyId": {carolKey.AccessKeyID},
+	}), http.StatusForbidden, `<Code>AccessDenied</Code>`)
+
+	want := "iam:GetAccessKeyLastUsed arn:vws:iam::123456789012:user/bob"
+	if !strings.Contains(strings.Join(rec.seen, "\n"), want) {
+		t.Errorf("not authorized: %q in %v", want, rec.seen)
+	}
+}
+
+func TestGetAccessKeyLastUsedFailsClosedWithoutOwnerARN(t *testing.T) {
+	h, _, _, root := harnessWith(t, func(a iam.Admin) iam.Admin { return noARNAdmin{a} })
+	has(t, call(t, h, root, sigv4.ServiceIAM, url.Values{
+		"Action": {"GetAccessKeyLastUsed"}, "AccessKeyId": {"AKIAABCDEFGHIJKLMNOP"},
+	}), http.StatusInternalServerError, `<Code>ServiceFailure</Code>`)
 }
 
 func TestLimitedUserAndSTS(t *testing.T) {

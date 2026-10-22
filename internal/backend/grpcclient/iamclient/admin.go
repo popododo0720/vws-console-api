@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"cloud.google.com/go/longrunning/autogen/longrunningpb"
 	"google.golang.org/grpc/status"
@@ -21,8 +22,7 @@ import (
 // AccessKey services yet; each answers Unimplemented, which the surface
 // returns as InvalidAction. ListPolicyVersions, SetDefaultPolicyVersion,
 // DeletePolicyVersion, the policy and MFA device tag calls, GetRole,
-// UpdateRole and
-// UpdateRoleDescription are mapped.
+// UpdateRole, UpdateRoleDescription and GetAccessKeyLastUsed are mapped.
 type STSAdmin struct{ *Client }
 
 var _ iam.Admin = STSAdmin{}
@@ -64,6 +64,71 @@ func (STSAdmin) CreateAccessKey(_ context.Context, _ resource.AccountID, _ strin
 // ListAccessKeys implements iam.Admin.
 func (STSAdmin) ListAccessKeys(_ context.Context, _ resource.AccountID, _ string) ([]iam.AccessKeyMeta, error) {
 	return nil, notServed("ListAccessKeys")
+}
+
+// GetAccessKeyLastUsed implements iam.Admin over
+// AccessKeyService.GetAccessKey. vws-iam addresses a key by its owning user,
+// so the call reads the key under each user of the account until one holds
+// it. The key id is globally unique. The proto has no lookup by key id, so
+// this is one read per user.
+func (a STSAdmin) GetAccessKeyLastUsed(
+	ctx context.Context, account resource.AccountID, keyID string,
+) (iam.AccessKeyLastUsed, error) {
+	ctx, cancel := context.WithTimeout(ctx, accessKeyScanTimeout)
+	defer cancel()
+	parent := "projects/" + account.String()
+	var token string
+	for {
+		page, err := retry(ctx, a.backoff, a.users.ListUsers, &iamv1.ListUsersRequest{
+			Parent: parent, PageSize: 100, PageToken: token,
+		})
+		if err != nil {
+			return iam.AccessKeyLastUsed{}, authError(err)
+		}
+		for _, u := range page.GetUsers() {
+			want := u.GetName() + "/accessKeys/" + keyID
+			key, err := retry(ctx, a.backoff, a.accessKeys.GetAccessKey, &iamv1.GetAccessKeyRequest{Name: want})
+			if err != nil {
+				mapped := authError(err)
+				if resource.CodeOf(mapped) == resource.CodeNotFound {
+					continue
+				}
+				return iam.AccessKeyLastUsed{}, mapped
+			}
+			if key.GetName() != want {
+				return iam.AccessKeyLastUsed{}, resource.Internal(
+					errors.New("vws-iam GetAccessKey returned " + key.GetName() + ", want " + want))
+			}
+			return lastUsedOf(key, u)
+		}
+		token = page.GetNextPageToken()
+		if token == "" {
+			return iam.AccessKeyLastUsed{}, iam.AccessKeyNotFound(keyID)
+		}
+	}
+}
+
+// accessKeyScanTimeout bounds the user scan, which is one read per user.
+const accessKeyScanTimeout = 10 * time.Second
+
+// lastUsedOf maps a vws-iam key and its owner to the IAM Query answer.
+func lastUsedOf(key *iamv1.AccessKey, user *iamv1.User) (iam.AccessKeyLastUsed, error) {
+	arn := user.GetStatus().GetArn()
+	if arn == "" {
+		return iam.AccessKeyLastUsed{}, resource.Internal(
+			errors.New("vws-iam access key has no owning user ARN"))
+	}
+	name := user.GetName()
+	out := iam.AccessKeyLastUsed{
+		UserName: name[strings.LastIndex(name, "/")+1:],
+		UserARN:  arn,
+		Service:  key.GetStatus().GetLastUsedService(),
+		Region:   key.GetStatus().GetLastUsedRegion(),
+	}
+	if t := key.GetStatus().GetLastUsedTime(); t != nil {
+		out.LastUsed = t.AsTime()
+	}
+	return out, nil
 }
 
 // DeleteAccessKey implements iam.Admin.

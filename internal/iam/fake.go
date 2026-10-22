@@ -37,6 +37,7 @@ type Fake struct {
 	Now      func() time.Time
 	mu       sync.RWMutex
 	keys     map[string]Key
+	used     map[string]keyUse
 	stmts    map[string][]Statement
 	accounts map[resource.AccountID]*store
 	sessions *sessionTable
@@ -44,10 +45,18 @@ type Fake struct {
 	dummy    func() string
 }
 
+// keyUse is the last use of one long-term key.
+type keyUse struct {
+	at      time.Time
+	service string
+	region  string
+}
+
 // NewFake returns an empty fake.
 func NewFake() *Fake {
 	return &Fake{
-		keys: map[string]Key{}, stmts: map[string][]Statement{}, accounts: map[resource.AccountID]*store{},
+		keys: map[string]Key{}, used: map[string]keyUse{},
+		stmts: map[string][]Statement{}, accounts: map[resource.AccountID]*store{},
 		sessions: newSessionTable(), guard: newGuard(), dummy: sync.OnceValue(newDummyHash),
 	}
 }
@@ -73,7 +82,8 @@ func (f *Fake) AddStatement(principalARN string, s Statement) {
 	f.stmts[principalARN] = append(f.stmts[principalARN], s)
 }
 
-// Authenticate verifies with the stored secret, inside the fake.
+// Authenticate verifies with the stored secret, inside the fake, and records
+// the key's last use.
 func (f *Fake) Authenticate(_ context.Context, req sigv4.AuthRequest) (Principal, error) {
 	f.mu.RLock()
 	k, ok := f.keys[req.AccessKeyID]
@@ -81,7 +91,21 @@ func (f *Fake) Authenticate(_ context.Context, req sigv4.AuthRequest) (Principal
 	if !ok {
 		return Principal{}, ErrUnknownKey
 	}
-	return verifyKey(k, req, f.now())
+	now := f.now()
+	p, err := verifyKey(k, req, now)
+	if err != nil {
+		return Principal{}, err
+	}
+	if strings.HasPrefix(k.AccessKey, "AKIA") && strings.Contains(k.Principal.ARN, ":user/") {
+		f.mu.Lock()
+		if _, live := f.keys[k.AccessKey]; live {
+			f.used[k.AccessKey] = keyUse{
+				at: now.Truncate(time.Second), service: string(req.Service), region: req.Region,
+			}
+		}
+		f.mu.Unlock()
+	}
+	return p, nil
 }
 
 // Authorize evaluates the principal's raw statements and, for an IAM user
