@@ -122,6 +122,11 @@ func TestEC2ErrorByKind(t *testing.T) {
 		{resource.CodeConflict, resource.KindInstance, wireErr{400, "IncorrectInstanceState"}},
 		{resource.CodeConflict, resource.KindUnspecified, wireErr{400, "IncorrectInstanceState"}},
 		{resource.CodeConflict, resource.KindVolume, wireErr{400, "IncorrectState"}},
+		// #291: a key pair is not an instance. EC2 documents IncorrectState
+		// for a resource in the wrong state, and Unavailable as a retryable
+		// server error.
+		{resource.CodeConflict, resource.KindKeyPair, wireErr{400, "IncorrectState"}},
+		{resource.CodeUnavailable, resource.KindKeyPair, wireErr{503, "Unavailable"}},
 		{resource.CodeConflict, resource.KindVpc, wireErr{400, "DependencyViolation"}},
 		{resource.CodeConflict, resource.KindSubnet, wireErr{400, "DependencyViolation"}},
 	} {
