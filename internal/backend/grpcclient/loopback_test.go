@@ -1129,9 +1129,17 @@ func (s *subnetSrv) ListSubnets(ctx context.Context, req *networkv1.ListSubnetsR
 	return &networkv1.ListSubnetsResponse{Subnets: items}, nil
 }
 
+// bucketSrv answers CreateBucket as vws-storage does (#315): a request id
+// it has seen returns that request's operation (storage.Service.Submit), and
+// a create for a bucket the project already holds returns a succeeded
+// operation for that bucket (vws-proto operation.proto, Create). Unlike
+// vws-storage, names stay global as in the fake, so another project's name
+// is ALREADY_EXISTS here.
 type bucketSrv struct {
 	storagev1.UnimplementedBucketServiceServer
-	w *loopWorld
+	w   *loopWorld
+	mu  sync.Mutex
+	ops map[string]*longrunningpb.Operation
 }
 
 func (s *bucketSrv) CreateBucket(ctx context.Context, req *storagev1.CreateBucketRequest) (*longrunningpb.Operation, error) {
@@ -1147,11 +1155,29 @@ func (s *bucketSrv) CreateBucket(ctx context.Context, req *storagev1.CreateBucke
 	if err != nil {
 		return nil, toStatus(err)
 	}
-	bucket, err := s.w.set.Storage.CreateBucket(ctx, backend.Scope{Account: account}, name)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	token := projectID + "/" + req.GetRequestId()
+	if op, ok := s.ops[token]; ok {
+		return op, nil
+	}
+	scope := backend.Scope{Account: account}
+	bucket, err := s.w.set.Storage.GetBucket(ctx, scope, name)
+	if resource.CodeOf(err) == resource.CodeNotFound {
+		bucket, err = s.w.set.Storage.CreateBucket(ctx, scope, name)
+	}
 	if err != nil {
 		return nil, toStatus(err)
 	}
-	return doneResource(projectID, req.GetRequestId(), bucketName(projectID, name.String()), bucketProto(bucket, projectID), s.w.now)
+	op, err := doneResource(projectID, req.GetRequestId(), bucketName(projectID, name.String()), bucketProto(bucket, projectID), s.w.now)
+	if err != nil {
+		return nil, err
+	}
+	if s.ops == nil {
+		s.ops = map[string]*longrunningpb.Operation{}
+	}
+	s.ops[token] = op
+	return op, nil
 }
 
 func (s *bucketSrv) GetBucket(ctx context.Context, req *storagev1.GetBucketRequest) (*storagev1.Bucket, error) {

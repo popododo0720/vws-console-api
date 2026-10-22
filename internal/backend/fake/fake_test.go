@@ -27,6 +27,14 @@ func TestDetachReplayContract(t *testing.T) {
 	})
 }
 
+// TestBucketCreateContract runs the #315 CreateBucket table on the fake.
+func TestBucketCreateContract(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0).UTC()
+	backendtest.BucketCreate(t, func() backend.Set {
+		return New(Options{Now: func() time.Time { return now }, Entropy: &Sequence{}}).Set()
+	})
+}
+
 // TestKeyImportContract runs the #279 ImportKeyPair table on the fake.
 func TestKeyImportContract(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0).UTC()
