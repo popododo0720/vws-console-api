@@ -1170,7 +1170,8 @@ func (s *bucketSrv) CreateBucket(ctx context.Context, req *storagev1.CreateBucke
 	if err != nil {
 		return nil, toStatus(err)
 	}
-	op, err := doneResource(projectID, req.GetRequestId(), bucketName(projectID, name.String()), bucketProto(bucket, projectID), s.w.now)
+	resName := bucketName(projectID, name.String())
+	op, err := doneResource(projectID, req.GetRequestId(), resName, bucketProto(bucket, projectID), s.w.now)
 	if err != nil {
 		return nil, err
 	}

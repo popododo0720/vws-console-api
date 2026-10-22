@@ -37,11 +37,15 @@ type inflightBuckets struct {
 	sent []string
 }
 
-func (b *inflightBuckets) GetBucket(context.Context, *storagev1.GetBucketRequest, ...grpc.CallOption) (*storagev1.Bucket, error) {
+func (b *inflightBuckets) GetBucket(
+	context.Context, *storagev1.GetBucketRequest, ...grpc.CallOption,
+) (*storagev1.Bucket, error) {
 	return nil, status.Error(codes.NotFound, "bucket not found")
 }
 
-func (b *inflightBuckets) CreateBucket(_ context.Context, in *storagev1.CreateBucketRequest, _ ...grpc.CallOption) (*longrunningpb.Operation, error) {
+func (b *inflightBuckets) CreateBucket(
+	_ context.Context, in *storagev1.CreateBucketRequest, _ ...grpc.CallOption,
+) (*longrunningpb.Operation, error) {
 	b.sent = append(b.sent, in.GetRequestId())
 	projectID, err := projectOfName(in.GetParent())
 	if err != nil {

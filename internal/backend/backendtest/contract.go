@@ -218,7 +218,8 @@ func Run(t *testing.T, newSet Harness) {
 	if _, err := set.Storage.CreateBucket(ctx, backend.Scope{Account: account}, name); !resource.OwnedByCaller(err) {
 		t.Fatalf("owner creates again: %v", err)
 	}
-	if _, err := set.Storage.CreateBucket(ctx, backend.Scope{Account: other}, name); resource.CodeOf(err) != resource.CodeAlreadyExists || resource.OwnedByCaller(err) {
+	_, err = set.Storage.CreateBucket(ctx, backend.Scope{Account: other}, name)
+	if resource.CodeOf(err) != resource.CodeAlreadyExists || resource.OwnedByCaller(err) {
 		t.Fatalf("bucket owner: %v", err)
 	}
 	key, err := resource.Parse[resource.ObjectKey]("a/b.txt")

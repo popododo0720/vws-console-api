@@ -1846,11 +1846,11 @@ func (c computeClient) importNonce(ctx context.Context, projectID, id string) (n
 	case !missingResource(fromNamedRPC(name, err)):
 		return "", false, fromNamedRPC(name, err)
 	}
-	nonce, err = newImportNonce()
+	nonce, err = newNonce()
 	return nonce, false, err
 }
 
-func newImportNonce() (string, error) {
+func newNonce() (string, error) {
 	var raw [16]byte
 	if _, err := rand.Read(raw[:]); err != nil {
 		return "", resource.Internal(err)
@@ -1968,7 +1968,7 @@ func (c computeClient) nextImport(
 		if err != nil || !stale {
 			return importStep{}, false, err
 		}
-		nonce, err := newImportNonce()
+		nonce, err := newNonce()
 		return importStep{nonce: nonce}, err == nil, err
 	}
 	if code != resource.CodeAlreadyExists {

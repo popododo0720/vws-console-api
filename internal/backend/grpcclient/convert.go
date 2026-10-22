@@ -235,6 +235,19 @@ func refFromResource(name string) (resource.Ref, bool) {
 	}
 }
 
+// operationRequestID is the request id vws-storage echoes in the operation
+// metadata, or "" when it names none.
+func operationRequestID(op *longrunningpb.Operation) (string, error) {
+	if op.GetMetadata() == nil {
+		return "", nil
+	}
+	meta := &commonv1.OperationMetadata{}
+	if err := op.GetMetadata().UnmarshalTo(meta); err != nil {
+		return "", resource.Internal(err)
+	}
+	return meta.GetRequestId(), nil
+}
+
 func metadataResource(op *longrunningpb.Operation) (string, error) {
 	if op == nil || op.GetMetadata() == nil {
 		return "", resource.Internal(errors.New("missing operation"))
