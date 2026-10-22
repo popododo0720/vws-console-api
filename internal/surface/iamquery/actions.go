@@ -85,6 +85,9 @@ func userName(c *exchange) string {
 }
 
 // userARN is the user's real ARN when it exists, so policies on paths apply.
+// A user that does not exist is authorized on the name the caller gave, as
+// AWS evaluates it. Any other lookup failure fails closed: a guessed path-less
+// ARN would skip a Deny on the user's real path.
 func userARN(h *handler, c *exchange) string {
 	name := userName(c)
 	if name == "" {
@@ -93,8 +96,12 @@ func userARN(h *handler, c *exchange) string {
 	if c.action == "CreateUser" {
 		return arnOf(c, "user", pathOr(c.form("Path")), name)
 	}
-	if u, err := h.cfg.Admin.GetUser(c.r.Context(), c.caller.Account, name); err == nil {
+	u, err := h.cfg.Admin.GetUser(c.r.Context(), c.caller.Account, name)
+	if err == nil {
 		return u.ARN
+	}
+	if resource.CodeOf(err) != resource.CodeNotFound {
+		c.resourceErr = err
 	}
 	return arnOf(c, "user", "/", name)
 }

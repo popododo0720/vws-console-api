@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/popododo0720/vws-console-api/internal/iam"
+	"github.com/popododo0720/vws-console-api/internal/resource"
 	"github.com/popododo0720/vws-console-api/internal/sigv4"
 )
 
@@ -140,4 +141,54 @@ func TestGetMFADeviceNeedsPermission(t *testing.T) {
 	has(t, call(t, h, bob, sigv4.ServiceIAM, forAlice), http.StatusNotFound, noSuchMFADevice)
 	has(t, call(t, h, bob, sigv4.ServiceIAM, enabledForAlice), http.StatusNotFound, noSuchMFADevice)
 	has(t, call(t, h, bob, sigv4.ServiceIAM, self), http.StatusForbidden, `<Code>AccessDenied</Code>`)
+
+	t.Run("an unavailable user lookup authorizes nothing", func(t *testing.T) {
+		// bob may read user/alice but not anyone under /restricted/. alice is
+		// /restricted/alice, so a check on a guessed path-less ARN would let
+		// bob through to the 404.
+		lookupErr := &resource.Error{Code: resource.CodeUnavailable, Message: "vws-iam is unavailable"}
+		h, f, rec, root := harnessWith(t, func(a iam.Admin) iam.Admin {
+			return userLookupError{Admin: a, err: lookupErr}
+		})
+		ctx := t.Context()
+		if _, err := f.CreateUser(ctx, root.Account, "alice", "/restricted/"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.CreateUser(ctx, root.Account, "bob", "/"); err != nil {
+			t.Fatal(err)
+		}
+		users := "arn:vws:iam::" + root.Account.String() + ":user/"
+		policy := `{"Statement":[` +
+			`{"Effect":"Allow","Action":"iam:GetMFADevice","Resource":"` + users + `alice"},` +
+			`{"Effect":"Deny","Action":"iam:GetMFADevice","Resource":"` + users + `restricted/*"}]}`
+		if err := f.PutInlinePolicy(ctx, root.Account, iam.EntityUser, "bob", "get", policy); err != nil {
+			t.Fatal(err)
+		}
+		k, err := f.CreateAccessKey(ctx, root.Account, "bob")
+		if err != nil {
+			t.Fatal(err)
+		}
+		bob := sigv4.Credential{AccessKey: k.AccessKeyID, Secret: k.Secret}
+		res := call(t, h, bob, sigv4.ServiceIAM, forAlice)
+		if res.Code == http.StatusNotFound {
+			t.Fatalf("a failed lookup authorized on a guessed ARN: %d %s", res.Code, res.Body.String())
+		}
+		has(t, res, http.StatusServiceUnavailable, `<Code>ServiceUnavailable</Code>`)
+		if len(rec.seen) != 0 {
+			t.Errorf("authorized on a guessed ARN: %v", rec.seen)
+		}
+	})
+
+	t.Run("a user that does not exist is authorized on the requested name", func(t *testing.T) {
+		// AWS evaluates the name it was given; a Deny on it still applies.
+		policy := `{"Statement":[{"Effect":"Allow","Action":"iam:GetMFADevice","Resource":"*"},` +
+			`{"Effect":"Deny","Action":"iam:GetMFADevice","Resource":"arn:vws:iam::` + root.Account.String() + `:user/ghost"}]}`
+		if err := f.PutInlinePolicy(ctx, root.Account, iam.EntityUser, "bob", "get", policy); err != nil {
+			t.Fatal(err)
+		}
+		ghost := url.Values{"Action": {"GetMFADevice"}, "SerialNumber": {fido}, "UserName": {"ghost"}}
+		has(t, call(t, h, bob, sigv4.ServiceIAM, ghost), http.StatusForbidden, `<Code>AccessDenied</Code>`)
+		casper := url.Values{"Action": {"GetMFADevice"}, "SerialNumber": {fido}, "UserName": {"casper"}}
+		has(t, call(t, h, bob, sigv4.ServiceIAM, casper), http.StatusNotFound, noSuchMFADevice)
+	})
 }
