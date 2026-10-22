@@ -181,6 +181,7 @@ func TestGetMFADeviceNeedsPermission(t *testing.T) {
 
 	t.Run("a user that does not exist is authorized on the requested name", func(t *testing.T) {
 		// AWS evaluates the name it was given; a Deny on it still applies.
+		ctx := t.Context()
 		policy := `{"Statement":[{"Effect":"Allow","Action":"iam:GetMFADevice","Resource":"*"},` +
 			`{"Effect":"Deny","Action":"iam:GetMFADevice","Resource":"arn:vws:iam::` + root.Account.String() + `:user/ghost"}]}`
 		if err := f.PutInlinePolicy(ctx, root.Account, iam.EntityUser, "bob", "get", policy); err != nil {
