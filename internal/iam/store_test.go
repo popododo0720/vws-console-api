@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/popododo0720/vws-console-api/internal/resource"
+	"github.com/popododo0720/vws-console-api/internal/sigv4"
 )
 
 const describeOnly = `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["ec2:Describe*","sts:AssumeRole"],"Resource":"*"}]}`
@@ -97,6 +98,41 @@ func TestAccessKeysAuthenticate(t *testing.T) {
 	must(t, f.DeleteAccessKey(ctx, a, "bob", k.AccessKeyID))
 	if _, err := verify(t, f, credOf(k.AccessKeyID, k.Secret, "")); resource.CodeOf(err) != resource.CodeUnauthenticated {
 		t.Fatalf("deleted key still works: %v", err)
+	}
+}
+
+func TestGetAccessKeyLastUsed(t *testing.T) {
+	ctx := t.Context()
+	a := account(t)
+	f := NewFake()
+	f.Now = func() time.Time { return now }
+	if _, err := f.CreateUser(ctx, a, "bob", "/"); err != nil {
+		t.Fatal(err)
+	}
+	used, err := f.CreateAccessKey(ctx, a, "bob")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fresh, err := f.CreateAccessKey(ctx, a, "bob")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := f.GetAccessKeyLastUsed(ctx, a, fresh.AccessKeyID)
+	if err != nil || got.UserName != "bob" || got.UserARN != "arn:vws:iam::123456789012:user/bob" ||
+		!got.LastUsed.IsZero() || got.Service != "" || got.Region != "" {
+		t.Fatalf("unused key %+v %v", got, err)
+	}
+	if _, err := verify(t, f, credOf(used.AccessKeyID, used.Secret, "")); err != nil {
+		t.Fatal(err)
+	}
+	got, err = f.GetAccessKeyLastUsed(ctx, a, used.AccessKeyID)
+	if err != nil || got.UserName != "bob" || !got.LastUsed.Equal(now) ||
+		got.Service != string(sigv4.ServiceEC2) || got.Region != resource.RegionName {
+		t.Fatalf("used key %+v %v", got, err)
+	}
+	if _, err := f.GetAccessKeyLastUsed(ctx, a, "AKIANOSUCHKEY0000000"); resource.CodeOf(err) != resource.CodeNotFound ||
+		!strings.Contains(err.Error(), "cannot be found") {
+		t.Fatalf("missing key: %v", err)
 	}
 }
 

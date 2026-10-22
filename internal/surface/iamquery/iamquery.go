@@ -54,6 +54,11 @@ type exchange struct {
 	// resourceErr is set when the action's ARN cannot be computed. The
 	// request fails closed instead of authorizing on a guessed ARN.
 	resourceErr error
+	// lastUsed caches the key read, so the ARN check and the response use
+	// one snapshot.
+	lastUsed     iam.AccessKeyLastUsed
+	lastUsedErr  error
+	lastUsedRead bool
 }
 
 func (c *exchange) form(k string) string { return c.r.Form.Get(k) }

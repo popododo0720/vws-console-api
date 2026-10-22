@@ -2,6 +2,7 @@ package iamquery
 
 import (
 	"encoding/xml"
+	"errors"
 	"regexp"
 	"strconv"
 	"strings"
@@ -18,6 +19,9 @@ var policyVersionRE = regexp.MustCompile(`^v[1-9][0-9]*(\.[A-Za-z0-9-]*)?$`)
 // policyARNRE is the AWS managed policy ARN shape. A well-formed ARN for
 // another account is left for the backend to report as missing.
 var policyARNRE = regexp.MustCompile(`^arn:[^:]+:iam::[0-9]{12}:policy/.+$`)
+
+// accessKeyIDRE is the AWS AccessKeyId shape.
+var accessKeyIDRE = regexp.MustCompile(`^\w{16,128}$`)
 
 // spec is one action: the form keys it reads, the ARN it is authorized on
 // (nil means "*"), and what it does.
@@ -194,6 +198,46 @@ func pathOr(p string) string {
 	return p
 }
 
+// readAccessKeyLastUsed reads the key once. A missing key is cached too, so
+// the action reports it after authorization instead of failing closed on a
+// guessed ARN.
+func readAccessKeyLastUsed(h *handler, c *exchange) (iam.AccessKeyLastUsed, error) {
+	if c.lastUsedRead {
+		return c.lastUsed, c.lastUsedErr
+	}
+	c.lastUsedRead = true
+	if err := required(c, "AccessKeyId"); err != nil {
+		c.lastUsedErr = err
+		return iam.AccessKeyLastUsed{}, err
+	}
+	if id := c.form("AccessKeyId"); !accessKeyIDRE.MatchString(id) {
+		c.lastUsedErr = resource.Invalid("accessKeyId",
+			"1 validation error detected: Value '"+id+"' at 'accessKeyId' failed to satisfy constraint: "+
+				`Member must satisfy regular expression pattern: [\w]+`)
+		return iam.AccessKeyLastUsed{}, c.lastUsedErr
+	}
+	c.lastUsed, c.lastUsedErr = h.cfg.Admin.GetAccessKeyLastUsed(
+		c.r.Context(), c.caller.Account, c.form("AccessKeyId"))
+	return c.lastUsed, c.lastUsedErr
+}
+
+// accessKeyLastUsedARN authorizes on the owning user's real ARN. A key that
+// does not exist is authorized on "*" and reported by the action.
+func accessKeyLastUsedARN(h *handler, c *exchange) string {
+	got, err := readAccessKeyLastUsed(h, c)
+	if err == nil {
+		if got.UserARN == "" {
+			c.resourceErr = resource.Internal(errors.New("access key owner has no ARN"))
+			return "*"
+		}
+		return got.UserARN
+	}
+	if code := resource.CodeOf(err); code != resource.CodeNotFound && code != resource.CodeInvalidArgument {
+		c.resourceErr = err
+	}
+	return "*"
+}
+
 func required(c *exchange, keys ...string) error {
 	for _, k := range keys {
 		if c.form(k) == "" {
@@ -366,6 +410,17 @@ func iamActions() map[string]spec {
 			}
 			return out, err
 		}},
+		"GetAccessKeyLastUsed": {
+			params: []string{"AccessKeyId"}, needsAdmin: true,
+			resource: accessKeyLastUsedARN,
+			run: func(h *handler, c *exchange) (any, error) {
+				got, err := readAccessKeyLastUsed(h, c)
+				if err != nil {
+					return nil, err
+				}
+				return toAccessKeyLastUsed(got), nil
+			},
+		},
 		"DeleteAccessKey": admin([]string{"UserName", "AccessKeyId"}, userARN, func(h *handler, c *exchange) (any, error) {
 			n, err := requireUser(c)
 			if err != nil {

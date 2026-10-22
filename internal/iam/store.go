@@ -395,6 +395,26 @@ func (f *Fake) ListAccessKeys(_ context.Context, a resource.AccountID, user stri
 	return out, nil
 }
 
+// GetAccessKeyLastUsed implements Admin. The AWS request names only the key,
+// so the owning user comes from the account's keys.
+func (f *Fake) GetAccessKeyLastUsed(_ context.Context, a resource.AccountID, keyID string) (AccessKeyLastUsed, error) {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	if st := f.accounts[a]; st != nil {
+		for name, u := range st.users {
+			if !u.keys[keyID] {
+				continue
+			}
+			out := AccessKeyLastUsed{UserName: name, UserARN: u.ARN}
+			if used, ok := f.used[keyID]; ok {
+				out.LastUsed, out.Service, out.Region = used.at, used.service, used.region
+			}
+			return out, nil
+		}
+	}
+	return AccessKeyLastUsed{}, AccessKeyNotFound(keyID)
+}
+
 // DeleteAccessKey implements Admin. The key stops authenticating at once.
 func (f *Fake) DeleteAccessKey(_ context.Context, a resource.AccountID, user, keyID string) error {
 	f.mu.Lock()
@@ -408,6 +428,7 @@ func (f *Fake) DeleteAccessKey(_ context.Context, a resource.AccountID, user, ke
 	}
 	delete(u.keys, keyID)
 	delete(f.keys, keyID)
+	delete(f.used, keyID)
 	return nil
 }
 
@@ -1262,6 +1283,7 @@ func (f *Fake) gcSessions() {
 	for id, k := range f.keys {
 		if k.SessionToken != "" && !k.Expires.IsZero() && !now.Before(k.Expires) {
 			delete(f.keys, id)
+			delete(f.used, id)
 		}
 	}
 }

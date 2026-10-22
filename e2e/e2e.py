@@ -668,6 +668,8 @@ def identity():
     step("new user key: IAM ListUsers is AccessDenied", lambda: aws_error("AccessDenied", lambda: bob_iam.list_users()))
     step("new user key: STS GetCallerIdentity needs no policy", lambda: check(
         bob_sts.get_caller_identity()["Arn"] == f"arn:vws:iam::{account}:user/e2e/e2e-bob", "bob arn"))
+    step("IAM GetAccessKeyLastUsed names the key owner", lambda: check(
+        iam.get_access_key_last_used(AccessKeyId=key["AccessKeyId"])["UserName"] == "e2e-bob", "owner"))
     step("GetCallerIdentity with a wrong secret is SignatureDoesNotMatch", lambda: aws_error(
         "SignatureDoesNotMatch", lambda: client("sts", key["AccessKeyId"], "wrong-secret").get_caller_identity()))
     step("unknown key is InvalidClientTokenId", lambda: aws_error(

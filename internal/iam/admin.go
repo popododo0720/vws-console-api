@@ -147,6 +147,23 @@ type NewAccessKey struct {
 	Secret string
 }
 
+// AccessKeyLastUsed is when and where an access key was last used. Service
+// and Region are empty when the key has never been used. UserARN is the
+// owning user's real ARN, for authorization.
+type AccessKeyLastUsed struct {
+	UserName, UserARN string
+	LastUsed          time.Time
+	Service, Region   string
+}
+
+// AccessKeyNotFound is the NoSuchEntity answer for an access key the account
+// does not hold.
+func AccessKeyNotFound(keyID string) error {
+	return &resource.Error{
+		Code: resource.CodeNotFound, Message: "The access key with id " + keyID + " cannot be found.",
+	}
+}
+
 // AssumedRole is the result of AssumeRole.
 type AssumedRole struct {
 	Key           Key
@@ -176,6 +193,7 @@ type Admin interface {
 
 	CreateAccessKey(ctx context.Context, a resource.AccountID, user string) (NewAccessKey, error)
 	ListAccessKeys(ctx context.Context, a resource.AccountID, user string) ([]AccessKeyMeta, error)
+	GetAccessKeyLastUsed(ctx context.Context, a resource.AccountID, keyID string) (AccessKeyLastUsed, error)
 	DeleteAccessKey(ctx context.Context, a resource.AccountID, user, keyID string) error
 
 	CreateGroup(ctx context.Context, a resource.AccountID, name, path string) (Group, error)
