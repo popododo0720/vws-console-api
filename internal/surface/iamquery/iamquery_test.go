@@ -388,6 +388,115 @@ func TestUpdateAssumeRolePolicy(t *testing.T) {
 	has(t, res, http.StatusConflict, `<Code>LimitExceeded</Code>`)
 }
 
+func TestCreatePolicyVersion(t *testing.T) {
+	h, f, rec, root := harness(t)
+	ctx := t.Context()
+	document := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"ec2:Describe*","Resource":"*"}]}`
+	newDocument := `{"Version":"2012-10-17","Statement":[{"Effect":"Deny","Action":"ec2:DeleteVpc","Resource":"*"}]}`
+	p, err := f.CreatePolicy(ctx, root.Account, "versioned", "/", document, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := call(t, h, root, sigv4.ServiceIAM, url.Values{
+		"Action": {"CreatePolicyVersion"}, "PolicyArn": {p.ARN}, "PolicyDocument": {newDocument}, "SetAsDefault": {"true"},
+	})
+	has(t, res, http.StatusOK,
+		`<CreatePolicyVersionResponse>`,
+		`<CreatePolicyVersionResult><PolicyVersion><VersionId>v2</VersionId>`+
+			`<IsDefaultVersion>true</IsDefaultVersion><CreateDate>2026-10-09T10:00:00Z</CreateDate>`+
+			`</PolicyVersion></CreatePolicyVersionResult>`,
+		`<ResponseMetadata><RequestId>`)
+	// The create result carries no document.
+	if strings.Contains(res.Body.String(), "<Document>") {
+		t.Errorf("create result carries a document: %s", res.Body.String())
+	}
+	want := "iam:CreatePolicyVersion " + p.ARN
+	if len(rec.seen) == 0 || rec.seen[len(rec.seen)-1] != want {
+		t.Errorf("authorized %v, want last %q", rec.seen, want)
+	}
+	page, err := f.ListPolicyVersions(ctx, root.Account, p.ARN, "", 0)
+	if err != nil || len(page.Versions) != 2 {
+		t.Fatalf("versions %+v: %v", page, err)
+	}
+	if !page.Versions[1].IsDefaultVersion || page.Versions[0].IsDefaultVersion {
+		t.Errorf("versions %+v, want v2 default", page.Versions)
+	}
+	// The policy now reports the new default version.
+	has(t, call(t, h, root, sigv4.ServiceIAM, url.Values{
+		"Action": {"GetPolicy"}, "PolicyArn": {p.ARN},
+	}), http.StatusOK, `<DefaultVersionId>v2</DefaultVersionId>`)
+	has(t, call(t, h, root, sigv4.ServiceIAM, url.Values{
+		"Action": {"GetPolicyVersion"}, "PolicyArn": {p.ARN}, "VersionId": {"v1"},
+	}), http.StatusOK, `<VersionId>v1</VersionId>`, `<IsDefaultVersion>false</IsDefaultVersion>`)
+	// v2 is readable and carries its own document.
+	has(t, call(t, h, root, sigv4.ServiceIAM, url.Values{
+		"Action": {"GetPolicyVersion"}, "PolicyArn": {p.ARN}, "VersionId": {"v2"},
+	}), http.StatusOK, `<Document>`+policyDoc(newDocument)+`</Document>`,
+		`<VersionId>v2</VersionId>`, `<IsDefaultVersion>true</IsDefaultVersion>`)
+	// SetAsDefault is optional and false when omitted.
+	res = call(t, h, root, sigv4.ServiceIAM, url.Values{
+		"Action": {"CreatePolicyVersion"}, "PolicyArn": {p.ARN}, "PolicyDocument": {document},
+	})
+	has(t, res, http.StatusOK, `<VersionId>v3</VersionId>`, `<IsDefaultVersion>false</IsDefaultVersion>`)
+	has(t, call(t, h, root, sigv4.ServiceIAM, url.Values{
+		"Action": {"CreatePolicyVersion"}, "PolicyArn": {"arn:vws:iam::123456789012:policy/none"},
+		"PolicyDocument": {document},
+	}), http.StatusNotFound, `<Code>NoSuchEntity</Code>`)
+	has(t, call(t, h, root, sigv4.ServiceIAM, url.Values{
+		"Action": {"CreatePolicyVersion"}, "PolicyArn": {p.ARN}, "PolicyDocument": {"{not json"},
+	}), http.StatusBadRequest, `<Code>MalformedPolicyDocument</Code>`)
+	has(t, call(t, h, root, sigv4.ServiceIAM, url.Values{
+		"Action": {"CreatePolicyVersion"}, "PolicyArn": {p.ARN}, "PolicyDocument": {document}, "SetAsDefault": {"yes"},
+	}), http.StatusBadRequest, `<Code>InvalidInput</Code>`)
+	has(t, call(t, h, root, sigv4.ServiceIAM, url.Values{
+		"Action": {"CreatePolicyVersion"}, "PolicyArn": {p.ARN},
+	}), http.StatusBadRequest, `<Code>ValidationError</Code>`, `Value null at`)
+	has(t, call(t, h, root, sigv4.ServiceIAM, url.Values{
+		"Action": {"CreatePolicyVersion"}, "PolicyArn": {"not-an-arn"}, "PolicyDocument": {document},
+	}), http.StatusBadRequest, `<Code>ValidationError</Code>`, `is not valid`)
+	has(t, call(t, h, root, sigv4.ServiceIAM, url.Values{
+		"Action": {"CreatePolicyVersion"}, "PolicyArn": {p.ARN}, "PolicyDocument": {document}, "PathPrefix": {"/"},
+	}), http.StatusBadRequest, `<Code>InvalidInput</Code>`)
+	// The policy keeps five versions, so the sixth is LimitExceeded.
+	for _, want := range []string{"v4", "v5"} {
+		has(t, call(t, h, root, sigv4.ServiceIAM, url.Values{
+			"Action": {"CreatePolicyVersion"}, "PolicyArn": {p.ARN}, "PolicyDocument": {document},
+		}), http.StatusOK, `<VersionId>`+want+`</VersionId>`)
+	}
+	has(t, call(t, h, root, sigv4.ServiceIAM, url.Values{
+		"Action": {"CreatePolicyVersion"}, "PolicyArn": {p.ARN}, "PolicyDocument": {document},
+	}), http.StatusConflict, `<Code>LimitExceeded</Code>`)
+}
+
+func TestCreatePolicyVersionAuthorizes(t *testing.T) {
+	h, f, _, root := harness(t)
+	ctx := t.Context()
+	document := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"ec2:Describe*","Resource":"*"}]}`
+	p, err := f.CreatePolicy(ctx, root.Account, "versioned", "/team/", document, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.CreateUser(ctx, root.Account, "bob", "/"); err != nil {
+		t.Fatal(err)
+	}
+	key, err := f.CreateAccessKey(ctx, root.Account, "bob")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bob := sigv4.Credential{AccessKey: key.AccessKeyID, Secret: key.Secret}
+	allow := `{"Statement":[{"Effect":"Allow","Action":"iam:CreatePolicyVersion","Resource":"` + p.ARN + `"}]}`
+	if err := f.PutInlinePolicy(ctx, root.Account, iam.EntityUser, "bob", "default", allow); err != nil {
+		t.Fatal(err)
+	}
+	has(t, call(t, h, bob, sigv4.ServiceIAM, url.Values{
+		"Action": {"CreatePolicyVersion"}, "PolicyArn": {"arn:vws:iam::123456789012:policy/admin/versioned"},
+		"PolicyDocument": {document},
+	}), http.StatusForbidden, `<Code>AccessDenied</Code>`)
+	has(t, call(t, h, bob, sigv4.ServiceIAM, url.Values{
+		"Action": {"CreatePolicyVersion"}, "PolicyArn": {p.ARN}, "PolicyDocument": {document},
+	}), http.StatusOK, `<CreatePolicyVersionResponse>`)
+}
+
 func TestSetDefaultPolicyVersion(t *testing.T) {
 	h, f, rec, root := harness(t)
 	ctx := t.Context()
