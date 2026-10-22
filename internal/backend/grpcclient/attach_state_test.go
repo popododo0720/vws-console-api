@@ -124,6 +124,15 @@ func TestDescribeVolumesReadsPendingAttachFromSpec(t *testing.T) {
 	}
 	badName := holder(ready)
 	badName.Name = "projects/" + projectID + "/instances/i-0fedcba987654321f"
+	// A record from another account's project must never become the
+	// caller's attachment (AGENTS.md: a result naming another account is
+	// rejected).
+	other, err := resource.Parse[resource.AccountID]("210987654321")
+	if err != nil {
+		t.Fatal(err)
+	}
+	foreign := observedInstance(project(other), instID, ready, running)
+	foreign.Spec.Volumes = holder(ready).GetSpec().GetVolumes()
 	rows := []struct {
 		name      string
 		inst      []*computev1.Instance
@@ -159,6 +168,15 @@ func TestDescribeVolumesReadsPendingAttachFromSpec(t *testing.T) {
 		{
 			name: "compute cannot be read", inst: []*computev1.Instance{holder(ready)},
 			listErr: status.Error(codes.Unavailable, "compute down"), wantCode: resource.CodeUnavailable, wantLists: 1,
+		},
+		{
+			name: "compute does not answer in time", inst: []*computev1.Instance{holder(ready)},
+			listErr:  status.Error(codes.DeadlineExceeded, "compute slow"),
+			wantCode: resource.CodeUnavailable, wantLists: 1,
+		},
+		{
+			name: "a foreign instance record is rejected", inst: []*computev1.Instance{foreign},
+			wantCode: resource.CodeInternal, wantLists: 1,
 		},
 	}
 	for _, row := range rows {
