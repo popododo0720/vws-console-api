@@ -23,6 +23,16 @@ func (u userLookupError) GetUser(context.Context, resource.AccountID, string) (i
 	return iam.User{}, u.err
 }
 
+// groupLookupError answers every GetGroup with err.
+type groupLookupError struct {
+	iam.Admin
+	err error
+}
+
+func (g groupLookupError) GetGroup(context.Context, resource.AccountID, string) (iam.Group, []iam.User, error) {
+	return iam.Group{}, nil, g.err
+}
+
 // actionsOn lists the IAM actions whose spec authorizes through one of res.
 func actionsOn(res ...func(*handler, *exchange) string) []string {
 	var out []string
@@ -65,6 +75,16 @@ func TestEntityActionsFailClosedWhenTheLookupFails(t *testing.T) {
 				"DeleteLoginProfile", "DeleteUser", "DeleteUserPolicy", "DetachUserPolicy", "GetLoginProfile",
 				"GetMFADevice", "GetUser", "GetUserPolicy", "ListAccessKeys", "ListAttachedUserPolicies",
 				"ListGroupsForUser", "ListUserPolicies", "PutUserPolicy", "UpdateLoginProfile", "UpdateUser",
+			},
+		},
+		{
+			name: "group", res: []func(*handler, *exchange) string{groupARN}, key: "GroupName",
+			wrap: func(a iam.Admin) iam.Admin { return groupLookupError{Admin: a, err: lookupErr} },
+			skip: []string{"CreateGroup"},
+			expect: []string{
+				"AddUserToGroup", "AttachGroupPolicy", "CreateGroup", "DeleteGroup", "DeleteGroupPolicy",
+				"DetachGroupPolicy", "GetGroup", "GetGroupPolicy", "ListAttachedGroupPolicies", "ListGroupPolicies",
+				"PutGroupPolicy", "RemoveUserFromGroup", "UpdateGroup",
 			},
 		},
 	} {

@@ -106,13 +106,20 @@ func userARN(h *handler, c *exchange) string {
 	return arnOf(c, "user", "/", name)
 }
 
+// groupARN is the group's real ARN when it exists. As in userARN, a missing
+// group is authorized on the requested name, and any other lookup failure
+// fails closed.
 func groupARN(h *handler, c *exchange) string {
 	name := c.form("GroupName")
 	if c.action == "CreateGroup" {
 		return arnOf(c, "group", pathOr(c.form("Path")), name)
 	}
-	if g, _, err := h.cfg.Admin.GetGroup(c.r.Context(), c.caller.Account, name); err == nil {
+	g, _, err := h.cfg.Admin.GetGroup(c.r.Context(), c.caller.Account, name)
+	if err == nil {
 		return g.ARN
+	}
+	if resource.CodeOf(err) != resource.CodeNotFound {
+		c.resourceErr = err
 	}
 	return arnOf(c, "group", "/", name)
 }
