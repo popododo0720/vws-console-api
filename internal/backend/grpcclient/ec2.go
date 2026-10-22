@@ -909,15 +909,19 @@ func (c computeClient) CreateKeyPair(ctx context.Context, m backend.Mutation, re
 		}
 		pair = sshkey.Pair{Public: pub.Line, AWSFingerprint: pub.AWSFingerprint}
 		req.Type = pub.Type
-	} else {
+	}
+	projectID := project(m.Account)
+	keyPairID, err := c.keyPairID(ctx, projectID, m.Account, req.Name)
+	if err != nil {
+		return resource.Accepted[resource.KeyPair]{}, err
+	}
+	if req.PublicKey == "" {
 		// The key comes from crypto/rand and nothing else, so no request
 		// input can rebuild it. It is never stored or logged.
-		var err error
 		if pair, err = sshkey.Generate(req.Type, rand.Reader); err != nil {
 			return resource.Accepted[resource.KeyPair]{}, resource.Internal(err)
 		}
 	}
-	projectID := project(m.Account)
 	labels := nameLabels(req.Name)
 	labels[labelFingerprint] = clip(m.Fingerprint, 63)
 	if req.PublicKey == "" && req.Type == resource.KeyTypeRSA {
@@ -930,7 +934,7 @@ func (c computeClient) CreateKeyPair(ctx context.Context, m backend.Mutation, re
 	}
 	created, err := c.keys.CreateKeyPair(ctx, &computev1.CreateKeyPairRequest{
 		Parent:    regionParent(projectID),
-		KeyPairId: derivedID("key-", m.Key, "key"),
+		KeyPairId: keyPairID,
 		RequestId: requestUUID(m.Key, "key"),
 		KeyPair: &computev1.KeyPair{
 			Labels: labels,
@@ -940,6 +944,9 @@ func (c computeClient) CreateKeyPair(ctx context.Context, m backend.Mutation, re
 	if err := rpcErr(created, err); err != nil {
 		if req.PublicKey == "" && resource.CodeOf(err) == resource.CodeIdempotencyMismatch {
 			return resource.Accepted[resource.KeyPair]{}, c.keyRetry(ctx, projectID, req.Name)
+		}
+		if resource.CodeOf(err) == resource.CodeAlreadyExists {
+			return resource.Accepted[resource.KeyPair]{}, resource.AlreadyExists(resource.KindKeyPair, req.Name)
 		}
 		return resource.Accepted[resource.KeyPair]{}, err
 	}
@@ -1523,6 +1530,26 @@ func protocolName(p networkv1.Protocol) string {
 		return ""
 	default:
 		return ""
+	}
+}
+
+// keyPairID names the key pair a create asks compute for. Compute creates
+// atomically per id, so an id derived from the account and the name turns a
+// second create of a live name into ALREADY_EXISTS, even when two creates
+// race (#273). A key pair made before that id carries an id derived from its
+// client token. When a key pair already holds the name, the create targets
+// its id, so compute still refuses the name or replays the same request.
+func (c computeClient) keyPairID(
+	ctx context.Context, projectID string, account resource.AccountID, name string,
+) (string, error) {
+	held, err := c.findKey(ctx, projectID, resource.DeleteKeyPairRequest{Name: name})
+	switch {
+	case err == nil:
+		return held.ID.String(), nil
+	case missingResource(err):
+		return derivedID("key-", account.String(), "key-name", name), nil
+	default:
+		return "", err
 	}
 }
 
