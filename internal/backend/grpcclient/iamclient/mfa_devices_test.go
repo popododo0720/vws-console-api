@@ -190,3 +190,164 @@ func TestListVirtualMFADevicesUnassignedSkipsUsers(t *testing.T) {
 		t.Fatalf("unassigned page %+v, %v; user reads %v", page, err, s.getUser)
 	}
 }
+
+func TestListMFADevicesOverGRPC(t *testing.T) {
+	c, s := harness(t)
+	ctx := t.Context()
+	const (
+		alice       = "projects/123456789012/users/alice"
+		bob         = "projects/123456789012/users/bob"
+		serialA     = "arn:vws:iam::123456789012:mfa/alice-a"
+		serialB     = "arn:vws:iam::123456789012:mfa/alice-b"
+		serialC     = "arn:vws:iam::123456789012:mfa/alice-c"
+		bobSerial   = "arn:vws:iam::123456789012:mfa/bob-phone"
+		spareSerial = "arn:vws:iam::123456789012:mfa/spare-phone"
+	)
+	enabled := time.Date(2026, 10, 9, 10, 0, 0, 0, time.UTC)
+	s.getUserRes = map[string]*iamv1.User{alice: {
+		Name:   alice,
+		Status: &iamv1.UserStatus{Arn: "arn:vws:iam::123456789012:user/alice"},
+	}}
+	s.listMfaDevicesPages = map[string]*iamv1.ListMfaDevicesResponse{
+		"": {MfaDevices: []*iamv1.MfaDevice{
+			{Status: &iamv1.MfaDeviceStatus{
+				SerialNumber: serialB, User: alice, EnableTime: timestamppb.New(enabled.Add(time.Hour)),
+			}},
+			{Status: &iamv1.MfaDeviceStatus{SerialNumber: bobSerial, User: bob}},
+			{Status: &iamv1.MfaDeviceStatus{SerialNumber: spareSerial}},
+			{Status: &iamv1.MfaDeviceStatus{
+				SerialNumber: serialA, User: alice, EnableTime: timestamppb.New(enabled),
+			}},
+		}, NextPageToken: "next"},
+		"next": {MfaDevices: []*iamv1.MfaDevice{
+			{Status: &iamv1.MfaDeviceStatus{
+				SerialNumber: serialC, User: alice, EnableTime: timestamppb.New(enabled.Add(2 * time.Hour)),
+			}},
+		}},
+	}
+
+	admin := STSAdmin{Client: c}
+	page, err := admin.ListMFADevices(ctx, accountID(t), "alice", "", 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(s.listMfaDevices) != 2 {
+		t.Fatalf("sent %v", s.listMfaDevices)
+	}
+	if got := s.listMfaDevices[0]; got.GetParent() != "projects/123456789012" ||
+		got.GetPageSize() != iam.MaxMFADevicePageSize || got.GetPageToken() != "" {
+		t.Errorf("first request %+v", got)
+	}
+	if got := s.listMfaDevices[1]; got.GetParent() != "projects/123456789012" ||
+		got.GetPageSize() != iam.MaxMFADevicePageSize || got.GetPageToken() != "next" {
+		t.Errorf("second request %+v", got)
+	}
+	if len(s.getUser) != 1 || s.getUser[0].GetName() != alice {
+		t.Errorf("user reads %v", s.getUser)
+	}
+	if !page.IsTruncated || page.Marker != serialB || len(page.Devices) != 2 {
+		t.Fatalf("page %+v", page)
+	}
+	if page.Devices[0].SerialNumber != serialA || page.Devices[1].SerialNumber != serialB {
+		t.Fatalf("serials %q %q", page.Devices[0].SerialNumber, page.Devices[1].SerialNumber)
+	}
+	for i, d := range page.Devices {
+		if d.UserName != "alice" {
+			t.Errorf("device %d user %q", i, d.UserName)
+		}
+	}
+	if !page.Devices[0].EnableDate.Equal(enabled) ||
+		!page.Devices[1].EnableDate.Equal(enabled.Add(time.Hour)) {
+		t.Errorf("enable dates %v %v", page.Devices[0].EnableDate, page.Devices[1].EnableDate)
+	}
+
+	rest, err := admin.ListMFADevices(ctx, accountID(t), "alice", page.Marker, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rest.IsTruncated || len(rest.Devices) != 1 || rest.Devices[0].SerialNumber != serialC {
+		t.Fatalf("rest page %+v, %v", rest, err)
+	}
+	if !rest.Devices[0].EnableDate.Equal(enabled.Add(2 * time.Hour)) {
+		t.Errorf("enable date %v", rest.Devices[0].EnableDate)
+	}
+}
+
+func TestListMFADevicesErrorsOverGRPC(t *testing.T) {
+	const alice = "projects/123456789012/users/alice"
+	aliceUser := map[string]*iamv1.User{alice: {
+		Name:   alice,
+		Status: &iamv1.UserStatus{Arn: "arn:vws:iam::123456789012:user/alice"},
+	}}
+
+	c, s := harness(t)
+	s.getUserErr = awsErr(codes.NotFound, "RESOURCE_NOT_FOUND", "NoSuchEntity")
+	if _, err := (STSAdmin{Client: c}).ListMFADevices(
+		t.Context(), accountID(t), "alice", "", 0,
+	); resource.CodeOf(err) != resource.CodeNotFound {
+		t.Fatalf("a missing user mapped to %v", err)
+	}
+	if len(s.listMfaDevices) != 0 {
+		t.Fatalf("listed devices before resolving the user: %v", s.listMfaDevices)
+	}
+
+	c, s = harness(t)
+	s.getUserRes = aliceUser
+	s.listMfaDevicesErr = awsErr(codes.ResourceExhausted, "QUOTA_EXCEEDED", "")
+	if _, err := (STSAdmin{Client: c}).ListMFADevices(
+		t.Context(), accountID(t), "alice", "", 0,
+	); resource.CodeOf(err) != resource.CodeResourceExhausted {
+		t.Fatalf("a failed list mapped to %v", err)
+	}
+
+	c, s = harness(t)
+	s.getUserRes = aliceUser
+	s.listMfaDevicesRes = &iamv1.ListMfaDevicesResponse{MfaDevices: []*iamv1.MfaDevice{{
+		Status: &iamv1.MfaDeviceStatus{User: alice},
+	}}}
+	if _, err := (STSAdmin{Client: c}).ListMFADevices(
+		t.Context(), accountID(t), "alice", "", 0,
+	); resource.CodeOf(err) != resource.CodeInternal {
+		t.Fatalf("a device without a serial number mapped to %v", err)
+	}
+
+	c, s = harness(t)
+	s.getUserRes = aliceUser
+	s.listMfaDevicesRes = &iamv1.ListMfaDevicesResponse{MfaDevices: []*iamv1.MfaDevice{{
+		Status: &iamv1.MfaDeviceStatus{
+			SerialNumber: "arn:vws:iam::210987654321:mfa/a-phone", User: alice,
+		},
+	}}}
+	if _, err := (STSAdmin{Client: c}).ListMFADevices(
+		t.Context(), accountID(t), "alice", "", 0,
+	); resource.CodeOf(err) != resource.CodeInternal {
+		t.Fatalf("a foreign device serial mapped to %v", err)
+	}
+
+	c, s = harness(t)
+	s.getUserRes = aliceUser
+	s.listMfaDevicesRes = &iamv1.ListMfaDevicesResponse{MfaDevices: []*iamv1.MfaDevice{{
+		Status: &iamv1.MfaDeviceStatus{
+			SerialNumber: "arn:vws:iam::123456789012:mfa/a-phone", User: alice,
+		},
+	}}}
+	if _, err := (STSAdmin{Client: c}).ListMFADevices(
+		t.Context(), accountID(t), "alice", "", 0,
+	); resource.CodeOf(err) != resource.CodeInternal {
+		t.Fatalf("a device without an enable time mapped to %v", err)
+	}
+
+	c, s = harness(t)
+	s.getUserRes = aliceUser
+	s.listMfaDevicesRes = &iamv1.ListMfaDevicesResponse{MfaDevices: []*iamv1.MfaDevice{{
+		Status: &iamv1.MfaDeviceStatus{
+			SerialNumber: "arn:vws:iam::123456789012:mfa/a-phone",
+			User:         "projects/210987654321/users/alice",
+		},
+	}}}
+	if _, err := (STSAdmin{Client: c}).ListMFADevices(
+		t.Context(), accountID(t), "alice", "", 0,
+	); resource.CodeOf(err) != resource.CodeInternal {
+		t.Fatalf("a foreign user mapped to %v", err)
+	}
+}

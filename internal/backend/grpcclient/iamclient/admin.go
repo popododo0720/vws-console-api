@@ -22,8 +22,8 @@ import (
 // AccessKey services yet; each answers Unimplemented, which the surface
 // returns as InvalidAction. CreatePolicyVersion, GetPolicyVersion,
 // ListPolicyVersions, SetDefaultPolicyVersion, DeletePolicyVersion, the policy
-// and MFA device tag calls, ListVirtualMFADevices, GetRole, UpdateRole,
-// UpdateRoleDescription and GetAccessKeyLastUsed are mapped.
+// and MFA device tag calls, ListVirtualMFADevices, ListMFADevices, GetRole,
+// UpdateRole, UpdateRoleDescription and GetAccessKeyLastUsed are mapped.
 type STSAdmin struct{ *Client }
 
 var _ iam.Admin = STSAdmin{}
@@ -739,6 +739,61 @@ func (a STSAdmin) ListVirtualMFADevices(
 		token = resp.GetNextPageToken()
 		if token == "" {
 			return iam.PageVirtualMFADevices(devices, assignment, marker, maxItems), nil
+		}
+	}
+}
+
+// ListMFADevices implements iam.Admin over MfaDeviceService.ListMfaDevices.
+// vws-iam pages every device of the account before the user filter, so this
+// reads every page and then filters and pages to keep AWS's MaxItems and
+// Marker semantics.
+func (a STSAdmin) ListMFADevices(
+	ctx context.Context, account resource.AccountID, user, marker string, maxItems int,
+) (iam.MFADevicePage, error) {
+	resourceName := "projects/" + account.String() + "/users/" + user
+	if _, err := a.userFor(ctx, account, resourceName); err != nil {
+		return iam.MFADevicePage{}, err
+	}
+	var devices []iam.MFADevice
+	token := ""
+	for {
+		resp, err := retry(ctx, a.backoff, a.mfaDevices.ListMfaDevices, &iamv1.ListMfaDevicesRequest{
+			Parent: "projects/" + account.String(), PageSize: iam.MaxMFADevicePageSize, PageToken: token,
+		})
+		if err != nil {
+			return iam.MFADevicePage{}, authError(err)
+		}
+		for _, dev := range resp.GetMfaDevices() {
+			status := dev.GetStatus()
+			assigned := status.GetUser()
+			if assigned != "" && !userResourceInAccount(account, assigned) {
+				return iam.MFADevicePage{}, resource.Internal(
+					errors.New("vws-iam ListMfaDevices returned a user outside the caller's account"))
+			}
+			if assigned != resourceName {
+				continue
+			}
+			serial := status.GetSerialNumber()
+			if serial == "" {
+				return iam.MFADevicePage{}, resource.Internal(
+					errors.New("vws-iam ListMfaDevices returned a device with no serial number"))
+			}
+			if _, err := mfaDeviceResource(account, serial); err != nil {
+				return iam.MFADevicePage{}, resource.Internal(
+					errors.New("vws-iam ListMfaDevices returned a device outside the caller's account"))
+			}
+			t := status.GetEnableTime()
+			if t == nil {
+				return iam.MFADevicePage{}, resource.Internal(
+					errors.New("vws-iam ListMfaDevices returned a device with no enable time"))
+			}
+			devices = append(devices, iam.MFADevice{
+				UserName: user, SerialNumber: serial, EnableDate: t.AsTime(),
+			})
+		}
+		token = resp.GetNextPageToken()
+		if token == "" {
+			return iam.PageMFADevices(devices, marker, maxItems), nil
 		}
 	}
 }

@@ -195,8 +195,9 @@ func (f *Fake) AddMfaDevice(a resource.AccountID, name string) string {
 }
 
 // AssignMfaDevice enables a virtual MFA device for a user of the same account
-// so ListVirtualMFADevices reports it as assigned. It is for tests and for a
-// fake seeded with the devices of an account.
+// so ListVirtualMFADevices reports it as assigned. A zero enableTime means the
+// fake's now. It is for tests and for a fake seeded with the devices of an
+// account.
 func (f *Fake) AssignMfaDevice(a resource.AccountID, serial, user string, enableTime time.Time) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -207,6 +208,9 @@ func (f *Fake) AssignMfaDevice(a resource.AccountID, serial, user string, enable
 	}
 	if st.users[user] == nil {
 		return notFound("user", user)
+	}
+	if enableTime.IsZero() {
+		enableTime = f.now()
 	}
 	d.user = user
 	d.enableTime = enableTime.UTC()
@@ -1161,6 +1165,29 @@ func (f *Fake) ListVirtualMFADevices(
 		devices = append(devices, v)
 	}
 	return PageVirtualMFADevices(devices, assignment, marker, maxItems), nil
+}
+
+// ListMFADevices implements Admin. Only devices enabled for the named user are
+// listed; a missing user is NotFound.
+func (f *Fake) ListMFADevices(
+	_ context.Context, a resource.AccountID, user, marker string, maxItems int,
+) (MFADevicePage, error) {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	st := f.account(a)
+	if st.users[user] == nil {
+		return MFADevicePage{}, notFound("user", user)
+	}
+	devices := make([]MFADevice, 0, len(st.mfa))
+	for serial, d := range st.mfa {
+		if d.user != user {
+			continue
+		}
+		devices = append(devices, MFADevice{
+			UserName: user, SerialNumber: serial, EnableDate: d.enableTime,
+		})
+	}
+	return PageMFADevices(devices, marker, maxItems), nil
 }
 
 // --- virtual MFA device tags ---

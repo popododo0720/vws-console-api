@@ -16,11 +16,51 @@ const (
 	MFADeviceAssignmentUnassigned MFADeviceAssignment = "Unassigned"
 )
 
-// The AWS paging limits of ListVirtualMFADevices.
+// The AWS paging limits of the MFA device lists.
 const (
 	DefaultMFADevicePageSize = 100
 	MaxMFADevicePageSize     = 1000
 )
+
+// MFADevice is one row of ListMFADevices: a virtual MFA device enabled for
+// one user.
+type MFADevice struct {
+	UserName     string
+	SerialNumber string
+	EnableDate   time.Time
+}
+
+// MFADevicePage is one page of ListMFADevices. Marker is the value the next
+// call sends as Marker; it is empty on the last page.
+type MFADevicePage struct {
+	Devices     []MFADevice
+	IsTruncated bool
+	Marker      string
+}
+
+// PageMFADevices sorts by serial number and returns the AWS page. The input
+// slice is not changed.
+func PageMFADevices(devices []MFADevice, marker string, maxItems int) MFADevicePage {
+	if maxItems <= 0 {
+		maxItems = DefaultMFADevicePageSize
+	}
+	if maxItems > MaxMFADevicePageSize {
+		maxItems = MaxMFADevicePageSize
+	}
+	out := append([]MFADevice(nil), devices...)
+	sort.Slice(out, func(i, j int) bool { return out[i].SerialNumber < out[j].SerialNumber })
+	start := 0
+	if marker != "" {
+		start = sort.Search(len(out), func(i int) bool { return out[i].SerialNumber > marker })
+	}
+	end := min(start+maxItems, len(out))
+	page := MFADevicePage{Devices: out[start:end]}
+	if end < len(out) {
+		page.IsTruncated = true
+		page.Marker = out[end-1].SerialNumber
+	}
+	return page
+}
 
 // VirtualMFADevice is one row of ListVirtualMFADevices. User is set only when
 // the device is enabled for that user.

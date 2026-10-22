@@ -798,6 +798,33 @@ func iamActions() map[string]spec {
 				return out, err
 			},
 		},
+		"ListMFADevices": {
+			params: []string{"UserName", "Marker", "MaxItems"}, needsAdmin: true,
+			run: func(h *handler, c *exchange) (any, error) {
+				user, err := listMFADevicesUserName(c)
+				if err != nil {
+					return nil, err
+				}
+				maxItems, err := maxItemsParam(c)
+				if err != nil {
+					return nil, err
+				}
+				if err := mfaDeviceMarkerParam(c); err != nil {
+					return nil, err
+				}
+				page, err := h.cfg.Admin.ListMFADevices(
+					c.r.Context(), c.caller.Account, user, c.form("Marker"), maxItems)
+				out := mfaDevicesResult{
+					MFADevices:  []mfaDeviceXML{},
+					IsTruncated: page.IsTruncated,
+					Marker:      page.Marker,
+				}
+				for _, d := range page.Devices {
+					out.MFADevices = append(out.MFADevices, toMFADevice(d))
+				}
+				return out, err
+			},
+		},
 		"TagMFADevice": {
 			params: []string{"SerialNumber"}, prefixes: []string{"Tags.member."}, needsAdmin: true,
 			resource: mfaDeviceARN,

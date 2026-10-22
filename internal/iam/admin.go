@@ -255,6 +255,12 @@ type Admin interface {
 		ctx context.Context, a resource.AccountID, assignment MFADeviceAssignment, marker string, maxItems int,
 	) (VirtualMFADevicePage, error)
 
+	// ListMFADevices lists the devices enabled for one user. The user
+	// argument is the AWS UserName, not an ARN.
+	ListMFADevices(
+		ctx context.Context, a resource.AccountID, user, marker string, maxItems int,
+	) (MFADevicePage, error)
+
 	// The MFA device argument is the device serial number, the ARN the AWS
 	// Query API calls SerialNumber.
 	TagMFADevice(ctx context.Context, a resource.AccountID, serial string, tags []Tag) error
