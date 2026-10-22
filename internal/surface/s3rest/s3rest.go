@@ -58,7 +58,7 @@ type handler struct {
 func (h *handler) wrap(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if h.verifier == nil {
-			writeErr(w, r, resource.Unauthenticated("missing signature"), "")
+			writeErr(w, r, sigv4.Reject(sigv4.FailureUnsigned, resource.Unauthenticated("missing signature")), "")
 			return
 		}
 		caller, err := h.verifier.Verify(r)
@@ -570,11 +570,17 @@ type bucketXML struct {
 }
 
 type errorXML struct {
-	XMLName   struct{} `xml:"Error"`
-	Code      string   `xml:"Code"`
-	Message   string   `xml:"Message"`
-	Resource  string   `xml:"Resource,omitempty"`
-	RequestID string   `xml:"RequestId"`
+	XMLName struct{} `xml:"Error"`
+	Code    string   `xml:"Code"`
+	Message string   `xml:"Message"`
+	// The detail S3 returns with SignatureDoesNotMatch: what it computed
+	// from the request, for the caller to compare with its own.
+	AWSAccessKeyID    string `xml:"AWSAccessKeyId,omitempty"`
+	StringToSign      string `xml:"StringToSign,omitempty"`
+	SignatureProvided string `xml:"SignatureProvided,omitempty"`
+	CanonicalRequest  string `xml:"CanonicalRequest,omitempty"`
+	Resource          string `xml:"Resource,omitempty"`
+	RequestID         string `xml:"RequestId"`
 }
 
 func writeXML(w http.ResponseWriter, status int, v any) {
@@ -588,6 +594,11 @@ func writeXML(w http.ResponseWriter, status int, v any) {
 }
 
 func writeErr(w http.ResponseWriter, r *http.Request, err error, resourceName string) {
+	if rej, ok := sigv4.RejectionOf(err); ok {
+		status, body := authError(rej, r.Header.Get("X-Request-Id"))
+		writeXML(w, status, body)
+		return
+	}
 	e := resource.AsError(err)
 	if statusOf(e) >= http.StatusInternalServerError {
 		server.RecordFailure(w, err)
@@ -595,6 +606,54 @@ func writeErr(w http.ResponseWriter, r *http.Request, err error, resourceName st
 	writeXML(w, statusOf(e), errorXML{
 		Code: s3Code(e), Message: e.Message, Resource: resourceName, RequestID: r.Header.Get("X-Request-Id"),
 	})
+}
+
+// authError is S3's answer to a SigV4 failure: the code and status from the
+// S3 list of error codes, and nothing about which check refused the request
+// beyond that code (#245). Only SignatureDoesNotMatch carries detail, and
+// only what was computed from the request itself.
+// https://docs.aws.amazon.com/AmazonS3/latest/developerguide/ErrorResponses.html
+//
+// The message is the text S3 sends where it differs from the list's
+// description, as vws-conformance checks it: SignatureDoesNotMatch as the
+// SigV4 troubleshooting guide quotes it
+// (https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_sigv-troubleshooting.html),
+// AuthorizationHeaderMalformed as the CloudFront guide quotes its start
+// (https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/http-400-bad-request.html)
+// without the region or service S3 then names, and RequestTimeTooSkewed and
+// InvalidAccessKeyId as S3 sends them.
+func authError(rej *sigv4.RejectionError, requestID string) (int, errorXML) {
+	out := errorXML{RequestID: requestID}
+	status := http.StatusForbidden
+	switch rej.Failure {
+	case sigv4.FailureMalformed:
+		status, out.Code, out.Message = http.StatusBadRequest, "AuthorizationHeaderMalformed",
+			"The authorization header is malformed."
+	case sigv4.FailureSkewed:
+		out.Code, out.Message = "RequestTimeTooSkewed",
+			"The difference between the request time and the current time is too large."
+	case sigv4.FailureUnknownKey:
+		out.Code, out.Message = "InvalidAccessKeyId", "The AWS Access Key Id you provided does not exist in our records."
+	case sigv4.FailureSignature:
+		out.Code, out.Message = "SignatureDoesNotMatch",
+			"The request signature we calculated does not match the signature you provided. "+
+				"Check your key and signing method."
+		out.AWSAccessKeyID, out.StringToSign = rej.AccessKeyID, rej.StringToSign
+		out.SignatureProvided, out.CanonicalRequest = rej.SignatureProvided, rej.CanonicalRequest
+	case sigv4.FailureInvalidToken:
+		status, out.Code, out.Message = http.StatusBadRequest, "InvalidToken",
+			"The provided token is malformed or otherwise not valid."
+	case sigv4.FailureExpiredToken:
+		status, out.Code, out.Message = http.StatusBadRequest, "ExpiredToken", "The provided token has expired."
+	case sigv4.FailurePayloadHash:
+		status, out.Code, out.Message = http.StatusBadRequest, "BadDigest",
+			"The Content-MD5 or checksum value that you specified did not match what the server received."
+	case sigv4.FailureUnsigned, sigv4.FailureDenied:
+		out.Code, out.Message = "AccessDenied", "Access Denied"
+	default:
+		out.Code, out.Message = "AccessDenied", "Access Denied"
+	}
+	return status, out
 }
 
 func statusOf(e *resource.Error) int {

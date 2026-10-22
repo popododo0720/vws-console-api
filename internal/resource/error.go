@@ -90,6 +90,14 @@ func (e *Error) Error() string {
 // Unwrap returns the internal cause.
 func (e *Error) Unwrap() error { return e.cause }
 
+// WithCause returns a copy of e that wraps cause. Like every cause it is for
+// logs and errors.Is/As only; callers never see it.
+func (e *Error) WithCause(cause error) *Error {
+	c := *e
+	c.cause = cause
+	return &c
+}
+
 // MarshalJSON encodes the caller-visible fields.
 func (e *Error) MarshalJSON() ([]byte, error) {
 	//nolint:wrapcheck // MarshalJSON returns encoding/json's own error to encoding/json.
