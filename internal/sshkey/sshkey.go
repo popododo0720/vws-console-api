@@ -51,8 +51,9 @@ type Public struct {
 	AWSFingerprint string
 }
 
-// Generate makes a key of typ from r. The same bytes from r give the same key,
-// so a retried CreateKeyPair returns the private key it returned the first time.
+// Generate makes a key of typ from r. The key is a function of r alone, so a
+// caller that serves a user passes crypto/rand.Reader. Tests pass a fixed
+// stream to get a fixed key.
 func Generate(typ resource.KeyType, r io.Reader) (Pair, error) {
 	switch typ {
 	case resource.KeyTypeRSA:
@@ -66,7 +67,7 @@ func Generate(typ resource.KeyType, r io.Reader) (Pair, error) {
 
 func generateRSA(r io.Reader) (Pair, error) {
 	// crypto/rsa ignores its reader since Go 1.26, so the primes are drawn here
-	// to keep the key a function of r.
+	// from r. That keeps test keys fixed under a fixed stream.
 	e := big.NewInt(65537)
 	one := big.NewInt(1)
 	for {

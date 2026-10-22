@@ -405,7 +405,17 @@ func (c compute) CreateKeyPair(ctx context.Context, m backend.Mutation, req reso
 	defer c.w.mu.Unlock()
 	c.w.settle(c.w.now())
 	if acc, ok, err := replay[resource.Accepted[resource.KeyPair]](c.w, m.Key, m.Fingerprint); err != nil || ok {
-		return acc, err
+		if err != nil || req.PublicKey != "" {
+			return acc, err
+		}
+		// EC2 returns a created private key once. A retry is a second create
+		// of the name, which is InvalidKeyPair.Duplicate while the name lives.
+		for _, existing := range c.w.key {
+			if existing.OwnerID == m.Account && existing.Name == req.Name {
+				return resource.Accepted[resource.KeyPair]{}, resource.AlreadyExists(resource.KindKeyPair, req.Name)
+			}
+		}
+		return resource.Accepted[resource.KeyPair]{}, resource.IdempotencyMismatch()
 	}
 	for _, existing := range c.w.key {
 		if existing.OwnerID == m.Account && existing.Name == req.Name {
@@ -443,9 +453,9 @@ func (c compute) CreateKeyPair(ctx context.Context, m backend.Mutation, req reso
 	stored := key
 	stored.Material = ""
 	c.w.key[id] = &stored
-	acc := resource.Accepted[resource.KeyPair]{Operation: op, Items: []resource.KeyPair{key}}
-	c.w.finish(m.Key, m.Fingerprint, acc)
-	return acc, nil
+	// The idempotency record keeps no private key.
+	c.w.finish(m.Key, m.Fingerprint, resource.Accepted[resource.KeyPair]{Operation: op, Items: []resource.KeyPair{stored}})
+	return resource.Accepted[resource.KeyPair]{Operation: op, Items: []resource.KeyPair{key}}, nil
 }
 
 func (n network) CreateVpc(ctx context.Context, m backend.Mutation, req resource.CreateVpcRequest) (resource.Accepted[resource.Vpc], error) {
