@@ -286,15 +286,16 @@ func authError(err error) error {
 		case "InvalidClientTokenId":
 			return sigv4.ErrUnknownKey
 		case "ExpiredToken":
-			return resource.Unauthenticated("the security token included in the request is expired")
+			return sigv4.Reject(sigv4.FailureExpiredToken,
+				resource.Unauthenticated("the security token included in the request is expired"))
 		case "RequestTimeTooSkewed":
-			return resource.Unauthenticated("request time is outside the allowed window")
+			return sigv4.Reject(sigv4.FailureSkewed, resource.Unauthenticated("request time is outside the allowed window"))
 		case "IncompleteSignature":
-			return resource.Unauthenticated("credential scope rejected")
+			return sigv4.Reject(sigv4.FailureMalformed, resource.Unauthenticated("credential scope rejected"))
 		case "MissingAuthenticationToken":
-			return resource.Unauthenticated("missing signature")
+			return sigv4.Reject(sigv4.FailureUnsigned, resource.Unauthenticated("missing signature"))
 		default:
-			return resource.Unauthenticated("signature mismatch")
+			return sigv4.SignatureMismatch()
 		}
 	case codes.PermissionDenied:
 		return resource.Denied(st.Message())

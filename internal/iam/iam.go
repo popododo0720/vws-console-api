@@ -93,7 +93,7 @@ func verifyKey(k Key, req sigv4.AuthRequest, now time.Time) (Principal, error) {
 		return Principal{}, err
 	}
 	if !req.VerifiedBy(k.Secret) {
-		return Principal{}, resource.Unauthenticated("signature mismatch")
+		return Principal{}, sigv4.SignatureMismatch()
 	}
 	return k.Principal, nil
 }
