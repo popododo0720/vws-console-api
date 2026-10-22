@@ -113,6 +113,10 @@ type Volume struct {
 	CreateTime time.Time   `json:"createTime"`
 	// AttachTime is when the volume was attached. It stays zero while detached.
 	AttachTime time.Time `json:"attachTime,omitzero"`
+	// AttachState is the attachment status while InstanceID is set: attaching
+	// from AttachVolume until the backend reports the volume on the instance,
+	// then attached. It is empty while detached.
+	AttachState AttachmentStatus `json:"attachState,omitempty"`
 	// DeleteOnTermination is set on a root volume, which goes with its instance.
 	DeleteOnTermination bool `json:"deleteOnTermination,omitempty"`
 }
@@ -167,12 +171,14 @@ func (r CreateVolumeRequest) Normalize() (CreateVolumeRequest, error) {
 	return r, nil
 }
 
-// AttachmentStatus is the EC2 attachment status on a detach accept.
-// It is not a volume state.
+// AttachmentStatus is the EC2 attachment status (VolumeAttachment.status).
+// It is not a volume state: a volume that is attaching is already in-use.
 type AttachmentStatus string
 
-// Attachment statuses this process returns. A detach accept is detaching.
+// Attachment statuses this process returns. An attach accept is attaching,
+// as on EC2, and a detach accept is detaching.
 const (
+	AttachmentAttaching AttachmentStatus = "attaching"
 	AttachmentAttached  AttachmentStatus = "attached"
 	AttachmentDetaching AttachmentStatus = "detaching"
 )

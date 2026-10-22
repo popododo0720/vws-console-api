@@ -203,12 +203,26 @@ func (c compute) AttachVolume(ctx context.Context, m backend.Mutation, req resou
 	}
 	prev := *vol
 	prevBlocks := append([]resource.BlockDevice(nil), inst.BlockDevices...)
+	// The volume is in-use from the accept, as on EC2. The attachment is
+	// attaching until the operation settles, which stands in for the
+	// hypervisor plugging the disk in.
 	vol.State = resource.VolumeInUse
 	vol.InstanceID = req.InstanceID
 	vol.Device = req.Device
 	vol.AttachTime = c.w.now().UTC()
+	vol.AttachState = resource.AttachmentAttaching
 	inst.BlockDevices = append(inst.BlockDevices, resource.BlockDevice{Device: req.Device, VolumeID: req.VolumeID})
-	op, err := c.w.newOp(m.Account, resource.ServiceCompute, resource.ActionAttachVolume, []resource.Ref{vol.ID.Ref()}, func(time.Time) {})
+	volID, instID, attachedAt := vol.ID, req.InstanceID, vol.AttachTime
+	targets := []resource.Ref{vol.ID.Ref()}
+	op, err := c.w.newOp(m.Account, resource.ServiceCompute, resource.ActionAttachVolume, targets, func(time.Time) {
+		// After a detach, or a detach and a new attach, the volume no longer
+		// holds this attachment, so it is left alone.
+		cur := c.w.vol[volID]
+		if cur != nil && cur.InstanceID == instID && cur.AttachTime.Equal(attachedAt) &&
+			cur.AttachState == resource.AttachmentAttaching {
+			cur.AttachState = resource.AttachmentAttached
+		}
+	})
 	if err != nil {
 		*vol = prev
 		inst.BlockDevices = prevBlocks
@@ -261,6 +275,7 @@ func (c compute) DetachVolume(
 	vol.InstanceID = resource.InstanceID{}
 	vol.Device = ""
 	vol.AttachTime = time.Time{}
+	vol.AttachState = ""
 	op, err := c.w.newOp(
 		m.Account, resource.ServiceCompute, resource.ActionDetachVolume,
 		[]resource.Ref{inst.ID.Ref()}, func(time.Time) {},
