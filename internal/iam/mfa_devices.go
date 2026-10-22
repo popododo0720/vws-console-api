@@ -22,14 +22,6 @@ const (
 	MaxMFADevicePageSize     = 1000
 )
 
-// MFADevice is one row of ListMFADevices: a virtual MFA device enabled for
-// one user.
-type MFADevice struct {
-	UserName     string
-	SerialNumber string
-	EnableDate   time.Time
-}
-
 // MFADevicePage is one page of ListMFADevices. Marker is the value the next
 // call sends as Marker; it is empty on the last page.
 type MFADevicePage struct {

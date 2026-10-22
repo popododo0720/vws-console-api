@@ -155,8 +155,8 @@ func TestFakeListMFADevices(t *testing.T) {
 			t.Errorf("device %d user %q", i, d.UserName)
 		}
 	}
-	if !first.EnableDate.Equal(enabled) || !second.EnableDate.Equal(enabled.Add(time.Hour)) {
-		t.Errorf("enable dates %v %v", first.EnableDate, second.EnableDate)
+	if !first.Enabled.Equal(enabled) || !second.Enabled.Equal(enabled.Add(time.Hour)) {
+		t.Errorf("enable dates %v %v", first.Enabled, second.Enabled)
 	}
 	for _, d := range page.Devices {
 		if d.SerialNumber == bobPhone || d.SerialNumber == spare {

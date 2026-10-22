@@ -41,6 +41,7 @@ type server struct {
 	iamv1.UnimplementedPolicyServiceServer
 	iamv1.UnimplementedMfaDeviceServiceServer
 	iamv1.UnimplementedRoleServiceServer
+	iamv1.UnimplementedGroupServiceServer
 	mu          sync.Mutex
 	authn       []*iamv1.AuthenticateRequest
 	authz       []*iamv1.AuthorizeRequest
@@ -102,6 +103,12 @@ type server struct {
 	getUser             []*iamv1.GetUserRequest
 	getUserRes          map[string]*iamv1.User
 	getUserErr          error
+	// Group calls. A name missing from getGroupRes is NotFound.
+	getGroup    []*iamv1.GetGroupRequest
+	getGroupRes map[string]*iamv1.Group
+	getGroupErr error
+	// client is the Client harness dialed, for tests that start from the server.
+	client *Client
 	// Role calls.
 	getRole       []*iamv1.GetRoleRequest
 	getRoleRes    *iamv1.Role
@@ -368,7 +375,28 @@ func (s *server) GetUser(ctx context.Context, req *iamv1.GetUserRequest) (*iamv1
 	if s.getUserErr != nil {
 		return nil, s.getUserErr
 	}
-	return s.getUserRes[req.GetName()], nil
+	u, ok := s.getUserRes[req.GetName()]
+	if !ok {
+		return nil, awsErr(codes.NotFound, "NOT_FOUND", "NoSuchEntity")
+	}
+	return u, nil
+}
+
+func (s *server) GetGroup(ctx context.Context, req *iamv1.GetGroupRequest) (*iamv1.Group, error) {
+	if err := s.enter(ctx); err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.getGroup = append(s.getGroup, req)
+	if s.getGroupErr != nil {
+		return nil, s.getGroupErr
+	}
+	g, ok := s.getGroupRes[req.GetName()]
+	if !ok {
+		return nil, awsErr(codes.NotFound, "NOT_FOUND", "NoSuchEntity")
+	}
+	return g, nil
 }
 
 func (s *server) TagMFADevice(ctx context.Context, req *iamv1.TagMFADeviceRequest) (*longrunningpb.Operation, error) {
@@ -507,6 +535,7 @@ func harness(t *testing.T) (*Client, *server) {
 	iamv1.RegisterPolicyServiceServer(g, s)
 	iamv1.RegisterMfaDeviceServiceServer(g, s)
 	iamv1.RegisterRoleServiceServer(g, s)
+	iamv1.RegisterGroupServiceServer(g, s)
 	go func() { _ = g.Serve(lis) }()
 	t.Cleanup(g.Stop)
 	conn, err := grpc.NewClient("passthrough:///bufnet",

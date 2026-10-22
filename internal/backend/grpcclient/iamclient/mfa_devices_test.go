@@ -256,9 +256,9 @@ func TestListMFADevicesOverGRPC(t *testing.T) {
 			t.Errorf("device %d user %q", i, d.UserName)
 		}
 	}
-	if !page.Devices[0].EnableDate.Equal(enabled) ||
-		!page.Devices[1].EnableDate.Equal(enabled.Add(time.Hour)) {
-		t.Errorf("enable dates %v %v", page.Devices[0].EnableDate, page.Devices[1].EnableDate)
+	if !page.Devices[0].Enabled.Equal(enabled) ||
+		!page.Devices[1].Enabled.Equal(enabled.Add(time.Hour)) {
+		t.Errorf("enable dates %v %v", page.Devices[0].Enabled, page.Devices[1].Enabled)
 	}
 
 	rest, err := admin.ListMFADevices(ctx, accountID(t), "alice", page.Marker, 2)
@@ -268,8 +268,8 @@ func TestListMFADevicesOverGRPC(t *testing.T) {
 	if rest.IsTruncated || len(rest.Devices) != 1 || rest.Devices[0].SerialNumber != serialC {
 		t.Fatalf("rest page %+v, %v", rest, err)
 	}
-	if !rest.Devices[0].EnableDate.Equal(enabled.Add(2 * time.Hour)) {
-		t.Errorf("enable date %v", rest.Devices[0].EnableDate)
+	if !rest.Devices[0].Enabled.Equal(enabled.Add(2 * time.Hour)) {
+		t.Errorf("enable date %v", rest.Devices[0].Enabled)
 	}
 }
 

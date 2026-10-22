@@ -1184,26 +1184,32 @@ func (f *Fake) ListMFADevices(
 			continue
 		}
 		devices = append(devices, MFADevice{
-			UserName: user, SerialNumber: serial, EnableDate: d.enableTime,
+			UserName: user, SerialNumber: serial, Enabled: d.enableTime,
 		})
 	}
 	return PageMFADevices(devices, marker, maxItems), nil
 }
 
-// --- virtual MFA device tags ---
-
-func mfaDeviceNotFound() error {
-	return &resource.Error{Code: resource.CodeNotFound, Message: "The specified MFA device does not exist."}
-}
+// --- virtual MFA devices ---
 
 // mfaDevice returns the device with serial. The caller holds f.mu.
 func (st *store) mfaDevice(serial string) (*mfaDeviceRec, error) {
 	d := st.mfa[serial]
 	if d == nil {
-		return nil, mfaDeviceNotFound()
+		return nil, MFADeviceNotFound()
 	}
 	return d, nil
 }
+
+// GetMFADevice implements Admin. AWS GetMFADevice accepts only FIDO security
+// key serial numbers (u2f/), and the fake, like vws-iam, keeps no FIDO keys
+// (popododo0720/vws-iam#133). Every serial number, a virtual mfa/ device
+// included, is therefore a device the account does not hold.
+func (*Fake) GetMFADevice(context.Context, resource.AccountID, string) (MFADevice, error) {
+	return MFADevice{}, MFADeviceNotFound()
+}
+
+// --- virtual MFA device tags ---
 
 // TagMFADevice implements Admin. A named key is overwritten; the whole request
 // fails and stores nothing when a tag is invalid or the device would keep more

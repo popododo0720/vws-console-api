@@ -37,8 +37,9 @@ func toVirtualMFADevice(d iam.VirtualMFADevice) virtualMFADeviceXML {
 	return out
 }
 
-// mfaDeviceXML is the AWS MFADevice structure.
-type mfaDeviceXML struct {
+// listedMFADeviceXML is one row of ListMFADevices. EnableDate is required by
+// the AWS MFADevice type.
+type listedMFADeviceXML struct {
 	UserName     string `xml:"UserName"`
 	SerialNumber string `xml:"SerialNumber"`
 	EnableDate   string `xml:"EnableDate"`
@@ -46,14 +47,14 @@ type mfaDeviceXML struct {
 
 // mfaDevicesResult is the ListMFADevices result.
 type mfaDevicesResult struct {
-	MFADevices  []mfaDeviceXML `xml:"MFADevices>member"`
-	IsTruncated bool           `xml:"IsTruncated"`
-	Marker      string         `xml:"Marker,omitempty"`
+	MFADevices  []listedMFADeviceXML `xml:"MFADevices>member"`
+	IsTruncated bool                 `xml:"IsTruncated"`
+	Marker      string               `xml:"Marker,omitempty"`
 }
 
-func toMFADevice(d iam.MFADevice) mfaDeviceXML {
-	return mfaDeviceXML{
-		UserName: d.UserName, SerialNumber: d.SerialNumber, EnableDate: stamp(d.EnableDate),
+func toListedMFADevice(d iam.MFADevice) listedMFADeviceXML {
+	return listedMFADeviceXML{
+		UserName: d.UserName, SerialNumber: d.SerialNumber, EnableDate: stamp(d.Enabled),
 	}
 }
 

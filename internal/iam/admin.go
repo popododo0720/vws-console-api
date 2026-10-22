@@ -168,6 +168,23 @@ func AccessKeyNotFound(keyID string) error {
 	}
 }
 
+// MFADevice is an MFA device as GetMFADevice and ListMFADevices report it.
+// GetMFADevice accepts only FIDO security keys, and no backend holds FIDO keys
+// yet (popododo0720/vws-iam#133), so GetMFADevice answers NoSuchEntity for
+// every serial number. ListMFADevices reports the virtual devices enabled for
+// one user.
+type MFADevice struct {
+	UserName     string
+	SerialNumber string
+	Enabled      time.Time
+}
+
+// MFADeviceNotFound is the NoSuchEntity answer for a device the account does
+// not hold.
+func MFADeviceNotFound() error {
+	return &resource.Error{Code: resource.CodeNotFound, Message: "The specified MFA device does not exist."}
+}
+
 // AssumedRole is the result of AssumeRole.
 type AssumedRole struct {
 	Key           Key
@@ -263,6 +280,7 @@ type Admin interface {
 
 	// The MFA device argument is the device serial number, the ARN the AWS
 	// Query API calls SerialNumber.
+	GetMFADevice(ctx context.Context, a resource.AccountID, serial string) (MFADevice, error)
 	TagMFADevice(ctx context.Context, a resource.AccountID, serial string, tags []Tag) error
 	UntagMFADevice(ctx context.Context, a resource.AccountID, serial string, keys []string) error
 	ListMFADeviceTags(ctx context.Context, a resource.AccountID, serial, marker string, maxItems int) (TagPage, error)
