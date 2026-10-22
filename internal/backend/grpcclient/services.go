@@ -41,6 +41,16 @@ type api struct {
 	storageOps longrunningpb.OperationsClient
 	networkOps longrunningpb.OperationsClient
 	log        *slog.Logger
+	// now stamps and prunes DetachVolume records. Nil is the wall clock.
+	now func() time.Time
+}
+
+// clock is the time detach records are stamped and pruned with.
+func (a *api) clock() time.Time {
+	if a.now != nil {
+		return a.now()
+	}
+	return time.Now()
 }
 
 type computeClient struct{ *api }
@@ -183,7 +193,9 @@ func (c computeClient) StopInstances(ctx context.Context, m backend.Mutation, re
 				return nil, err
 			}
 			mid = next
-			labels, err := instanceUpdateLabels(model, got.GetLabels(), resource.ActionStopInstances, m.Fingerprint, nil)
+			labels, err := instanceUpdateLabels(
+				model, got.GetLabels(), resource.ActionStopInstances, m.Fingerprint, nil, c.clock(),
+			)
 			if err != nil {
 				return nil, err
 			}

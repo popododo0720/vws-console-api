@@ -3,6 +3,7 @@ package fake
 import (
 	"bytes"
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -32,6 +33,26 @@ func TestBucketCreateContract(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0).UTC()
 	backendtest.BucketCreate(t, func() backend.Set {
 		return New(Options{Now: func() time.Time { return now }, Entropy: &Sequence{}}).Set()
+	})
+}
+
+// TestDetachWindowContract runs the #303 DetachVolume record window table on
+// the fake.
+func TestDetachWindowContract(t *testing.T) {
+	backendtest.DetachWindow(t, func() (backend.Set, func(time.Duration)) {
+		now := time.Unix(1_700_000_000, 0).UTC()
+		var mu sync.Mutex
+		clock := func() time.Time {
+			mu.Lock()
+			defer mu.Unlock()
+			return now
+		}
+		set := New(Options{Now: clock, Entropy: &Sequence{}}).Set()
+		return set, func(d time.Duration) {
+			mu.Lock()
+			defer mu.Unlock()
+			now = now.Add(d)
+		}
 	})
 }
 

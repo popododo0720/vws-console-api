@@ -65,11 +65,23 @@ func (s *Service) AttachVolume(ctx context.Context, c resource.Caller, token res
 func (s *Service) DetachVolume(
 	ctx context.Context, c resource.Caller, token resource.ClientToken, req resource.DetachVolumeRequest,
 ) (resource.Accepted[resource.VolumeAttachment], error) {
+	minted := token.IsZero()
 	token, err := fillToken(token)
 	if err != nil {
 		return resource.Accepted[resource.VolumeAttachment]{}, err
 	}
-	return mutate(ctx, s, c, token, req, s.backends.Compute.DetachVolume)
+	call := s.backends.Compute.DetachVolume
+	if minted {
+		// No caller can send a minted token again, so the backend keeps no
+		// replay record for it (#303).
+		call = func(
+			ctx context.Context, m backend.Mutation, req resource.DetachVolumeRequest,
+		) (resource.Accepted[resource.VolumeAttachment], error) {
+			m.MintedToken = true
+			return s.backends.Compute.DetachVolume(ctx, m, req)
+		}
+	}
+	return mutate(ctx, s, c, token, req, call)
 }
 
 // DeleteVolume accepts a delete and returns the operation.
