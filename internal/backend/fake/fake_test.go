@@ -18,6 +18,14 @@ func TestContract(t *testing.T) {
 	})
 }
 
+// TestKeyImportContract runs the #279 ImportKeyPair table on the fake.
+func TestKeyImportContract(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0).UTC()
+	backendtest.KeyImport(t, func() backend.Set {
+		return New(Options{Now: func() time.Time { return now }, Entropy: &Sequence{}}).Set()
+	})
+}
+
 func TestRepeatedEntropyDoesNotOverwrite(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0).UTC()
 	set := New(Options{
