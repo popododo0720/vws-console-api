@@ -46,6 +46,19 @@ type Mutation struct {
 // what a retry after the window answers.
 const ClientTokenWindow = 24 * time.Hour
 
+// ClientTokenGrace is how much longer than ClientTokenWindow a record is
+// kept. A record's stamp is read from the clock before the compute call that
+// starts compute's window, so the record outlives the request id by at most
+// this, never the other way round (PR #316 review).
+const ClientTokenGrace = time.Minute
+
+// ClientTokenExpired reports whether a record stamped at is no longer
+// needed at now: more than ClientTokenWindow and ClientTokenGrace have
+// passed. A stamp ahead of now is clock skew and has not expired.
+func ClientTokenExpired(at, now time.Time) bool {
+	return now.Sub(at) > ClientTokenWindow+ClientTokenGrace
+}
+
 // MaxDetachReplays is how many DetachVolume requests with a client token
 // one instance remembers within ClientTokenWindow. Each takes two of the
 // instance's 64 labels, so with resource.MaxTags user tags the records

@@ -44,7 +44,7 @@ func stampOf(at time.Time) string { return strconv.FormatInt(at.Unix(), 36) }
 func TestPruneDetachRecords(t *testing.T) {
 	t.Run("sub-second boundary", pruneSubSecondBoundary)
 	now := time.Unix(1_700_000_000, 0).UTC()
-	const grace = time.Minute // backend.ClientTokenGrace
+	const grace = backend.ClientTokenGrace
 	req := strings.Repeat("ab", 16)
 	longDevice := "/dev/" + strings.Repeat("x", 20) // 25 bytes: no room for a stamp
 	raw := map[string]string{
@@ -96,7 +96,7 @@ func TestPruneDetachRecords(t *testing.T) {
 // backend.ClientTokenWindow and backend.ClientTokenGrace past that stamp,
 // which covers the compute call that follows the clock read (#316 review).
 func pruneSubSecondBoundary(t *testing.T) {
-	const grace = time.Minute // backend.ClientTokenGrace
+	const grace = backend.ClientTokenGrace
 	req := strings.Repeat("cd", 16)
 	accepted := time.Unix(1_700_000_000, 999_000_000).UTC()
 	stamp := time.Unix(1_700_000_001, 0).UTC()
@@ -333,7 +333,7 @@ func TestDetachRecoveryResendsTheOriginalStamp(t *testing.T) {
 // the resend pruned it, the payload would differ from B's original and
 // compute would answer a fingerprint mismatch (#316 review).
 func recoveryKeepsExpiredRecords(t *testing.T) {
-	const grace = time.Minute // backend.ClientTokenGrace
+	const grace = backend.ClientTokenGrace
 	world, client, name, vols, inst := capacityWorld(t, 2)
 	start := time.Unix(1_700_000_000, 0).UTC()
 	var offset atomic.Int64
@@ -341,7 +341,8 @@ func recoveryKeepsExpiredRecords(t *testing.T) {
 	scope := backend.Scope{Account: mustAccount(t)}
 	ctx := context.Background()
 	mA := backend.Mutation{Scope: scope, Key: "k-expire-a", Fingerprint: "fp-expire-a"}
-	if _, err := client.DetachVolume(ctx, mA, resource.DetachVolumeRequest{VolumeID: vols[0], InstanceID: inst}); err != nil {
+	reqA := resource.DetachVolumeRequest{VolumeID: vols[0], InstanceID: inst}
+	if _, err := client.DetachVolume(ctx, mA, reqA); err != nil {
 		t.Fatalf("detach A: %v", err)
 	}
 	recordA := labelDetachPrefix + vols[0].String()

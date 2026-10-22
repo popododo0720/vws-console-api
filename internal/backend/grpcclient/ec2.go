@@ -642,7 +642,7 @@ func (c computeClient) writeDetach(
 	switch {
 	case !drop:
 		// This resends the update that wrote the record, by its request id,
-		// so the record is the one stored, stamp included.
+		// so the records are the ones stored, stamps included.
 		if stored, ok := got.GetLabels()[recordKey]; ok {
 			record = map[string]string{recordKey: stored}
 		}
@@ -655,9 +655,20 @@ func (c computeClient) writeDetach(
 		}
 		record = map[string]string{recordKey: detachRecordValue(detachRequestHex(m.Key), device, now)}
 	}
-	labels, err := instanceUpdateLabels(
-		model, got.GetLabels(), resource.ActionDetachVolume, m.Fingerprint, record, now,
-	)
+	var labels map[string]string
+	var err error
+	if drop {
+		labels, err = instanceUpdateLabels(
+			model, got.GetLabels(), resource.ActionDetachVolume, m.Fingerprint, record, now,
+		)
+	} else {
+		// The resend must be the update that was written, byte for byte, or
+		// compute answers a fingerprint mismatch. So nothing is pruned: a
+		// record that expired since is carried over as that write stored it.
+		labels, err = instanceLabels(
+			model, got.GetLabels(), resource.ActionDetachVolume, m.Fingerprint, storedDetachRecords(got.GetLabels()),
+		)
+	}
 	if err != nil {
 		return zero, err
 	}
@@ -821,6 +832,17 @@ func instanceUpdateLabels(
 	inst resource.Instance, raw map[string]string, action resource.Action, fingerprint string,
 	record map[string]string, now time.Time,
 ) (map[string]string, error) {
+	records := pruneDetachRecords(raw, now)
+	maps.Copy(records, record)
+	return instanceLabels(inst, raw, action, fingerprint, records)
+}
+
+// instanceLabels is instanceUpdateLabels with the detach records given as
+// they are to be written, pruned or not.
+func instanceLabels(
+	inst resource.Instance, raw map[string]string, action resource.Action, fingerprint string,
+	records map[string]string,
+) (map[string]string, error) {
 	extra := map[string]string{
 		labelAction:      action.String(),
 		labelFingerprint: clip(fingerprint, 63),
@@ -830,18 +852,35 @@ func instanceUpdateLabels(
 	if launch := raw[labelLaunch]; launch != "" {
 		extra[labelLaunch] = launch
 	}
-	maps.Copy(extra, pruneDetachRecords(raw, now))
-	maps.Copy(extra, record)
+	maps.Copy(extra, records)
 	return withInternalLabels(inst.Tags, extra)
 }
 
+// storedDetachRecords returns the detach records and saved operation ids of
+// raw unchanged: no pruning and no stamping.
+func storedDetachRecords(raw map[string]string) map[string]string {
+	out := map[string]string{}
+	for key, value := range raw {
+		if strings.HasPrefix(key, labelDetachPrefix) || strings.HasPrefix(key, labelDetachOpPrefix) {
+			out[key] = value
+		}
+	}
+	return out
+}
+
 // A detach record value is "<request hex> <device> <stamp>": the stamp is
-// the time the detach was accepted, in base-36 Unix seconds. A record
+// the time the detach was accepted, in base-36 Unix seconds rounded up, so
+// it is never earlier than the time compute starts remembering the request
+// id (PR #316 review). A record
 // written before #303 has no stamp, and neither does one whose device name
 // leaves no room for it in a 63-byte label value.
 func detachRecordValue(requestHex, device string, at time.Time) string {
 	plain := requestHex + " " + device
-	if stamped := plain + " " + strconv.FormatInt(at.Unix(), 36); len(stamped) <= labelValueMax {
+	sec := at.Unix()
+	if at.Nanosecond() > 0 {
+		sec++
+	}
+	if stamped := plain + " " + strconv.FormatInt(sec, 36); len(stamped) <= labelValueMax {
 		return stamped
 	}
 	return plain
@@ -869,9 +908,10 @@ func parseDetachRecord(raw string) (requestHex, device string, at time.Time, sta
 }
 
 // pruneDetachRecords returns the detach records of raw, with their saved
-// operation ids, that a retry may still need at now (#303). A record older
-// than backend.ClientTokenWindow is dropped with its operation id: the
-// request id it would replay is past compute's window too. A record with no
+// operation ids, that a retry may still need at now (#303). A record that
+// has expired (backend.ClientTokenExpired: more than the window and its
+// grace past the stamp) is dropped with its operation id: the request id it
+// would replay is past compute's window too. A record with no
 // stamp is stamped now, so its window starts at the first write that sees
 // it. A stamp ahead of now is clock skew and is kept. An operation id with
 // no record, and a value no request can match, are dropped. The result
@@ -889,7 +929,7 @@ func pruneDetachRecords(raw map[string]string, now time.Time) map[string]string 
 		}
 		if !stamped {
 			value = detachRecordValue(requestHex, device, now)
-		} else if now.Sub(at) > backend.ClientTokenWindow {
+		} else if backend.ClientTokenExpired(at, now) {
 			continue
 		}
 		out[key] = value

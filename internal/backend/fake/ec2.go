@@ -306,13 +306,13 @@ func (c compute) DetachVolume(
 	return acc, nil
 }
 
-// detachesInWindow forgets the client-token detaches of inst older than
-// backend.ClientTokenWindow and counts the others, except one of skip,
+// detachesInWindow forgets the client-token detaches of inst that have
+// expired (backend.ClientTokenExpired) and counts the others, except one of skip,
 // which a new detach of the same volume replaces.
 func (w *World) detachesInWindow(inst resource.InstanceID, skip resource.VolumeID, now time.Time) int {
 	n := 0
 	for vol, at := range w.detached[inst] {
-		if now.Sub(at) > backend.ClientTokenWindow {
+		if backend.ClientTokenExpired(at, now) {
 			delete(w.detached[inst], vol)
 			continue
 		}
