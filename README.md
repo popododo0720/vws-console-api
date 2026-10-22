@@ -82,7 +82,8 @@ Each call has a 5 s timeout, or the request's deadline if earlier;
 up to 3 times with doubling backoff; `Login` and `AssumeRole` are never
 retried. The IAM management actions (users, groups, roles, policies, access
 keys, login profiles) are not mapped to vws-iam's services yet and answer
-`InvalidAction` in this mode.
+`InvalidAction` in this mode, except `GetRole` and `UpdateRoleDescription`,
+which read and update a role through `RoleService`.
 
 ```sh
 aws --endpoint-url http://127.0.0.1:8084 --region vws-1 iam create-user --user-name bob

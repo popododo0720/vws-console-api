@@ -2,6 +2,7 @@ package iam
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/popododo0720/vws-console-api/internal/resource"
@@ -48,6 +49,36 @@ type RoleInput struct {
 	Name, Path, TrustPolicy, Description string
 	// MaxSessionDuration in seconds, 3600 to 43200. Zero means 3600.
 	MaxSessionDuration int
+}
+
+// MaxRoleDescription is AWS's limit on a role description.
+const MaxRoleDescription = 1000
+
+// ServiceLinkedRolePath is the path AWS reserves for service-linked roles.
+const ServiceLinkedRolePath = "/aws-service-role/"
+
+// ValidateRoleDescription reports a description over the AWS limit.
+func ValidateRoleDescription(description string) error {
+	if len(description) > MaxRoleDescription {
+		return resource.Invalid("description",
+			"1 validation error detected: Value at 'description' failed to satisfy constraint: "+
+				"Member must have length less than or equal to 1000")
+	}
+	return nil
+}
+
+// IsServiceLinkedRole reports a path only the service that owns the role may
+// change.
+func IsServiceLinkedRole(path string) bool {
+	return strings.HasPrefix(path, ServiceLinkedRolePath)
+}
+
+// UnmodifiableRole reports a service-linked role as AWS UnmodifiableEntity.
+func UnmodifiableRole(name string) error {
+	return &resource.Error{
+		Code: resource.CodeConflict, Field: "UnmodifiableEntity",
+		Message: "The role " + name + " is a service-linked role and only the service that depends on it can modify it.",
+	}
 }
 
 // Role is an IAM role.
@@ -117,6 +148,7 @@ type Admin interface {
 
 	CreateRole(ctx context.Context, a resource.AccountID, in RoleInput) (Role, error)
 	GetRole(ctx context.Context, a resource.AccountID, name string) (Role, error)
+	UpdateRoleDescription(ctx context.Context, a resource.AccountID, name, description string) (Role, error)
 	ListRoles(ctx context.Context, a resource.AccountID, pathPrefix string) ([]Role, error)
 	UpdateAssumeRolePolicy(ctx context.Context, a resource.AccountID, name, document string) error
 	DeleteRole(ctx context.Context, a resource.AccountID, name string) error
