@@ -141,8 +141,9 @@ func TestImportConflictsMapByCause(t *testing.T) {
 			name: "request id reused by a generated create", reason: "IDEMPOTENCY_CONFLICT", code: codes.Aborted,
 			generate: true, want: resource.CodeIdempotencyMismatch,
 		},
-		{name: "etag mismatch", reason: "ETAG_MISMATCH", code: codes.Aborted, want: resource.CodeConflict},
-		{name: "generation conflict", reason: "GENERATION_CONFLICT", code: codes.Aborted, want: resource.CodeConflict},
+		// A lost concurrency race is retryable Unavailable (#291).
+		{name: "etag mismatch", reason: "ETAG_MISMATCH", code: codes.Aborted, want: resource.CodeUnavailable},
+		{name: "generation conflict", reason: "GENERATION_CONFLICT", code: codes.Aborted, want: resource.CodeUnavailable},
 		{
 			name: "dependency not ready", reason: "DEPENDENCY_NOT_READY", code: codes.FailedPrecondition,
 			want: resource.CodeConflict,

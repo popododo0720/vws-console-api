@@ -1031,13 +1031,15 @@ func notFoundCode(k resource.Kind) string {
 
 func conflictCode(k resource.Kind) string {
 	switch k {
-	case resource.KindVolume:
+	case resource.KindVolume, resource.KindKeyPair:
+		// A key pair is not an instance: EC2's IncorrectState is the
+		// resource-neutral state error (#291).
 		return "IncorrectState"
 	case resource.KindVpc, resource.KindSubnet:
 		return "DependencyViolation"
 	case resource.KindInstance, resource.KindImage, resource.KindReservation,
 		resource.KindBucket, resource.KindObject, resource.KindOperation, resource.KindSecurityGroup,
-		resource.KindKeyPair, resource.KindAddress, resource.KindSnapshot, resource.KindUnspecified:
+		resource.KindAddress, resource.KindSnapshot, resource.KindUnspecified:
 		return "IncorrectInstanceState"
 	default:
 		return "IncorrectInstanceState"
