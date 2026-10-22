@@ -7,66 +7,52 @@ import (
 	"github.com/popododo0720/vws-console-api/internal/resource"
 )
 
+// AWS GetMFADevice accepts only FIDO security key serial numbers, and the fake
+// keeps no FIDO keys, so every serial number is NoSuchEntity: a u2f/ key, an
+// unassigned or enabled virtual mfa/ device, and a renamed owner's device.
 func TestFakeGetMFADevice(t *testing.T) {
 	ctx := t.Context()
 	a := account(t)
 	f := NewFake()
 	f.Now = func() time.Time { return now }
-	u, err := f.CreateUser(ctx, a, "alice", "/")
-	if err != nil {
+	if _, err := f.CreateUser(ctx, a, "alice", "/"); err != nil {
 		t.Fatal(err)
 	}
-	serial := f.AddMfaDevice(a, "alice-phone")
-
-	// An unassigned device is not a device GetMFADevice answers for.
-	if _, err := f.GetMFADevice(ctx, a, serial); resource.CodeOf(err) != resource.CodeNotFound {
-		t.Fatalf("unassigned device: %v", err)
+	virtual := f.AddMfaDevice(a, "alice-phone")
+	notFound := func(name string, acct resource.AccountID, serial string) {
+		t.Helper()
+		dev, err := f.GetMFADevice(ctx, acct, serial)
+		if resource.CodeOf(err) != resource.CodeNotFound || err.Error() != MFADeviceNotFound().Error() {
+			t.Errorf("%s: %+v %v, want NoSuchEntity", name, dev, err)
+		}
 	}
-	enabled := now
-	if err := f.AssignMfaDevice(a, serial, "alice", enabled); err != nil {
+	notFound("unassigned virtual device", a, virtual)
+	if err := f.AssignMfaDevice(a, virtual, "alice", now); err != nil {
 		t.Fatal(err)
 	}
-	dev, err := f.GetMFADevice(ctx, a, serial)
-	if err != nil {
-		t.Fatal(err)
+	// The device is enabled for alice, so it is listed as assigned.
+	page, err := f.ListVirtualMFADevices(ctx, a, MFADeviceAssignmentAssigned, "", 100)
+	if err != nil || len(page.Devices) != 1 || page.Devices[0].SerialNumber != virtual {
+		t.Fatalf("assigned devices %+v %v", page, err)
 	}
-	if dev.SerialNumber != serial || dev.UserName != "alice" || dev.UserARN != u.ARN ||
-		!dev.Enabled.Equal(enabled) || !dev.Enabled.Equal(now) {
-		t.Fatalf("enabled device %+v", dev)
-	}
-	// A rename moves the device's owner with the user.
+	notFound("enabled virtual device", a, virtual)
+	notFound("FIDO security key", a, "arn:vws:iam::"+a.String()+":u2f/alice/testFidoKey-R1234")
+	notFound("unknown serial", a, "arn:vws:iam::"+a.String()+":mfa/ghost")
 	if err := f.UpdateUser(ctx, a, "alice", "", "alicia", ""); err != nil {
 		t.Fatal(err)
 	}
-	dev, err = f.GetMFADevice(ctx, a, serial)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if dev.UserName != "alicia" || dev.UserARN != iamARN(a, "user", "/", "alicia") {
-		t.Fatalf("renamed owner %+v", dev)
-	}
-
+	notFound("renamed owner", a, virtual)
 	other, err := resource.Parse[resource.AccountID]("210987654321")
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, tc := range []struct {
-		name   string
-		acct   resource.AccountID
-		serial string
-	}{
-		{"unknown serial", a, "arn:vws:iam::" + a.String() + ":mfa/ghost"},
-		{"other account", other, serial},
-	} {
-		if _, err := f.GetMFADevice(ctx, tc.acct, tc.serial); resource.CodeOf(err) != resource.CodeNotFound {
-			t.Errorf("%s: %v", tc.name, err)
-		}
-	}
-	if err := f.AssignMfaDevice(a, serial, "nobody", now); resource.CodeOf(err) != resource.CodeNotFound {
+	notFound("other account", other, virtual)
+
+	if err := f.AssignMfaDevice(a, virtual, "nobody", now); resource.CodeOf(err) != resource.CodeNotFound {
 		t.Fatalf("enable for a missing user: %v", err)
 	}
 	ghost := "arn:vws:iam::" + a.String() + ":mfa/ghost"
-	if err := f.AssignMfaDevice(a, ghost, "alice", now); resource.CodeOf(err) != resource.CodeNotFound {
+	if err := f.AssignMfaDevice(a, ghost, "alicia", now); resource.CodeOf(err) != resource.CodeNotFound {
 		t.Fatalf("enable a missing device: %v", err)
 	}
 }

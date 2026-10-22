@@ -22,8 +22,9 @@ import (
 // AccessKey services yet; each answers Unimplemented, which the surface
 // returns as InvalidAction. CreatePolicyVersion, GetPolicyVersion,
 // ListPolicyVersions, SetDefaultPolicyVersion, DeletePolicyVersion, the policy
-// and MFA device tag calls, ListVirtualMFADevices, GetMfaDevice, GetRole,
-// UpdateRole, UpdateRoleDescription and GetAccessKeyLastUsed are mapped.
+// and MFA device tag calls, ListVirtualMFADevices, GetRole, UpdateRole,
+// UpdateRoleDescription and GetAccessKeyLastUsed are mapped. GetMFADevice
+// answers NoSuchEntity without a call (see GetMFADevice).
 type STSAdmin struct{ *Client }
 
 var _ iam.Admin = STSAdmin{}
@@ -613,87 +614,39 @@ func mfaDeviceResource(a resource.AccountID, serial string) (string, error) {
 	return "projects/" + parts[4] + "/mfaDevices/" + name, nil
 }
 
-// mfaDevice resolves a device serial number to the resource name the vws-iam
-// wire uses, and checks that the stored serial number, including its
-// partition, region, account, path and name, equals the serial number the
-// caller sent. vws-iam addresses a device by the name in the resource, not by
-// its full serial number, so without this check a serial number for one
-// partition, region or path would reach the same device. The answer for a
-// mismatch is the answer for a missing device.
-func (a STSAdmin) mfaDevice(
-	ctx context.Context, account resource.AccountID, serial string,
-) (string, *iamv1.MfaDevice, error) {
+// mfaDeviceFor resolves a device serial number to a resource name and checks
+// that the stored serial number, including its partition, region, account,
+// path and name, equals the serial number the caller sent. vws-iam addresses a
+// device by the name in the resource, not by its full serial number, so
+// without this check a serial number for one partition, region or path would
+// reach the same device. The answer for a mismatch is the answer for a missing
+// device.
+func (a STSAdmin) mfaDeviceFor(ctx context.Context, account resource.AccountID, serial string) (string, error) {
 	name, err := mfaDeviceResource(account, serial)
 	if err != nil {
-		return "", nil, err
+		return "", err
 	}
 	dev, err := retry(ctx, a.backoff, a.mfaDevices.GetMfaDevice, &iamv1.GetMfaDeviceRequest{Name: name})
 	if err != nil {
 		if resource.CodeOf(authError(err)) == resource.CodeNotFound {
-			return "", nil, iam.MFADeviceNotFound()
+			return "", iam.MFADeviceNotFound()
 		}
-		return "", nil, authError(err)
+		return "", authError(err)
 	}
 	if dev.GetStatus().GetSerialNumber() != serial {
-		return "", nil, iam.MFADeviceNotFound()
+		return "", iam.MFADeviceNotFound()
 	}
-	return name, dev, nil
+	return name, nil
 }
 
-// mfaDeviceFor resolves a serial number to the device's resource name.
-func (a STSAdmin) mfaDeviceFor(ctx context.Context, account resource.AccountID, serial string) (string, error) {
-	name, _, err := a.mfaDevice(ctx, account, serial)
-	return name, err
-}
-
-// GetMFADevice implements iam.Admin over MfaDeviceService.GetMfaDevice. The
-// proto carries no FIDO certification levels, so the surface answers with an
-// empty Certifications element. Only an enabled device has an owner to
-// authorize on.
-func (a STSAdmin) GetMFADevice(
-	ctx context.Context, account resource.AccountID, serial string,
-) (iam.MFADevice, error) {
-	_, dev, err := a.mfaDevice(ctx, account, serial)
-	if err != nil {
-		return iam.MFADevice{}, err
-	}
-	user, arn, err := a.mfaOwner(ctx, account, dev.GetStatus().GetUser())
-	if err != nil {
-		return iam.MFADevice{}, err
-	}
-	out := iam.MFADevice{UserName: user, UserARN: arn, SerialNumber: serial}
-	if t := dev.GetStatus().GetEnableTime(); t != nil {
-		out.Enabled = t.AsTime()
-	}
-	return out, nil
-}
-
-// mfaOwner resolves the user a device is enabled for to the friendly name and
-// real ARN. vws-iam names the user as a resource; the ARN carries its path.
-func (a STSAdmin) mfaOwner(
-	ctx context.Context, account resource.AccountID, resourceName string,
-) (string, string, error) {
-	if resourceName == "" {
-		return "", "", iam.MFADeviceNotFound()
-	}
-	prefix := "projects/" + account.String() + "/users/"
-	name, ok := strings.CutPrefix(resourceName, prefix)
-	if !ok || name == "" || strings.Contains(name, "/") {
-		return "", "", resource.Internal(errors.New("vws-iam GetMfaDevice returned user " + resourceName))
-	}
-	u, err := retry(ctx, a.backoff, a.users.GetUser, &iamv1.GetUserRequest{Name: resourceName})
-	if err != nil {
-		if resource.CodeOf(authError(err)) == resource.CodeNotFound {
-			return "", "", iam.MFADeviceNotFound()
-		}
-		return "", "", authError(err)
-	}
-	arn := u.GetStatus().GetArn()
-	arnPrefix := "arn:vws:iam::" + account.String() + ":user/"
-	if !strings.HasPrefix(arn, arnPrefix) {
-		return "", "", resource.Internal(errors.New("vws-iam user " + resourceName + " has ARN " + arn))
-	}
-	return name, arn, nil
+// GetMFADevice implements iam.Admin. AWS GetMFADevice accepts only FIDO
+// security key serial numbers (u2f/), and vws-iam keeps no FIDO keys
+// (popododo0720/vws-iam#133), so every serial number, a virtual mfa/ device
+// included, is a device the account does not hold. vws-iam is not called:
+// MfaDeviceService.GetMfaDevice reads virtual devices, which this action does
+// not serve.
+func (STSAdmin) GetMFADevice(context.Context, resource.AccountID, string) (iam.MFADevice, error) {
+	return iam.MFADevice{}, iam.MFADeviceNotFound()
 }
 
 // operationResult maps a finished vws-iam operation to an error. vws-iam

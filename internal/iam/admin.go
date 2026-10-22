@@ -168,12 +168,12 @@ func AccessKeyNotFound(keyID string) error {
 	}
 }
 
-// MFADevice is a virtual MFA device as GetMFADevice reports it. UserName and
-// Enabled are empty while the device is not attached to a user. UserARN is the
-// owning user's real ARN, for authorization.
+// MFADevice is a FIDO security key as GetMFADevice reports it. No backend
+// holds FIDO keys yet (popododo0720/vws-iam#133), so GetMFADevice answers
+// NoSuchEntity for every serial number and this type only fixes the result
+// shape.
 type MFADevice struct {
 	UserName     string
-	UserARN      string
 	SerialNumber string
 	Enabled      time.Time
 }
