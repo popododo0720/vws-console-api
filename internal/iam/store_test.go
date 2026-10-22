@@ -312,9 +312,17 @@ func TestUpdateRoleDescription(t *testing.T) {
 	if stored, _ := f.GetRole(ctx, a, "ops"); stored.Description != "new" {
 		t.Errorf("a rejected update changed the description to %q", stored.Description)
 	}
-	for _, invalid := range []string{"\u007f", "\u0080", "\u00a0"} {
+	for _, invalid := range []string{"\u007f", "\u0080", "\u00a0", "\u0100"} {
 		if _, err := f.UpdateRoleDescription(ctx, a, "ops", invalid); resource.CodeOf(err) != resource.CodeInvalidArgument {
 			t.Errorf("description %q outside the AWS pattern: %v", invalid, err)
+		}
+	}
+	if stored, _ := f.GetRole(ctx, a, "ops"); stored.Description != "new" {
+		t.Errorf("a rejected update changed the description to %q", stored.Description)
+	}
+	for _, valid := range []string{"\t", " ", "~", "\u00a1"} {
+		if _, err := f.UpdateRoleDescription(ctx, a, "ops", valid); err != nil {
+			t.Errorf("description %q inside the AWS pattern: %v", valid, err)
 		}
 	}
 	wide := strings.Repeat("\u00ff", MaxRoleDescription)

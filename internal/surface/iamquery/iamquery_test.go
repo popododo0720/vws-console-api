@@ -378,7 +378,7 @@ func TestUpdateRoleDescription(t *testing.T) {
 	res = call(t, h, root, sigv4.ServiceIAM, url.Values{
 		"Action": {"UpdateRoleDescription"}, "RoleName": {"ops"}, "Description": {wide},
 	})
-	has(t, res, http.StatusOK)
+	has(t, res, http.StatusOK, "<Description>"+wide+"</Description>")
 	if stored, err := f.GetRole(ctx, root.Account, "ops"); err != nil || stored.Description != wide {
 		t.Fatalf("1000-character description stored as %q: %v", stored.Description, err)
 	}
