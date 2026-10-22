@@ -59,6 +59,11 @@ type exchange struct {
 	lastUsed     iam.AccessKeyLastUsed
 	lastUsedErr  error
 	lastUsedRead bool
+	// mfa caches the device read, so the ARN check and the response use one
+	// snapshot.
+	mfa     iam.MFADevice
+	mfaErr  error
+	mfaRead bool
 }
 
 func (c *exchange) form(k string) string { return c.r.Form.Get(k) }

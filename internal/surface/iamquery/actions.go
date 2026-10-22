@@ -238,6 +238,39 @@ func accessKeyLastUsedARN(h *handler, c *exchange) string {
 	return "*"
 }
 
+// readMFADevice reads the device once. A missing device is cached too, so the
+// action reports it after authorization instead of failing closed on a guessed
+// ARN.
+func readMFADevice(h *handler, c *exchange) (iam.MFADevice, error) {
+	if c.mfaRead {
+		return c.mfa, c.mfaErr
+	}
+	c.mfaRead = true
+	if err := requireMFADevice(c, h, "iam:GetMFADevice"); err != nil {
+		c.mfaErr = err
+		return iam.MFADevice{}, err
+	}
+	c.mfa, c.mfaErr = h.cfg.Admin.GetMFADevice(c.r.Context(), c.caller.Account, c.form("SerialNumber"))
+	return c.mfa, c.mfaErr
+}
+
+// mfaDeviceUserARN authorizes on the owning user's real ARN, as AWS does. A
+// device that does not exist is authorized on "*" and reported by the action.
+func mfaDeviceUserARN(h *handler, c *exchange) string {
+	dev, err := readMFADevice(h, c)
+	if err == nil {
+		if dev.UserARN == "" {
+			c.resourceErr = resource.Internal(errors.New("MFA device owner has no ARN"))
+			return "*"
+		}
+		return dev.UserARN
+	}
+	if code := resource.CodeOf(err); code != resource.CodeNotFound && code != resource.CodeInvalidArgument {
+		c.resourceErr = err
+	}
+	return "*"
+}
+
 func required(c *exchange, keys ...string) error {
 	for _, k := range keys {
 		if c.form(k) == "" {
@@ -796,6 +829,21 @@ func iamActions() map[string]spec {
 					out.VirtualMFADevices = append(out.VirtualMFADevices, toVirtualMFADevice(d))
 				}
 				return out, err
+			},
+		},
+		"GetMFADevice": {
+			params: []string{"SerialNumber", "UserName"}, needsAdmin: true, resource: mfaDeviceUserARN,
+			run: func(h *handler, c *exchange) (any, error) {
+				dev, err := readMFADevice(h, c)
+				if err != nil {
+					return nil, err
+				}
+				// AWS names the device's user in the answer; a UserName that
+				// names another user does not have this device.
+				if user := c.form("UserName"); user != "" && user != dev.UserName {
+					return nil, iam.MFADeviceNotFound()
+				}
+				return toMFADevice(dev), nil
 			},
 		},
 		"TagMFADevice": {
