@@ -148,6 +148,95 @@ func TestAssumeRole(t *testing.T) {
 	}
 }
 
+func TestUpdateGroup(t *testing.T) {
+	ctx := t.Context()
+	a := account(t)
+	f := NewFake()
+	g, err := f.CreateGroup(ctx, a, "dev", "/old/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.CreateUser(ctx, a, "bob", "/"); err != nil {
+		t.Fatal(err)
+	}
+	p, err := f.CreatePolicy(ctx, a, "read", "/", describeOnly, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	must(t, f.AttachPolicy(ctx, a, EntityGroup, "dev", p.ARN))
+	must(t, f.PutInlinePolicy(ctx, a, EntityGroup, "dev", "inline", describeOnly))
+	must(t, f.AddUserToGroup(ctx, a, "dev", "bob"))
+	if _, err := f.CreateGroup(ctx, a, "taken", "/"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := f.UpdateGroup(ctx, a, "missing", "/new/", "ops"); resource.CodeOf(err) != resource.CodeNotFound {
+		t.Errorf("missing group: %v", err)
+	}
+	if err := f.UpdateGroup(ctx, a, "dev", "/new/", "taken"); resource.CodeOf(err) != resource.CodeAlreadyExists {
+		t.Errorf("duplicate name: %v", err)
+	}
+	if err := f.UpdateGroup(ctx, a, "dev", "new", ""); resource.CodeOf(err) != resource.CodeInvalidArgument {
+		t.Errorf("bad path: %v", err)
+	}
+	if err := f.UpdateGroup(ctx, a, "bad name!", "", ""); resource.CodeOf(err) != resource.CodeInvalidArgument {
+		t.Errorf("bad group name: %v", err)
+	}
+	if err := f.UpdateGroup(ctx, a, "dev", "", "bad name!"); resource.CodeOf(err) != resource.CodeInvalidArgument {
+		t.Errorf("bad new name: %v", err)
+	}
+	if got, _, err := f.GetGroup(ctx, a, "dev"); err != nil || got.Path != "/old/" {
+		t.Fatalf("a rejected update changed the group to %+v: %v", got, err)
+	}
+
+	if _, err := f.CreateGroup(ctx, a, "moved", "/old/"); err != nil {
+		t.Fatal(err)
+	}
+	must(t, f.UpdateGroup(ctx, a, "moved", "/moved/", ""))
+	if got, _, err := f.GetGroup(ctx, a, "moved"); err != nil || got.Name != "moved" || got.Path != "/moved/" {
+		t.Errorf("path-only update %+v, want moved at /moved/: %v", got, err)
+	}
+	if _, err := f.CreateGroup(ctx, a, "renamed", "/keep/"); err != nil {
+		t.Fatal(err)
+	}
+	must(t, f.UpdateGroup(ctx, a, "renamed", "", "newer"))
+	if got, _, err := f.GetGroup(ctx, a, "newer"); err != nil || got.Name != "newer" || got.Path != "/keep/" {
+		t.Errorf("name-only update %+v, want newer at /keep/: %v", got, err)
+	}
+
+	must(t, f.UpdateGroup(ctx, a, "dev", "/new/", "platform"))
+	if _, _, err := f.GetGroup(ctx, a, "dev"); resource.CodeOf(err) != resource.CodeNotFound {
+		t.Errorf("old name still found: %v", err)
+	}
+	got, users, err := f.GetGroup(ctx, a, "platform")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Path != "/new/" || got.ARN != "arn:vws:iam::123456789012:group/new/platform" || got.ID != g.ID {
+		t.Errorf("renamed group %+v, want path /new/, a new ARN, and id %s", got, g.ID)
+	}
+	if len(users) != 1 || users[0].Name != "bob" {
+		t.Errorf("members after rename %v, want bob", users)
+	}
+	groups, err := f.ListGroupsForUser(ctx, a, "bob")
+	if err != nil || len(groups) != 1 || groups[0].Name != "platform" {
+		t.Errorf("groups for bob %v, want platform: %v", groups, err)
+	}
+	attached, err := f.ListAttachedPolicies(ctx, a, EntityGroup, "platform")
+	if err != nil || len(attached) != 1 || attached[0].ARN != p.ARN {
+		t.Errorf("attached policies after rename %v, want %s: %v", attached, p.ARN, err)
+	}
+	inline, err := f.ListInlinePolicies(ctx, a, EntityGroup, "platform")
+	if err != nil || len(inline) != 1 || inline[0] != "inline" {
+		t.Errorf("inline policies after rename %v, want inline: %v", inline, err)
+	}
+
+	must(t, f.UpdateGroup(ctx, a, "platform", "", ""))
+	if got, _, err := f.GetGroup(ctx, a, "platform"); err != nil || got.Path != "/new/" {
+		t.Errorf("empty update changed the group to %+v: %v", got, err)
+	}
+}
+
 func TestUpdateAssumeRolePolicy(t *testing.T) {
 	ctx := t.Context()
 	a := account(t)

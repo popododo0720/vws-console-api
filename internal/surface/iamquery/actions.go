@@ -98,6 +98,35 @@ func groupARN(h *handler, c *exchange) string {
 	return arnOf(c, "group", "/", name)
 }
 
+// authorizeMovedGroup checks iam:UpdateGroup on the group's new ARN too, as
+// AWS does when a request changes its name or path. A missing group is left
+// for UpdateGroup to report.
+func authorizeMovedGroup(h *handler, c *exchange) error {
+	newPath, newName := c.form("NewPath"), c.form("NewGroupName")
+	if newPath == "" && newName == "" {
+		return nil
+	}
+	g, _, err := h.cfg.Admin.GetGroup(c.r.Context(), c.caller.Account, c.form("GroupName"))
+	if err != nil {
+		if resource.CodeOf(err) == resource.CodeNotFound {
+			return nil
+		}
+		return err
+	}
+	path, name := g.Path, g.Name
+	if newPath != "" {
+		path = newPath
+	}
+	if newName != "" {
+		name = newName
+	}
+	target := arnOf(c, "group", path, name)
+	if target == g.ARN {
+		return nil
+	}
+	return iam.Check(c.r.Context(), h.cfg.Authorizer, c.caller, "iam:"+c.action, target)
+}
+
 func roleARN(h *handler, c *exchange) string {
 	name := c.form("RoleName")
 	if c.action == "CreateRole" {
@@ -127,6 +156,18 @@ func required(c *exchange, keys ...string) error {
 	for _, k := range keys {
 		if c.form(k) == "" {
 			return resource.Invalid(lowerFirst(k), "1 validation error detected: Value null at '"+lowerFirst(k)+"' failed to satisfy constraint: Member must not be null")
+		}
+	}
+	return nil
+}
+
+func rejectEmpty(c *exchange, keys ...string) error {
+	for _, k := range keys {
+		if c.r.Form.Has(k) && c.form(k) == "" {
+			field := lowerFirst(k)
+			msg := "1 validation error detected: Value '' at '" + field +
+				"' failed to satisfy constraint: Member must have length greater than or equal to 1"
+			return resource.Invalid(field, msg)
 		}
 	}
 	return nil
@@ -305,6 +346,22 @@ func iamActions() map[string]spec {
 			}
 			return out, err
 		}),
+		"UpdateGroup": admin(
+			[]string{"GroupName", "NewPath", "NewGroupName"}, groupARN,
+			func(h *handler, c *exchange) (any, error) {
+				if err := required(c, "GroupName"); err != nil {
+					return nil, err
+				}
+				if err := rejectEmpty(c, "NewPath", "NewGroupName"); err != nil {
+					return nil, err
+				}
+				if err := authorizeMovedGroup(h, c); err != nil {
+					return nil, err
+				}
+				return nil, h.cfg.Admin.UpdateGroup(
+					c.r.Context(), c.caller.Account, c.form("GroupName"), c.form("NewPath"), c.form("NewGroupName"))
+			},
+		),
 		"DeleteGroup": admin([]string{"GroupName"}, groupARN, func(h *handler, c *exchange) (any, error) {
 			return nil, h.cfg.Admin.DeleteGroup(c.r.Context(), c.caller.Account, c.form("GroupName"))
 		}),

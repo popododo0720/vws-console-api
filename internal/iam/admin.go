@@ -106,6 +106,7 @@ type Admin interface {
 	CreateGroup(ctx context.Context, a resource.AccountID, name, path string) (Group, error)
 	GetGroup(ctx context.Context, a resource.AccountID, name string) (Group, []User, error)
 	ListGroups(ctx context.Context, a resource.AccountID, pathPrefix string) ([]Group, error)
+	UpdateGroup(ctx context.Context, a resource.AccountID, name, newPath, newName string) error
 	DeleteGroup(ctx context.Context, a resource.AccountID, name string) error
 	AddUserToGroup(ctx context.Context, a resource.AccountID, group, user string) error
 	RemoveUserFromGroup(ctx context.Context, a resource.AccountID, group, user string) error
