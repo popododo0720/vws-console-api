@@ -2,10 +2,12 @@ package iamquery
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/url"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/popododo0720/vws-console-api/internal/iam"
@@ -113,5 +115,83 @@ func TestEntityActionsFailClosedWhenTheLookupFails(t *testing.T) {
 				})
 			}
 		})
+	}
+}
+
+// Without UserName a user action is about the caller, authorized on its own
+// authenticated ARN with no lookup, as in AWS. A lookup that would fail (on
+// -iam grpc, vws-iam not serving GetUser or being down) must not turn the
+// caller's own call into an error before authorization (PR #311 review).
+func TestCallerActionsAuthorizeOnTheCallerWithoutALookup(t *testing.T) {
+	lookupErr := &resource.Error{Code: resource.CodeUnimplemented, Message: "GetUser is not served"}
+	h, f, rec, root := harnessWith(t, func(a iam.Admin) iam.Admin { return userLookupError{Admin: a, err: lookupErr} })
+	ctx := t.Context()
+	bob, err := f.CreateUser(ctx, root.Account, "bob", "/eng/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	k, err := f.CreateAccessKey(ctx, root.Account, "bob")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cred := sigv4.Credential{AccessKey: k.AccessKeyID, Secret: k.Secret}
+	for _, action := range actionsOn(userARN, getMFADeviceARN) {
+		if action == "CreateUser" {
+			continue
+		}
+		t.Run(action, func(t *testing.T) {
+			rec.seen = nil
+			form := url.Values{"Action": {action}}
+			if action == "GetMFADevice" {
+				form.Set("SerialNumber", "arn:vws:iam::"+root.Account.String()+":u2f/bob/testFidoKey-R1234")
+			}
+			// bob holds no policy: the answer is AccessDenied on bob's ARN.
+			has(t, call(t, h, cred, sigv4.ServiceIAM, form), http.StatusForbidden, `<Code>AccessDenied</Code>`)
+			want := []string{"iam:" + action + " " + bob.ARN}
+			if !slices.Equal(rec.seen, want) {
+				t.Errorf("authorized %q, want %q", rec.seen, want)
+			}
+		})
+	}
+}
+
+// A lookup that fails with something other than an IAM error (the gRPC
+// client's error for vws-iam being down or timing out) answers
+// ServiceUnavailable, as iam.Check does for authorization, not a 500, and
+// does not echo the backend's message.
+func TestLookupOutageAnswersServiceUnavailable(t *testing.T) {
+	outage := errors.New("vws-iam: Unavailable backend-internal-wording")
+	for _, tc := range []struct {
+		key  string
+		res  []func(*handler, *exchange) string
+		skip string
+		wrap func(iam.Admin) iam.Admin
+	}{
+		{"UserName", []func(*handler, *exchange) string{userARN, getMFADeviceARN}, "CreateUser",
+			func(a iam.Admin) iam.Admin { return userLookupError{Admin: a, err: outage} }},
+		{"GroupName", []func(*handler, *exchange) string{groupARN}, "CreateGroup",
+			func(a iam.Admin) iam.Admin { return groupLookupError{Admin: a, err: outage} }},
+	} {
+		h, _, rec, root := harnessWith(t, tc.wrap)
+		for _, action := range actionsOn(tc.res...) {
+			if action == tc.skip {
+				continue
+			}
+			t.Run(action, func(t *testing.T) {
+				rec.seen = nil
+				form := url.Values{"Action": {action}, tc.key: {"alice"}}
+				if action == "GetMFADevice" {
+					form.Set("SerialNumber", "arn:vws:iam::"+root.Account.String()+":u2f/alice/testFidoKey-R1234")
+				}
+				res := call(t, h, root, sigv4.ServiceIAM, form)
+				has(t, res, http.StatusServiceUnavailable, `<Code>ServiceUnavailable</Code>`)
+				if strings.Contains(res.Body.String(), "backend-internal-wording") {
+					t.Errorf("body echoes the backend: %s", res.Body)
+				}
+				if len(rec.seen) != 0 {
+					t.Errorf("authorized on a guessed ARN: %v", rec.seen)
+				}
+			})
+		}
 	}
 }

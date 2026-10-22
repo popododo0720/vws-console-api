@@ -3,6 +3,7 @@ package iamquery
 import (
 	"encoding/xml"
 	"errors"
+	"fmt"
 	"regexp"
 	"strconv"
 	"strings"
@@ -85,11 +86,13 @@ func userName(c *exchange) string {
 }
 
 // userARN is the user's real ARN when it exists, so policies on paths apply.
-// A user that does not exist is authorized on the name the caller gave, as
-// AWS evaluates it. Any other lookup failure fails closed: a guessed path-less
+// Without UserName the call is about the caller, authorized on its own
+// authenticated ARN (path included) with no lookup, as AWS does. A named user
+// that does not exist is authorized on the name the caller gave, as AWS
+// evaluates it. Any other lookup failure fails closed: a guessed path-less
 // ARN would skip a Deny on the user's real path.
 func userARN(h *handler, c *exchange) string {
-	name := userName(c)
+	name := c.form("UserName")
 	if name == "" {
 		return c.caller.Principal
 	}
@@ -101,9 +104,21 @@ func userARN(h *handler, c *exchange) string {
 		return u.ARN
 	}
 	if resource.CodeOf(err) != resource.CodeNotFound {
-		c.resourceErr = err
+		c.resourceErr = lookupError(err)
 	}
 	return arnOf(c, "user", "/", name)
+}
+
+// lookupError is a failed user or group lookup that is not NoSuchEntity. An
+// IAM error is answered as it is; anything else (vws-iam down or timing out)
+// answers ServiceUnavailable, as iam.Check does for authorization, and never
+// echoes the backend's message. The cause stays in the chain for the log.
+func lookupError(err error) error {
+	var re *resource.Error
+	if errors.As(err, &re) {
+		return err
+	}
+	return fmt.Errorf("%w: %w", &resource.Error{Code: resource.CodeUnavailable, Message: "identity lookup unavailable"}, err)
 }
 
 // groupARN is the group's real ARN when it exists. As in userARN, a missing
@@ -119,7 +134,7 @@ func groupARN(h *handler, c *exchange) string {
 		return g.ARN
 	}
 	if resource.CodeOf(err) != resource.CodeNotFound {
-		c.resourceErr = err
+		c.resourceErr = lookupError(err)
 	}
 	return arnOf(c, "group", "/", name)
 }
