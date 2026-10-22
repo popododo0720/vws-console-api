@@ -19,8 +19,9 @@ import (
 // STSAdmin serves the IAM Query surface's STS calls over vws-iam. Most IAM
 // management calls are not mapped to vws-iam's User, Group, Role, Policy and
 // AccessKey services yet; each answers Unimplemented, which the surface
-// returns as InvalidAction. SetDefaultPolicyVersion, the policy and MFA
-// device tag calls, GetRole and UpdateRoleDescription are mapped.
+// returns as InvalidAction. ListPolicyVersions, SetDefaultPolicyVersion, the
+// policy and MFA device tag calls, GetRole and UpdateRoleDescription are
+// mapped.
 type STSAdmin struct{ *Client }
 
 var _ iam.Admin = STSAdmin{}
@@ -213,6 +214,39 @@ func (STSAdmin) CreatePolicy(_ context.Context, _ resource.AccountID, name, path
 // GetPolicy implements iam.Admin.
 func (STSAdmin) GetPolicy(_ context.Context, _ resource.AccountID, _ string) (iam.ManagedPolicy, error) {
 	return iam.ManagedPolicy{}, notServed("GetPolicy")
+}
+
+// ListPolicyVersions implements iam.Admin over
+// PolicyService.ListPolicyVersions. The AWS Marker is the proto page token:
+// both are opaque to the caller.
+func (a STSAdmin) ListPolicyVersions(
+	ctx context.Context, account resource.AccountID, arn, marker string, maxItems int,
+) (iam.PolicyVersionPage, error) {
+	name, err := a.policyFor(ctx, account, arn)
+	if err != nil {
+		return iam.PolicyVersionPage{}, err
+	}
+	req := &iamv1.ListPolicyVersionsRequest{Parent: name, PageToken: marker}
+	if maxItems > 0 {
+		req.PageSize = int32(maxItems) //nolint:gosec // the surface bounds MaxItems to 1..1000.
+	}
+	resp, err := retry(ctx, a.backoff, a.policies.ListPolicyVersions, req)
+	if err != nil {
+		return iam.PolicyVersionPage{}, authError(err)
+	}
+	page := iam.PolicyVersionPage{
+		Versions:    []iam.PolicyVersion{},
+		IsTruncated: resp.GetNextPageToken() != "",
+		Marker:      resp.GetNextPageToken(),
+	}
+	for _, v := range resp.GetPolicyVersions() {
+		page.Versions = append(page.Versions, iam.PolicyVersion{
+			ID:               v.GetName()[strings.LastIndex(v.GetName(), "/")+1:],
+			IsDefaultVersion: v.GetStatus().GetDefaultVersion(),
+			Created:          v.GetCreateTime().AsTime(),
+		})
+	}
+	return page, nil
 }
 
 // ListPolicies implements iam.Admin.
