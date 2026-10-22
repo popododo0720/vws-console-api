@@ -28,8 +28,8 @@ type Statement struct {
 }
 
 // Fake is an in-memory IAM: users, groups, roles, policies, access keys,
-// virtual MFA device tags and STS sessions per account (store.go), plus raw
-// statements per principal ARN for tests. Policies evaluate as explicit deny,
+// virtual MFA devices and their tags, and STS sessions per account (store.go),
+// plus raw statements per principal ARN for tests. Policies evaluate as explicit deny,
 // then allow, then implicit deny. It stands in for vws-iam (-iam=fake), and
 // nothing in it survives a restart.
 type Fake struct {

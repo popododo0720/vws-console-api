@@ -41,12 +41,16 @@ type store struct {
 }
 
 // mfaDeviceRec is a virtual MFA device in the fake. The device keeps its tags
-// only: the IAM Query surface has no action that manages devices yet, so the
-// tags are reachable only on a device added with AddMfaDevice.
+// and the user it is enabled for. A device is reachable only after
+// AddMfaDevice.
 type mfaDeviceRec struct {
 	// tags are the AWS tags of the device, keyed by tag key. AWS tag keys are
 	// case sensitive for a virtual MFA device, so the map is not folded.
 	tags map[string]string
+	// user is the name of the user the device is enabled for. Empty when the
+	// device is unassigned.
+	user       string
+	enableTime time.Time
 }
 
 type holder struct {
@@ -177,10 +181,10 @@ func (f *Fake) account(a resource.AccountID) *store {
 	return st
 }
 
-// AddMfaDevice registers a virtual MFA device so its tags can be managed, and
-// returns its serial number (the AWS SerialNumber). It is for tests and for a
-// fake seeded with the devices of an account: the IAM Query surface does not
-// create MFA devices yet.
+// AddMfaDevice registers an unassigned virtual MFA device so it can be listed
+// and its tags managed, and returns its serial number (the AWS SerialNumber).
+// It is for tests and for a fake seeded with the devices of an account: the
+// IAM Query surface does not create MFA devices yet.
 func (f *Fake) AddMfaDevice(a resource.AccountID, name string) string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -188,6 +192,25 @@ func (f *Fake) AddMfaDevice(a resource.AccountID, name string) string {
 	serial := iamARN(a, "mfa", "/", name)
 	st.mfa[serial] = &mfaDeviceRec{tags: map[string]string{}}
 	return serial
+}
+
+// AssignMfaDevice enables a virtual MFA device for a user of the same account
+// so ListVirtualMFADevices reports it as assigned. It is for tests and for a
+// fake seeded with the devices of an account.
+func (f *Fake) AssignMfaDevice(a resource.AccountID, serial, user string, enableTime time.Time) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	st := f.account(a)
+	d, err := st.mfaDevice(serial)
+	if err != nil {
+		return err
+	}
+	if st.users[user] == nil {
+		return notFound("user", user)
+	}
+	d.user = user
+	d.enableTime = enableTime.UTC()
+	return nil
 }
 
 func iamARN(a resource.AccountID, kind, path, name string) string {
@@ -296,7 +319,8 @@ func prefixOr(p string) string {
 }
 
 // DeleteUser implements Admin. Like AWS it refuses while the user still has
-// access keys, policies or group memberships.
+// access keys, policies, group memberships, a login profile or an assigned MFA
+// device.
 func (f *Fake) DeleteUser(_ context.Context, a resource.AccountID, name string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -305,7 +329,8 @@ func (f *Fake) DeleteUser(_ context.Context, a resource.AccountID, name string) 
 	if u == nil {
 		return notFound("user", name)
 	}
-	if len(u.keys) > 0 || len(u.attached) > 0 || len(u.inline) > 0 || len(u.groups) > 0 || u.login != nil {
+	if len(u.keys) > 0 || len(u.attached) > 0 || len(u.inline) > 0 || len(u.groups) > 0 || u.login != nil ||
+		st.mfaAssigned(name) {
 		return conflict("Cannot delete entity, must delete login profile, access keys, policies and group memberships first.")
 	}
 	delete(st.users, name)
@@ -377,6 +402,11 @@ func (f *Fake) UpdateUser(_ context.Context, a resource.AccountID, name, newPath
 			g.members[target] = true
 		}
 		st.users[target] = u
+		for _, d := range st.mfa {
+			if d.user == name {
+				d.user = target
+			}
+		}
 	}
 	u.Name, u.Path, u.ARN = target, path, iamARN(a, "user", path, target)
 	for id, key := range f.keys {
@@ -1095,6 +1125,42 @@ func (f *Fake) ListPolicyTags(
 		page.Marker = keys[end-1]
 	}
 	return page, nil
+}
+
+// mfaAssigned reports whether an MFA device is enabled for user. The caller
+// holds f.mu.
+func (st *store) mfaAssigned(user string) bool {
+	for _, d := range st.mfa {
+		if d.user == user {
+			return true
+		}
+	}
+	return false
+}
+
+// ListVirtualMFADevices implements Admin. Devices are sorted by serial number
+// and paged with an opaque marker, as in AWS.
+func (f *Fake) ListVirtualMFADevices(
+	_ context.Context, a resource.AccountID, assignment MFADeviceAssignment, marker string, maxItems int,
+) (VirtualMFADevicePage, error) {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	st := f.account(a)
+	devices := make([]VirtualMFADevice, 0, len(st.mfa))
+	for serial, d := range st.mfa {
+		v := VirtualMFADevice{SerialNumber: serial}
+		if d.user != "" {
+			u := st.users[d.user]
+			if u == nil {
+				return VirtualMFADevicePage{}, notFound("user", d.user)
+			}
+			user := u.User
+			v.User = &user
+			v.EnableDate = d.enableTime
+		}
+		devices = append(devices, v)
+	}
+	return PageVirtualMFADevices(devices, assignment, marker, maxItems), nil
 }
 
 // --- virtual MFA device tags ---
