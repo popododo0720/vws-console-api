@@ -352,3 +352,100 @@ func TestUpdateRoleDescription(t *testing.T) {
 		t.Errorf("service-linked role field: %+v", err)
 	}
 }
+
+func TestUpdateRole(t *testing.T) {
+	ctx := t.Context()
+	a := account(t)
+	f := NewFake()
+	trust := `{"Statement":[{"Effect":"Allow","Action":"sts:AssumeRole","Principal":{"AWS":"*"}}]}`
+	if _, err := f.CreateRole(ctx, a, RoleInput{
+		Name: "ops", Path: "/", TrustPolicy: trust, Description: "old", MaxSessionDuration: 7200,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	description := "new"
+	must(t, f.UpdateRole(ctx, a, "ops", RoleUpdate{Description: &description}))
+	got, err := f.GetRole(ctx, a, "ops")
+	if err != nil || got.Description != "new" || got.MaxSessionDuration != 7200 {
+		t.Fatalf("description update %+v %v", got, err)
+	}
+
+	seconds := 43200
+	must(t, f.UpdateRole(ctx, a, "ops", RoleUpdate{MaxSessionDuration: &seconds}))
+	got, err = f.GetRole(ctx, a, "ops")
+	if err != nil || got.Description != "new" || got.MaxSessionDuration != 43200 {
+		t.Fatalf("duration update %+v %v", got, err)
+	}
+
+	empty := ""
+	seconds = 3600
+	must(t, f.UpdateRole(ctx, a, "ops", RoleUpdate{Description: &empty, MaxSessionDuration: &seconds}))
+	got, err = f.GetRole(ctx, a, "ops")
+	if err != nil || got.Description != "" || got.MaxSessionDuration != 3600 {
+		t.Fatalf("both fields %+v %v", got, err)
+	}
+	must(t, f.UpdateRole(ctx, a, "ops", RoleUpdate{Description: &empty, MaxSessionDuration: &seconds}))
+
+	err = f.UpdateRole(ctx, a, "none", RoleUpdate{Description: &description})
+	if resource.CodeOf(err) != resource.CodeNotFound {
+		t.Errorf("missing role: %v", err)
+	}
+	short := 3599
+	err = f.UpdateRole(ctx, a, "ops", RoleUpdate{MaxSessionDuration: &short})
+	if resource.CodeOf(err) != resource.CodeInvalidArgument {
+		t.Errorf("short duration: %v", err)
+	}
+	tooLong := 43201
+	err = f.UpdateRole(ctx, a, "ops", RoleUpdate{MaxSessionDuration: &tooLong})
+	if resource.CodeOf(err) != resource.CodeInvalidArgument {
+		t.Errorf("long duration: %v", err)
+	}
+	long := strings.Repeat("x", MaxRoleDescription+1)
+	err = f.UpdateRole(ctx, a, "ops", RoleUpdate{Description: &long})
+	if resource.CodeOf(err) != resource.CodeInvalidArgument {
+		t.Errorf("oversized description: %v", err)
+	}
+	if stored, _ := f.GetRole(ctx, a, "ops"); stored.Description != "" || stored.MaxSessionDuration != 3600 {
+		t.Errorf("a rejected update changed the role: %+v", stored)
+	}
+
+	if _, err := f.CreateRole(ctx, a, RoleInput{
+		Name: "svc", Path: ServiceLinkedRolePath + "compute.vws/", TrustPolicy: trust,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	err = f.UpdateRole(ctx, a, "svc", RoleUpdate{Description: &description})
+	var e *resource.Error
+	if !errors.As(err, &e) || e.Code != resource.CodeConflict || e.Field != "UnmodifiableEntity" {
+		t.Errorf("service-linked role: %+v", err)
+	}
+	if stored, _ := f.GetRole(ctx, a, "svc"); stored.Description != "" {
+		t.Errorf("a service-linked role changed: %+v", stored)
+	}
+}
+
+func TestUpdateRoleStaysInAccount(t *testing.T) {
+	ctx := t.Context()
+	a := account(t)
+	other, err := resource.Parse[resource.AccountID]("210987654321")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := NewFake()
+	trust := `{"Statement":[{"Effect":"Allow","Action":"sts:AssumeRole","Principal":{"AWS":"*"}}]}`
+	for _, acct := range []resource.AccountID{a, other} {
+		if _, err := f.CreateRole(ctx, acct, RoleInput{
+			Name: "ops", Path: "/", TrustPolicy: trust, Description: acct.String(),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	description := "new"
+	must(t, f.UpdateRole(ctx, a, "ops", RoleUpdate{Description: &description}))
+	if got, _ := f.GetRole(ctx, a, "ops"); got.Description != "new" {
+		t.Errorf("caller role description %q, want new", got.Description)
+	}
+	if got, _ := f.GetRole(ctx, other, "ops"); got.Description != other.String() {
+		t.Errorf("another account's role changed: %+v", got)
+	}
+}

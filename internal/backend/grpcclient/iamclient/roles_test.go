@@ -50,6 +50,127 @@ func TestGetRole(t *testing.T) {
 	}
 }
 
+func TestUpdateRole(t *testing.T) {
+	c, s := harness(t)
+	admin := STSAdmin{Client: c}
+	s.getRoleRes = &iamv1.Role{
+		Name: "projects/123456789012/roles/ops",
+		Spec: &iamv1.RoleSpec{Path: "/"},
+	}
+	s.updateRoleRes = &longrunningpb.Operation{Done: true}
+	description := "new"
+	seconds := 3600
+	if err := admin.UpdateRole(t.Context(), accountID(t), "ops", iam.RoleUpdate{
+		Description: &description, MaxSessionDuration: &seconds,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(s.updateRole) != 1 {
+		t.Fatalf("%d UpdateRole calls, want 1", len(s.updateRole))
+	}
+	req := s.updateRole[0]
+	if req.GetRole().GetName() != "projects/123456789012/roles/ops" {
+		t.Errorf("role name %q", req.GetRole().GetName())
+	}
+	if req.GetRole().GetSpec().GetDescription() != "new" ||
+		req.GetRole().GetSpec().GetMaxSessionDurationSeconds() != 3600 {
+		t.Errorf("role spec %+v", req.GetRole().GetSpec())
+	}
+	if paths := req.GetUpdateMask().GetPaths(); len(paths) != 2 ||
+		paths[0] != "spec.description" || paths[1] != "spec.max_session_duration_seconds" {
+		t.Errorf("update mask %v", paths)
+	}
+
+	s.updateRole = nil
+	seconds = 43200
+	if err := admin.UpdateRole(t.Context(), accountID(t), "ops", iam.RoleUpdate{
+		MaxSessionDuration: &seconds,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(s.updateRole) != 1 {
+		t.Fatalf("%d UpdateRole calls, want 1", len(s.updateRole))
+	}
+	req = s.updateRole[0]
+	if req.GetRole().GetSpec().GetDescription() != "" ||
+		req.GetRole().GetSpec().GetMaxSessionDurationSeconds() != 43200 {
+		t.Errorf("role spec %+v", req.GetRole().GetSpec())
+	}
+	if paths := req.GetUpdateMask().GetPaths(); len(paths) != 1 ||
+		paths[0] != "spec.max_session_duration_seconds" {
+		t.Errorf("update mask %v, want [spec.max_session_duration_seconds]", paths)
+	}
+
+	s.updateRole = nil
+	empty := ""
+	if err := admin.UpdateRole(t.Context(), accountID(t), "ops", iam.RoleUpdate{Description: &empty}); err != nil {
+		t.Fatal(err)
+	}
+	if len(s.updateRole) != 1 {
+		t.Fatalf("%d UpdateRole calls, want 1", len(s.updateRole))
+	}
+	req = s.updateRole[0]
+	if req.GetRole().GetSpec().GetDescription() != "" {
+		t.Errorf("description %q, want empty", req.GetRole().GetSpec().GetDescription())
+	}
+	if paths := req.GetUpdateMask().GetPaths(); len(paths) != 1 || paths[0] != "spec.description" {
+		t.Errorf("update mask %v, want [spec.description]", paths)
+	}
+
+	s.updateRole = nil
+	if err := admin.UpdateRole(t.Context(), accountID(t), "ops", iam.RoleUpdate{}); err != nil {
+		t.Fatal(err)
+	}
+	if len(s.updateRole) != 0 {
+		t.Errorf("a no-op update reached UpdateRole: %v", s.updateRole)
+	}
+}
+
+func TestUpdateRoleErrors(t *testing.T) {
+	c, s := harness(t)
+	admin := STSAdmin{Client: c}
+	s.getRoleErr = awsErr(codes.NotFound, "NOT_FOUND", "NoSuchEntity")
+	err := admin.UpdateRole(t.Context(), accountID(t), "none", iam.RoleUpdate{})
+	if resource.CodeOf(err) != resource.CodeNotFound {
+		t.Errorf("missing role: %v", err)
+	}
+	s.getRoleErr = nil
+	s.getRoleRes = &iamv1.Role{
+		Name: "projects/123456789012/roles/svc",
+		Spec: &iamv1.RoleSpec{Path: iam.ServiceLinkedRolePath + "compute.vws/"},
+	}
+	err = admin.UpdateRole(t.Context(), accountID(t), "svc", iam.RoleUpdate{})
+	var re *resource.Error
+	if !errors.As(err, &re) || re.Code != resource.CodeConflict || re.Field != "UnmodifiableEntity" {
+		t.Errorf("service-linked role: %+v", err)
+	}
+	if len(s.updateRole) != 0 {
+		t.Errorf("a service-linked role reached UpdateRole: %v", s.updateRole)
+	}
+
+	s.getRoleRes = &iamv1.Role{Spec: &iamv1.RoleSpec{Path: "/"}}
+	long := strings.Repeat("x", iam.MaxRoleDescription+1)
+	err = admin.UpdateRole(t.Context(), accountID(t), "ops", iam.RoleUpdate{Description: &long})
+	if resource.CodeOf(err) != resource.CodeInvalidArgument {
+		t.Errorf("oversized description: %v", err)
+	}
+	short := 3599
+	err = admin.UpdateRole(t.Context(), accountID(t), "ops", iam.RoleUpdate{MaxSessionDuration: &short})
+	if resource.CodeOf(err) != resource.CodeInvalidArgument {
+		t.Errorf("short duration: %v", err)
+	}
+	if len(s.updateRole) != 0 {
+		t.Errorf("invalid input reached UpdateRole: %v", s.updateRole)
+	}
+
+	s.updateRoleErr = awsErr(codes.FailedPrecondition, "FAILED_PRECONDITION", "UnmodifiableEntity")
+	description := "new"
+	err = admin.UpdateRole(t.Context(), accountID(t), "ops", iam.RoleUpdate{Description: &description})
+	if !errors.As(err, &re) || re.Code != resource.CodeConflict || re.Field != "UnmodifiableEntity" {
+		t.Errorf("vws-iam rejection: %+v", err)
+	}
+}
+
 func TestUpdateRoleDescription(t *testing.T) {
 	c, s := harness(t)
 	admin := STSAdmin{Client: c}

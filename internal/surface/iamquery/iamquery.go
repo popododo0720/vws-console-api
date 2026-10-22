@@ -51,6 +51,9 @@ type exchange struct {
 	service sigv4.Service
 	caller  resource.Caller
 	action  string
+	// resourceErr is set when the action's ARN cannot be computed. The
+	// request fails closed instead of authorizing on a guessed ARN.
+	resourceErr error
 }
 
 func (c *exchange) form(k string) string { return c.r.Form.Get(k) }
@@ -105,6 +108,10 @@ func (h *handler) serve(w http.ResponseWriter, r *http.Request) {
 	arn := "*"
 	if spec.resource != nil {
 		arn = spec.resource(h, c)
+		if c.resourceErr != nil {
+			c.fail(c.resourceErr)
+			return
+		}
 	}
 	if !spec.public {
 		if err := iam.Check(r.Context(), h.cfg.Authorizer, c.caller, string(c.service)+":"+c.action, arn); err != nil {
