@@ -75,6 +75,8 @@ func (c computeClient) TerminateInstances(ctx context.Context, m backend.Mutatio
 
 // CreateTags rewrites each instance's labels with the merged tags. Compute
 // serves a labels-only UpdateInstance, so power and spec do not change.
+// Compute replaces the whole label map, so the write keeps the internal
+// labels and detach records the instance carries (writeInstanceLabels).
 func (c computeClient) CreateTags(ctx context.Context, m backend.Mutation, req resource.CreateTagsRequest) (resource.Accepted[resource.Instance], error) {
 	projectID := project(m.Account)
 	insts := make([]resource.Instance, 0, len(req.IDs))
@@ -91,21 +93,25 @@ func (c computeClient) CreateTags(ctx context.Context, m backend.Mutation, req r
 	var op resource.Operation
 	targets := make([]resource.Ref, 0, len(insts))
 	for i, inst := range insts {
-		labels, err := withInternalLabels(inst.Tags, map[string]string{
-			labelAction:      resource.ActionCreateTags.String(),
-			labelFingerprint: clip(m.Fingerprint, 63),
-			labelImage:       inst.ImageID.String(),
-			labelReservation: inst.ReservationID.String(),
+		updated, _, err := c.writeInstanceLabels(ctx, projectID, inst.ID, func(
+			got *computev1.Instance, model resource.Instance,
+		) (*computev1.UpdateInstanceRequest, error) {
+			tags, err := resource.MergeTags(model.Tags, req.Tags)
+			if err != nil {
+				return nil, err
+			}
+			model.Tags = tags
+			labels, err := instanceUpdateLabels(model, got.GetLabels(), resource.ActionCreateTags, m.Fingerprint, nil)
+			if err != nil {
+				return nil, err
+			}
+			return &computev1.UpdateInstanceRequest{
+				RequestId:  requestUUID(m.Key, "tags", hex.EncodeToString([]byte{byte(i)})),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"labels"}},
+				Instance:   &computev1.Instance{Name: got.GetName(), Labels: labels},
+			}, nil
 		})
 		if err != nil {
-			return resource.Accepted[resource.Instance]{}, err
-		}
-		updated, err := c.instances.UpdateInstance(ctx, &computev1.UpdateInstanceRequest{
-			RequestId:  requestUUID(m.Key, "tags", hex.EncodeToString([]byte{byte(i)})),
-			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"labels"}},
-			Instance:   &computev1.Instance{Name: instanceName(projectID, inst.ID.String()), Labels: labels},
-		})
-		if err := rpcErr(updated, err); err != nil {
 			return resource.Accepted[resource.Instance]{}, err
 		}
 		if i == 0 {
@@ -136,38 +142,40 @@ func (c computeClient) changeInstances(ctx context.Context, m backend.Mutation, 
 	var op resource.Operation
 	items := make([]resource.InstanceStateChange, 0, len(prev))
 	for i, inst := range prev {
-		mid, _, err := resource.NextInstanceState(action, inst.State)
-		if err != nil {
-			return resource.Accepted[resource.InstanceStateChange]{}, err
-		}
-		labels, err := withInternalLabels(inst.Tags, map[string]string{
-			labelAction:      action.String(),
-			labelFingerprint: clip(m.Fingerprint, 63),
-			labelImage:       inst.ImageID.String(),
-			labelReservation: inst.ReservationID.String(),
-		})
-		if err != nil {
-			return resource.Accepted[resource.InstanceStateChange]{}, err
-		}
-		updated, err := c.instances.UpdateInstance(ctx, &computev1.UpdateInstanceRequest{
-			RequestId:  requestUUID(m.Key, action.String(), hex.EncodeToString([]byte{byte(i)})),
-			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.power", "labels"}},
-			Instance: &computev1.Instance{
-				Name:   instanceName(projectID, inst.ID.String()),
-				Labels: labels,
-				Spec: &computev1.InstanceSpec{
-					MachineType: inst.InstanceType,
-					Power:       power,
-					NetworkInterfaces: []*computev1.NetworkInterface{{
-						DeviceName: "nic0",
-						Subnet:     subnetName(projectID, "", inst.SubnetID.String()),
-					}},
+		var mid resource.InstanceState
+		updated, cur, err := c.writeInstanceLabels(ctx, projectID, inst.ID, func(
+			got *computev1.Instance, model resource.Instance,
+		) (*computev1.UpdateInstanceRequest, error) {
+			next, _, err := resource.NextInstanceState(action, model.State)
+			if err != nil {
+				return nil, err
+			}
+			mid = next
+			labels, err := instanceUpdateLabels(model, got.GetLabels(), action, m.Fingerprint, nil)
+			if err != nil {
+				return nil, err
+			}
+			return &computev1.UpdateInstanceRequest{
+				RequestId:  requestUUID(m.Key, action.String(), hex.EncodeToString([]byte{byte(i)})),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.power", "labels"}},
+				Instance: &computev1.Instance{
+					Name:   got.GetName(),
+					Labels: labels,
+					Spec: &computev1.InstanceSpec{
+						MachineType: model.InstanceType,
+						Power:       power,
+						NetworkInterfaces: []*computev1.NetworkInterface{{
+							DeviceName: "nic0",
+							Subnet:     subnetName(projectID, "", model.SubnetID.String()),
+						}},
+					},
 				},
-			},
+			}, nil
 		})
-		if err := rpcErr(updated, err); err != nil {
+		if err != nil {
 			return resource.Accepted[resource.InstanceStateChange]{}, err
 		}
+		inst = cur
 		if i == 0 {
 			op, err = operationFrom(updated, resource.ServiceCompute)
 			if err != nil {
@@ -181,6 +189,41 @@ func (c computeClient) changeInstances(ctx context.Context, m backend.Mutation, 
 	op.Action = action
 	op.Targets = stateRefs(items)
 	return resource.Accepted[resource.InstanceStateChange]{Operation: op, Items: items}, nil
+}
+
+// writeInstanceLabels sends the update build makes from the current instance
+// with that instance's etag. Compute replaces the whole label map, so build
+// starts from the labels it was given (instanceUpdateLabels), and the etag
+// keeps a detach record written in between from being dropped: a stale etag
+// rereads and builds again. The request id does not change, because compute
+// stores no request it rejected for its etag.
+func (c computeClient) writeInstanceLabels(
+	ctx context.Context, projectID string, id resource.InstanceID,
+	build func(*computev1.Instance, resource.Instance) (*computev1.UpdateInstanceRequest, error),
+) (*longrunningpb.Operation, resource.Instance, error) {
+	for attempt := 0; attempt < 5; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return nil, resource.Instance{}, err
+		}
+		got, model, err := c.detachInstance(ctx, projectID, id)
+		if err != nil {
+			return nil, resource.Instance{}, err
+		}
+		req, err := build(got, model)
+		if err != nil {
+			return nil, resource.Instance{}, err
+		}
+		req.Instance.Etag = got.GetEtag()
+		updated, callErr := c.instances.UpdateInstance(ctx, req)
+		if etagMismatch(callErr) {
+			continue
+		}
+		if err := rpcErr(updated, callErr); err != nil {
+			return nil, resource.Instance{}, err
+		}
+		return updated, model, nil
+	}
+	return nil, resource.Instance{}, resource.Conflict(resource.KindInstance, id.String(), "instance changed")
 }
 
 func (c computeClient) CreateVolume(ctx context.Context, m backend.Mutation, req resource.CreateVolumeRequest) (resource.Accepted[resource.Volume], error) {
@@ -342,6 +385,27 @@ func (c computeClient) detachOnce(
 	if err != nil {
 		return zero, err
 	}
+	requestHex := detachRequestHex(m.Key)
+	// A retry of a detach this instance already took is that detach, even if
+	// the volume was attached again since (EC2 client-token rules: the same
+	// token and parameters succeed with no further action).
+	if got != nil {
+		if rec, ok := detachReplayFrom(got.GetLabels(), vol.ID.String()); ok && rec.requestHex == requestHex {
+			rec.instanceID = model.ID
+			switch rec.opMatch(m.Fingerprint) {
+			case opSaved:
+				return c.acceptDetachReplay(ctx, m.Account, vol, model, rec)
+			case opOtherParams:
+				return zero, resource.IdempotencyMismatch()
+			case opUnknown:
+				if !bound {
+					return c.writeDetach(ctx, m, vol, got, model, backend.VolumeBind{
+						InstanceID: rec.instanceID, Device: rec.device,
+					}, false)
+				}
+			}
+		}
+	}
 	if bound {
 		if !req.InstanceID.IsZero() && req.InstanceID != bind.InstanceID {
 			return zero, resource.AttachmentNotFound(vol.ID)
@@ -366,18 +430,19 @@ func (c computeClient) detachOnce(
 			return zero, resource.AttachmentNotFound(vol.ID)
 		}
 	}
-	holder, holderModel, rec, ok, err := c.findDetachReplay(ctx, projectID, vol.ID, req.InstanceID, got, model)
+	holder, holderModel, rec, ok, err := c.findDetachReplay(ctx, projectID, vol.ID, requestHex, req.InstanceID, got)
 	if err != nil {
 		return zero, err
 	}
-	if !ok || rec.requestHex != detachRequestHex(m.Key) {
+	if !ok {
 		return zero, resource.Conflict(resource.KindVolume, vol.ID.String(), "volume is not in use")
 	}
-	if rec.opLocal != "" && !detachFingerprintMatches(rec.fingerprint, m.Fingerprint) {
-		return zero, resource.IdempotencyMismatch()
-	}
-	if rec.opLocal != "" {
+	switch rec.opMatch(m.Fingerprint) {
+	case opSaved:
 		return c.acceptDetachReplay(ctx, m.Account, vol, holderModel, rec)
+	case opOtherParams:
+		return zero, resource.IdempotencyMismatch()
+	case opUnknown:
 	}
 	return c.writeDetach(ctx, m, vol, holder, holderModel, backend.VolumeBind{
 		InstanceID: rec.instanceID, Device: rec.device,
@@ -501,21 +566,17 @@ func (c computeClient) volumeBoundElsewhere(
 	return model.ID != skip, nil
 }
 
-// findDetachReplay reads the detach record for id.
-// A named instance is the only place a named request may replay.
-// A volume-only request pages until some instance still carries the record.
+// findDetachReplay finds the record of request requestHex for volume id.
+// detachOnce has already read the hint instance. A named instance is the only
+// place a named request may replay. A volume-only request pages until an
+// instance carries that request's record. A record of another request for the
+// same volume, such as an older detach from another instance, is skipped.
 func (c computeClient) findDetachReplay(
-	ctx context.Context, projectID string, id resource.VolumeID, want resource.InstanceID,
-	hint *computev1.Instance, hintModel resource.Instance,
+	ctx context.Context, projectID string, id resource.VolumeID, requestHex string, want resource.InstanceID,
+	hint *computev1.Instance,
 ) (*computev1.Instance, resource.Instance, detachReplay, bool, error) {
-	if hint != nil {
-		if rec, ok := detachReplayFrom(hint.GetLabels(), id.String()); ok {
-			rec.instanceID = hintModel.ID
-			return hint, hintModel, rec, true, nil
-		}
-		if !want.IsZero() {
-			return nil, resource.Instance{}, detachReplay{}, false, nil
-		}
+	if hint != nil && !want.IsZero() {
+		return nil, resource.Instance{}, detachReplay{}, false, nil
 	}
 	token := ""
 	seen := map[string]struct{}{}
@@ -535,7 +596,7 @@ func (c computeClient) findDetachReplay(
 		}
 		for _, item := range out.GetInstances() {
 			rec, ok := detachReplayFrom(item.GetLabels(), id.String())
-			if !ok {
+			if !ok || rec.requestHex != requestHex {
 				continue
 			}
 			model, err := instanceModel(item)
@@ -579,6 +640,10 @@ func (c computeClient) writeDetach(
 	if err != nil {
 		return zero, err
 	}
+	// The operation id saved for this volume belongs to the previous detach.
+	// Next to this request's record it would replay that detach, so it goes.
+	// This request's own id is written by persistDetachOp.
+	delete(labels, labelDetachOpPrefix+vol.ID.String())
 	updated, callErr := c.instances.UpdateInstance(ctx, &computev1.UpdateInstanceRequest{
 		RequestId:  requestUUID(m.Key, "detach"),
 		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.volumes", "labels"}},
@@ -635,7 +700,8 @@ func (c computeClient) writeDetach(
 // read it without rebuilding the volume list that request fingerprinted.
 func (c computeClient) persistDetachOp(ctx context.Context, m backend.Mutation, name, volID, opLocal string) error {
 	key := labelDetachOpPrefix + volID
-	value := opLocal + " " + detachFPToken(m.Fingerprint)
+	requestHex := detachRequestHex(m.Key)
+	value := opLocal + " " + detachFPToken(requestHex, m.Fingerprint)
 	for attempt := 0; attempt < 5; attempt++ {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -645,6 +711,12 @@ func (c computeClient) persistDetachOp(ctx context.Context, m backend.Mutation, 
 			return fromNamedRPC(name, err)
 		}
 		if got.GetLabels()[key] == value {
+			return nil
+		}
+		// A later detach of this volume owns the record now. This id would
+		// pair with its request, so it is not written; a retry of this
+		// request then asks compute by request id (detachOnce, opUnknown).
+		if rec, ok := detachReplayFrom(got.GetLabels(), volID); !ok || rec.requestHex != requestHex {
 			return nil
 		}
 		labels := maps.Clone(got.GetLabels())
@@ -747,13 +819,46 @@ func detachRequestHex(key string) string {
 	return strings.ReplaceAll(requestUUID(key, "detach"), "-", "")
 }
 
-func detachFPToken(fingerprint string) string {
+// detachFPToken binds a saved operation id to the request and its
+// fingerprint, so it can only replay for that request. The label value stays
+// "<op> <16 hex>" and fits in 63 bytes for any operation id length.
+func detachFPToken(requestHex, fingerprint string) string {
+	sum := sha256.Sum256([]byte(requestHex + "\x00" + fingerprint))
+	return hex.EncodeToString(sum[:8])
+}
+
+// legacyFPToken is the token written before #213, bound to the fingerprint
+// only. Such a record may pair an older detach's operation with this request.
+func legacyFPToken(fingerprint string) string {
 	sum := sha256.Sum256([]byte(fingerprint))
 	return hex.EncodeToString(sum[:8])
 }
 
-func detachFingerprintMatches(token, fingerprint string) bool {
-	return token == detachFPToken(fingerprint)
+// opMatch is what a saved operation id means for a retry.
+type opMatch int
+
+const (
+	// opUnknown: no id is saved for this request, or it cannot be trusted.
+	// The retry asks compute by request id.
+	opUnknown opMatch = iota
+	// opSaved: the id is this request's, with the same parameters.
+	opSaved
+	// opOtherParams: the token was used with other parameters.
+	opOtherParams
+)
+
+// opMatch compares the saved operation token with this request's fingerprint.
+func (r detachReplay) opMatch(fingerprint string) opMatch {
+	switch {
+	case r.opLocal == "":
+		return opUnknown
+	case r.fingerprint == detachFPToken(r.requestHex, fingerprint):
+		return opSaved
+	case r.fingerprint == legacyFPToken(fingerprint):
+		return opUnknown
+	default:
+		return opOtherParams
+	}
 }
 
 func detachRecordKey(key string) bool {

@@ -172,38 +172,42 @@ func (c computeClient) StopInstances(ctx context.Context, m backend.Mutation, re
 	var op resource.Operation
 	items := make([]resource.InstanceStateChange, 0, len(prev))
 	for i, inst := range prev {
-		mid, _, err := resource.NextInstanceState(resource.ActionStopInstances, inst.State)
-		if err != nil {
-			return resource.Accepted[resource.InstanceStateChange]{}, err
-		}
-		labels, err := withInternalLabels(inst.Tags, map[string]string{
-			labelAction:      resource.ActionStopInstances.String(),
-			labelFingerprint: clip(m.Fingerprint, 63),
-			labelImage:       inst.ImageID.String(),
-			labelReservation: inst.ReservationID.String(),
-		})
-		if err != nil {
-			return resource.Accepted[resource.InstanceStateChange]{}, err
-		}
-		updated, err := c.instances.UpdateInstance(ctx, &computev1.UpdateInstanceRequest{
-			RequestId:  requestUUID(m.Key, "stop", strconv.Itoa(i)),
-			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.power", "labels"}},
-			Instance: &computev1.Instance{
-				Name:   instanceName(projectID, inst.ID.String()),
-				Labels: labels,
-				Spec: &computev1.InstanceSpec{
-					MachineType: inst.InstanceType,
-					Power:       computev1.InstancePower_INSTANCE_POWER_STOPPED,
-					NetworkInterfaces: []*computev1.NetworkInterface{{
-						DeviceName: "nic0",
-						Subnet:     subnetName(projectID, "", inst.SubnetID.String()),
-					}},
+		var mid resource.InstanceState
+		// writeInstanceLabels keeps the detach records compute would drop
+		// with a whole-map label replace (#213).
+		updated, cur, err := c.writeInstanceLabels(ctx, projectID, inst.ID, func(
+			got *computev1.Instance, model resource.Instance,
+		) (*computev1.UpdateInstanceRequest, error) {
+			next, _, err := resource.NextInstanceState(resource.ActionStopInstances, model.State)
+			if err != nil {
+				return nil, err
+			}
+			mid = next
+			labels, err := instanceUpdateLabels(model, got.GetLabels(), resource.ActionStopInstances, m.Fingerprint, nil)
+			if err != nil {
+				return nil, err
+			}
+			return &computev1.UpdateInstanceRequest{
+				RequestId:  requestUUID(m.Key, "stop", strconv.Itoa(i)),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.power", "labels"}},
+				Instance: &computev1.Instance{
+					Name:   got.GetName(),
+					Labels: labels,
+					Spec: &computev1.InstanceSpec{
+						MachineType: model.InstanceType,
+						Power:       computev1.InstancePower_INSTANCE_POWER_STOPPED,
+						NetworkInterfaces: []*computev1.NetworkInterface{{
+							DeviceName: "nic0",
+							Subnet:     subnetName(projectID, "", model.SubnetID.String()),
+						}},
+					},
 				},
-			},
+			}, nil
 		})
-		if err := rpcErr(updated, err); err != nil {
+		if err != nil {
 			return resource.Accepted[resource.InstanceStateChange]{}, err
 		}
+		inst = cur
 		if i == 0 {
 			op, err = operationFrom(updated, resource.ServiceCompute)
 			if err != nil {
