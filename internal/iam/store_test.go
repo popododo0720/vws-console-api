@@ -466,6 +466,42 @@ func TestSetDefaultPolicyVersion(t *testing.T) {
 	}
 }
 
+func TestListPolicyVersions(t *testing.T) {
+	ctx := t.Context()
+	a := account(t)
+	f := NewFake()
+	p, err := f.CreatePolicy(ctx, a, "versioned", "/", describeOnly, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	page, err := f.ListPolicyVersions(ctx, a, p.ARN, "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page.IsTruncated || page.Marker != "" || len(page.Versions) != 1 {
+		t.Fatalf("page %+v", page)
+	}
+	v := page.Versions[0]
+	if v.ID != "v1" || !v.IsDefaultVersion || !v.Created.Equal(p.Created) {
+		t.Errorf("version %+v, want v1 default at %v", v, p.Created)
+	}
+	// The last page's marker resumes after the only version.
+	page, err = f.ListPolicyVersions(ctx, a, p.ARN, "v1", 100)
+	if err != nil || len(page.Versions) != 0 || page.IsTruncated {
+		t.Errorf("resume from v1: %+v %v", page, err)
+	}
+	other, err := resource.Parse[resource.AccountID]("210987654321")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.ListPolicyVersions(ctx, other, p.ARN, "", 0); resource.CodeOf(err) != resource.CodeNotFound {
+		t.Errorf("policy from another account: %v", err)
+	}
+	if _, err := f.ListPolicyVersions(ctx, a, "not-an-arn", "", 0); resource.CodeOf(err) != resource.CodeNotFound {
+		t.Errorf("unknown policy ARN: %v", err)
+	}
+}
+
 func must(t *testing.T, err error) {
 	t.Helper()
 	if err != nil {

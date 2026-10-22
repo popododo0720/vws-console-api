@@ -526,6 +526,34 @@ func iamActions() map[string]spec {
 				PolicyVersion policyVersionXML `xml:"PolicyVersion"`
 			}{policyVersionXML{Document: policyDoc(p.Document), VersionID: "v1", IsDefaultVersion: true, CreateDate: stamp(p.Created)}}, nil
 		}),
+		"ListPolicyVersions": {
+			params: []string{"PolicyArn", "Marker", "MaxItems"}, needsAdmin: true, resource: policyARN,
+			run: func(h *handler, c *exchange) (any, error) {
+				if err := requirePolicyArn(c, h, "iam:ListPolicyVersions"); err != nil {
+					return nil, err
+				}
+				maxItems, err := maxItemsParam(c)
+				if err != nil {
+					return nil, err
+				}
+				if err := markerParam(c); err != nil {
+					return nil, err
+				}
+				page, err := h.cfg.Admin.ListPolicyVersions(
+					c.r.Context(), c.caller.Account, c.form("PolicyArn"), c.form("Marker"), maxItems)
+				out := policyVersionsResult{
+					Versions:    []policyVersionXML{},
+					IsTruncated: page.IsTruncated,
+					Marker:      page.Marker,
+				}
+				for _, v := range page.Versions {
+					out.Versions = append(out.Versions, policyVersionXML{
+						VersionID: v.ID, IsDefaultVersion: v.IsDefaultVersion, CreateDate: stamp(v.Created),
+					})
+				}
+				return out, err
+			},
+		},
 		"SetDefaultPolicyVersion": admin([]string{"PolicyArn", "VersionId"}, policyARN,
 			func(h *handler, c *exchange) (any, error) {
 				if err := required(c, "PolicyArn", "VersionId"); err != nil {

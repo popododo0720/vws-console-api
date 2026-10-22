@@ -2,13 +2,82 @@ package iamclient
 
 import (
 	"testing"
+	"time"
 
 	"google.golang.org/grpc/codes"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	iamv1 "github.com/popododo0720/vws-proto/gen/go/vws/iam/v1"
 
 	"github.com/popododo0720/vws-console-api/internal/resource"
 )
+
+func TestListPolicyVersionsOverGRPC(t *testing.T) {
+	c, s := harness(t)
+	admin := STSAdmin{Client: c}
+	created := time.Date(2026, 10, 14, 7, 0, 0, 0, time.UTC)
+	s.listVersionsRes = &iamv1.ListPolicyVersionsResponse{
+		PolicyVersions: []*iamv1.PolicyVersion{{
+			Name:       "projects/123456789012/policies/tagged/versions/v1",
+			Status:     &iamv1.PolicyVersionStatus{DefaultVersion: true},
+			CreateTime: timestamppb.New(created),
+		}},
+		NextPageToken: "next-token",
+	}
+	page, err := admin.ListPolicyVersions(t.Context(), accountID(t), policyARN, "marker-token", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(s.listVersions) != 1 {
+		t.Fatalf("sent %v", s.listVersions)
+	}
+	sent := s.listVersions[0]
+	if got := sent.GetParent(); got != "projects/123456789012/policies/tagged" {
+		t.Errorf("parent %q", got)
+	}
+	if sent.GetPageToken() != "marker-token" || sent.GetPageSize() != 1 {
+		t.Errorf("paging %v", sent)
+	}
+	if !page.IsTruncated || page.Marker != "next-token" || len(page.Versions) != 1 {
+		t.Fatalf("page %+v", page)
+	}
+	v := page.Versions[0]
+	if v.ID != "v1" || !v.IsDefaultVersion || !v.Created.Equal(created) {
+		t.Errorf("version %+v", v)
+	}
+}
+
+func TestListPolicyVersionsErrorsOverGRPC(t *testing.T) {
+	c, _ := harness(t)
+	admin := STSAdmin{Client: c}
+	_, err := admin.ListPolicyVersions(t.Context(), accountID(t), "not-an-arn", "", 0)
+	if resource.CodeOf(err) != resource.CodeInvalidArgument {
+		t.Errorf("malformed ARN: %v", err)
+	}
+	c, s := harness(t)
+	admin = STSAdmin{Client: c}
+	s.listVersionsErr = awsErr(codes.NotFound, "RESOURCE_NOT_FOUND", "NoSuchEntity")
+	_, err = admin.ListPolicyVersions(t.Context(), accountID(t), policyARN, "", 0)
+	if resource.CodeOf(err) != resource.CodeNotFound {
+		t.Errorf("missing policy: %v", err)
+	}
+	// vws-iam addresses a policy by name, so a wrong path in the ARN must not
+	// reach the policy behind it.
+	c, s = harness(t)
+	admin = STSAdmin{Client: c}
+	s.getPolicyRes = &iamv1.Policy{
+		Name:   "projects/123456789012/policies/tagged",
+		Status: &iamv1.PolicyStatus{Arn: "arn:vws:iam::123456789012:policy/admin/tagged"},
+	}
+	wrong := "arn:vws:iam::123456789012:policy/team/tagged"
+	_, err = admin.ListPolicyVersions(t.Context(), accountID(t), wrong, "", 0)
+	if resource.CodeOf(err) != resource.CodeNotFound {
+		t.Errorf("wrong path: %v", err)
+	}
+	if len(s.listVersions) != 0 {
+		t.Errorf("a wrong-path call reached ListPolicyVersions: %v", s.listVersions)
+	}
+}
 
 func TestSetDefaultPolicyVersionOverGRPC(t *testing.T) {
 	c, s := harness(t)

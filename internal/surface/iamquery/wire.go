@@ -89,10 +89,18 @@ type accessKeyXML struct {
 }
 
 type policyVersionXML struct {
-	Document         string `xml:"Document"`
+	Document         string `xml:"Document,omitempty"`
 	VersionID        string `xml:"VersionId"`
 	IsDefaultVersion bool   `xml:"IsDefaultVersion"`
 	CreateDate       string `xml:"CreateDate"`
+}
+
+// policyVersionsResult is the ListPolicyVersions result. AWS leaves out the
+// document here; GetPolicyVersion returns it.
+type policyVersionsResult struct {
+	Versions    []policyVersionXML `xml:"Versions>member"`
+	IsTruncated bool               `xml:"IsTruncated"`
+	Marker      string             `xml:"Marker,omitempty"`
 }
 
 type credentialsXML struct {

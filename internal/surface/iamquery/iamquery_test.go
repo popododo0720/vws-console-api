@@ -445,6 +445,79 @@ func TestSetDefaultPolicyVersionAuthorizes(t *testing.T) {
 	}), http.StatusOK, `<SetDefaultPolicyVersionResponse>`)
 }
 
+func TestListPolicyVersions(t *testing.T) {
+	h, f, rec, root := harness(t)
+	ctx := t.Context()
+	document := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"ec2:Describe*","Resource":"*"}]}`
+	p, err := f.CreatePolicy(ctx, root.Account, "versioned", "/", document, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := call(t, h, root, sigv4.ServiceIAM, url.Values{
+		"Action": {"ListPolicyVersions"}, "PolicyArn": {p.ARN},
+	})
+	has(t, res, http.StatusOK,
+		`<ListPolicyVersionsResponse>`,
+		`<ListPolicyVersionsResult><Versions><member><VersionId>v1</VersionId>`+
+			`<IsDefaultVersion>true</IsDefaultVersion><CreateDate>2026-10-09T10:00:00Z</CreateDate>`+
+			`</member></Versions><IsTruncated>false</IsTruncated></ListPolicyVersionsResult>`,
+		`<ResponseMetadata><RequestId>`)
+	// AWS leaves the document out of a version listing.
+	if strings.Contains(res.Body.String(), "<Document>") {
+		t.Errorf("version listing carries a document: %s", res.Body.String())
+	}
+	want := "iam:ListPolicyVersions " + p.ARN
+	if len(rec.seen) == 0 || rec.seen[len(rec.seen)-1] != want {
+		t.Errorf("authorized %v, want last %q", rec.seen, want)
+	}
+	has(t, call(t, h, root, sigv4.ServiceIAM, url.Values{
+		"Action": {"ListPolicyVersions"}, "PolicyArn": {"arn:vws:iam::123456789012:policy/none"},
+	}), http.StatusNotFound, `<Code>NoSuchEntity</Code>`)
+	has(t, call(t, h, root, sigv4.ServiceIAM, url.Values{"Action": {"ListPolicyVersions"}}),
+		http.StatusBadRequest, `<Code>ValidationError</Code>`, `Value null at`)
+	// A Marker outside the AWS character range is InvalidInput.
+	has(t, call(t, h, root, sigv4.ServiceIAM, url.Values{
+		"Action": {"ListPolicyVersions"}, "PolicyArn": {p.ARN}, "Marker": {"\x01"},
+	}), http.StatusBadRequest, `<Code>InvalidInput</Code>`)
+	// PathPrefix is not an input of this action.
+	has(t, call(t, h, root, sigv4.ServiceIAM, url.Values{
+		"Action": {"ListPolicyVersions"}, "PolicyArn": {p.ARN}, "PathPrefix": {"/"},
+	}), http.StatusBadRequest, `<Code>InvalidInput</Code>`)
+	for _, maxItems := range []string{"0", "1001", "many"} {
+		has(t, call(t, h, root, sigv4.ServiceIAM, url.Values{
+			"Action": {"ListPolicyVersions"}, "PolicyArn": {p.ARN}, "MaxItems": {maxItems},
+		}), http.StatusBadRequest, `<Code>ValidationError</Code>`)
+	}
+}
+
+func TestListPolicyVersionsAuthorizes(t *testing.T) {
+	h, f, _, root := harness(t)
+	ctx := t.Context()
+	document := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"ec2:Describe*","Resource":"*"}]}`
+	p, err := f.CreatePolicy(ctx, root.Account, "versioned", "/", document, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.CreateUser(ctx, root.Account, "bob", "/"); err != nil {
+		t.Fatal(err)
+	}
+	key, err := f.CreateAccessKey(ctx, root.Account, "bob")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bob := sigv4.Credential{AccessKey: key.AccessKeyID, Secret: key.Secret}
+	allow := `{"Statement":[{"Effect":"Allow","Action":"iam:ListPolicyVersions","Resource":"` + p.ARN + `"}]}`
+	if err := f.PutInlinePolicy(ctx, root.Account, iam.EntityUser, "bob", "default", allow); err != nil {
+		t.Fatal(err)
+	}
+	has(t, call(t, h, bob, sigv4.ServiceIAM, url.Values{
+		"Action": {"ListPolicyVersions"}, "PolicyArn": {"arn:vws:iam::123456789012:policy/other"},
+	}), http.StatusForbidden, `<Code>AccessDenied</Code>`)
+	has(t, call(t, h, bob, sigv4.ServiceIAM, url.Values{
+		"Action": {"ListPolicyVersions"}, "PolicyArn": {p.ARN},
+	}), http.StatusOK, `<ListPolicyVersionsResponse>`)
+}
+
 func TestLimitedUserAndSTS(t *testing.T) {
 	h, f, rec, root := harness(t)
 	ctx := t.Context()

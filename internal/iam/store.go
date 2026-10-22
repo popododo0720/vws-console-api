@@ -742,6 +742,36 @@ func (f *Fake) GetPolicy(_ context.Context, a resource.AccountID, arn string) (M
 	return p.ManagedPolicy, nil
 }
 
+// ListPolicyVersions implements Admin. Only version v1 exists in the fake.
+func (f *Fake) ListPolicyVersions(
+	_ context.Context, a resource.AccountID, arn, marker string, maxItems int,
+) (PolicyVersionPage, error) {
+	if maxItems <= 0 {
+		maxItems = DefaultTagPageSize
+	}
+	if maxItems > MaxTagPageSize {
+		maxItems = MaxTagPageSize
+	}
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	p, err := f.account(a).policy(arn)
+	if err != nil {
+		return PolicyVersionPage{}, err
+	}
+	versions := []PolicyVersion{{ID: "v1", IsDefaultVersion: true, Created: p.Created}}
+	start := 0
+	if marker != "" {
+		start = sort.Search(len(versions), func(i int) bool { return versions[i].ID > marker })
+	}
+	end := min(start+maxItems, len(versions))
+	page := PolicyVersionPage{Versions: versions[start:end]}
+	if end < len(versions) {
+		page.IsTruncated = true
+		page.Marker = versions[end-1].ID
+	}
+	return page, nil
+}
+
 // ListPolicies implements Admin (customer managed policies only).
 func (f *Fake) ListPolicies(_ context.Context, a resource.AccountID, prefix string) ([]ManagedPolicy, error) {
 	f.mu.RLock()

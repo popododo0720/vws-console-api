@@ -106,6 +106,21 @@ type ManagedPolicy struct {
 	Created, Updated                           time.Time
 }
 
+// PolicyVersion is one version of a managed policy.
+type PolicyVersion struct {
+	ID               string
+	IsDefaultVersion bool
+	Created          time.Time
+}
+
+// PolicyVersionPage is one page of ListPolicyVersions. Marker is the value the
+// next call sends as Marker; it is empty on the last page.
+type PolicyVersionPage struct {
+	Versions    []PolicyVersion
+	IsTruncated bool
+	Marker      string
+}
+
 // AccessKeyMeta is an access key without its secret.
 type AccessKeyMeta struct {
 	UserName, AccessKeyID, Status string
@@ -166,6 +181,9 @@ type Admin interface {
 
 	CreatePolicy(ctx context.Context, a resource.AccountID, name, path, document, description string) (ManagedPolicy, error)
 	GetPolicy(ctx context.Context, a resource.AccountID, arn string) (ManagedPolicy, error)
+	ListPolicyVersions(
+		ctx context.Context, a resource.AccountID, arn, marker string, maxItems int,
+	) (PolicyVersionPage, error)
 	ListPolicies(ctx context.Context, a resource.AccountID, pathPrefix string) ([]ManagedPolicy, error)
 	DeletePolicy(ctx context.Context, a resource.AccountID, arn string) error
 	// SetDefaultPolicyVersion makes version the policy's operative version.
