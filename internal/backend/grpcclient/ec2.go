@@ -932,19 +932,24 @@ func (c computeClient) CreateKeyPair(ctx context.Context, m backend.Mutation, re
 	if req.Format == resource.KeyFormatPPK {
 		material = pair.PPK(req.Name)
 	}
+	requestID := requestUUID(m.Key, "key")
+	if req.PublicKey == "" {
+		// EC2 CreateKeyPair takes no client token (#268). Each attempt is its
+		// own compute request, named by the token and the new public key, so
+		// compute's record of an earlier create under the token never answers
+		// it. A gRPC retry of this attempt resends the same request id.
+		requestID = requestUUID(m.Key, "key", pair.Public)
+	}
 	created, err := c.keys.CreateKeyPair(ctx, &computev1.CreateKeyPairRequest{
 		Parent:    regionParent(projectID),
 		KeyPairId: keyPairID,
-		RequestId: requestUUID(m.Key, "key"),
+		RequestId: requestID,
 		KeyPair: &computev1.KeyPair{
 			Labels: labels,
 			Spec:   &computev1.KeyPairSpec{PublicKey: pair.Public},
 		},
 	})
 	if err := rpcErr(created, err); err != nil {
-		if req.PublicKey == "" && resource.CodeOf(err) == resource.CodeIdempotencyMismatch {
-			return resource.Accepted[resource.KeyPair]{}, c.keyRetry(ctx, projectID, req.Name)
-		}
 		if resource.CodeOf(err) == resource.CodeAlreadyExists {
 			return resource.Accepted[resource.KeyPair]{}, resource.AlreadyExists(resource.KindKeyPair, req.Name)
 		}
@@ -1550,25 +1555,6 @@ func (c computeClient) keyPairID(
 		return derivedID("key-", account.String(), "key-name", name), nil
 	default:
 		return "", err
-	}
-}
-
-// keyRetry answers a generated CreateKeyPair whose client token compute has
-// seen. Each attempt draws a new key, so compute always sees a different
-// public key and reports IDEMPOTENCY_CONFLICT. EC2 CreateKeyPair takes no
-// client token, returns the private key once, and fails a create of a live
-// name with InvalidKeyPair.Duplicate. So the retry is AlreadyExists while a
-// key pair holds the name, and IdempotencyMismatch otherwise. It never
-// returns a private key.
-func (c computeClient) keyRetry(ctx context.Context, projectID, name string) error {
-	_, err := c.findKey(ctx, projectID, resource.DeleteKeyPairRequest{Name: name})
-	switch {
-	case missingResource(err):
-		return resource.IdempotencyMismatch()
-	case err != nil:
-		return err
-	default:
-		return resource.AlreadyExists(resource.KindKeyPair, name)
 	}
 }
 

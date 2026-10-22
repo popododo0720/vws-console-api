@@ -157,7 +157,8 @@ func TestCreatedKeyIsNotDerivedFromTheRequest(t *testing.T) {
 // TestCreateKeyPairReplayDoesNotReturnTheKey is #220. EC2 CreateKeyPair has
 // no client token and returns the private key once. A second create of the
 // name is InvalidKeyPair.Duplicate. A retry under the same token is that
-// second create, so it never carries a private key.
+// second create, so it never carries a private key. A reused token for a
+// free name creates that key pair (#268).
 func TestCreateKeyPairReplayDoesNotReturnTheKey(t *testing.T) {
 	ctx := context.Background()
 	client, world := dialKeyWorld(t)
@@ -181,11 +182,12 @@ func TestCreateKeyPairReplayDoesNotReturnTheKey(t *testing.T) {
 	}
 	other := m
 	other.Fingerprint = "different-request"
-	_, err = client.CreateKeyPair(ctx, other, resource.CreateKeyPairRequest{Name: "web", Type: resource.KeyTypeEd25519})
-	if resource.CodeOf(err) != resource.CodeIdempotencyMismatch {
-		t.Fatalf("reused token, other name: want IdempotencyMismatch, got %v", err)
+	web, err := client.CreateKeyPair(ctx, other, resource.CreateKeyPairRequest{Name: "web", Type: resource.KeyTypeEd25519})
+	if err != nil || len(web.Items) != 1 || web.Items[0].Material == "" ||
+		web.Items[0].Material == first.Items[0].Material {
+		t.Fatalf("reused token, free name: want a new key pair (#268), got %v %+v", err, web.Items)
 	}
-	if len(world.keys) != 1 {
-		t.Fatalf("stored %d key pairs, want 1", len(world.keys))
+	if len(world.keys) != 2 {
+		t.Fatalf("stored %d key pairs, want 2", len(world.keys))
 	}
 }
