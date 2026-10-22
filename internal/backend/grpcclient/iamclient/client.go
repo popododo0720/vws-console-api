@@ -301,6 +301,18 @@ func authError(err error) error {
 		return &resource.Error{Code: resource.CodeInvalidArgument, Message: st.Message()}
 	case codes.ResourceExhausted:
 		return &resource.Error{Code: resource.CodeResourceExhausted, Message: st.Message()}
+	case codes.FailedPrecondition:
+		// Two vws-iam failures arrive as FailedPrecondition. The AWS code in
+		// metadata tells them apart: a policy's default version cannot be
+		// deleted, and a service-linked role cannot be changed.
+		switch aws {
+		case "DeleteConflict":
+			return &resource.Error{Code: resource.CodeConflict, Message: st.Message()}
+		case "UnmodifiableEntity":
+			return &resource.Error{Code: resource.CodeConflict, Field: "UnmodifiableEntity", Message: st.Message()}
+		default:
+			return fmt.Errorf("vws-iam: %w", errors.New(st.Code().String()))
+		}
 	default:
 		if aws == "UnmodifiableEntity" {
 			return &resource.Error{Code: resource.CodeConflict, Field: "UnmodifiableEntity", Message: st.Message()}

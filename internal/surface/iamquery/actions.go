@@ -15,6 +15,10 @@ import (
 // policyVersionRE is the AWS VersionId pattern.
 var policyVersionRE = regexp.MustCompile(`^v[1-9][0-9]*(\.[A-Za-z0-9-]*)?$`)
 
+// policyARNRE is the AWS managed policy ARN shape. A well-formed ARN for
+// another account is left for the backend to report as missing.
+var policyARNRE = regexp.MustCompile(`^arn:[^:]+:iam::[0-9]{12}:policy/.+$`)
+
 // spec is one action: the form keys it reads, the ARN it is authorized on
 // (nil means "*"), and what it does.
 type spec struct {
@@ -594,6 +598,23 @@ func iamActions() map[string]spec {
 					return nil, resource.Invalid("VersionId", "The specified value for versionId is invalid.")
 				}
 				return nil, h.cfg.Admin.SetDefaultPolicyVersion(
+					c.r.Context(), c.caller.Account, c.form("PolicyArn"), c.form("VersionId"))
+			},
+		),
+		"DeletePolicyVersion": admin([]string{"PolicyArn", "VersionId"}, policyARN,
+			func(h *handler, c *exchange) (any, error) {
+				if err := required(c, "PolicyArn", "VersionId"); err != nil {
+					return nil, err
+				}
+				if !policyARNRE.MatchString(c.form("PolicyArn")) {
+					return nil, resource.Invalid("policyArn", "The policy ARN '"+c.form("PolicyArn")+"' is not valid.")
+				}
+				if !policyVersionRE.MatchString(c.form("VersionId")) {
+					// The capital field name makes the surface answer InvalidInput,
+					// as the AWS reference documents for this action.
+					return nil, resource.Invalid("VersionId", "The policy version id '"+c.form("VersionId")+"' is not valid.")
+				}
+				return nil, h.cfg.Admin.DeletePolicyVersion(
 					c.r.Context(), c.caller.Account, c.form("PolicyArn"), c.form("VersionId"))
 			},
 		),
