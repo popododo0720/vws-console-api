@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"maps"
+	"strconv"
 	"strings"
 	"time"
 
@@ -101,7 +102,7 @@ func (c computeClient) CreateTags(ctx context.Context, m backend.Mutation, req r
 				return nil, err
 			}
 			model.Tags = tags
-			labels, err := instanceUpdateLabels(model, got.GetLabels(), resource.ActionCreateTags, m.Fingerprint, nil)
+			labels, err := instanceUpdateLabels(model, got.GetLabels(), resource.ActionCreateTags, m.Fingerprint, nil, c.clock())
 			if err != nil {
 				return nil, err
 			}
@@ -151,7 +152,7 @@ func (c computeClient) changeInstances(ctx context.Context, m backend.Mutation, 
 				return nil, err
 			}
 			mid = next
-			labels, err := instanceUpdateLabels(model, got.GetLabels(), action, m.Fingerprint, nil)
+			labels, err := instanceUpdateLabels(model, got.GetLabels(), action, m.Fingerprint, nil, c.clock())
 			if err != nil {
 				return nil, err
 			}
@@ -306,7 +307,9 @@ func (c computeClient) attachOnce(
 			DeviceName: req.Device,
 		})
 	}
-	labels, err := instanceUpdateLabels(model, inst.GetLabels(), resource.ActionAttachVolume, m.Fingerprint, nil)
+	labels, err := instanceUpdateLabels(
+		model, inst.GetLabels(), resource.ActionAttachVolume, m.Fingerprint, nil, c.clock(),
+	)
 	if err != nil {
 		return zero, err
 	}
@@ -633,17 +636,37 @@ func (c computeClient) writeDetach(
 	if device == "" {
 		device = vol.Device
 	}
+	now := c.clock()
+	recordKey := labelDetachPrefix + vol.ID.String()
+	var record map[string]string
+	switch {
+	case !drop:
+		// This resends the update that wrote the record, by its request id,
+		// so the record is the one stored, stamp included.
+		if stored, ok := got.GetLabels()[recordKey]; ok {
+			record = map[string]string{recordKey: stored}
+		}
+	case m.MintedToken:
+		// No caller can send this token again: no record, and an older
+		// detach's record of this volume stays for that detach's retries.
+	default:
+		if detachRecordsInWindow(got.GetLabels(), now, vol.ID.String()) >= backend.MaxDetachReplays {
+			return zero, backend.DetachReplaysExhausted(model.ID)
+		}
+		record = map[string]string{recordKey: detachRecordValue(detachRequestHex(m.Key), device, now)}
+	}
 	labels, err := instanceUpdateLabels(
-		model, got.GetLabels(), resource.ActionDetachVolume, m.Fingerprint,
-		detachReplayLabel(vol.ID.String(), detachRequestHex(m.Key), device),
+		model, got.GetLabels(), resource.ActionDetachVolume, m.Fingerprint, record, now,
 	)
 	if err != nil {
 		return zero, err
 	}
-	// The operation id saved for this volume belongs to the previous detach.
-	// Next to this request's record it would replay that detach, so it goes.
-	// This request's own id is written by persistDetachOp.
-	delete(labels, labelDetachOpPrefix+vol.ID.String())
+	if record != nil {
+		// The operation id saved for this volume belongs to the previous
+		// detach. Next to this request's record it would replay that detach,
+		// so it goes. This request's own id is written by persistDetachOp.
+		delete(labels, labelDetachOpPrefix+vol.ID.String())
+	}
 	updated, callErr := c.instances.UpdateInstance(ctx, &computev1.UpdateInstanceRequest{
 		RequestId:  requestUUID(m.Key, "detach"),
 		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.volumes", "labels"}},
@@ -681,8 +704,10 @@ func (c computeClient) writeDetach(
 			return zero, resource.Conflict(resource.KindVolume, vol.ID.String(), "volume is not in use")
 		}
 	}
-	if err := c.persistDetachOp(ctx, m, got.GetName(), vol.ID.String(), op.ID.Local()); err != nil {
-		return zero, err
+	if !m.MintedToken {
+		if err := c.persistDetachOp(ctx, m, got.GetName(), vol.ID.String(), op.ID.Local()); err != nil {
+			return zero, err
+		}
 	}
 	op.Action = resource.ActionDetachVolume
 	op.Targets = []resource.Ref{bind.InstanceID.Ref()}
@@ -790,8 +815,11 @@ func detachAttachTime(vol resource.Volume, inst resource.Instance) time.Time {
 
 // instanceUpdateLabels replaces an instance label map without dropping the
 // image, reservation, or launch labels instanceModel and RunInstances stored.
+// It carries the detach records over, pruned at now (pruneDetachRecords), so
+// every label write frees the room of records no retry can need any more.
 func instanceUpdateLabels(
-	inst resource.Instance, raw map[string]string, action resource.Action, fingerprint string, record map[string]string,
+	inst resource.Instance, raw map[string]string, action resource.Action, fingerprint string,
+	record map[string]string, now time.Time,
 ) (map[string]string, error) {
 	extra := map[string]string{
 		labelAction:      action.String(),
@@ -802,17 +830,92 @@ func instanceUpdateLabels(
 	if launch := raw[labelLaunch]; launch != "" {
 		extra[labelLaunch] = launch
 	}
-	for key, value := range raw {
-		if detachRecordKey(key) {
-			extra[key] = value
-		}
-	}
+	maps.Copy(extra, pruneDetachRecords(raw, now))
 	maps.Copy(extra, record)
 	return withInternalLabels(inst.Tags, extra)
 }
 
-func detachReplayLabel(volID, requestHex, device string) map[string]string {
-	return map[string]string{labelDetachPrefix + volID: requestHex + " " + device}
+// A detach record value is "<request hex> <device> <stamp>": the stamp is
+// the time the detach was accepted, in base-36 Unix seconds. A record
+// written before #303 has no stamp, and neither does one whose device name
+// leaves no room for it in a 63-byte label value.
+func detachRecordValue(requestHex, device string, at time.Time) string {
+	plain := requestHex + " " + device
+	if stamped := plain + " " + strconv.FormatInt(at.Unix(), 36); len(stamped) <= labelValueMax {
+		return stamped
+	}
+	return plain
+}
+
+// parseDetachRecord reads a detach record value. ok is false for a value no
+// request can match.
+func parseDetachRecord(raw string) (requestHex, device string, at time.Time, stamped, ok bool) {
+	parts := strings.Split(raw, " ")
+	switch len(parts) {
+	case 2:
+	case 3:
+		n, err := strconv.ParseInt(parts[2], 36, 64)
+		if err != nil || n <= 0 {
+			return "", "", time.Time{}, false, false
+		}
+		at, stamped = time.Unix(n, 0).UTC(), true
+	default:
+		return "", "", time.Time{}, false, false
+	}
+	if parts[0] == "" {
+		return "", "", time.Time{}, false, false
+	}
+	return parts[0], parts[1], at, stamped, true
+}
+
+// pruneDetachRecords returns the detach records of raw, with their saved
+// operation ids, that a retry may still need at now (#303). A record older
+// than backend.ClientTokenWindow is dropped with its operation id: the
+// request id it would replay is past compute's window too. A record with no
+// stamp is stamped now, so its window starts at the first write that sees
+// it. A stamp ahead of now is clock skew and is kept. An operation id with
+// no record, and a value no request can match, are dropped. The result
+// depends only on raw and now, so pruning twice changes nothing.
+func pruneDetachRecords(raw map[string]string, now time.Time) map[string]string {
+	out := map[string]string{}
+	for key, value := range raw {
+		volID, ok := strings.CutPrefix(key, labelDetachPrefix)
+		if !ok {
+			continue
+		}
+		requestHex, device, at, stamped, ok := parseDetachRecord(value)
+		if !ok {
+			continue
+		}
+		if !stamped {
+			value = detachRecordValue(requestHex, device, now)
+		} else if now.Sub(at) > backend.ClientTokenWindow {
+			continue
+		}
+		out[key] = value
+		if op, ok := raw[labelDetachOpPrefix+volID]; ok {
+			out[labelDetachOpPrefix+volID] = op
+		}
+	}
+	return out
+}
+
+// Every user tag EC2 allows and every detach record within the window fit
+// next to the internal labels, whose count withInternalLabels reserves: two
+// labels per record (vws-detach-, vws-dop-). The array length is negative,
+// and the build fails, if a limit changes so they no longer fit (#303).
+var _ [labelMax - resource.MaxTags - labelReserve - 2*backend.MaxDetachReplays]struct{}
+
+// detachRecordsInWindow counts the records a retry may still need at now,
+// apart from one for skipVolID, which a new detach of that volume replaces.
+func detachRecordsInWindow(raw map[string]string, now time.Time, skipVolID string) int {
+	n := 0
+	for key := range pruneDetachRecords(raw, now) {
+		if volID, ok := strings.CutPrefix(key, labelDetachPrefix); ok && volID != skipVolID {
+			n++
+		}
+	}
+	return n
 }
 
 func detachRequestHex(key string) string {
@@ -870,8 +973,8 @@ func detachReplayFrom(labels map[string]string, volID string) (detachReplay, boo
 	if !ok {
 		return detachReplay{}, false
 	}
-	requestHex, device, ok := strings.Cut(raw, " ")
-	if !ok || requestHex == "" {
+	requestHex, device, _, _, ok := parseDetachRecord(raw)
+	if !ok {
 		return detachReplay{}, false
 	}
 	rec := detachReplay{requestHex: requestHex, device: device}
