@@ -196,6 +196,16 @@ def ec2_error(code, call):
     raise AssertionError("no error")
 
 
+def s3_error(code, status, call):
+    try:
+        call()
+    except s3.exceptions.ClientError as exc:
+        got = (exc.response["Error"]["Code"], exc.response["ResponseMetadata"]["HTTPStatusCode"])
+        check(got == (code, status), f"{got} != {(code, status)}")
+        return
+    raise AssertionError("no error")
+
+
 def not_found():
     vol, snap, vpc = "vol-00000000000000000", "snap-00000000000000000", "vpc-00000000000000000"
     for name, code, call in [
@@ -513,6 +523,9 @@ def objects():
     b = "bucket-one"
     step("S3 CreateBucket", lambda: s3.create_bucket(Bucket=b))
     step("S3 HeadBucket", lambda: s3.head_bucket(Bucket=b))
+    # VWS's region is not us-east-1, so an owned name is 409 (#315).
+    step("S3 CreateBucket again is BucketAlreadyOwnedByYou", lambda: s3_error(
+        "BucketAlreadyOwnedByYou", 409, lambda: s3.create_bucket(Bucket=b)))
     for key, body in [("a/k", b"hello"), ("a/j", b"x"), ("top", b"y")]:
         step(f"S3 PutObject {key}", lambda key=key, body=body: s3.put_object(Bucket=b, Key=key, Body=body))
 

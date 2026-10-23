@@ -410,18 +410,46 @@ func (c computeClient) findSubnetIn(ctx context.Context, parent, id string) (str
 
 type storageClient struct{ *api }
 
+// CreateBucket creates a bucket the caller does not hold yet (#315). A bucket
+// the caller already owns is BucketAlreadyOwned. vws-storage answers a
+// create for a bucket the project holds with a succeeded operation
+// (operation.proto, Create), so the client asks first.
+//
+// Each call sends a request id of its own. vws-storage returns the stored
+// operation for any request id it has seen, so a fixed id per name would
+// answer a create after DeleteBucket with the first create's operation, and
+// no bucket. An operation that names another request id is a create
+// already in flight for this project, so the caller owns the name.
 func (c storageClient) CreateBucket(ctx context.Context, s backend.Scope, name resource.BucketName) (resource.Bucket, error) {
+	switch _, err := c.GetBucket(ctx, s, name); {
+	case err == nil:
+		return resource.Bucket{}, resource.BucketAlreadyOwned(name.String())
+	case resource.CodeOf(err) != resource.CodeNotFound:
+		return resource.Bucket{}, err
+	}
 	projectID := project(s.Account)
+	nonce, err := newNonce()
+	if err != nil {
+		return resource.Bucket{}, err
+	}
+	requestID := requestUUID(projectID, name.String(), "bucket", nonce)
 	op, err := c.buckets.CreateBucket(ctx, &storagev1.CreateBucketRequest{
 		Parent:    bucketParent(projectID),
 		BucketId:  name.String(),
-		RequestId: requestUUID(projectID, name.String(), "bucket"),
+		RequestId: requestID,
 		Bucket: &storagev1.Bucket{
 			Spec: &storagev1.BucketSpec{Region: resource.RegionName},
 		},
 	})
 	if err := rpcErr(op, err); err != nil {
 		return resource.Bucket{}, err
+	}
+	other, err := operationRequestID(op)
+	if err != nil {
+		return resource.Bucket{}, err
+	}
+	if other != "" && other != requestID {
+		return resource.Bucket{}, resource.BucketAlreadyOwned(name.String())
 	}
 	if bucket, ok, err := unpackBucket(op); err != nil || ok {
 		if err != nil {
@@ -460,10 +488,17 @@ func (c storageClient) ListBuckets(ctx context.Context, s backend.Scope, q resou
 	return resource.Page[resource.Bucket]{Items: items, NextToken: out.GetNextPageToken()}, nil
 }
 
+// DeleteBucket sends a request id of its own on each call, for the reason
+// CreateBucket does: a fixed id per name would answer a delete of a bucket
+// created again with the earlier delete's operation and leave it (#315).
 func (c storageClient) DeleteBucket(ctx context.Context, s backend.Scope, name resource.BucketName) error {
+	nonce, err := newNonce()
+	if err != nil {
+		return err
+	}
 	op, err := c.buckets.DeleteBucket(ctx, &storagev1.DeleteBucketRequest{
 		Name:      bucketName(project(s.Account), name.String()),
-		RequestId: requestUUID(project(s.Account), name.String(), "delete-bucket"),
+		RequestId: requestUUID(project(s.Account), name.String(), "delete-bucket", nonce),
 	})
 	return rpcErr(op, err)
 }

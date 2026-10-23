@@ -25,7 +25,7 @@ func (s storage) CreateBucket(ctx context.Context, sc backend.Scope, name resour
 		if cur.OwnerID != sc.Account {
 			return resource.Bucket{}, resource.AlreadyExists(resource.KindBucket, name.String())
 		}
-		return *cur, nil
+		return resource.Bucket{}, resource.BucketAlreadyOwned(name.String())
 	}
 	b := &resource.Bucket{
 		Name:         name,

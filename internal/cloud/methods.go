@@ -370,7 +370,8 @@ func fillToken(token resource.ClientToken) (resource.ClientToken, error) {
 	return minted, nil
 }
 
-// CreateBucket creates a bucket, or returns it when the caller already owns the name.
+// CreateBucket creates a bucket. A name the caller already owns is
+// BucketAlreadyOwned; a name another account holds is AlreadyExists (#315).
 func (s *Service) CreateBucket(ctx context.Context, c resource.Caller, name resource.BucketName) (resource.Bucket, error) {
 	return readOne(ctx, c, bucketName{name: name}, func(ctx context.Context, sc backend.Scope, q bucketName) (resource.Bucket, error) {
 		return s.backends.Storage.CreateBucket(ctx, sc, q.name)
