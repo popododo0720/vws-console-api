@@ -415,7 +415,8 @@ func exerciseEC2(ctx context.Context, t *testing.T, set backend.Set, account res
 	}
 
 	images, err := set.Compute.DescribeImages(ctx, scope, resource.ImageQuery{Page: resource.PageRequest{Size: 50}})
-	if err != nil || len(images.Items) != 1 || images.Items[0].ID.String() != "ami-0123456789abcdef0" || images.Items[0].OwnerID != account {
+	if err != nil || len(images.Items) != 1 || images.Items[0].ID.String() != "ami-0123456789abcdef0" ||
+		images.Items[0].OwnerID != account || images.Items[0].Public {
 		t.Fatalf("images: %v %+v", err, images.Items)
 	}
 	unknown, err := resource.Parse[resource.ImageID]("ami-01234567")

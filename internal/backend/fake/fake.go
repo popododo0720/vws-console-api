@@ -18,11 +18,13 @@ import (
 )
 
 // Options configures a world. Zero values use the wall clock, no settle
-// delay, and crypto/rand.
+// delay, and crypto/rand. Images seeds the compute image store; the catalog
+// image is always present.
 type Options struct {
 	Now     func() time.Time
 	Latency time.Duration
 	Entropy io.Reader
+	Images  []resource.Image
 }
 
 // World is one account-aware simulation of compute, storage, and network.
@@ -42,6 +44,7 @@ type World struct {
 	key   map[resource.KeyPairID]*resource.KeyPair
 	addr  map[resource.AddressID]*resource.Address
 	snap  map[resource.SnapshotID]*resource.Snapshot
+	img   map[resource.ImageID]*resource.Image
 	buck  map[resource.BucketName]*resource.Bucket
 	obj   map[string]*storedObject
 	seqIP uint32
@@ -75,7 +78,7 @@ func New(opt Options) *World {
 	if opt.Entropy == nil {
 		opt.Entropy = rand.Reader
 	}
-	return &World{
+	world := &World{
 		now:      opt.Now,
 		latency:  opt.Latency,
 		entropy:  opt.Entropy,
@@ -90,9 +93,14 @@ func New(opt Options) *World {
 		key:      map[resource.KeyPairID]*resource.KeyPair{},
 		addr:     map[resource.AddressID]*resource.Address{},
 		snap:     map[resource.SnapshotID]*resource.Snapshot{},
+		img:      map[resource.ImageID]*resource.Image{},
 		buck:     map[resource.BucketName]*resource.Bucket{},
 		obj:      map[string]*storedObject{},
 	}
+	for _, img := range opt.Images {
+		world.img[img.ID] = &img
+	}
+	return world
 }
 
 // Set returns the three clients.

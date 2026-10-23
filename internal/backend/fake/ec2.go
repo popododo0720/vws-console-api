@@ -424,24 +424,47 @@ func (c compute) DescribeImages(ctx context.Context, s backend.Scope, q resource
 	if err := ctx.Err(); err != nil {
 		return resource.Page[resource.Image]{}, err
 	}
-	known := resource.KnownImages(s.Account)
+	c.w.mu.Lock()
+	defer c.w.mu.Unlock()
+	c.w.settle(c.w.now())
+	rows := make(map[resource.ImageID]resource.Image, len(c.w.img)+1)
+	for _, img := range resource.KnownImages(s.Account) {
+		rows[img.ID] = img
+	}
+	for _, img := range c.w.img {
+		if img.OwnerID != s.Account && !img.Public {
+			continue
+		}
+		if _, ok := rows[img.ID]; ok {
+			continue
+		}
+		rows[img.ID] = *img
+	}
+	items := make([]resource.Image, 0, len(rows))
+	for _, img := range rows {
+		items = append(items, img)
+	}
+	sortOwned(items)
 	want := map[resource.ImageID]struct{}{}
 	for _, id := range q.IDs {
 		want[id] = struct{}{}
 	}
-	var items []resource.Image
-	for _, img := range known {
+	filtered := items[:0]
+	for _, img := range items {
+		if !q.Owner.IsZero() && img.OwnerID != q.Owner {
+			continue
+		}
 		if len(want) > 0 {
 			if _, ok := want[img.ID]; !ok {
 				continue
 			}
 		}
-		items = append(items, img)
+		filtered = append(filtered, img)
 	}
-	if len(q.IDs) == 1 && len(items) == 0 {
-		return resource.Page[resource.Image]{}, resource.NotFound(resource.KindImage, q.IDs[0].String())
+	if len(q.IDs) == 1 && len(filtered) == 0 {
+		return resource.Page[resource.Image]{}, resource.ImageNotFound(q.IDs[0])
 	}
-	return page(items, q.Page)
+	return page(filtered, q.Page)
 }
 
 func (c compute) CreateKeyPair(ctx context.Context, m backend.Mutation, req resource.CreateKeyPairRequest) (resource.Accepted[resource.KeyPair], error) {

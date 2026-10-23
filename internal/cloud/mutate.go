@@ -109,6 +109,20 @@ func readPage[Q resource.Query[Q], T resource.Owned](
 	q Q,
 	call func(context.Context, backend.Scope, Q) (resource.Page[T], error),
 ) (resource.Page[T], error) {
+	return readPageGuarded(ctx, c, q, call, func(account resource.AccountID, item T) error {
+		return guardOwner(account, item)
+	})
+}
+
+// readPageGuarded is readPage with the page's tenancy check. A page that may
+// name another account, as public images do, passes guardImage.
+func readPageGuarded[Q resource.Query[Q], T resource.Owned](
+	ctx context.Context,
+	c resource.Caller,
+	q Q,
+	call func(context.Context, backend.Scope, Q) (resource.Page[T], error),
+	guard func(resource.AccountID, T) error,
+) (resource.Page[T], error) {
 	if err := requireCaller(c); err != nil {
 		return resource.Page[T]{}, err
 	}
@@ -121,11 +135,21 @@ func readPage[Q resource.Query[Q], T resource.Owned](
 		return resource.Page[T]{}, err
 	}
 	for _, item := range page.Items {
-		if err := guardOwner(c.Account, item); err != nil {
+		if err := guard(c.Account, item); err != nil {
 			return resource.Page[T]{}, err
 		}
 	}
 	return page, nil
+}
+
+// guardImage admits a public image another account owns, as an AWS public AMI
+// is readable from every account. A private image of another account is still
+// internal.
+func guardImage(account resource.AccountID, img resource.Image) error {
+	if img.Public {
+		return nil
+	}
+	return guardOwner(account, img)
 }
 
 func callScoped(ctx context.Context, c resource.Caller, call func(context.Context, backend.Scope) error) error {

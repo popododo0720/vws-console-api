@@ -379,8 +379,8 @@ func TestKnownImagesIsNotEmpty(t *testing.T) {
 		t.Fatal(err)
 	}
 	images := KnownImages(owner)
-	if len(images) != 1 || images[0].ID.String() != knownImageID || images[0].OwnerID != owner {
-		t.Fatalf("KnownImages = %+v, want one %s owned by %s", images, knownImageID, owner)
+	if len(images) != 1 || images[0].ID.String() != knownImageID || images[0].OwnerID != owner || images[0].Public {
+		t.Fatalf("KnownImages = %+v, want one private %s owned by %s", images, knownImageID, owner)
 	}
 }
 

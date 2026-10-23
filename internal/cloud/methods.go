@@ -134,9 +134,10 @@ func (s *Service) DescribeVolumes(ctx context.Context, c resource.Caller, q reso
 	return readPage(ctx, c, q, s.backends.Compute.DescribeVolumes)
 }
 
-// DescribeImages lists images the caller can launch.
+// DescribeImages lists images the caller can launch. A public image may belong
+// to another account.
 func (s *Service) DescribeImages(ctx context.Context, c resource.Caller, q resource.ImageQuery) (resource.Page[resource.Image], error) {
-	return readPage(ctx, c, q, s.backends.Compute.DescribeImages)
+	return readPageGuarded(ctx, c, q, s.backends.Compute.DescribeImages, guardImage)
 }
 
 // CreateKeyPair accepts a key pair and returns the operation. The private key
