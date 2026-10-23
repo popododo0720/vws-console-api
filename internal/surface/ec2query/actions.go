@@ -379,7 +379,8 @@ func (h *handler) describeImages(w http.ResponseWriter, r *http.Request, c resou
 		writeErr(w, r, err)
 		return
 	}
-	if !ownerSelectsCaller(r, c.Account) || !selectsCaller(indexedStrings(r, "ExecutableBy"), c.Account) {
+	owner, ok := ownerFilter(r, c.Account)
+	if !ok || !selectsCaller(indexedStrings(r, "ExecutableBy"), c.Account) {
 		writeXML(w, describeImagesXML{RequestID: requestID(r)})
 		return
 	}
@@ -393,7 +394,7 @@ func (h *handler) describeImages(w http.ResponseWriter, r *http.Request, c resou
 		writeErr(w, r, err)
 		return
 	}
-	page, err := h.svc.DescribeImages(r.Context(), c, resource.ImageQuery{IDs: ids, Page: pageReq})
+	page, err := h.svc.DescribeImages(r.Context(), c, resource.ImageQuery{IDs: ids, Owner: owner, Page: pageReq})
 	if err != nil {
 		writeErr(w, r, err)
 		return

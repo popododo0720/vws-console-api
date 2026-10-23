@@ -378,6 +378,86 @@ func (a *api) skipBadRecord(ctx context.Context, name string, err error) bool {
 	return false
 }
 
+// imageModel maps one compute image. Compute serves an image under the
+// caller's regional name, so the copy source is the only record of the project
+// that owns it: a public image copied from another project's volume or snapshot
+// names that project. A seed image registered from a file has no copy source,
+// so it reads as the caller's own and private.
+func imageModel(in *computev1.Image, caller resource.AccountID) (resource.Image, error) {
+	if in == nil {
+		return resource.Image{}, resource.Internal(errors.New("missing image"))
+	}
+	parts := splitSlash(in.GetName())
+	if len(parts) != 6 || parts[0] != "projects" || parts[2] != "regions" || parts[4] != "images" {
+		return resource.Image{}, resource.Internal(&badRecordNameError{errors.New("bad image name")})
+	}
+	id, err := resource.Parse[resource.ImageID](parts[5])
+	if err != nil {
+		return resource.Image{}, resource.Internal(&badRecordNameError{err})
+	}
+	owner, err := imageOwner(in, caller)
+	if err != nil {
+		return resource.Image{}, err
+	}
+	name := in.GetSpec().GetFamily()
+	if name == "" {
+		name = id.String()
+	}
+	return resource.Image{
+		ID: id, OwnerID: owner, Name: name, State: imageStateOf(in.GetStatus().GetObserved().GetState()),
+		Public: owner != caller,
+	}, nil
+}
+
+// imageOwner is the account of the image's copy source. A source in another
+// project is a public image compute exposed to the caller. A source in the
+// caller's project, or no source, is the caller's own image.
+func imageOwner(in *computev1.Image, caller resource.AccountID) (resource.AccountID, error) {
+	source := in.GetSpec().GetVolume()
+	if source == "" {
+		source = in.GetSpec().GetSnapshot()
+	}
+	if source == "" {
+		return caller, nil
+	}
+	parts := splitSlash(source)
+	if len(parts) != 6 || parts[0] != "projects" || parts[1] == "" {
+		return resource.AccountID{}, resource.Internal(&badRecordNameError{errors.New("bad image source")})
+	}
+	switch {
+	case parts[2] == "regions" && parts[4] == "snapshots":
+	case parts[2] == "zones" && parts[4] == "volumes":
+	default:
+		return resource.AccountID{}, resource.Internal(&badRecordNameError{errors.New("bad image source")})
+	}
+	if parts[1] == project(caller) {
+		return caller, nil
+	}
+	owner, err := accountOf(parts[1])
+	if err != nil {
+		return resource.AccountID{}, resource.Internal(&badRecordNameError{err})
+	}
+	return owner, nil
+}
+
+// imageStateOf is the EC2 image state of a compute reconciliation state.
+func imageStateOf(obs commonv1.ReconciliationState) string {
+	switch obs {
+	case commonv1.ReconciliationState_RECONCILIATION_STATE_PENDING,
+		commonv1.ReconciliationState_RECONCILIATION_STATE_RECONCILING:
+		return "pending"
+	case commonv1.ReconciliationState_RECONCILIATION_STATE_READY:
+		return "available"
+	case commonv1.ReconciliationState_RECONCILIATION_STATE_DELETING:
+		return "deregistered"
+	case commonv1.ReconciliationState_RECONCILIATION_STATE_ERROR:
+		return "failed"
+	case commonv1.ReconciliationState_RECONCILIATION_STATE_UNSPECIFIED:
+		return "available"
+	}
+	return "available"
+}
+
 func instanceModel(in *computev1.Instance) (resource.Instance, error) {
 	if in == nil {
 		return resource.Instance{}, resource.Internal(errors.New("missing instance"))

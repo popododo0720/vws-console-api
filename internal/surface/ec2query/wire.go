@@ -631,7 +631,8 @@ func snapshotCreatedXML(requestID string, snap resource.Snapshot) createSnapshot
 func imageXML(img resource.Image) imageItem {
 	return imageItem{
 		ImageID: img.ID.String(), Name: img.Name, State: img.State, OwnerID: img.OwnerID.String(),
-		Architecture: "x86_64", ImageType: "machine", RootDeviceType: "ebs", VirtualizationType: "hvm",
+		Public: img.Public, Architecture: "x86_64", ImageType: "machine", RootDeviceType: "ebs",
+		VirtualizationType: "hvm",
 	}
 }
 

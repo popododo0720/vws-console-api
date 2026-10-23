@@ -442,12 +442,14 @@ func canonicalProtocol(raw string) (string, error) {
 	}
 }
 
-// Image is a machine image the caller can launch.
+// Image is a machine image. Public marks one every project in its region can
+// read, as an AWS public AMI. OwnerID is the account that owns it.
 type Image struct {
 	ID      ImageID   `json:"imageId"`
 	OwnerID AccountID `json:"ownerId"`
 	Name    string    `json:"name"`
 	State   string    `json:"state"`
+	Public  bool      `json:"public"`
 }
 
 // Owner returns the account that owns the image.
@@ -456,10 +458,12 @@ func (i Image) Owner() AccountID { return i.OwnerID }
 // Identity returns the image id.
 func (i Image) Identity() string { return i.ID.String() }
 
-// ImageQuery selects images.
+// ImageQuery selects images. Owner limits the page to images that account
+// owns; zero means any image the caller can read.
 type ImageQuery struct {
-	IDs  []ImageID   `json:"imageIds,omitempty"`
-	Page PageRequest `json:"page,omitempty"`
+	IDs   []ImageID   `json:"imageIds,omitempty"`
+	Owner AccountID   `json:"ownerId,omitzero"`
+	Page  PageRequest `json:"page,omitempty"`
 }
 
 // Normalize canonicalizes the page.

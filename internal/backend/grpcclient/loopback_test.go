@@ -484,13 +484,18 @@ func (w *loopWorld) lookup(ctx context.Context, name string) (resource.Operation
 
 // imageSrv is compute's image store. The loop world holds no images, so every
 // read is not found and a launch of any non-catalog image is refused before a
-// volume or instance exists.
+// volume or instance exists. A list is empty, so DescribeImages reports the
+// catalog alone.
 type imageSrv struct {
 	computev1.UnimplementedImageServiceServer
 }
 
 func (imageSrv) GetImage(context.Context, *computev1.GetImageRequest) (*computev1.Image, error) {
 	return nil, toStatus(resource.NotFound(resource.KindImage, ""))
+}
+
+func (imageSrv) ListImages(context.Context, *computev1.ListImagesRequest) (*computev1.ListImagesResponse, error) {
+	return &computev1.ListImagesResponse{}, nil
 }
 
 type instanceSrv struct {

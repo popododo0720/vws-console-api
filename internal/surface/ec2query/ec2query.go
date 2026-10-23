@@ -809,6 +809,20 @@ func ownerSelectsCaller(r *http.Request, account resource.AccountID) bool {
 	return selectsCaller(owners, account)
 }
 
+// ownerFilter is the owner a describe limits its page to. No owner keeps every
+// row the caller can read; self or the caller's id keeps the caller's rows.
+// Another account is false, and the caller answers an empty page.
+func ownerFilter(r *http.Request, account resource.AccountID) (resource.AccountID, bool) {
+	owners := append(indexedStrings(r, "Owner"), indexedStrings(r, "OwnerId")...)
+	if !selectsCaller(owners, account) {
+		return resource.AccountID{}, false
+	}
+	if len(owners) == 0 {
+		return resource.AccountID{}, true
+	}
+	return account, true
+}
+
 func selectsCaller(values []string, account resource.AccountID) bool {
 	if len(values) == 0 {
 		return true

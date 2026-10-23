@@ -8,6 +8,7 @@ import (
 	"errors"
 	"log/slog"
 	"maps"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -1372,23 +1373,116 @@ func (c computeClient) DescribeImages(ctx context.Context, s backend.Scope, q re
 	if err := ctx.Err(); err != nil {
 		return resource.Page[resource.Image]{}, err
 	}
-	want := map[string]struct{}{}
-	for _, id := range q.IDs {
-		want[id.String()] = struct{}{}
+	listed, err := c.listImages(ctx, project(s.Account), s.Account)
+	if err != nil {
+		return resource.Page[resource.Image]{}, err
 	}
-	var items []resource.Image
-	for _, img := range resource.KnownImages(s.Account) {
+	items := withCatalog(listed, s.Account)
+	want := map[resource.ImageID]struct{}{}
+	for _, id := range q.IDs {
+		want[id] = struct{}{}
+	}
+	filtered := items[:0]
+	for _, img := range items {
+		if !q.Owner.IsZero() && img.OwnerID != q.Owner {
+			continue
+		}
 		if len(want) > 0 {
-			if _, ok := want[img.ID.String()]; !ok {
+			if _, ok := want[img.ID]; !ok {
 				continue
 			}
 		}
-		items = append(items, img)
+		filtered = append(filtered, img)
 	}
-	if len(q.IDs) == 1 && len(items) == 0 {
-		return resource.Page[resource.Image]{}, resource.NotFound(resource.KindImage, q.IDs[0].String())
+	if len(q.IDs) == 1 && len(filtered) == 0 {
+		return resource.Page[resource.Image]{}, resource.ImageNotFound(q.IDs[0])
 	}
-	return pageByID(items, q.Page, func(item resource.Image) string { return item.ID.String() })
+	return pageByID(filtered, q.Page, func(item resource.Image) string { return item.ID.String() })
+}
+
+// listImages reads every image compute lists for the caller's project and
+// region. Compute pages its store; the console pages the result.
+func (c computeClient) listImages(
+	ctx context.Context, projectID string, account resource.AccountID,
+) ([]resource.Image, error) {
+	var items []resource.Image
+	token := ""
+	seen := map[string]struct{}{}
+	for page := 0; page < 50; page++ {
+		out, err := c.images.ListImages(ctx, &computev1.ListImagesRequest{
+			Parent: regionParent(projectID), PageSize: 100, PageToken: token,
+		})
+		if err != nil {
+			return nil, fromRPC(err)
+		}
+		for _, in := range out.GetImages() {
+			img, err := imageModel(in, account)
+			if err != nil {
+				if c.skipBadRecord(ctx, in.GetName(), err) {
+					continue
+				}
+				return nil, err
+			}
+			if img.OwnerID != account {
+				img = c.confirmImageOwner(ctx, img, account)
+			}
+			items = append(items, img)
+		}
+		next := out.GetNextPageToken()
+		if next == "" {
+			return items, nil
+		}
+		if _, ok := seen[next]; ok {
+			return nil, resource.Internal(errors.New("image list repeated a page token"))
+		}
+		seen[next] = struct{}{}
+		token = next
+	}
+	return nil, resource.Internal(errors.New("image list exceeded 50 pages"))
+}
+
+// confirmImageOwner keeps a foreign copy source only when the source project
+// owns the image. A private image copied in the caller's project names the
+// source it was copied from, so a read under that project finds nothing and
+// the image stays the caller's own. A compute that cannot answer leaves the
+// source-derived owner, the only one it exposes.
+func (c computeClient) confirmImageOwner(
+	ctx context.Context, img resource.Image, caller resource.AccountID,
+) resource.Image {
+	_, err := c.images.GetImage(ctx, &computev1.GetImageRequest{
+		Name: imageName(project(img.OwnerID), img.ID.String()),
+	})
+	if err == nil {
+		return img
+	}
+	if resource.CodeOf(fromRPC(err)) == resource.CodeNotFound {
+		img.OwnerID, img.Public = caller, false
+		return img
+	}
+	c.logger().WarnContext(ctx, "image owner read failed, keeping the copy source",
+		slog.String("image", img.ID.String()), slog.Any("err", err))
+	return img
+}
+
+// withCatalog adds the launchable catalog image when compute did not list the
+// same id. RunInstances still launches it without a compute read, so it must
+// stay discoverable. Compute's record wins a duplicate.
+func withCatalog(items []resource.Image, account resource.AccountID) []resource.Image {
+	seen := make(map[resource.ImageID]struct{}, len(items)+1)
+	out := make([]resource.Image, 0, len(items)+1)
+	for _, img := range resource.KnownImages(account) {
+		seen[img.ID] = struct{}{}
+		out = append(out, img)
+	}
+	for _, img := range items {
+		if _, ok := seen[img.ID]; ok {
+			continue
+		}
+		seen[img.ID] = struct{}{}
+		out = append(out, img)
+	}
+	slices.SortFunc(out, func(a, b resource.Image) int { return strings.Compare(a.ID.String(), b.ID.String()) })
+	return out
 }
 
 func (c computeClient) CreateKeyPair(ctx context.Context, m backend.Mutation, req resource.CreateKeyPairRequest) (resource.Accepted[resource.KeyPair], error) {
