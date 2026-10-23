@@ -25,7 +25,6 @@ that claims this project is someone else's cloud.
 | `internal/surface/s3rest` | Path-style object codec. |
 | `internal/surface/interop` | Tests that drive more than one surface against one world. |
 | `internal/server` | One listener per surface, request IDs, shutdown. |
-| `third_party/vws-proto` | Vendored `github.com/popododo0720/vws-proto` at tag `v0.5.0` (3fbc83c): `buf.gen.yaml`, `buf.yaml`, `go.mod`, `go.sum`, `vws/` and `gen/` copied from the tag, and `go.mod` requires `v0.5.0`. Imported through a `replace` directive. |
 
 ## Rules
 
@@ -92,7 +91,7 @@ change.
 | On S3 each SigV4 failure is its own S3 error, with nothing about which check refused it beyond the code (#245): `SignatureDoesNotMatch` 403 (with the access key, string to sign and canonical request computed from the request and the signature as sent, never the expected one), `RequestTimeTooSkewed` 403, `AuthorizationHeaderMalformed` 400 for an unusable header or a scope for another date, region or service, `InvalidAccessKeyId` 403, `InvalidToken` 400, `ExpiredToken` 400, `BadDigest` 400 for a body that is not the signed payload, and `AccessDenied` 403 `Access Denied` for an unsigned request or one console-api refuses. `sigv4` marks each failure as a `RejectionError` cause and keeps the code and message EC2 and IAM map, so their answers do not change; its error text names only the failure. | `TestSigV4FailuresUseS3ErrorCodes`, `TestS3AnswersVwsIAMRefusalsWithS3Codes`, `TestVerifyNamesEachFailure`, `TestSignatureMismatchDetail` |
 | A resource created on one surface is the same resource, with the same id and state names, on the others. | `internal/surface/interop` |
 | Console JSON field names are camelCase. | `tagliatelle` |
-| The resource API is the vendored module. This repo does not generate it and does not keep a local proto tree. | `internal/hygiene` checks the `replace` directive and rejects `proto/` |
+| The resource API is the `github.com/popododo0720/vws-proto` module at a release tag (`vX.Y.Z`, no pseudo-version) from the module proxy. This repo does not generate it, does not copy it, and does not keep a local proto tree. | `internal/hygiene` (`TestRepositoryRules`, `TestProtoModuleRules`) rejects a vws-proto `replace`, an untagged require, `third_party/vws-proto`, `*.pb.go` and `proto/` |
 | Google Go style and formatting. | golangci-lint in CI job `lint` |
 | Tests pass under the race detector. | CI job `test` |
 | `//nolint` names one linter and gives a reason. | `nolintlint` |

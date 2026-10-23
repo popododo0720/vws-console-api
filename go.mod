@@ -29,5 +29,3 @@ require (
 	golang.org/x/text v0.42.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20261005182115-fad411399dd8 // indirect
 )
-
-replace github.com/popododo0720/vws-proto => ./third_party/vws-proto
