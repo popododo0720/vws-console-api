@@ -46,6 +46,8 @@ jobs:
       - name: go.mod and go.sum are tidy
         run: go mod tidy && git diff --exit-code go.mod go.sum
       - run: go vet ./...
+      - name: Architecture rules and Judgment count
+        run: scripts/guard-agents.sh archtest
       - run: go test -race -count=1 ./...
 
   e2e:

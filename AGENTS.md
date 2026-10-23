@@ -34,10 +34,10 @@ change.
 
 | Rule | Enforced by |
 | --- | --- |
-| Surfaces call `internal/cloud`, never `internal/backend`. | depguard `surfaces-use-the-kernel` |
-| `internal/resource` imports only the standard library. | depguard `model-is-a-leaf` |
-| The kernel never sees HTTP, signatures, or a surface. | depguard `kernel-knows-no-wire` |
-| Protobuf and gRPC types stay inside `internal/backend/grpcclient`. | depguard `grpc-stays-in-grpcclient` |
+| Surfaces call `internal/cloud`, never `internal/backend`. | `TestArchitectureRules`; depguard `surfaces-use-the-kernel` |
+| `internal/resource` imports only the standard library. | `TestArchitectureRules`; depguard `model-is-a-leaf` |
+| The kernel never sees HTTP, signatures, or a surface. | `TestArchitectureRules`; depguard `kernel-knows-no-wire` |
+| Protobuf and gRPC types stay inside `internal/backend/grpcclient`. | `TestArchitectureRules`; depguard `grpc-stays-in-grpcclient` |
 | Untrusted strings become IDs only through `resource.Parse` or JSON decoding. | The compiler: ID types are structs with unexported fields |
 | Surfaces and the kernel do not mint IDs or operation IDs. | `internal/hygiene` rejects `resource.Mint` and `resource.NewOperationID` outside `internal/backend` |
 | Every switch over a model enum handles every value. | `exhaustive` |
