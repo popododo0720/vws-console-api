@@ -64,6 +64,9 @@ func (d *directory) GetPolicy(_ context.Context, req *iamv1.GetPolicyRequest) (*
 	if err := d.enter("GetPolicy", req); err != nil {
 		return nil, err
 	}
+	if d.onGetPolicy != nil {
+		d.onGetPolicy(d)
+	}
 	project, id, err := split(req.GetName(), "policies")
 	if err != nil {
 		return nil, err

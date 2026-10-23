@@ -424,6 +424,43 @@ func TestGroupInlinePolicyActionsThroughTheQuerySurfaceOverGRPC(t *testing.T) {
 	expect(t, queryCall(t, h, del), http.StatusNotFound, "<Code>NoSuchEntity</Code>")
 }
 
+// #314 bundle 3: ListAttached*Policies reads the user or group again after
+// reading its policies, so one that moved while they were read is 409
+// ConcurrentModification with no policy, as ListAccessKeys does.
+func TestListAttachedPoliciesRereadsTheEntityOverGRPC(t *testing.T) {
+	for _, kind := range []iam.Entity{iam.EntityUser, iam.EntityGroup} {
+		t.Run(kind.String(), func(t *testing.T) {
+			ctx := t.Context()
+			a, d := seeded(ctx, t)
+			ops := d.seedPolicy("Ops", "/team/")
+			name, arn, entities := "alice", "arn:vws:iam::123456789012:user/ops/alice", d.users
+			if kind == iam.EntityGroup {
+				name, arn, entities = "devs", "arn:vws:iam::123456789012:group/team/devs", d.groups
+			}
+			if err := a.AttachPolicy(ctx, account314, kind, name, ops, arn); err != nil {
+				t.Fatal(err)
+			}
+			if ps, err := a.ListAttachedPolicies(ctx, account314, kind, name, arn); err != nil || len(ps) != 1 {
+				t.Fatalf("before the move: %v, %v", ps, err)
+			}
+			d.mu.Lock()
+			d.onGetPolicy = func(d *directory) {
+				for _, e := range entities {
+					if strings.HasSuffix(e.name, "/"+name) {
+						e.path, e.version = "/denied/", e.version+1
+					}
+				}
+				d.onGetPolicy = nil
+			}
+			d.mu.Unlock()
+			ps, err := a.ListAttachedPolicies(ctx, account314, kind, name, arn)
+			if !iam.IsChanged(err) || len(ps) != 0 {
+				t.Fatalf("moved while its policies were read: %v, %v", ps, err)
+			}
+		})
+	}
+}
+
 // #314 bundle 3: over gRPC a policy call acts only on the ARN the caller was
 // authorized on; an entity moved in between is 409 ConcurrentModification
 // and nothing is written.

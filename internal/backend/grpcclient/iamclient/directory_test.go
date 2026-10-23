@@ -74,6 +74,9 @@ type directory struct {
 	keyState iamv1.AccessKeyState
 	// createSecret, when set, replaces the secret CreateAccessKey returns.
 	createSecret *string
+	// onGetPolicy, when set, runs under d.mu in each GetPolicy, as another
+	// writer acting while a list reads the attached policies.
+	onGetPolicy func(d *directory)
 }
 
 type dirKey struct {
