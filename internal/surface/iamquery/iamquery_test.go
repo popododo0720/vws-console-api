@@ -806,7 +806,9 @@ func TestLimitedUserAndSTS(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := f.PutInlinePolicy(ctx, root.Account, iam.EntityUser, "bob", "p", `{"Statement":[{"Effect":"Allow","Action":["iam:GetUser","sts:GetCallerIdentity","sts:AssumeRole"],"Resource":"*"}]}`, ""); err != nil {
+	doc := `{"Statement":[{"Effect":"Allow",` +
+		`"Action":["iam:GetUser","sts:GetCallerIdentity","sts:AssumeRole"],"Resource":"*"}]}`
+	if err := f.PutInlinePolicy(ctx, root.Account, iam.EntityUser, "bob", "p", doc, ""); err != nil {
 		t.Fatal(err)
 	}
 	k, err := f.CreateAccessKey(ctx, root.Account, "bob", "")

@@ -103,7 +103,8 @@ func TestEntityPolicyChangesRetrySafely(t *testing.T) {
 			t.Fatal(err)
 		}
 		ws := policyWrites(d)
-		if len(ws) != 2 || ws[0].(*iamv1.UpdateUserRequest).GetRequestId() != ws[1].(*iamv1.UpdateUserRequest).GetRequestId() {
+		if len(ws) != 2 ||
+			ws[0].(*iamv1.UpdateUserRequest).GetRequestId() != ws[1].(*iamv1.UpdateUserRequest).GetRequestId() {
 			t.Fatalf("writes %v, want one request sent twice", ws)
 		}
 		ps, err := a.ListAttachedPolicies(ctx, account314, iam.EntityUser, "bob", "")
@@ -120,7 +121,8 @@ func TestEntityPolicyChangesRetrySafely(t *testing.T) {
 			t.Fatal(err)
 		}
 		ws := policyWrites(d)
-		if len(ws) != 2 || ws[0].(*iamv1.UpdateUserRequest).GetRequestId() == ws[1].(*iamv1.UpdateUserRequest).GetRequestId() ||
+		if len(ws) != 2 ||
+			ws[0].(*iamv1.UpdateUserRequest).GetRequestId() == ws[1].(*iamv1.UpdateUserRequest).GetRequestId() ||
 			ws[0].(*iamv1.UpdateUserRequest).GetUser().GetEtag() == ws[1].(*iamv1.UpdateUserRequest).GetUser().GetEtag() {
 			t.Fatalf("writes %v, want a second request on the new etag", ws)
 		}
@@ -295,9 +297,13 @@ func TestEntityPolicyActionsThroughTheQuerySurfaceOverGRPC(t *testing.T) {
 		status int
 		parts  []string
 	}{
-		{f("Action", "AttachGroupPolicy", "GroupName", "devs", "PolicyArn", ops), 200, []string{"<AttachGroupPolicyResponse"}},
+		{
+			f("Action", "AttachGroupPolicy", "GroupName", "devs", "PolicyArn", ops), 200,
+			[]string{"<AttachGroupPolicyResponse"},
+		},
 		{f("Action", "ListAttachedGroupPolicies", "GroupName", "devs", "PathPrefix", "/team/"), 200, []string{
-			"<AttachedPolicies><member><PolicyName>Ops</PolicyName><PolicyArn>" + ops + "</PolicyArn></member></AttachedPolicies>",
+			"<AttachedPolicies><member><PolicyName>Ops</PolicyName><PolicyArn>" + ops +
+				"</PolicyArn></member></AttachedPolicies>",
 			"<IsTruncated>false</IsTruncated>",
 		}},
 		{
@@ -308,7 +314,10 @@ func TestEntityPolicyActionsThroughTheQuerySurfaceOverGRPC(t *testing.T) {
 		{f("Action", "GetUserPolicy", "UserName", "alice", "PolicyName", "s3"), 200, []string{
 			"<UserName>alice</UserName>", "<PolicyName>s3</PolicyName>", "<PolicyDocument>%7B%22Version%22%3A%222012-10-17%22",
 		}},
-		{f("Action", "ListUserPolicies", "UserName", "alice"), 200, []string{"<PolicyNames><member>s3</member></PolicyNames>"}},
+		{
+			f("Action", "ListUserPolicies", "UserName", "alice"), 200,
+			[]string{"<PolicyNames><member>s3</member></PolicyNames>"},
+		},
 		{
 			f("Action", "PutUserPolicy", "UserName", "alice", "PolicyName", "x", "PolicyDocument", `{"Version":"2012-10-17"}`),
 			400,
@@ -341,7 +350,10 @@ func TestEntityPolicyCallsActOnTheAuthorizedARNOverGRPC(t *testing.T) {
 	}{
 		{url.Values{"Action": {"AttachGroupPolicy"}, "GroupName": {"devs"}, "PolicyArn": {"Ops"}}, "devs", ""},
 		{
-			url.Values{"Action": {"PutGroupPolicy"}, "GroupName": {"devs"}, "PolicyName": {"p"}, "PolicyDocument": {policyDoc314}},
+			url.Values{
+				"Action": {"PutGroupPolicy"}, "GroupName": {"devs"}, "PolicyName": {"p"},
+				"PolicyDocument": {policyDoc314},
+			},
 			"devs", "",
 		},
 		{url.Values{"Action": {"ListGroupPolicies"}, "GroupName": {"devs"}}, "devs", ""},
@@ -358,13 +370,13 @@ func TestEntityPolicyCallsActOnTheAuthorizedARNOverGRPC(t *testing.T) {
 			})
 			ctx := t.Context()
 			ops := d.seedPolicy("Ops", "/team/")
-			if _, err := mover.Admin.CreateUser(ctx, account314, "erin", "/ops/"); err != nil {
+			if _, err := mover.CreateUser(ctx, account314, "erin", "/ops/"); err != nil {
 				t.Fatal(err)
 			}
-			if err := mover.Admin.AttachPolicy(ctx, account314, iam.EntityUser, "erin", ops, ""); err != nil {
+			if err := mover.AttachPolicy(ctx, account314, iam.EntityUser, "erin", ops, ""); err != nil {
 				t.Fatal(err)
 			}
-			if err := mover.Admin.PutInlinePolicy(ctx, account314, iam.EntityUser, "erin", "keep", policyDoc314, ""); err != nil {
+			if err := mover.PutInlinePolicy(ctx, account314, iam.EntityUser, "erin", "keep", policyDoc314, ""); err != nil {
 				t.Fatal(err)
 			}
 			if tc.form.Has("PolicyArn") {

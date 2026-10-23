@@ -44,7 +44,8 @@ func newLoginEnv(t *testing.T) loginEnv {
 	if _, err := f.CreateLoginProfile(ctx, account, "bob", "correct horse 1"); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.PutInlinePolicy(ctx, account, iam.EntityUser, "bob", "read", `{"Statement":[{"Effect":"Allow","Action":["ec2:Describe*","s3:ListAllMyBuckets"],"Resource":"*"}]}`, ""); err != nil {
+	read := `{"Statement":[{"Effect":"Allow","Action":["ec2:Describe*","s3:ListAllMyBuckets"],"Resource":"*"}]}`
+	if err := f.PutInlinePolicy(ctx, account, iam.EntityUser, "bob", "read", read, ""); err != nil {
 		t.Fatal(err)
 	}
 	return loginEnv{clock: clock, h: h, account: account, fake: f, root: root}
@@ -168,7 +169,8 @@ func TestSessionIsAuthorizedPerRequest(t *testing.T) {
 	if rec := e.do(t, http.MethodPost, "/api/v1/vpcs", `{"cidrBlock":"10.4.0.0/16"}`, mutate, session); rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "PermissionDenied") {
 		t.Errorf("denied mutation: %d %s", rec.Code, rec.Body)
 	}
-	if err := e.fake.PutInlinePolicy(t.Context(), e.account, iam.EntityUser, "bob", "vpcs", `{"Statement":[{"Effect":"Allow","Action":"ec2:CreateVpc","Resource":"*"}]}`, ""); err != nil {
+	vpcs := `{"Statement":[{"Effect":"Allow","Action":"ec2:CreateVpc","Resource":"*"}]}`
+	if err := e.fake.PutInlinePolicy(t.Context(), e.account, iam.EntityUser, "bob", "vpcs", vpcs, ""); err != nil {
 		t.Fatal(err)
 	}
 	if rec := e.do(t, http.MethodPost, "/api/v1/vpcs", `{"cidrBlock":"10.4.0.0/16"}`, mutate, session); rec.Code != http.StatusAccepted {
@@ -300,7 +302,8 @@ func TestStateChangingSessionRequestsNeedOriginAndJSON(t *testing.T) {
 	}
 	session, csrf := e.login(t)
 	write := map[string]string{"Idempotency-Key": "vpc-origin-1", CSRFHeader: csrf.Value}
-	if err := e.fake.PutInlinePolicy(t.Context(), e.account, iam.EntityUser, "bob", "vpcs", `{"Statement":[{"Effect":"Allow","Action":"ec2:CreateVpc","Resource":"*"}]}`, ""); err != nil {
+	vpcs := `{"Statement":[{"Effect":"Allow","Action":"ec2:CreateVpc","Resource":"*"}]}`
+	if err := e.fake.PutInlinePolicy(t.Context(), e.account, iam.EntityUser, "bob", "vpcs", vpcs, ""); err != nil {
 		t.Fatal(err)
 	}
 	for name, extra := range map[string]map[string]string{

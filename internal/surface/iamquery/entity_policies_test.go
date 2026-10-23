@@ -165,7 +165,8 @@ func TestEntityPolicyListsPage(t *testing.T) {
 		}
 		res = call(t, h, bob, sigv4.ServiceIAM, list(attached, "MaxItems", "2", "Marker", m[1]))
 		has(t, res, http.StatusOK, "<PolicyName>C</PolicyName>", "<IsTruncated>false</IsTruncated>")
-		if strings.Contains(res.Body.String(), "<PolicyName>B</PolicyName>") || strings.Contains(res.Body.String(), "<Marker>") {
+		if body := res.Body.String(); strings.Contains(body, "<PolicyName>B</PolicyName>") ||
+			strings.Contains(body, "<Marker>") {
 			t.Errorf("page 2: %s", res.Body)
 		}
 		res = call(t, h, bob, sigv4.ServiceIAM, list(attached, "PathPrefix", "/x/"))
@@ -254,7 +255,8 @@ func TestEntityPolicyErrorsAndShapes(t *testing.T) {
 			[]string{"<Code>ValidationError</Code>", "policyName"},
 		},
 		{
-			form("Action", "PutGroupPolicy", "GroupName", "devs", "PolicyName", strings.Repeat("p", 129), "PolicyDocument", s3Doc),
+			form("Action", "PutGroupPolicy", "GroupName", "devs",
+				"PolicyName", strings.Repeat("p", 129), "PolicyDocument", s3Doc),
 			400,
 			[]string{"<Code>ValidationError</Code>", "policyName"},
 		},

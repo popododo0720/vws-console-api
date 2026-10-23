@@ -110,14 +110,19 @@ func wantField(t *testing.T, what string, err error, code resource.Code, field s
 	}
 }
 
-// holders are the user and the group every row runs on.
-var holders = []struct {
+// policyHolder is the user or the group a row runs on.
+type policyHolder struct {
 	kind       iam.Entity
 	name, word string // word: as in PoliciesPerUser
 	arn        string
-}{
-	{iam.EntityUser, "bob", "User", arnPrefix + "user/eng/bob"},
-	{iam.EntityGroup, "devs", "Group", arnPrefix + "group/team/devs"},
+}
+
+// holders are the user and the group every row runs on.
+func holders() []policyHolder {
+	return []policyHolder{
+		{iam.EntityUser, "bob", "User", arnPrefix + "user/eng/bob"},
+		{iam.EntityGroup, "devs", "Group", arnPrefix + "group/team/devs"},
+	}
 }
 
 // iamPolicyRows are the #314 bundle 3 rows. Each runs on the user bob and on
@@ -127,7 +132,7 @@ func iamPolicyRows() []policyRow {
 		{"Attach lists the policy by name with its path; a second attach is a no-op", func(
 			ctx context.Context, t *testing.T, a iam.Admin, p seededPolicies,
 		) {
-			for _, h := range holders {
+			for _, h := range holders() {
 				wantAttached(ctx, t, a, h.kind, h.name)
 				wantOK(t, "Attach ReadOnly", a.AttachPolicy(ctx, iamAccount(), h.kind, h.name, p.readOnly, ""))
 				wantOK(t, "Attach Ops", a.AttachPolicy(ctx, iamAccount(), h.kind, h.name, p.ops, h.arn))
@@ -149,7 +154,7 @@ func iamPolicyRows() []policyRow {
 			for i := range 11 {
 				arns = append(arns, p.seed(t, "P"+string(rune('a'+i)), "/q/"))
 			}
-			for _, h := range holders {
+			for _, h := range holders() {
 				for _, arn := range arns[:10] {
 					wantOK(t, "Attach "+arn, a.AttachPolicy(ctx, iamAccount(), h.kind, h.name, arn, ""))
 				}
@@ -164,7 +169,7 @@ func iamPolicyRows() []policyRow {
 		{"Detach removes; a policy that is not attached is NoSuchEntity", func(
 			ctx context.Context, t *testing.T, a iam.Admin, p seededPolicies,
 		) {
-			for _, h := range holders {
+			for _, h := range holders() {
 				err := a.DetachPolicy(ctx, iamAccount(), h.kind, h.name, p.ops, "")
 				wantErr(t, "Detach before attach", err, resource.CodeNotFound, "Policy "+p.ops+" was not found.")
 				wantOK(t, "Attach", a.AttachPolicy(ctx, iamAccount(), h.kind, h.name, p.ops, ""))
@@ -178,7 +183,7 @@ func iamPolicyRows() []policyRow {
 		{"a missing policy, another path or another account is NoSuchEntity", func(
 			ctx context.Context, t *testing.T, a iam.Admin, p seededPolicies,
 		) {
-			for _, h := range holders {
+			for _, h := range holders() {
 				for _, arn := range []string{
 					arnPrefix + "policy/Ghost", arnPrefix + "policy/other/Ops", arnPrefix + "policy/Ops",
 					"arn:vws:iam::210987654321:policy/team/Ops",
@@ -221,7 +226,7 @@ func iamPolicyRows() []policyRow {
 		) {
 			spaced := "{\n  \"Version\": \"2012-10-17\",\n  \"Statement\": {\"Effect\": \"Deny\", " +
 				"\"Action\": [\"ec2:*\"], \"Resource\": \"*\"}\n}\n"
-			for _, h := range holders {
+			for _, h := range holders() {
 				wantInline(ctx, t, a, h.kind, h.name)
 				wantOK(t, "Put s3", a.PutInlinePolicy(ctx, iamAccount(), h.kind, h.name, "s3", identityDoc("*"), ""))
 				wantOK(t, "Put ec2", a.PutInlinePolicy(ctx, iamAccount(), h.kind, h.name, "ec2", spaced, h.arn))
@@ -245,7 +250,7 @@ func iamPolicyRows() []policyRow {
 		{"Delete removes an inline policy; a missing one is NoSuchEntity", func(
 			ctx context.Context, t *testing.T, a iam.Admin, _ seededPolicies,
 		) {
-			for _, h := range holders {
+			for _, h := range holders() {
 				msg := "The " + h.kind.String() + " policy with name s3 cannot be found."
 				_, err := a.GetInlinePolicy(ctx, iamAccount(), h.kind, h.name, "s3", "")
 				wantErr(t, "Get before Put", err, resource.CodeNotFound, msg)
@@ -264,7 +269,7 @@ func iamPolicyRows() []policyRow {
 		{"a malformed document is MalformedPolicyDocument and nothing is stored", func(
 			ctx context.Context, t *testing.T, a iam.Admin, _ seededPolicies,
 		) {
-			for _, h := range holders {
+			for _, h := range holders() {
 				for _, doc := range []string{
 					`not json`,
 					`{"Version":"2012-10-17"}`,
@@ -281,7 +286,7 @@ func iamPolicyRows() []policyRow {
 		{"an inline policy name outside the AWS pattern is a ValidationError", func(
 			ctx context.Context, t *testing.T, a iam.Admin, _ seededPolicies,
 		) {
-			for _, h := range holders {
+			for _, h := range holders() {
 				for _, name := range []string{"", "bad name", "a/b", strings.Repeat("p", 129)} {
 					err := a.PutInlinePolicy(ctx, iamAccount(), h.kind, h.name, name, identityDoc("*"), "")
 					wantField(t, "Put "+name, err, resource.CodeInvalidArgument, "policyName")
@@ -327,17 +332,19 @@ func iamPolicyRows() []policyRow {
 
 			wantOK(t, "RemoveUserFromGroup", a.RemoveUserFromGroup(ctx, iamAccount(), "devs", "alice", ""))
 			wantOK(t, "Put", a.PutInlinePolicy(ctx, iamAccount(), iam.EntityGroup, "devs", "s3", identityDoc("*"), ""))
-			wantErr(t, "DeleteGroup", a.DeleteGroup(ctx, iamAccount(), "devs", ""), resource.CodeConflict, iam.GroupDeleteConflict)
+			wantErr(t, "DeleteGroup", a.DeleteGroup(ctx, iamAccount(), "devs", ""),
+				resource.CodeConflict, iam.GroupDeleteConflict)
 			wantOK(t, "Delete inline", a.DeleteInlinePolicy(ctx, iamAccount(), iam.EntityGroup, "devs", "s3", ""))
 			wantOK(t, "Attach", a.AttachPolicy(ctx, iamAccount(), iam.EntityGroup, "devs", p.readOnly, ""))
-			wantErr(t, "DeleteGroup", a.DeleteGroup(ctx, iamAccount(), "devs", ""), resource.CodeConflict, iam.GroupDeleteConflict)
+			wantErr(t, "DeleteGroup", a.DeleteGroup(ctx, iamAccount(), "devs", ""),
+				resource.CodeConflict, iam.GroupDeleteConflict)
 			wantOK(t, "Detach", a.DetachPolicy(ctx, iamAccount(), iam.EntityGroup, "devs", p.readOnly, ""))
 			wantOK(t, "DeleteGroup once the policies are gone", a.DeleteGroup(ctx, iamAccount(), "devs", ""))
 		}},
 		{"every call at a stale ARN is ConcurrentModification and writes nothing", func(
 			ctx context.Context, t *testing.T, a iam.Admin, p seededPolicies,
 		) {
-			for _, h := range holders {
+			for _, h := range holders() {
 				wantOK(t, "Attach", a.AttachPolicy(ctx, iamAccount(), h.kind, h.name, p.readOnly, ""))
 				wantOK(t, "Put", a.PutInlinePolicy(ctx, iamAccount(), h.kind, h.name, "s3", identityDoc("*"), ""))
 				old := strings.Replace(h.arn, "/eng/", "/old/", 1)

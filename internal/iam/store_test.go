@@ -151,7 +151,8 @@ func TestAssumeRole(t *testing.T) {
 	if err != nil || r.ARN != "arn:vws:iam::123456789012:role/ops" || r.MaxSessionDuration != 3600 {
 		t.Fatalf("create role %+v %v", r, err)
 	}
-	must(t, f.PutInlinePolicy(ctx, a, EntityRole, "ops", "vpcs", `{"Statement":[{"Effect":"Allow","Action":"ec2:CreateVpc","Resource":"*"}]}`, ""))
+	vpcs := `{"Statement":[{"Effect":"Allow","Action":"ec2:CreateVpc","Resource":"*"}]}`
+	must(t, f.PutInlinePolicy(ctx, a, EntityRole, "ops", "vpcs", vpcs, ""))
 
 	got, err := f.AssumeRole(ctx, Principal{Account: a, ARN: u.ARN}, r.ARN, "s1", 15*time.Minute)
 	if err != nil || !strings.HasPrefix(got.Key.AccessKey, "ASIA") || got.Key.SessionToken == "" || !got.Key.Expires.Equal(now.Add(15*time.Minute)) ||
