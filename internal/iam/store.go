@@ -265,11 +265,8 @@ func assumedRoleName(arn string) (string, bool) {
 
 // CreateUser implements Admin.
 func (f *Fake) CreateUser(_ context.Context, a resource.AccountID, name, path string) (User, error) {
-	if err := checkName(entityName, "userName", name); err != nil {
+	if err := CheckUserName("userName", name); err != nil {
 		return User{}, err
-	}
-	if strings.EqualFold(name, RootUserName) {
-		return User{}, resource.Invalid("userName", "the user name "+RootUserName+" is reserved for the account root")
 	}
 	path, err := normPath(path)
 	if err != nil {
@@ -331,7 +328,7 @@ func (f *Fake) DeleteUser(_ context.Context, a resource.AccountID, name string) 
 	}
 	if len(u.keys) > 0 || len(u.attached) > 0 || len(u.inline) > 0 || len(u.groups) > 0 || u.login != nil ||
 		st.mfaAssigned(name) {
-		return conflict("Cannot delete entity, must delete login profile, access keys, policies and group memberships first.")
+		return conflict(UserDeleteConflict)
 	}
 	delete(st.users, name)
 	return nil
@@ -355,11 +352,8 @@ func (f *Fake) UpdateUser(_ context.Context, a resource.AccountID, name, newPath
 		path = p
 	}
 	if newName != "" {
-		if err := checkName(entityName, "newUserName", newName); err != nil {
+		if err := CheckUserName("newUserName", newName); err != nil {
 			return err
-		}
-		if strings.EqualFold(newName, RootUserName) {
-			return resource.Invalid("newUserName", "the user name "+RootUserName+" is reserved for the account root")
 		}
 	}
 	f.mu.Lock()
@@ -370,7 +364,7 @@ func (f *Fake) UpdateUser(_ context.Context, a resource.AccountID, name, newPath
 		return notFound("user", name)
 	}
 	if expectARN != "" && u.ARN != expectARN {
-		return conflict("The user changed while the request was in flight.")
+		return conflict(UserChanged)
 	}
 	target := name
 	if newName != "" {
@@ -602,7 +596,7 @@ func (f *Fake) DeleteGroup(_ context.Context, a resource.AccountID, name string)
 		return notFound("group", name)
 	}
 	if len(g.members) > 0 || len(g.attached) > 0 || len(g.inline) > 0 {
-		return conflict("Cannot delete entity, must remove users and policies from group first.")
+		return conflict(GroupDeleteConflict)
 	}
 	delete(st.groups, name)
 	return nil
@@ -621,7 +615,7 @@ func (f *Fake) AddUserToGroup(_ context.Context, a resource.AccountID, group, us
 		return notFound("user", user)
 	}
 	if !u.groups[group] && len(u.groups) >= maxGroupsPerUser {
-		return quota("Cannot exceed quota for GroupsPerUser: 10")
+		return GroupsPerUserExceeded()
 	}
 	g.members[user], u.groups[group] = true, true
 	return nil

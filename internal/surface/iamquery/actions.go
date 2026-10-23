@@ -302,11 +302,52 @@ func requireUser(c *exchange) (string, error) {
 type usersResult struct {
 	Users       []userXML `xml:"Users>member"`
 	IsTruncated bool      `xml:"IsTruncated"`
+	Marker      string    `xml:"Marker,omitempty"`
 }
 
 type groupsResult struct {
 	Groups      []groupXML `xml:"Groups>member"`
 	IsTruncated bool       `xml:"IsTruncated"`
+	Marker      string     `xml:"Marker,omitempty"`
+}
+
+func userNameOf(u iam.User) string   { return u.Name }
+func groupNameOf(g iam.Group) string { return g.Name }
+
+// pagedUsers is one Marker/MaxItems page of us.
+func pagedUsers(c *exchange, list func(prefix string) ([]iam.User, error)) (any, error) {
+	prefix, err := pathPrefixParam(c)
+	if err != nil {
+		return nil, err
+	}
+	marker, maxItems, err := pageParams(c)
+	if err != nil {
+		return nil, err
+	}
+	us, err := list(prefix)
+	if err != nil {
+		return nil, err
+	}
+	page, truncated, next := pageByName(us, userNameOf, marker, maxItems)
+	out := usersResult{Users: []userXML{}, IsTruncated: truncated, Marker: next}
+	for _, u := range page {
+		out.Users = append(out.Users, toUser(u))
+	}
+	return out, nil
+}
+
+// pagedGroups is one Marker/MaxItems page of gs.
+func pagedGroups(c *exchange, gs []iam.Group) (any, error) {
+	marker, maxItems, err := pageParams(c)
+	if err != nil {
+		return nil, err
+	}
+	page, truncated, next := pageByName(gs, groupNameOf, marker, maxItems)
+	out := groupsResult{Groups: []groupXML{}, IsTruncated: truncated, Marker: next}
+	for _, g := range page {
+		out.Groups = append(out.Groups, toGroup(g))
+	}
+	return out, nil
 }
 
 type rolesResult struct {
@@ -353,12 +394,9 @@ func iamActions() map[string]spec {
 			}{toUser(u)}, err
 		}),
 		"ListUsers": lister(nil, func(h *handler, c *exchange) (any, error) {
-			us, err := h.cfg.Admin.ListUsers(c.r.Context(), c.caller.Account, c.form("PathPrefix"))
-			out := usersResult{Users: []userXML{}}
-			for _, u := range us {
-				out.Users = append(out.Users, toUser(u))
-			}
-			return out, err
+			return pagedUsers(c, func(prefix string) ([]iam.User, error) {
+				return h.cfg.Admin.ListUsers(c.r.Context(), c.caller.Account, prefix)
+			})
 		}),
 		"UpdateUser": admin(
 			[]string{"UserName", "NewPath", "NewUserName"}, userARN,
@@ -472,24 +510,42 @@ func iamActions() map[string]spec {
 			}{toGroup(g)}, err
 		}),
 		"GetGroup": {params: []string{"GroupName"}, list: true, needsAdmin: true, resource: groupARN, run: func(h *handler, c *exchange) (any, error) {
+			if err := required(c, "GroupName"); err != nil {
+				return nil, err
+			}
+			marker, maxItems, err := pageParams(c)
+			if err != nil {
+				return nil, err
+			}
 			g, us, err := h.cfg.Admin.GetGroup(c.r.Context(), c.caller.Account, c.form("GroupName"))
+			if err != nil {
+				return nil, err
+			}
+			page, truncated, next := pageByName(us, userNameOf, marker, maxItems)
 			out := struct {
 				Group       groupXML  `xml:"Group"`
 				Users       []userXML `xml:"Users>member"`
 				IsTruncated bool      `xml:"IsTruncated"`
-			}{Group: toGroup(g), Users: []userXML{}}
-			for _, u := range us {
+				Marker      string    `xml:"Marker,omitempty"`
+			}{Group: toGroup(g), Users: []userXML{}, IsTruncated: truncated, Marker: next}
+			for _, u := range page {
 				out.Users = append(out.Users, toUser(u))
 			}
-			return out, err
+			return out, nil
 		}},
 		"ListGroups": lister(nil, func(h *handler, c *exchange) (any, error) {
-			gs, err := h.cfg.Admin.ListGroups(c.r.Context(), c.caller.Account, c.form("PathPrefix"))
-			out := groupsResult{Groups: []groupXML{}}
-			for _, g := range gs {
-				out.Groups = append(out.Groups, toGroup(g))
+			prefix, err := pathPrefixParam(c)
+			if err != nil {
+				return nil, err
 			}
-			return out, err
+			if _, _, err := pageParams(c); err != nil {
+				return nil, err
+			}
+			gs, err := h.cfg.Admin.ListGroups(c.r.Context(), c.caller.Account, prefix)
+			if err != nil {
+				return nil, err
+			}
+			return pagedGroups(c, gs)
 		}),
 		"UpdateGroup": admin(
 			[]string{"GroupName", "NewPath", "NewGroupName"}, groupARN,
@@ -508,6 +564,9 @@ func iamActions() map[string]spec {
 			},
 		),
 		"DeleteGroup": admin([]string{"GroupName"}, groupARN, func(h *handler, c *exchange) (any, error) {
+			if err := required(c, "GroupName"); err != nil {
+				return nil, err
+			}
 			return nil, h.cfg.Admin.DeleteGroup(c.r.Context(), c.caller.Account, c.form("GroupName"))
 		}),
 		"AddUserToGroup": admin([]string{"GroupName", "UserName"}, groupARN, func(h *handler, c *exchange) (any, error) {
@@ -523,12 +582,17 @@ func iamActions() map[string]spec {
 			return nil, h.cfg.Admin.RemoveUserFromGroup(c.r.Context(), c.caller.Account, c.form("GroupName"), c.form("UserName"))
 		}),
 		"ListGroupsForUser": {params: []string{"UserName"}, list: true, needsAdmin: true, resource: userARN, run: func(h *handler, c *exchange) (any, error) {
-			gs, err := h.cfg.Admin.ListGroupsForUser(c.r.Context(), c.caller.Account, c.form("UserName"))
-			out := groupsResult{Groups: []groupXML{}}
-			for _, g := range gs {
-				out.Groups = append(out.Groups, toGroup(g))
+			if err := required(c, "UserName"); err != nil {
+				return nil, err
 			}
-			return out, err
+			if _, _, err := pageParams(c); err != nil {
+				return nil, err
+			}
+			gs, err := h.cfg.Admin.ListGroupsForUser(c.r.Context(), c.caller.Account, c.form("UserName"))
+			if err != nil {
+				return nil, err
+			}
+			return pagedGroups(c, gs)
 		}},
 
 		"CreateRole": admin([]string{"RoleName", "Path", "AssumeRolePolicyDocument", "Description", "MaxSessionDuration"}, roleARN, func(h *handler, c *exchange) (any, error) {
