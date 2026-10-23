@@ -900,6 +900,42 @@ func iamActions() map[string]spec {
 				return out, err
 			},
 		},
+		// AWS ListMFADevices is authorized on the user, the named one or else
+		// the caller, so a policy on user/${aws:username} covers only the
+		// caller's own devices. It takes Marker and MaxItems but not
+		// PathPrefix, so the spec lists them rather than setting list.
+		"ListMFADevices": {
+			params: []string{"UserName", "Marker", "MaxItems"}, needsAdmin: true, resource: listMFADevicesARN,
+			run: func(h *handler, c *exchange) (any, error) {
+				user, err := listMFADevicesUserName(c)
+				if err != nil {
+					return nil, err
+				}
+				maxItems, err := maxItemsParam(c)
+				if err != nil {
+					return nil, err
+				}
+				if err := mfaDeviceMarkerParam(c); err != nil {
+					return nil, err
+				}
+				// The backend reads only the user at the authorized ARN, so a
+				// user moved since the authorization lists nothing.
+				page, err := h.cfg.Admin.ListMFADevices(
+					c.r.Context(), c.caller.Account, user, c.form("Marker"), maxItems, c.authorized)
+				if err != nil {
+					return nil, err
+				}
+				out := mfaDevicesResult{
+					MFADevices:  []listedMFADeviceXML{},
+					IsTruncated: page.IsTruncated,
+					Marker:      page.Marker,
+				}
+				for _, d := range page.Devices {
+					out.MFADevices = append(out.MFADevices, toListedMFADevice(d))
+				}
+				return out, nil
+			},
+		},
 		// AWS GetMFADevice is authorized on the user, the named one or else the
 		// caller, and accepts only FIDO security key serial numbers. No
 		// backend holds FIDO keys yet, so an authorized call answers

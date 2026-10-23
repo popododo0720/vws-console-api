@@ -168,10 +168,11 @@ func AccessKeyNotFound(keyID string) error {
 	}
 }
 
-// MFADevice is a FIDO security key as GetMFADevice reports it. No backend
-// holds FIDO keys yet (popododo0720/vws-iam#133), so GetMFADevice answers
-// NoSuchEntity for every serial number and this type only fixes the result
-// shape.
+// MFADevice is an MFA device as GetMFADevice and ListMFADevices report it.
+// GetMFADevice accepts only FIDO security keys, and no backend holds FIDO keys
+// yet (popododo0720/vws-iam#133), so GetMFADevice answers NoSuchEntity for
+// every serial number. ListMFADevices reports the virtual devices enabled for
+// one user.
 type MFADevice struct {
 	UserName     string
 	SerialNumber string
@@ -277,6 +278,14 @@ type Admin interface {
 	ListVirtualMFADevices(
 		ctx context.Context, a resource.AccountID, assignment MFADeviceAssignment, marker string, maxItems int,
 	) (VirtualMFADevicePage, error)
+
+	// ListMFADevices lists the devices enabled for one user. The user
+	// argument is the AWS UserName, not an ARN. A non-empty expectARN must be
+	// the user's ARN for the whole read, or the answer is a
+	// ConcurrentModification (Changed(UserChanged)) with no device.
+	ListMFADevices(
+		ctx context.Context, a resource.AccountID, user, marker string, maxItems int, expectARN string,
+	) (MFADevicePage, error)
 
 	// The MFA device argument is the device serial number, the ARN the AWS
 	// Query API calls SerialNumber.
