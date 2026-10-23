@@ -558,14 +558,26 @@ func recoveryAfterInterveningWrite(
 // for its vws-dop- label. That detach is the tag capacity error before
 // compute is called, and changes nothing; a same-token retry is refused the
 // same way, never answered for a detach that happened (#319 review, #322).
+// The pending detach next to it has no operation id yet either, and its
+// label is reserved too (#327 review): 49 tags leave no room for both.
 func TestDetachLeavesRoomForItsOperationID(t *testing.T) {
 	t.Run("the operation id would be label 65", func(t *testing.T) { detachOpIDBoundary(t, resource.MaxTags, false) })
-	t.Run("the operation id is label 64", func(t *testing.T) { detachOpIDBoundary(t, resource.MaxTags-1, true) })
+	t.Run("the pending detach's reserved label would be 65", func(t *testing.T) {
+		detachOpIDBoundary(t, resource.MaxTags-1, false)
+	})
+	t.Run("the operation id is label 63, next to the reserved label 64", func(t *testing.T) {
+		detachOpIDBoundary(t, resource.MaxTags-2, true)
+	})
 }
 
-// detachOpIDBoundary holds three expired records next to a pending one and a
-// normal one, adds tags one label each, and detaches one more volume.
-func detachOpIDBoundary(t *testing.T, tagCount int, fits bool) {
+// heldRecordsNextToTags holds three expired records next to a pending one
+// (its operation id write failed) and a normal one, then adds tagCount tags
+// of one label each: 13+tagCount labels, one of them reserved for the
+// pending detach's operation id.
+func heldRecordsNextToTags(t *testing.T, tagCount int) (
+	*detachWorld, computeClient, string, []resource.VolumeID, resource.InstanceID, backend.Scope,
+) {
+	t.Helper()
 	world, client, name, vols, inst := capacityWorld(t, 6)
 	start := time.Unix(1_700_000_000, 0).UTC()
 	var offset atomic.Int64
@@ -605,6 +617,13 @@ func detachOpIDBoundary(t *testing.T, tagCount int, fits bool) {
 	if n := len(world.labelsOf(name)); n != 13+tagCount {
 		t.Fatalf("%d labels after %d tags, want %d", n, tagCount, 13+tagCount)
 	}
+	return world, client, name, vols, inst, scope
+}
+
+// detachOpIDBoundary detaches one more volume next to heldRecordsNextToTags.
+func detachOpIDBoundary(t *testing.T, tagCount int, fits bool) {
+	world, client, name, vols, inst, scope := heldRecordsNextToTags(t, tagCount)
+	ctx := context.Background()
 	spec := world.volumeNames(name)
 	mN := backend.Mutation{Scope: scope, Key: "k-new", Fingerprint: "fp-new"}
 	reqN := resource.DetachVolumeRequest{VolumeID: vols[5], InstanceID: inst}
@@ -631,14 +650,88 @@ func detachOpIDBoundary(t *testing.T, tagCount int, fits bool) {
 		return
 	}
 	if err != nil {
-		t.Fatalf("detach whose operation id is label %d: %v", labelMax, err)
+		t.Fatalf("detach with room for its operation id: %v", err)
 	}
 	labels := world.labelsOf(name)
-	if len(labels) != labelMax {
-		t.Fatalf("%d labels, want %d", len(labels), labelMax)
+	if want := 13 + tagCount + 2; len(labels) != want {
+		t.Fatalf("%d labels, want %d", len(labels), want)
 	}
 	if _, ok := labels[labelDetachOpPrefix+vols[5].String()]; !ok {
 		t.Fatal("the operation id was not saved")
+	}
+	again, err := client.DetachVolume(ctx, mN, reqN)
+	if err != nil || again.Operation.ID != first.Operation.ID {
+		t.Fatalf("same-token retry: op %s, %v; want op %s", again.Operation.ID, err, first.Operation.ID)
+	}
+}
+
+// A detach's operation id label is reserved from its first write until the
+// id is saved: a label write in between that would take it is the tag
+// capacity error and writes nothing, and the detach completes with its id
+// saved (#327 review). With 49 tags there is no room for the detach next
+// to the pending one's reserved label, so it is refused before compute is
+// called and no write can race it.
+func TestATagWriteCannotTakeAPendingOperationIDsRoom(t *testing.T) {
+	t.Run("49 tags: the detach is refused before a tag write can race it", func(t *testing.T) {
+		tagWriteDuringOpIDSave(t, resource.MaxTags-1, false)
+	})
+	t.Run("48 tags: the tag write is refused and the detach saves its id", func(t *testing.T) {
+		tagWriteDuringOpIDSave(t, resource.MaxTags-2, true)
+	})
+}
+
+// tagWriteDuringOpIDSave sends CreateTags with one more tag between a
+// detach's first write and the write that saves its operation id.
+func tagWriteDuringOpIDSave(t *testing.T, tagCount int, fits bool) {
+	world, client, name, vols, inst, scope := heldRecordsNextToTags(t, tagCount)
+	ctx := context.Background()
+	mN := backend.Mutation{Scope: scope, Key: "k-new", Fingerprint: "fp-new"}
+	reqN := resource.DetachVolumeRequest{VolumeID: vols[5], InstanceID: inst}
+	extra := fmt.Sprintf("k%02d", tagCount)
+	var once sync.Once
+	var raced bool
+	var tagErr error
+	world.mu.Lock()
+	world.afterUpdate = func(req *computev1.UpdateInstanceRequest, err error) {
+		if err != nil || req.GetRequestId() != requestUUID(mN.Key, "detach") {
+			return
+		}
+		once.Do(func() {
+			raced = true
+			_, tagErr = client.CreateTags(ctx,
+				backend.Mutation{Scope: scope, Key: "k-tag-race", Fingerprint: "fp-tag-race"},
+				resource.CreateTagsRequest{IDs: []resource.InstanceID{inst}, Tags: map[string]string{extra: "v"}})
+		})
+	}
+	world.mu.Unlock()
+	first, err := client.DetachVolume(ctx, mN, reqN)
+	if !fits {
+		if resource.CodeOf(err) != resource.CodeInvalidArgument {
+			t.Fatalf("detach with %d tags: %v, want the capacity error before compute", tagCount, err)
+		}
+		if raced {
+			t.Fatalf("the refused detach reached compute (%v)", err)
+		}
+		return
+	}
+	if !raced {
+		t.Fatal("the tag write did not run between the detach's writes")
+	}
+	if resource.CodeOf(tagErr) != resource.CodeInvalidArgument {
+		t.Fatalf("tag write into the reserved label: %v, want the tag capacity error", tagErr)
+	}
+	if err != nil {
+		t.Fatalf("detach whose label was reserved: %v", err)
+	}
+	labels := world.labelsOf(name)
+	if _, ok := labels[labelDetachOpPrefix+vols[5].String()]; !ok {
+		t.Fatal("the operation id was not saved")
+	}
+	if _, ok := labels[extra]; ok {
+		t.Fatal("the refused tag write was stored")
+	}
+	if want := 13 + tagCount + 2; len(labels) != want {
+		t.Fatalf("%d labels, want %d", len(labels), want)
 	}
 	again, err := client.DetachVolume(ctx, mN, reqN)
 	if err != nil || again.Operation.ID != first.Operation.ID {
