@@ -83,10 +83,12 @@ up to 3 times with doubling backoff; `Login` and `AssumeRole` are never
 retried. User and group management (`CreateUser`, `GetUser`, `ListUsers`,
 `UpdateUser`, `DeleteUser`, `CreateGroup`, `GetGroup`, `ListGroups`,
 `UpdateGroup`, `DeleteGroup`, `AddUserToGroup`, `RemoveUserFromGroup`,
-`ListGroupsForUser`) goes to `UserService` and `GroupService`: creates and
-deletes carry a `request_id` and updates the etag they read, so a retry of
-`UNAVAILABLE` (up to 3 times) cannot apply a change twice; a vws-iam that
-stays down is `503`. Renaming a user or group (`NewUserName`,
+`ListGroupsForUser`) goes to `UserService` and `GroupService`: every change
+carries a `request_id`, and updates and deletes the etag they read, so a retry
+of `UNAVAILABLE` (up to 3 times) cannot apply a change twice; a vws-iam that
+stays down is `503`. A change acts only on the user or group at the ARN the
+request was authorized on: one that moved in between is `409
+ConcurrentModification`, and nothing is written (on both backends). Renaming a user or group (`NewUserName`,
 `NewGroupName`) is `InvalidAction`, because vws-iam cannot rename. `GetRole`,
 `UpdateRole` and `UpdateRoleDescription` go to `RoleService`. IAM
 management actions that are not mapped to vws-iam yet (among them the user
