@@ -26,7 +26,7 @@ func TestRunInstancesRejectsTagsBeforeCreate(t *testing.T) {
 		_, err = client.RunInstances(context.Background(), backend.Mutation{
 			Scope: backend.Scope{Account: mustAccount(t)}, Key: "refused-tags", Fingerprint: "fp",
 		}, resource.RunInstancesRequest{
-			ImageID: mustImage(t, ownedAMI), InstanceType: "vws.small", SubnetID: sub, Count: 1, Tags: tags,
+			ImageID: mustImage(t, catalogAMI), InstanceType: "vws.small", SubnetID: sub, Count: 1, Tags: tags,
 		})
 		if resource.CodeOf(err) != resource.CodeInvalidArgument {
 			t.Fatalf("try %d: err %v, want invalid argument", i, err)
