@@ -173,11 +173,18 @@ func TestEntityPolicyListsPage(t *testing.T) {
 		if strings.Contains(res.Body.String(), "<PolicyName>A</PolicyName>") {
 			t.Errorf("PathPrefix /x/ lists A: %s", res.Body)
 		}
-		for _, bad := range [][]string{{"PathPrefix", "x"}, {"PathPrefix", "/x"}, {"PathPrefix", "/a b/"}, {"MaxItems", "0"},
-			{"MaxItems", "1001"}, {"Marker", ""}} {
+		for _, bad := range [][]string{
+			{"PathPrefix", "x"},
+			{"PathPrefix", "/x"},
+			{"PathPrefix", "/a b/"},
+			{"MaxItems", "0"},
+			{"MaxItems", "1001"},
+		} {
 			has(t, call(t, h, bob, sigv4.ServiceIAM, list(attached, bad...)), http.StatusBadRequest,
 				"<Code>ValidationError</Code>")
 		}
+		has(t, call(t, h, bob, sigv4.ServiceIAM, list(attached, "Marker", "")), http.StatusBadRequest,
+			"The Marker value is invalid.")
 
 		inline := "List" + e.word + "Policies"
 		res = call(t, h, bob, sigv4.ServiceIAM, list(inline, "MaxItems", "2"))
@@ -222,48 +229,82 @@ func TestEntityPolicyErrorsAndShapes(t *testing.T) {
 		status int
 		parts  []string
 	}{
-		{form("Action", "AttachGroupPolicy", "GroupName", "devs", "PolicyArn", "arn:short"), 400,
-			[]string{"<Code>ValidationError</Code>", "policyArn"}},
-		{form("Action", "AttachGroupPolicy", "GroupName", "devs", "PolicyArn", arn+"user/ok/carol"), 400,
-			[]string{"<Code>InvalidInput</Code>", "ARN " + arn + "user/ok/carol is not valid."}},
-		{form("Action", "DetachGroupPolicy", "GroupName", "devs", "PolicyArn", arn+"policy/Ghost"), 404,
-			[]string{"<Code>NoSuchEntity</Code>", "Policy " + arn + "policy/Ghost does not exist or is not attachable."}},
-		{form("Action", "DetachGroupPolicy", "GroupName", "devs", "PolicyArn", managed[0]), 404,
-			[]string{"<Code>NoSuchEntity</Code>", "Policy " + managed[0] + " was not found."}},
-		{form("Action", "AttachGroupPolicy", "GroupName", "devs"), 400,
-			[]string{"<Code>ValidationError</Code>", "policyArn"}},
-		{form("Action", "PutGroupPolicy", "GroupName", "devs", "PolicyName", "bad name", "PolicyDocument", s3Doc), 400,
-			[]string{"<Code>ValidationError</Code>", "policyName"}},
-		{form("Action", "PutGroupPolicy", "GroupName", "devs", "PolicyName", strings.Repeat("p", 129), "PolicyDocument", s3Doc),
-			400, []string{"<Code>ValidationError</Code>", "policyName"}},
-		{form("Action", "PutGroupPolicy", "GroupName", "devs", "PolicyName", "p", "PolicyDocument", "{\u0100}"), 400,
-			[]string{"<Code>ValidationError</Code>", "policyDocument"}},
+		{
+			form("Action", "AttachGroupPolicy", "GroupName", "devs", "PolicyArn", "arn:short"), 400,
+			[]string{"<Code>ValidationError</Code>", "policyArn"},
+		},
+		{
+			form("Action", "AttachGroupPolicy", "GroupName", "devs", "PolicyArn", arn+"user/ok/carol"), 400,
+			[]string{"<Code>InvalidInput</Code>", "ARN " + arn + "user/ok/carol is not valid."},
+		},
+		{
+			form("Action", "DetachGroupPolicy", "GroupName", "devs", "PolicyArn", arn+"policy/Ghost"), 404,
+			[]string{"<Code>NoSuchEntity</Code>", "Policy " + arn + "policy/Ghost does not exist or is not attachable."},
+		},
+		{
+			form("Action", "DetachGroupPolicy", "GroupName", "devs", "PolicyArn", managed[0]), 404,
+			[]string{"<Code>NoSuchEntity</Code>", "Policy " + managed[0] + " was not found."},
+		},
+		{
+			form("Action", "AttachGroupPolicy", "GroupName", "devs"), 400,
+			[]string{"<Code>ValidationError</Code>", "policyArn"},
+		},
+		{
+			form("Action", "PutGroupPolicy", "GroupName", "devs", "PolicyName", "bad name", "PolicyDocument", s3Doc), 400,
+			[]string{"<Code>ValidationError</Code>", "policyName"},
+		},
+		{
+			form("Action", "PutGroupPolicy", "GroupName", "devs", "PolicyName", strings.Repeat("p", 129), "PolicyDocument", s3Doc),
+			400,
+			[]string{"<Code>ValidationError</Code>", "policyName"},
+		},
+		{
+			form("Action", "PutGroupPolicy", "GroupName", "devs", "PolicyName", "p", "PolicyDocument", "{\u0100}"), 400,
+			[]string{"<Code>ValidationError</Code>", "policyDocument"},
+		},
 		{form("Action", "PutGroupPolicy", "GroupName", "devs", "PolicyName", "p",
 			"PolicyDocument", strings.Repeat(" ", 131073)), 400, []string{"<Code>ValidationError</Code>", "policyDocument"}},
-		{form("Action", "PutGroupPolicy", "GroupName", "devs", "PolicyName", "p", "PolicyDocument", `{"Statement":[]}`), 400,
-			[]string{"<Code>MalformedPolicyDocument</Code>"}},
-		{form("Action", "PutGroupPolicy", "GroupName", "devs", "PolicyName", "p"), 400,
-			[]string{"<Code>ValidationError</Code>", "policyDocument"}},
-		{form("Action", "PutUserPolicy", "UserName", "carol", "PolicyName", "big",
-			"PolicyDocument", strings.Replace(s3Doc, `"*"`, `"arn:vws:s3:::`+strings.Repeat("x", 2048)+`"`, 1)), 409,
-			[]string{"<Code>LimitExceeded</Code>", "Maximum policy size of 2048 bytes exceeded for user carol."}},
-		{form("Action", "PutUserPolicy", "UserName", "carol", "PolicyName", "s3", "PolicyDocument", s3Doc+"\n"), 200,
-			[]string{"<PutUserPolicyResponse"}},
+		{
+			form("Action", "PutGroupPolicy", "GroupName", "devs", "PolicyName", "p", "PolicyDocument", `{"Statement":[]}`), 400,
+			[]string{"<Code>MalformedPolicyDocument</Code>"},
+		},
+		{
+			form("Action", "PutGroupPolicy", "GroupName", "devs", "PolicyName", "p"), 400,
+			[]string{"<Code>ValidationError</Code>", "policyDocument"},
+		},
+		{
+			form("Action", "PutUserPolicy", "UserName", "carol", "PolicyName", "big",
+				"PolicyDocument", strings.Replace(s3Doc, `"*"`, `"arn:vws:s3:::`+strings.Repeat("x", 2048)+`"`, 1)), 409,
+			[]string{"<Code>LimitExceeded</Code>", "Maximum policy size of 2048 bytes exceeded for user carol."},
+		},
+		{
+			form("Action", "PutUserPolicy", "UserName", "carol", "PolicyName", "s3", "PolicyDocument", s3Doc+"\n"), 200,
+			[]string{"<PutUserPolicyResponse"},
+		},
 		{form("Action", "GetUserPolicy", "UserName", "carol", "PolicyName", "s3"), 200, []string{
 			"<GetUserPolicyResult><UserName>carol</UserName><PolicyName>s3</PolicyName>",
 			"<PolicyDocument>%7B%22Version%22%3A%222012-10-17%22%2C%22Statement%22%3A%5B%7B%22Effect%22%3A%22Allow%22" +
 				"%2C%22Action%22%3A%22s3%3AGetObject%22%2C%22Resource%22%3A%22%2A%22%7D%5D%7D%0A</PolicyDocument>",
 		}},
-		{form("Action", "GetUserPolicy", "UserName", "carol", "PolicyName", "zzz"), 404,
-			[]string{"<Code>NoSuchEntity</Code>", "The user policy with name zzz cannot be found."}},
-		{form("Action", "DeleteGroupPolicy", "GroupName", "devs", "PolicyName", "zzz"), 404,
-			[]string{"<Code>NoSuchEntity</Code>", "The group policy with name zzz cannot be found."}},
+		{
+			form("Action", "GetUserPolicy", "UserName", "carol", "PolicyName", "zzz"), 404,
+			[]string{"<Code>NoSuchEntity</Code>", "The user policy with name zzz cannot be found."},
+		},
+		{
+			form("Action", "DeleteGroupPolicy", "GroupName", "devs", "PolicyName", "zzz"), 404,
+			[]string{"<Code>NoSuchEntity</Code>", "The group policy with name zzz cannot be found."},
+		},
 		{form("Action", "GetUserPolicy", "UserName", "carol"), 400, []string{"<Code>ValidationError</Code>", "policyName"}},
-		{form("Action", "DeleteUserPolicy", "PolicyName", "s3"), 400, []string{"<Code>ValidationError</Code>", "userName"}},
-		{form("Action", "ListUserPolicies"), 400, []string{"<Code>ValidationError</Code>", "userName"}},
-		{form("Action", "ListAttachedGroupPolicies"), 400, []string{"<Code>ValidationError</Code>", "groupName"}},
-		{form("Action", "DeleteUserPolicy", "UserName", "carol", "PolicyName", "s3"), 200,
-			[]string{"<DeleteUserPolicyResponse"}},
+		// Without UserName or GroupName the call is authorized on the caller,
+		// as the other user and group actions are, and bob may not act on
+		// himself.
+		{form("Action", "DeleteUserPolicy", "PolicyName", "s3"), 403, []string{"<Code>AccessDenied</Code>"}},
+		{form("Action", "ListUserPolicies"), 403, []string{"<Code>AccessDenied</Code>"}},
+		{form("Action", "ListAttachedGroupPolicies"), 403, []string{"<Code>AccessDenied</Code>"}},
+		{
+			form("Action", "DeleteUserPolicy", "UserName", "carol", "PolicyName", "s3"), 200,
+			[]string{"<DeleteUserPolicyResponse"},
+		},
 	} {
 		res := call(t, h, bob, sigv4.ServiceIAM, tc.form)
 		if res.Code != tc.status {

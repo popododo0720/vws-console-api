@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
+	"maps"
 	"regexp"
 	"sort"
 	"strconv"
@@ -888,7 +889,7 @@ func (f *Fake) CreatePolicy(_ context.Context, a resource.AccountID, name, path,
 func (st *store) policy(arn string) (*policyRec, error) {
 	p := st.policies[arn]
 	if p == nil {
-		return nil, &resource.Error{Code: resource.CodeNotFound, Message: "Policy " + arn + " does not exist or is not attachable."}
+		return nil, PolicyNotAttachable(arn)
 	}
 	return p, nil
 }
@@ -1362,12 +1363,34 @@ func (st *store) holderOf(kind Entity, name string) (*holder, error) {
 	return nil, notFound(kind.String(), name)
 }
 
+// holderAt is holderOf for a call authorized on expectARN: a non-empty one
+// must still be the entity's ARN, or the call is a ConcurrentModification.
+func (st *store) holderAt(kind Entity, name, expectARN string) (*holder, error) {
+	h, err := st.holderOf(kind, name)
+	if err != nil {
+		return nil, err
+	}
+	arn := ""
+	switch kind {
+	case EntityUser:
+		arn = st.users[name].ARN
+	case EntityGroup:
+		arn = st.groups[name].ARN
+	case EntityRole:
+		arn = st.roles[name].ARN
+	}
+	if stale(arn, expectARN) {
+		return nil, ChangedFor(kind)
+	}
+	return h, nil
+}
+
 // AttachPolicy implements Admin.
-func (f *Fake) AttachPolicy(_ context.Context, a resource.AccountID, kind Entity, name, arn, _ string) error {
+func (f *Fake) AttachPolicy(_ context.Context, a resource.AccountID, kind Entity, name, arn, expectARN string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	st := f.account(a)
-	h, err := st.holderOf(kind, name)
+	h, err := st.holderAt(kind, name, expectARN)
 	if err != nil {
 		return err
 	}
@@ -1379,7 +1402,7 @@ func (f *Fake) AttachPolicy(_ context.Context, a resource.AccountID, kind Entity
 		return nil
 	}
 	if len(h.attached) >= maxAttachedPerEntity {
-		return quota("Cannot exceed quota for PoliciesPerEntity: 10")
+		return AttachedQuotaExceeded(kind)
 	}
 	h.attached[arn] = true
 	p.AttachmentCount++
@@ -1387,11 +1410,11 @@ func (f *Fake) AttachPolicy(_ context.Context, a resource.AccountID, kind Entity
 }
 
 // DetachPolicy implements Admin.
-func (f *Fake) DetachPolicy(_ context.Context, a resource.AccountID, kind Entity, name, arn, _ string) error {
+func (f *Fake) DetachPolicy(_ context.Context, a resource.AccountID, kind Entity, name, arn, expectARN string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	st := f.account(a)
-	h, err := st.holderOf(kind, name)
+	h, err := st.holderAt(kind, name, expectARN)
 	if err != nil {
 		return err
 	}
@@ -1400,7 +1423,7 @@ func (f *Fake) DetachPolicy(_ context.Context, a resource.AccountID, kind Entity
 		return err
 	}
 	if !h.attached[arn] {
-		return &resource.Error{Code: resource.CodeNotFound, Message: "Policy " + arn + " was not found."}
+		return PolicyNotAttached(arn)
 	}
 	delete(h.attached, arn)
 	p.AttachmentCount--
@@ -1409,12 +1432,12 @@ func (f *Fake) DetachPolicy(_ context.Context, a resource.AccountID, kind Entity
 
 // ListAttachedPolicies implements Admin.
 func (f *Fake) ListAttachedPolicies(
-	_ context.Context, a resource.AccountID, kind Entity, name, _ string,
+	_ context.Context, a resource.AccountID, kind Entity, name, expectARN string,
 ) ([]ManagedPolicy, error) {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
 	st := f.account(a)
-	h, err := st.holderOf(kind, name)
+	h, err := st.holderAt(kind, name, expectARN)
 	if err != nil {
 		return nil, err
 	}
@@ -1430,19 +1453,24 @@ func (f *Fake) ListAttachedPolicies(
 
 // PutInlinePolicy implements Admin. It replaces a policy of the same name.
 func (f *Fake) PutInlinePolicy(
-	_ context.Context, a resource.AccountID, kind Entity, name, policy, document, _ string,
+	_ context.Context, a resource.AccountID, kind Entity, name, policy, document, expectARN string,
 ) error {
-	if err := checkName(policyName, "policyName", policy); err != nil {
+	if err := CheckInlinePolicyName(policy); err != nil {
 		return err
 	}
-	parsed, err := parsePolicy(document, false)
+	parsed, err := parseDoc(document, false)
 	if err != nil {
 		return err
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	h, err := f.account(a).holderOf(kind, name)
+	h, err := f.account(a).holderAt(kind, name, expectARN)
 	if err != nil {
+		return err
+	}
+	next := maps.Clone(h.inline)
+	next[policy] = document
+	if err := CheckInlinePolicySize(kind, name, next); err != nil {
 		return err
 	}
 	h.inline[policy], h.parsed[policy] = document, parsed
@@ -1451,31 +1479,33 @@ func (f *Fake) PutInlinePolicy(
 
 // GetInlinePolicy implements Admin.
 func (f *Fake) GetInlinePolicy(
-	_ context.Context, a resource.AccountID, kind Entity, name, policy, _ string,
+	_ context.Context, a resource.AccountID, kind Entity, name, policy, expectARN string,
 ) (string, error) {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
-	h, err := f.account(a).holderOf(kind, name)
+	h, err := f.account(a).holderAt(kind, name, expectARN)
 	if err != nil {
 		return "", err
 	}
 	doc, ok := h.inline[policy]
 	if !ok {
-		return "", notFound("policy", policy)
+		return "", InlinePolicyNotFound(kind, policy)
 	}
 	return doc, nil
 }
 
 // DeleteInlinePolicy implements Admin.
-func (f *Fake) DeleteInlinePolicy(_ context.Context, a resource.AccountID, kind Entity, name, policy, _ string) error {
+func (f *Fake) DeleteInlinePolicy(
+	_ context.Context, a resource.AccountID, kind Entity, name, policy, expectARN string,
+) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	h, err := f.account(a).holderOf(kind, name)
+	h, err := f.account(a).holderAt(kind, name, expectARN)
 	if err != nil {
 		return err
 	}
 	if _, ok := h.inline[policy]; !ok {
-		return notFound("policy", policy)
+		return InlinePolicyNotFound(kind, policy)
 	}
 	delete(h.inline, policy)
 	delete(h.parsed, policy)
@@ -1484,11 +1514,11 @@ func (f *Fake) DeleteInlinePolicy(_ context.Context, a resource.AccountID, kind 
 
 // ListInlinePolicies implements Admin.
 func (f *Fake) ListInlinePolicies(
-	_ context.Context, a resource.AccountID, kind Entity, name, _ string,
+	_ context.Context, a resource.AccountID, kind Entity, name, expectARN string,
 ) ([]string, error) {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
-	h, err := f.account(a).holderOf(kind, name)
+	h, err := f.account(a).holderAt(kind, name, expectARN)
 	if err != nil {
 		return nil, err
 	}
