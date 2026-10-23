@@ -51,7 +51,7 @@ func DetachWindow(t *testing.T, newSet ClockHarness) {
 	newVol := func(t *testing.T, w world, key string) resource.VolumeID {
 		t.Helper()
 		vol, err := w.set.Compute.CreateVolume(ctx, mut(key), resource.CreateVolumeRequest{
-			SizeGiB: 8, Zone: resource.ZoneName,
+			SizeGiB: 8, Zone: resource.ZoneName, Type: resource.VolumeGP2,
 		})
 		if err != nil {
 			t.Fatal(err)

@@ -130,12 +130,27 @@ func (v Volume) Identity() string { return v.ID.String() }
 // VolumeType is the EC2 volume type name.
 type VolumeType string
 
-// Volume types CreateVolume accepts.
+// The EBS volume types (EC2 VolumeType). CreateVolumeRequest.Normalize
+// accepts standard, gp2 and gp3 today; io1, io2, st1 and sc1 need their
+// Iops and size rules first (#324). Backends store and return all seven.
 const (
 	VolumeStandard VolumeType = "standard"
 	VolumeGP2      VolumeType = "gp2"
 	VolumeGP3      VolumeType = "gp3"
+	VolumeIO1      VolumeType = "io1"
+	VolumeIO2      VolumeType = "io2"
+	VolumeST1      VolumeType = "st1"
+	VolumeSC1      VolumeType = "sc1"
 )
+
+// Valid reports whether t is one of the seven EBS volume types.
+func (t VolumeType) Valid() bool {
+	switch t {
+	case VolumeStandard, VolumeGP2, VolumeGP3, VolumeIO1, VolumeIO2, VolumeST1, VolumeSC1:
+		return true
+	}
+	return false
+}
 
 // CreateVolumeRequest allocates a volume.
 type CreateVolumeRequest struct {

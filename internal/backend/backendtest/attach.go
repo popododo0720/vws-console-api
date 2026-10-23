@@ -60,7 +60,7 @@ func AttachLifecycle(t *testing.T, newSet AttachHarness) {
 	var vols []resource.VolumeID
 	for _, key := range []string{"vol", "spare"} {
 		created, err := set.Compute.CreateVolume(ctx, mut(key), resource.CreateVolumeRequest{
-			SizeGiB: 1, Zone: resource.ZoneName,
+			SizeGiB: 1, Zone: resource.ZoneName, Type: resource.VolumeGP2,
 		})
 		if err != nil {
 			t.Fatal(err)

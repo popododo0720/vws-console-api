@@ -76,7 +76,7 @@ func TestCreateVolumeRetryKeepsTheVolumeID(t *testing.T) {
 		t.Fatal(err)
 	}
 	m := backend.Mutation{Scope: backend.Scope{Account: account}, Key: "vol-token", Fingerprint: "fp"}
-	req := resource.CreateVolumeRequest{SizeGiB: 8, Zone: resource.ZoneName}
+	req := resource.CreateVolumeRequest{SizeGiB: 8, Zone: resource.ZoneName, Type: resource.VolumeGP2}
 	first, err := client.CreateVolume(context.Background(), m, req)
 	if err != nil {
 		t.Fatal(err)

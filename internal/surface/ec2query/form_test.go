@@ -463,6 +463,25 @@ func TestCreateVolumeDefaultsToGP2(t *testing.T) {
 	}
 }
 
+// EC2 answers a volume type it does not support with UnknownVolumeType
+// (EC2 API Reference, Error codes). io1 is an EBS type VWS does not accept
+// yet (#324), so it is unsupported here too.
+func TestCreateVolumeUnsupportedTypeIsUnknownVolumeType(t *testing.T) {
+	h, cred, now := harness(t)
+	for _, typ := range []string{"io3", "ssd", "GP3", "io1"} {
+		form := url.Values{}
+		form.Set("Action", "CreateVolume")
+		form.Set("Version", Version)
+		form.Set("AvailabilityZone", "vws-1a")
+		form.Set("Size", "1")
+		form.Set("VolumeType", typ)
+		res := signed(t, h, cred, now, form.Encode())
+		if res.Code != http.StatusBadRequest || !strings.Contains(res.Body.String(), "<Code>UnknownVolumeType</Code>") {
+			t.Fatalf("%s: %d %s", typ, res.Code, res.Body)
+		}
+	}
+}
+
 func TestDescribeVolumesHasCreateTime(t *testing.T) {
 	h, cred, now := harness(t)
 	form := url.Values{}

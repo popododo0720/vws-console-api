@@ -976,6 +976,10 @@ func ec2Code(e *resource.Error) string {
 			}
 			return "InvalidKey.Format"
 		}
+		// EC2 reports a volume type it does not support as UnknownVolumeType.
+		if strings.EqualFold(e.Field, "volumeType") {
+			return "UnknownVolumeType"
+		}
 		return "InvalidParameterValue"
 	case resource.CodeAlreadyExists:
 		return alreadyExistsCode(e.Kind)

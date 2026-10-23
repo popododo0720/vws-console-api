@@ -148,7 +148,7 @@ func observedVolume(projectID, id string, state commonv1.ReconciliationState, in
 	}
 	return &storagev1.Volume{
 		Name:   volumeName(projectID, id),
-		Spec:   &storagev1.VolumeSpec{SizeGib: 8, Type: storagev1.VolumeType_VOLUME_TYPE_SSD},
+		Spec:   &storagev1.VolumeSpec{SizeGib: 8, Type: storagev1.VolumeType_VOLUME_TYPE_GP2},
 		Status: status,
 	}
 }

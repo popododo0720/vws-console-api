@@ -36,6 +36,11 @@ func exerciseRootDevice(ctx context.Context, t *testing.T, set backend.Set, acco
 		t.Fatalf("root volume by id: %v %+v", err, vols.Items)
 	}
 	vol := vols.Items[0]
+	// A VWS image has no block device mapping, so the root volume is gp2,
+	// the EC2 CreateVolume default (#323).
+	if vol.Type != resource.VolumeGP2 {
+		t.Fatalf("root volume type %q, want gp2", vol.Type)
+	}
 	if vol.InstanceID != inst.ID || vol.Device != resource.RootDeviceName || vol.State != resource.VolumeInUse || !vol.DeleteOnTermination {
 		t.Fatalf("root volume: %+v", vol)
 	}
