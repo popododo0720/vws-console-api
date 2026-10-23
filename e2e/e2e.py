@@ -158,6 +158,13 @@ def network():
         ec2.delete_volume(VolumeId=vid)
         check(got == "gp3", f"type {got}")
     step("CreateVolume VolumeType=gp3 reads back as gp3", gp3_volume)
+    step(
+        "CreateVolume VolumeType=io3 is UnknownVolumeType",
+        lambda: ec2_error(
+            "UnknownVolumeType",
+            lambda: ec2.create_volume(AvailabilityZone="vws-1a", Size=1, VolumeType="io3"),
+        ),
+    )
     def modify_volume():
         vid = ec2.create_volume(AvailabilityZone="vws-1a", Size=1)["VolumeId"]
         ec2.get_waiter("volume_available").wait(VolumeIds=[vid], WaiterConfig={"Delay": 1, "MaxAttempts": 30})
