@@ -598,8 +598,10 @@ type errorXML struct {
 // does not stand in for it, so VWS answers 409.
 func ownedCreateSucceeds(region string) bool { return region == "us-east-1" }
 
-// takenBucketMessage is the text S3 sends with BucketAlreadyExists.
-// https://docs.aws.amazon.com/AmazonS3/latest/developerguide/ErrorResponses.html
+// takenBucketMessage is the text S3 sends with BucketAlreadyExists, from the
+// error code table of the S3 API Reference (API Version 2006-03-01,
+// https://awsdocs.s3.amazonaws.com/S3/latest/s3-api.pdf), as
+// resource.BucketOwnedMessage is.
 const takenBucketMessage = "The requested bucket name is not available. " +
 	"The bucket namespace is shared by all users of the system. Please select a different name and try again."
 
