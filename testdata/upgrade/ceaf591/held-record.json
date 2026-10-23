@@ -1,0 +1,20 @@
+{
+  "source": "ceaf591",
+  "now": "2026-10-23T06:00:00Z",
+  "labels": {
+    "env": "prod",
+    "vws-action": "CreateTags",
+    "vws-detach-vol-0123456789abcdef0": "41d013d896d840b388451307f692cf85 /dev/sdf tnaomb",
+    "vws-detach-vol-0123456789abcdef1": "c4b81a2a3b644977a52a257d6f38483f /dev/sdg tncgk0",
+    "vws-dop-vol-0123456789abcdef0": "00000000000000000009 d64d9a4af70d5d25",
+    "vws-fingerprint": "fp-tags",
+    "vws-image": "ami-0123456789abcdef0",
+    "vws-reservation": "r-0123456789abcdef0"
+  },
+  "heldVolumeId": "vol-0123456789abcdef0",
+  "heldKey": "f41bf89e18653d97146832f8f1df5487903272dd19d7b4daec8d919109ddee90",
+  "heldFingerprint": "70c786457a47279433a976415e1daa16657ad463d16e8d1679e56d9ca7a90891",
+  "heldOpId": "00000000000000000009",
+  "pendingVolumeId": "vol-0123456789abcdef1",
+  "pendingOp": "0000000000000000000a a8e79892c0f8e9d8"
+}

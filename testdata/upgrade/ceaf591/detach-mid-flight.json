@@ -1,0 +1,12 @@
+{
+  "source": "ceaf591",
+  "now": "2026-10-23T06:00:00Z",
+  "labels": {
+    "vws-action": "DetachVolume",
+    "vws-detach-vol-0123456789abcdef0": "3b7091b494ba47f0a7a240288b405236 /dev/sdf tncivc",
+    "vws-fingerprint": "70c786457a47279433a976415e1daa16657ad463d16e8d1679e56d9ca7a9089",
+    "vws-image": "ami-0123456789abcdef0",
+    "vws-reservation": "r-0123456789abcdef0"
+  },
+  "volumeId": "vol-0123456789abcdef0"
+}

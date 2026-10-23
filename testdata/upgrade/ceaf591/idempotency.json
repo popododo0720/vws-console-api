@@ -1,0 +1,14 @@
+{
+  "source": "ceaf591",
+  "account": "123456789012",
+  "subject": "dev",
+  "action": "DetachVolume",
+  "clientToken": "detach-upgrade-1",
+  "request": {
+    "volumeId": "vol-0123456789abcdef0",
+    "instanceId": "i-0123456789abcdef0",
+    "device": "/dev/sdf"
+  },
+  "key": "73459b4ee4557c1b83337ace638403635ab0c9ca7d7620d9a043af339c5b5889",
+  "fingerprint": "70c786457a47279433a976415e1daa16657ad463d16e8d1679e56d9ca7a90891"
+}
