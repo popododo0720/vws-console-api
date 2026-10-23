@@ -92,7 +92,7 @@ func TestFakeAssignedMfaDeviceFollowsUserMutations(t *testing.T) {
 	if err := f.AssignMfaDevice(account, serial, "alice", time.Time{}); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.DeleteUser(ctx, account, "alice"); resource.CodeOf(err) != resource.CodeConflict {
+	if err := f.DeleteUser(ctx, account, "alice", ""); resource.CodeOf(err) != resource.CodeConflict {
 		t.Fatalf("delete of a user with an assigned device: %v", err)
 	}
 	if err := f.UpdateUser(ctx, account, "alice", "/new/", "alicia", ""); err != nil {

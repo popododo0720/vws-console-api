@@ -45,7 +45,7 @@ func TestUsersGroupsAndPolicies(t *testing.T) {
 		t.Fatal(err)
 	}
 	must(t, f.AttachPolicy(ctx, a, EntityGroup, "readers", p.ARN))
-	must(t, f.AddUserToGroup(ctx, a, "readers", "bob"))
+	must(t, f.AddUserToGroup(ctx, a, "readers", "bob", ""))
 	must(t, f.PutInlinePolicy(ctx, a, EntityUser, "bob", "deny-vols",
 		`{"Version":"2012-10-17","Statement":{"Effect":"Deny","Action":"ec2:DescribeVolumes","Resource":"*"}}`))
 
@@ -65,15 +65,15 @@ func TestUsersGroupsAndPolicies(t *testing.T) {
 	if err := f.DeletePolicy(ctx, a, p.ARN); resource.CodeOf(err) != resource.CodeConflict {
 		t.Errorf("delete attached policy: %v", err)
 	}
-	if err := f.DeleteUser(ctx, a, "bob"); resource.CodeOf(err) != resource.CodeConflict {
+	if err := f.DeleteUser(ctx, a, "bob", ""); resource.CodeOf(err) != resource.CodeConflict {
 		t.Errorf("delete user in a group with a policy: %v", err)
 	}
-	must(t, f.RemoveUserFromGroup(ctx, a, "readers", "bob"))
+	must(t, f.RemoveUserFromGroup(ctx, a, "readers", "bob", ""))
 	must(t, f.DeleteInlinePolicy(ctx, a, EntityUser, "bob", "deny-vols"))
-	must(t, f.DeleteUser(ctx, a, "bob"))
+	must(t, f.DeleteUser(ctx, a, "bob", ""))
 	must(t, f.DetachPolicy(ctx, a, EntityGroup, "readers", p.ARN))
 	must(t, f.DeletePolicy(ctx, a, p.ARN))
-	must(t, f.DeleteGroup(ctx, a, "readers"))
+	must(t, f.DeleteGroup(ctx, a, "readers", ""))
 }
 
 func TestAccessKeysAuthenticate(t *testing.T) {
@@ -202,24 +202,24 @@ func TestUpdateGroup(t *testing.T) {
 	}
 	must(t, f.AttachPolicy(ctx, a, EntityGroup, "dev", p.ARN))
 	must(t, f.PutInlinePolicy(ctx, a, EntityGroup, "dev", "inline", describeOnly))
-	must(t, f.AddUserToGroup(ctx, a, "dev", "bob"))
+	must(t, f.AddUserToGroup(ctx, a, "dev", "bob", ""))
 	if _, err := f.CreateGroup(ctx, a, "taken", "/"); err != nil {
 		t.Fatal(err)
 	}
 
-	if err := f.UpdateGroup(ctx, a, "missing", "/new/", "ops"); resource.CodeOf(err) != resource.CodeNotFound {
+	if err := f.UpdateGroup(ctx, a, "missing", "/new/", "ops", ""); resource.CodeOf(err) != resource.CodeNotFound {
 		t.Errorf("missing group: %v", err)
 	}
-	if err := f.UpdateGroup(ctx, a, "dev", "/new/", "taken"); resource.CodeOf(err) != resource.CodeAlreadyExists {
+	if err := f.UpdateGroup(ctx, a, "dev", "/new/", "taken", ""); resource.CodeOf(err) != resource.CodeAlreadyExists {
 		t.Errorf("duplicate name: %v", err)
 	}
-	if err := f.UpdateGroup(ctx, a, "dev", "new", ""); resource.CodeOf(err) != resource.CodeInvalidArgument {
+	if err := f.UpdateGroup(ctx, a, "dev", "new", "", ""); resource.CodeOf(err) != resource.CodeInvalidArgument {
 		t.Errorf("bad path: %v", err)
 	}
-	if err := f.UpdateGroup(ctx, a, "bad name!", "", ""); resource.CodeOf(err) != resource.CodeInvalidArgument {
+	if err := f.UpdateGroup(ctx, a, "bad name!", "", "", ""); resource.CodeOf(err) != resource.CodeInvalidArgument {
 		t.Errorf("bad group name: %v", err)
 	}
-	if err := f.UpdateGroup(ctx, a, "dev", "", "bad name!"); resource.CodeOf(err) != resource.CodeInvalidArgument {
+	if err := f.UpdateGroup(ctx, a, "dev", "", "bad name!", ""); resource.CodeOf(err) != resource.CodeInvalidArgument {
 		t.Errorf("bad new name: %v", err)
 	}
 	if got, _, err := f.GetGroup(ctx, a, "dev"); err != nil || got.Path != "/old/" {
@@ -229,19 +229,19 @@ func TestUpdateGroup(t *testing.T) {
 	if _, err := f.CreateGroup(ctx, a, "moved", "/old/"); err != nil {
 		t.Fatal(err)
 	}
-	must(t, f.UpdateGroup(ctx, a, "moved", "/moved/", ""))
+	must(t, f.UpdateGroup(ctx, a, "moved", "/moved/", "", ""))
 	if got, _, err := f.GetGroup(ctx, a, "moved"); err != nil || got.Name != "moved" || got.Path != "/moved/" {
 		t.Errorf("path-only update %+v, want moved at /moved/: %v", got, err)
 	}
 	if _, err := f.CreateGroup(ctx, a, "renamed", "/keep/"); err != nil {
 		t.Fatal(err)
 	}
-	must(t, f.UpdateGroup(ctx, a, "renamed", "", "newer"))
+	must(t, f.UpdateGroup(ctx, a, "renamed", "", "newer", ""))
 	if got, _, err := f.GetGroup(ctx, a, "newer"); err != nil || got.Name != "newer" || got.Path != "/keep/" {
 		t.Errorf("name-only update %+v, want newer at /keep/: %v", got, err)
 	}
 
-	must(t, f.UpdateGroup(ctx, a, "dev", "/new/", "platform"))
+	must(t, f.UpdateGroup(ctx, a, "dev", "/new/", "platform", ""))
 	if _, _, err := f.GetGroup(ctx, a, "dev"); resource.CodeOf(err) != resource.CodeNotFound {
 		t.Errorf("old name still found: %v", err)
 	}
@@ -268,7 +268,7 @@ func TestUpdateGroup(t *testing.T) {
 		t.Errorf("inline policies after rename %v, want inline: %v", inline, err)
 	}
 
-	must(t, f.UpdateGroup(ctx, a, "platform", "", ""))
+	must(t, f.UpdateGroup(ctx, a, "platform", "", "", ""))
 	if got, _, err := f.GetGroup(ctx, a, "platform"); err != nil || got.Path != "/new/" {
 		t.Errorf("empty update changed the group to %+v: %v", got, err)
 	}
@@ -292,7 +292,7 @@ func TestUpdateUser(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	must(t, f.AddUserToGroup(ctx, a, "dev", "bob"))
+	must(t, f.AddUserToGroup(ctx, a, "dev", "bob", ""))
 	must(t, f.AttachPolicy(ctx, a, EntityUser, "bob", p.ARN))
 	must(t, f.PutInlinePolicy(ctx, a, EntityUser, "bob", "inline", describeOnly))
 

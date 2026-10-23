@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/popododo0720/vws-console-api/internal/iam"
 	"github.com/popododo0720/vws-console-api/internal/resource"
 	"github.com/popododo0720/vws-console-api/internal/sigv4"
 )
@@ -137,5 +138,19 @@ func TestUpdateUserConflictIsConcurrentModification(t *testing.T) {
 	}
 	if got := iamWireAction(t, sigv4.ServiceIAM, "DeleteUser", e); got != (wireErr{409, "DeleteConflict"}) {
 		t.Errorf("DeleteUser conflict = %+v", got)
+	}
+}
+
+// TestChangedIsConcurrentModification pins the AWS code for a change whose
+// entity moved since its authorization (#325 r1), on every action that
+// passes the authorized ARN down.
+func TestChangedIsConcurrentModification(t *testing.T) {
+	e := resource.AsError(iam.Changed(iam.GroupChanged))
+	for _, action := range []string{
+		"AddUserToGroup", "RemoveUserFromGroup", "UpdateGroup", "DeleteGroup", "DeleteUser", "UpdateUser",
+	} {
+		if got := iamWireAction(t, sigv4.ServiceIAM, action, e); got != (wireErr{409, "ConcurrentModification"}) {
+			t.Errorf("%s changed = %+v", action, got)
+		}
 	}
 }

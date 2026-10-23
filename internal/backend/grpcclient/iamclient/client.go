@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -46,7 +47,8 @@ type Options struct {
 
 // Client implements the per-request half of iam.Client, AssumeRole, the
 // policy version calls, the policy and virtual MFA device tag calls, the
-// role calls, GetUser, GetGroup and GetAccessKeyLastUsed of iam.Admin.
+// role calls, the user and group calls and GetAccessKeyLastUsed of
+// iam.Admin.
 type Client struct {
 	auth       iamv1.AuthServiceClient
 	tokens     iamv1.TokenServiceClient
@@ -57,7 +59,19 @@ type Client struct {
 	roles      iamv1.RoleServiceClient
 	groups     iamv1.GroupServiceClient
 	backoff    time.Duration
+	log        *slog.Logger
 	close      func() error
+}
+
+// SetLogger sets the logger for the user and group changes. Call it after
+// Dial and before serving. Without one, the records are dropped.
+func (c *Client) SetLogger(log *slog.Logger) { c.log = log }
+
+func (c *Client) logger() *slog.Logger {
+	if c.log == nil {
+		return slog.New(slog.DiscardHandler)
+	}
+	return c.log
 }
 
 // Dial connects to vws-iam at target. The connection is lazy; the first call

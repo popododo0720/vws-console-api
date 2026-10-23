@@ -135,6 +135,7 @@ func run(ctx context.Context, args []string) (err error) {
 			return dialErr
 		}
 		defer func() { err = errors.Join(err, remote.Close()) }()
+		remote.SetLogger(logger)
 		auth, admin = iam.WithRoot(root, remote), iamclient.STSAdmin{Client: remote}
 	default:
 		return fmt.Errorf("unknown -iam %q", *iamMode)
