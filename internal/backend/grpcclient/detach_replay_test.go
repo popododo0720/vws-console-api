@@ -3,6 +3,7 @@ package grpcclient
 import (
 	"context"
 	"testing"
+	"time"
 
 	commonv1 "github.com/popododo0720/vws-proto/gen/go/vws/common/v1"
 	computev1 "github.com/popododo0720/vws-proto/gen/go/vws/compute/v1"
@@ -119,7 +120,10 @@ func TestTagWriteKeepsARecordWrittenMeanwhile(t *testing.T) {
 	holder.Spec.Volumes = []*computev1.VolumeAttachment{
 		{Volume: volumeName(projectID, "vol-0123456789abcdef0"), DeviceName: "boot", Boot: true},
 	}
-	record := detachReplayLabel("vol-0fedcba9876543210", detachRequestHex("k-other"), "/dev/sdf")
+	// A record within the window, on the wall clock the client prunes with.
+	record := map[string]string{
+		labelDetachPrefix + "vol-0fedcba9876543210": detachRecordValue(detachRequestHex("k-other"), "/dev/sdf", time.Now()),
+	}
 	world := &detachWorld{
 		inst:      []*computev1.Instance{holder},
 		byRequest: map[string]*detachRecord{},

@@ -50,6 +50,13 @@ func TestContractOverGRPC(t *testing.T) {
 // clients for it. now stamps the operations the loopback mints.
 func dialLoopback(t *testing.T, world *fake.World, now time.Time) backendtest.Harness {
 	t.Helper()
+	return dialLoopbackClock(t, world, now, nil)
+}
+
+// dialLoopbackClock is dialLoopback with clock as the client's clock, the
+// one that stamps and prunes detach records. Nil is the wall clock.
+func dialLoopbackClock(t *testing.T, world *fake.World, now time.Time, clock func() time.Time) backendtest.Harness {
+	t.Helper()
 	computeLis := bufconn.Listen(MaxMessageBytes())
 	storageLis := bufconn.Listen(MaxMessageBytes())
 	computeSrv := grpc.NewServer(
@@ -113,6 +120,7 @@ func dialLoopback(t *testing.T, world *fake.World, now time.Time) backendtest.Ha
 		storageOps: longrunningpb.NewOperationsClient(storageConn),
 		networkOps: longrunningpb.NewOperationsClient(computeConn),
 	}
+	shared.now = clock
 	return func() backend.Set {
 		return backend.Set{
 			Compute: computeClient{shared},
@@ -714,8 +722,10 @@ func (s *instanceSrv) detachVolume(
 	if err != nil {
 		return nil, toStatus(err)
 	}
+	// The fake plays compute here, which keeps no console-api detach
+	// records, so its record budget must not apply (MintedToken).
 	acc, err := s.w.set.Compute.DetachVolume(ctx, backend.Mutation{
-		Scope: backend.Scope{Account: account}, Key: req.GetRequestId(), Fingerprint: fp,
+		Scope: backend.Scope{Account: account}, Key: req.GetRequestId(), Fingerprint: fp, MintedToken: true,
 	}, resource.DetachVolumeRequest{VolumeID: volID, InstanceID: instID, Device: device})
 	if err != nil {
 		// The operation id is written after the drop, as a second update whose

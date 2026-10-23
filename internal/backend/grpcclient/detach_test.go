@@ -48,6 +48,13 @@ type detachWorld struct {
 	// beforeWrite runs once, under the lock, before the next update is
 	// checked. A test uses it to land a concurrent write first.
 	beforeWrite func(inst *computev1.Instance)
+	// afterUpdate, when set, runs after every update, outside the lock, with
+	// the request and its error. A test uses it to land a concurrent write
+	// between a detach's two writes.
+	afterUpdate func(req *computev1.UpdateInstanceRequest, err error)
+	// maxLabels, when set, rejects an update with more labels, or a label
+	// longer than 63 bytes, as vws-compute does (internal/compute/metadata.go).
+	maxLabels int
 }
 
 // detachRecord is the idempotency record for one UpdateInstance request id.
@@ -143,6 +150,19 @@ func (s *detachWorld) GetInstance(ctx context.Context, req *computev1.GetInstanc
 func (s *detachWorld) UpdateInstance(
 	ctx context.Context, req *computev1.UpdateInstanceRequest,
 ) (*longrunningpb.Operation, error) {
+	op, err := s.updateInstance(ctx, req)
+	s.mu.Lock()
+	hook := s.afterUpdate
+	s.mu.Unlock()
+	if hook != nil {
+		hook(req, err)
+	}
+	return op, err
+}
+
+func (s *detachWorld) updateInstance(
+	ctx context.Context, req *computev1.UpdateInstanceRequest,
+) (*longrunningpb.Operation, error) {
 	if s.gate != nil {
 		if err := s.gate.beforeWrite(ctx); err != nil {
 			return nil, err
@@ -179,6 +199,16 @@ func (s *detachWorld) UpdateInstance(
 	// An empty etag is no precondition, as in vws-compute checkEtag.
 	if etag := req.GetInstance().GetEtag(); etag != "" && etag != inst.GetEtag() {
 		return nil, vwsStatus(codes.Aborted, "ETAG_MISMATCH", "etag mismatch")
+	}
+	if s.maxLabels > 0 {
+		if n := len(req.GetInstance().GetLabels()); n > s.maxLabels {
+			return nil, status.Errorf(codes.InvalidArgument, "%d labels, at most %d", n, s.maxLabels)
+		}
+		for k, v := range req.GetInstance().GetLabels() {
+			if len(k) > 63 || len(v) > 63 {
+				return nil, status.Errorf(codes.InvalidArgument, "label %q is over 63 bytes", k)
+			}
+		}
 	}
 	removed := removedDetachDevice(inst.GetSpec().GetVolumes(), req.GetInstance().GetSpec().GetVolumes())
 	if s.failSameSpec > 0 && len(inst.GetSpec().GetVolumes()) == len(req.GetInstance().GetSpec().GetVolumes()) {

@@ -263,6 +263,12 @@ func (c compute) DetachVolume(
 	if req.Device != "" && req.Device != bind.Device {
 		return zero, resource.AttachmentNotFound(vol.ID)
 	}
+	// The gRPC backend keeps a replay record per client-token detach on the
+	// instance, within a label budget; the fake holds the same budget.
+	now := c.w.now()
+	if !m.MintedToken && c.w.detachesInWindow(inst.ID, vol.ID, now) >= backend.MaxDetachReplays {
+		return zero, backend.DetachReplaysExhausted(inst.ID)
+	}
 	next, _, err := backend.DropBind(*inst, vol.ID)
 	if err != nil {
 		return zero, err
@@ -290,8 +296,31 @@ func (c compute) DetachVolume(
 		Status: resource.AttachmentDetaching, AttachTime: attachedAt,
 	}
 	acc := resource.Accepted[resource.VolumeAttachment]{Operation: op, Items: []resource.VolumeAttachment{item}}
+	if !m.MintedToken {
+		if c.w.detached[inst.ID] == nil {
+			c.w.detached[inst.ID] = map[resource.VolumeID]time.Time{}
+		}
+		c.w.detached[inst.ID][vol.ID] = now
+	}
 	c.w.finish(m.Key, m.Fingerprint, acc)
 	return acc, nil
+}
+
+// detachesInWindow forgets the client-token detaches of inst that have
+// expired (backend.ClientTokenExpired) and counts the others, except one of skip,
+// which a new detach of the same volume replaces.
+func (w *World) detachesInWindow(inst resource.InstanceID, skip resource.VolumeID, now time.Time) int {
+	n := 0
+	for vol, at := range w.detached[inst] {
+		if backend.ClientTokenExpired(at, now) {
+			delete(w.detached[inst], vol)
+			continue
+		}
+		if vol != skip {
+			n++
+		}
+	}
+	return n
 }
 
 func (w *World) bindOfVolume(
