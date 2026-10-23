@@ -21,21 +21,28 @@ func TestValidateTag(t *testing.T) {
 		}
 	}
 	for _, tc := range []struct {
-		name string
-		tag  Tag
+		name  string
+		tag   Tag
+		field string
 	}{
-		{"empty key", Tag{Key: ""}},
-		{"key too long", Tag{Key: strings.Repeat("k", MaxTagKeyLen+1)}},
-		{"value too long", Tag{Key: "k", Value: strings.Repeat("v", MaxTagValueLen+1)}},
-		{"bad key character", Tag{Key: "bad#key"}},
-		{"bad value character", Tag{Key: "k", Value: "bad#value"}},
-		{"reserved key prefix", Tag{Key: "aws:team"}},
-		{"reserved key prefix in another case", Tag{Key: "AWS:team"}},
-		{"reserved value prefix", Tag{Key: "k", Value: "aws:value"}},
+		{"empty key", Tag{Key: ""}, "tags.member.key"},
+		{"key too long", Tag{Key: strings.Repeat("k", MaxTagKeyLen+1)}, "tags.member.key"},
+		{"value too long", Tag{Key: "k", Value: strings.Repeat("v", MaxTagValueLen+1)}, "tags.member.value"},
+		{"bad key character", Tag{Key: "bad#key"}, "tags.member.key"},
+		{"bad value character", Tag{Key: "k", Value: "bad#value"}, "tags.member.value"},
+		{"reserved key prefix", Tag{Key: "aws:team"}, "TagKey"},
+		{"reserved key prefix in another case", Tag{Key: "AWS:team"}, "TagKey"},
+		{"reserved value prefix", Tag{Key: "k", Value: "aws:value"}, "TagValue"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if err := ValidateTag(tc.tag); err == nil {
+			err := ValidateTag(tc.tag)
+			if err == nil {
 				t.Fatalf("%v accepted", tc.tag)
+			}
+			// A lower-case member path maps to ValidationError on the IAM
+			// Query surface; an upper-case field stays InvalidInput.
+			if got := resource.AsError(err).Field; got != tc.field {
+				t.Errorf("%v field %q, want %q", tc.tag, got, tc.field)
 			}
 		})
 	}
@@ -100,6 +107,14 @@ func TestFakePolicyTagErrors(t *testing.T) {
 	}
 	if err := f.TagPolicy(ctx, a, p.ARN, []Tag{{Key: "bad#key"}}); err == nil {
 		t.Fatal("invalid tag stored")
+	} else if got := resource.AsError(err).Field; got != "tags.member.key" {
+		t.Fatalf("invalid tag field %q, want tags.member.key", got)
+	}
+	// A key beginning with aws: stays an InvalidInput, not a constraint failure.
+	if err := f.TagPolicy(ctx, a, p.ARN, []Tag{{Key: "aws:team", Value: "v"}}); err == nil {
+		t.Fatal("reserved key stored")
+	} else if got := resource.AsError(err).Field; got != "TagKey" {
+		t.Fatalf("reserved key field %q, want TagKey", got)
 	}
 	fill := make([]Tag, 50)
 	for i := range fill {
@@ -121,6 +136,8 @@ func TestFakePolicyTagErrors(t *testing.T) {
 	}
 	if err := f.UntagPolicy(ctx, a, p.ARN, []string{""}); err == nil {
 		t.Fatal("empty tag key accepted")
+	} else if got := resource.AsError(err).Field; got != "tagKeys.member" {
+		t.Fatalf("empty tag key field %q, want tagKeys.member", got)
 	}
 }
 
