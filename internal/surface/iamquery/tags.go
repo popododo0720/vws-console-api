@@ -106,12 +106,16 @@ func parseTagMembers(c *exchange) ([]iam.Tag, error) {
 	tags := make([]iam.Tag, 0, len(indexes))
 	for _, index := range indexes {
 		if !present[index].key {
-			return nil, nullMember("tags.member." + strconv.Itoa(index) + ".Key")
+			return nil, nullMember("tags." + strconv.Itoa(index) + ".member.key")
 		}
 		if !present[index].value {
-			return nil, nullMember("tags.member." + strconv.Itoa(index) + ".Value")
+			return nil, nullMember("tags." + strconv.Itoa(index) + ".member.value")
 		}
-		tags = append(tags, *byIndex[index])
+		tag := *byIndex[index]
+		if err := iam.ValidateTagAt(tag, index); err != nil {
+			return nil, err
+		}
+		tags = append(tags, tag)
 	}
 	return tags, nil
 }
@@ -139,19 +143,18 @@ func parseTagKeys(c *exchange) ([]string, error) {
 	}
 	sort.Ints(indexes)
 	keys := make([]string, 0, len(indexes))
-	for _, index := range indexes {
-		keys = append(keys, byIndex[index])
-	}
 	switch {
-	case len(keys) == 0:
+	case len(indexes) == 0:
 		return nil, nullMember("tagKeys")
-	case len(keys) > iam.MaxTags:
+	case len(indexes) > iam.MaxTags:
 		return nil, badMember("tagKeys", "Member must have length less than or equal to 50")
 	}
-	for _, key := range keys {
-		if key == "" {
-			return nil, badMember("tagKeys", "Member must have length greater than or equal to 1")
+	for _, index := range indexes {
+		key := byIndex[index]
+		if err := iam.ValidateTagKeyAt(key, index); err != nil {
+			return nil, err
 		}
+		keys = append(keys, key)
 	}
 	return keys, nil
 }

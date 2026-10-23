@@ -754,9 +754,6 @@ func iamActions() map[string]spec {
 				if err != nil {
 					return nil, err
 				}
-				if err := iam.ValidateTags(tags); err != nil {
-					return nil, err
-				}
 				return nil, h.cfg.Admin.TagPolicy(c.r.Context(), c.caller.Account, c.form("PolicyArn"), tags)
 			},
 		},
@@ -770,11 +767,6 @@ func iamActions() map[string]spec {
 				keys, err := parseTagKeys(c)
 				if err != nil {
 					return nil, err
-				}
-				for _, key := range keys {
-					if err := iam.ValidateTagKey(key); err != nil {
-						return nil, err
-					}
 				}
 				return nil, h.cfg.Admin.UntagPolicy(c.r.Context(), c.caller.Account, c.form("PolicyArn"), keys)
 			},
@@ -862,9 +854,6 @@ func iamActions() map[string]spec {
 				if err != nil {
 					return nil, err
 				}
-				if err := iam.ValidateTags(tags); err != nil {
-					return nil, err
-				}
 				return nil, h.cfg.Admin.TagMFADevice(c.r.Context(), c.caller.Account, c.form("SerialNumber"), tags)
 			},
 		},
@@ -878,11 +867,6 @@ func iamActions() map[string]spec {
 				keys, err := parseTagKeys(c)
 				if err != nil {
 					return nil, err
-				}
-				for _, key := range keys {
-					if err := iam.ValidateTagKey(key); err != nil {
-						return nil, err
-					}
 				}
 				return nil, h.cfg.Admin.UntagMFADevice(c.r.Context(), c.caller.Account, c.form("SerialNumber"), keys)
 			},
