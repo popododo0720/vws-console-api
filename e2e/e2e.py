@@ -650,8 +650,12 @@ def identity():
     step("IAM ListUsers Marker returns the next page", lambda: check(
         [u["UserName"] for u in iam.list_users(PathPrefix="/e2e/", Marker=first["Marker"])["Users"]] == ["e2e-dave"],
         "page 2"))
+    # botocore refuses MaxItems 0 itself; send it unvalidated to reach the server.
+    loose_iam = boto3.client(
+        "iam", endpoint_url=IAM_URL,
+        config=Config(retries={"total_max_attempts": 1}, parameter_validation=False), **KW)
     step("IAM ListUsers MaxItems 0 is ValidationError", lambda: aws_error(
-        "ValidationError", lambda: iam.list_users(MaxItems=0)))
+        "ValidationError", lambda: loose_iam.list_users(MaxItems=0)))
     step("IAM UpdateUser NewPath", lambda: iam.update_user(UserName="e2e-dave", NewPath="/e2e/moved/"))
     step("IAM GetUser after UpdateUser", lambda: check(
         iam.get_user(UserName="e2e-dave")["User"]["Arn"] == f"arn:vws:iam::{account}:user/e2e/moved/e2e-dave", "arn"))
