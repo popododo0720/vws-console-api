@@ -633,6 +633,7 @@ func detachOpIDBoundary(t *testing.T, tagCount int, fits bool) {
 			if resource.CodeOf(err) != resource.CodeInvalidArgument {
 				t.Fatalf("attempt %d: %v, want the tag capacity error", attempt, err)
 			}
+			assertDetachRoomError(t, err)
 			world.mu.Lock()
 			_, sent := world.byRequest[requestUUID(mN.Key, "detach")]
 			world.mu.Unlock()
@@ -712,6 +713,7 @@ func tagWriteDuringOpIDSave(t *testing.T, tagCount int, fits bool) {
 		if raced {
 			t.Fatalf("the refused detach reached compute (%v)", err)
 		}
+		assertDetachRoomError(t, err)
 		return
 	}
 	if !raced {
@@ -736,6 +738,17 @@ func tagWriteDuringOpIDSave(t *testing.T, tagCount int, fits bool) {
 	again, err := client.DetachVolume(ctx, mN, reqN)
 	if err != nil || again.Operation.ID != first.Operation.ID {
 		t.Fatalf("same-token retry: op %s, %v; want op %s", again.Operation.ID, err, first.Operation.ID)
+	}
+}
+
+// assertDetachRoomError checks that a DetachVolume refused for label room
+// names the volume and the detach record, not tags (#327 review).
+func assertDetachRoomError(t *testing.T, err error) {
+	t.Helper()
+	e := resource.AsError(err)
+	if e.Field != "VolumeId" || !strings.Contains(e.Message, "detach") || strings.Contains(e.Message, "tags") {
+		t.Fatalf("refused detach: field %q, message %q; want VolumeId and a message about the detach record",
+			e.Field, e.Message)
 	}
 }
 
