@@ -54,7 +54,7 @@ func seedIAM(ctx context.Context, t *testing.T, a iam.Admin) {
 	if _, err := a.CreateGroup(ctx, iamAccount(), "devs", "/team/"); err != nil {
 		t.Fatalf("seed CreateGroup: %v", err)
 	}
-	if err := a.AddUserToGroup(ctx, iamAccount(), "devs", "alice"); err != nil {
+	if err := a.AddUserToGroup(ctx, iamAccount(), "devs", "alice", ""); err != nil {
 		t.Fatalf("seed AddUserToGroup: %v", err)
 	}
 }
@@ -208,16 +208,16 @@ func iamUserGroupRows() []iamRow {
 			wantErr(t, "UpdateUser ghost", err, resource.CodeNotFound, "The user with name ghost cannot be found.")
 		}},
 		{"DeleteUser of a group member is DeleteConflict", func(ctx context.Context, t *testing.T, a iam.Admin) {
-			err := a.DeleteUser(ctx, iamAccount(), "alice")
+			err := a.DeleteUser(ctx, iamAccount(), "alice", "")
 			wantErr(t, "DeleteUser", err, resource.CodeConflict, iam.UserDeleteConflict)
 			_, err = a.GetUser(ctx, iamAccount(), "alice")
 			wantOK(t, "GetUser after the conflict", err)
 		}},
 		{"DeleteUser deletes, and a second delete is NoSuchEntity", func(ctx context.Context, t *testing.T, a iam.Admin) {
-			wantOK(t, "DeleteUser", a.DeleteUser(ctx, iamAccount(), "bob"))
+			wantOK(t, "DeleteUser", a.DeleteUser(ctx, iamAccount(), "bob", ""))
 			_, err := a.GetUser(ctx, iamAccount(), "bob")
 			wantErr(t, "GetUser", err, resource.CodeNotFound, "")
-			err = a.DeleteUser(ctx, iamAccount(), "bob")
+			err = a.DeleteUser(ctx, iamAccount(), "bob", "")
 			wantErr(t, "DeleteUser again", err, resource.CodeNotFound, "The user with name bob cannot be found.")
 			us, err := a.ListUsers(ctx, iamAccount(), "")
 			wantOK(t, "ListUsers", err)
@@ -276,24 +276,24 @@ func iamUserGroupRows() []iamRow {
 			}
 		}},
 		{"UpdateGroup moves the group to a new path", func(ctx context.Context, t *testing.T, a iam.Admin) {
-			wantOK(t, "UpdateGroup", a.UpdateGroup(ctx, iamAccount(), "devs", "/eng/", ""))
+			wantOK(t, "UpdateGroup", a.UpdateGroup(ctx, iamAccount(), "devs", "/eng/", "", ""))
 			g, us, err := a.GetGroup(ctx, iamAccount(), "devs")
 			wantOK(t, "GetGroup", err)
 			if g.Path != "/eng/" || g.ARN != arnPrefix+"group/eng/devs" || len(us) != 1 {
 				t.Fatalf("after UpdateGroup: %+v %+v", g, us)
 			}
-			wantOK(t, "UpdateGroup same path", a.UpdateGroup(ctx, iamAccount(), "devs", "/eng/", ""))
+			wantOK(t, "UpdateGroup same path", a.UpdateGroup(ctx, iamAccount(), "devs", "/eng/", "", ""))
 		}},
 		{"UpdateGroup validates the new path and finds the group", func(ctx context.Context, t *testing.T, a iam.Admin) {
-			err := a.UpdateGroup(ctx, iamAccount(), "devs", "eng", "")
+			err := a.UpdateGroup(ctx, iamAccount(), "devs", "eng", "", "")
 			wantErr(t, "UpdateGroup bad path", err, resource.CodeInvalidArgument, "")
-			wantErr(t, "UpdateGroup ghost", a.UpdateGroup(ctx, iamAccount(), "ghost", "/eng/", ""),
+			wantErr(t, "UpdateGroup ghost", a.UpdateGroup(ctx, iamAccount(), "ghost", "/eng/", "", ""),
 				resource.CodeNotFound, "The group with name ghost cannot be found.")
 		}},
 		{"AddUserToGroup adds a member and adding it again is a no-op", func(ctx context.Context, t *testing.T, a iam.Admin) {
-			wantOK(t, "AddUserToGroup", a.AddUserToGroup(ctx, iamAccount(), "devs", "bob"))
+			wantOK(t, "AddUserToGroup", a.AddUserToGroup(ctx, iamAccount(), "devs", "bob", ""))
 			wantNames(t, "members", members(ctx, t, a, "devs"), []string{"alice", "bob"})
-			wantOK(t, "AddUserToGroup again", a.AddUserToGroup(ctx, iamAccount(), "devs", "bob"))
+			wantOK(t, "AddUserToGroup again", a.AddUserToGroup(ctx, iamAccount(), "devs", "bob", ""))
 			wantNames(t, "members", members(ctx, t, a, "devs"), []string{"alice", "bob"})
 			gs, err := a.ListGroupsForUser(ctx, iamAccount(), "bob")
 			wantOK(t, "ListGroupsForUser", err)
@@ -303,9 +303,9 @@ func iamUserGroupRows() []iamRow {
 			}
 		}},
 		{"AddUserToGroup of a missing group or user is NoSuchEntity", func(ctx context.Context, t *testing.T, a iam.Admin) {
-			wantErr(t, "missing group", a.AddUserToGroup(ctx, iamAccount(), "ghost", "bob"),
+			wantErr(t, "missing group", a.AddUserToGroup(ctx, iamAccount(), "ghost", "bob", ""),
 				resource.CodeNotFound, "The group with name ghost cannot be found.")
-			wantErr(t, "missing user", a.AddUserToGroup(ctx, iamAccount(), "devs", "ghost"),
+			wantErr(t, "missing user", a.AddUserToGroup(ctx, iamAccount(), "devs", "ghost", ""),
 				resource.CodeNotFound, "The user with name ghost cannot be found.")
 			wantNames(t, "members", members(ctx, t, a, "devs"), []string{"alice"})
 		}},
@@ -315,13 +315,13 @@ func iamUserGroupRows() []iamRow {
 				_, err := a.CreateGroup(ctx, iamAccount(), name, "/")
 				wantOK(t, "CreateGroup "+name, err)
 				if i < iam.MaxGroupsPerUser-1 {
-					wantOK(t, "AddUserToGroup "+name, a.AddUserToGroup(ctx, iamAccount(), name, "alice"))
+					wantOK(t, "AddUserToGroup "+name, a.AddUserToGroup(ctx, iamAccount(), name, "alice", ""))
 				}
 			}
-			err := a.AddUserToGroup(ctx, iamAccount(), "g"+string(rune('a'+iam.MaxGroupsPerUser-1)), "alice")
+			err := a.AddUserToGroup(ctx, iamAccount(), "g"+string(rune('a'+iam.MaxGroupsPerUser-1)), "alice", "")
 			wantErr(t, "AddUserToGroup past the quota", err, resource.CodeResourceExhausted,
 				"Cannot exceed quota for GroupsPerUser: 10")
-			wantOK(t, "AddUserToGroup to a group it is in", a.AddUserToGroup(ctx, iamAccount(), "devs", "alice"))
+			wantOK(t, "AddUserToGroup to a group it is in", a.AddUserToGroup(ctx, iamAccount(), "devs", "alice", ""))
 			gs, err := a.ListGroupsForUser(ctx, iamAccount(), "alice")
 			wantOK(t, "ListGroupsForUser", err)
 			if len(gs) != iam.MaxGroupsPerUser {
@@ -331,28 +331,29 @@ func iamUserGroupRows() []iamRow {
 		{"RemoveUserFromGroup removes a member; a non-member is NoSuchEntity", func(
 			ctx context.Context, t *testing.T, a iam.Admin,
 		) {
-			wantOK(t, "RemoveUserFromGroup", a.RemoveUserFromGroup(ctx, iamAccount(), "devs", "alice"))
+			wantOK(t, "RemoveUserFromGroup", a.RemoveUserFromGroup(ctx, iamAccount(), "devs", "alice", ""))
 			wantNames(t, "members", members(ctx, t, a, "devs"), []string{})
-			wantErr(t, "again", a.RemoveUserFromGroup(ctx, iamAccount(), "devs", "alice"),
+			wantErr(t, "again", a.RemoveUserFromGroup(ctx, iamAccount(), "devs", "alice", ""),
 				resource.CodeNotFound, "The user with name alice cannot be found.")
-			wantErr(t, "never a member", a.RemoveUserFromGroup(ctx, iamAccount(), "devs", "bob"),
+			wantErr(t, "never a member", a.RemoveUserFromGroup(ctx, iamAccount(), "devs", "bob", ""),
 				resource.CodeNotFound, "The user with name bob cannot be found.")
-			wantErr(t, "missing group", a.RemoveUserFromGroup(ctx, iamAccount(), "ghost", "alice"),
+			wantErr(t, "missing group", a.RemoveUserFromGroup(ctx, iamAccount(), "ghost", "alice", ""),
 				resource.CodeNotFound, "The group with name ghost cannot be found.")
 			gs, err := a.ListGroupsForUser(ctx, iamAccount(), "alice")
 			wantOK(t, "ListGroupsForUser", err)
 			wantNames(t, "ListGroupsForUser", groupNames(gs), []string{})
-			wantOK(t, "DeleteUser once out of the group", a.DeleteUser(ctx, iamAccount(), "alice"))
+			wantOK(t, "DeleteUser once out of the group", a.DeleteUser(ctx, iamAccount(), "alice", ""))
 		}},
 		{"DeleteGroup with members is DeleteConflict; an empty group deletes", func(
 			ctx context.Context, t *testing.T, a iam.Admin,
 		) {
-			wantErr(t, "DeleteGroup", a.DeleteGroup(ctx, iamAccount(), "devs"), resource.CodeConflict, iam.GroupDeleteConflict)
-			wantOK(t, "RemoveUserFromGroup", a.RemoveUserFromGroup(ctx, iamAccount(), "devs", "alice"))
-			wantOK(t, "DeleteGroup", a.DeleteGroup(ctx, iamAccount(), "devs"))
+			wantErr(t, "DeleteGroup", a.DeleteGroup(ctx, iamAccount(), "devs", ""),
+				resource.CodeConflict, iam.GroupDeleteConflict)
+			wantOK(t, "RemoveUserFromGroup", a.RemoveUserFromGroup(ctx, iamAccount(), "devs", "alice", ""))
+			wantOK(t, "DeleteGroup", a.DeleteGroup(ctx, iamAccount(), "devs", ""))
 			_, _, err := a.GetGroup(ctx, iamAccount(), "devs")
 			wantErr(t, "GetGroup", err, resource.CodeNotFound, "")
-			wantErr(t, "DeleteGroup again", a.DeleteGroup(ctx, iamAccount(), "devs"),
+			wantErr(t, "DeleteGroup again", a.DeleteGroup(ctx, iamAccount(), "devs", ""),
 				resource.CodeNotFound, "The group with name devs cannot be found.")
 		}},
 		{"ListGroupsForUser of a missing user is NoSuchEntity", func(ctx context.Context, t *testing.T, a iam.Admin) {
@@ -361,6 +362,55 @@ func iamUserGroupRows() []iamRow {
 			gs, err := a.ListGroupsForUser(ctx, iamAccount(), "bob")
 			wantOK(t, "ListGroupsForUser bob", err)
 			wantNames(t, "ListGroupsForUser bob", groupNames(gs), []string{})
+		}},
+		{"changes bound to a stale ARN are ConcurrentModification and change nothing", func(
+			ctx context.Context, t *testing.T, a iam.Admin,
+		) {
+			// #325 r1: the surface passes the ARN it authorized; an entity
+			// that has moved since must not be changed.
+			stale := arnPrefix + "group/old/devs"
+			changed := func(what string, err error, msg string) {
+				t.Helper()
+				wantErr(t, what, err, resource.CodeConflict, msg)
+				if !iam.IsChanged(err) {
+					t.Fatalf("%s: %v is not a ConcurrentModification", what, err)
+				}
+			}
+			changed("AddUserToGroup", a.AddUserToGroup(ctx, iamAccount(), "devs", "bob", stale), iam.GroupChanged)
+			changed("RemoveUserFromGroup", a.RemoveUserFromGroup(ctx, iamAccount(), "devs", "alice", stale),
+				iam.GroupChanged)
+			wantNames(t, "members", members(ctx, t, a, "devs"), []string{"alice"})
+			changed("UpdateGroup", a.UpdateGroup(ctx, iamAccount(), "devs", "/eng/", "", stale), iam.GroupChanged)
+			_, err := a.CreateGroup(ctx, iamAccount(), "empty", "/team/")
+			wantOK(t, "CreateGroup empty", err)
+			changed("DeleteGroup", a.DeleteGroup(ctx, iamAccount(), "empty", arnPrefix+"group/empty"), iam.GroupChanged)
+			changed("DeleteUser", a.DeleteUser(ctx, iamAccount(), "bob", arnPrefix+"user/bob"), iam.UserChanged)
+			changed("UpdateUser", a.UpdateUser(ctx, iamAccount(), "bob", "/x/", "", arnPrefix+"user/bob"),
+				iam.UserChanged)
+			g, _, err := a.GetGroup(ctx, iamAccount(), "devs")
+			wantOK(t, "GetGroup devs", err)
+			if g.Path != "/team/" {
+				t.Fatalf("UpdateGroup moved the group: %+v", g)
+			}
+			_, _, err = a.GetGroup(ctx, iamAccount(), "empty")
+			wantOK(t, "the empty group stays", err)
+			u, err := a.GetUser(ctx, iamAccount(), "bob")
+			wantOK(t, "bob stays", err)
+			if u.Path != "/eng/" {
+				t.Fatalf("UpdateUser moved bob: %+v", u)
+			}
+			// The authorized ARN itself goes through.
+			devs, empty, bob := arnPrefix+"group/team/devs", arnPrefix+"group/team/empty", arnPrefix+"user/eng/bob"
+			wantOK(t, "AddUserToGroup", a.AddUserToGroup(ctx, iamAccount(), "devs", "bob", devs))
+			wantOK(t, "RemoveUserFromGroup", a.RemoveUserFromGroup(ctx, iamAccount(), "devs", "bob", devs))
+			wantOK(t, "UpdateGroup", a.UpdateGroup(ctx, iamAccount(), "devs", "/eng/", "", devs))
+			wantOK(t, "DeleteGroup", a.DeleteGroup(ctx, iamAccount(), "empty", empty))
+			wantOK(t, "DeleteUser", a.DeleteUser(ctx, iamAccount(), "bob", bob))
+			// A missing entity is still NoSuchEntity, not a conflict.
+			wantErr(t, "AddUserToGroup ghost", a.AddUserToGroup(ctx, iamAccount(), "ghost", "alice", stale),
+				resource.CodeNotFound, "The group with name ghost cannot be found.")
+			wantErr(t, "DeleteUser ghost", a.DeleteUser(ctx, iamAccount(), "ghost", arnPrefix+"user/ghost"),
+				resource.CodeNotFound, "The user with name ghost cannot be found.")
 		}},
 		{"another account sees none of it", func(ctx context.Context, t *testing.T, a iam.Admin) {
 			us, err := a.ListUsers(ctx, iamOther(), "")
@@ -371,14 +421,14 @@ func iamUserGroupRows() []iamRow {
 			wantNames(t, "ListGroups", groupNames(gs), []string{})
 			_, err = a.GetUser(ctx, iamOther(), "alice")
 			wantErr(t, "GetUser", err, resource.CodeNotFound, "")
-			wantErr(t, "DeleteUser", a.DeleteUser(ctx, iamOther(), "alice"), resource.CodeNotFound, "")
-			wantErr(t, "AddUserToGroup", a.AddUserToGroup(ctx, iamOther(), "devs", "bob"), resource.CodeNotFound, "")
+			wantErr(t, "DeleteUser", a.DeleteUser(ctx, iamOther(), "alice", ""), resource.CodeNotFound, "")
+			wantErr(t, "AddUserToGroup", a.AddUserToGroup(ctx, iamOther(), "devs", "bob", ""), resource.CodeNotFound, "")
 			u, err := a.CreateUser(ctx, iamOther(), "alice", "/")
 			wantOK(t, "CreateUser in the other account", err)
 			if u.ARN != "arn:vws:iam::210987654321:user/alice" {
 				t.Fatalf("CreateUser: %+v", u)
 			}
-			wantOK(t, "DeleteUser in the other account", a.DeleteUser(ctx, iamOther(), "alice"))
+			wantOK(t, "DeleteUser in the other account", a.DeleteUser(ctx, iamOther(), "alice", ""))
 			_, err = a.GetUser(ctx, iamAccount(), "alice")
 			wantOK(t, "alice is still in the first account", err)
 		}},

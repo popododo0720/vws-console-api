@@ -128,6 +128,14 @@ func exists(what, name string) error {
 
 func conflict(msg string) error { return &resource.Error{Code: resource.CodeConflict, Message: msg} }
 
+func changed(msg string) error {
+	return &resource.Error{Code: resource.CodeConflict, Field: ConcurrentModification, Message: msg}
+}
+
+// stale reports whether a non-empty expectARN differs from arn: the entity
+// moved since the caller was authorized on expectARN.
+func stale(arn, expectARN string) bool { return expectARN != "" && arn != expectARN }
+
 func quota(msg string) error {
 	return &resource.Error{Code: resource.CodeResourceExhausted, Message: msg}
 }
@@ -317,14 +325,18 @@ func prefixOr(p string) string {
 
 // DeleteUser implements Admin. Like AWS it refuses while the user still has
 // access keys, policies, group memberships, a login profile or an assigned MFA
-// device.
-func (f *Fake) DeleteUser(_ context.Context, a resource.AccountID, name string) error {
+// device. A non-empty expectARN must be the user's ARN, or the delete is a
+// ConcurrentModification and nothing changes.
+func (f *Fake) DeleteUser(_ context.Context, a resource.AccountID, name, expectARN string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	st := f.account(a)
 	u := st.users[name]
 	if u == nil {
 		return notFound("user", name)
+	}
+	if stale(u.ARN, expectARN) {
+		return changed(UserChanged)
 	}
 	if len(u.keys) > 0 || len(u.attached) > 0 || len(u.inline) > 0 || len(u.groups) > 0 || u.login != nil ||
 		st.mfaAssigned(name) {
@@ -363,8 +375,8 @@ func (f *Fake) UpdateUser(_ context.Context, a resource.AccountID, name, newPath
 	if u == nil {
 		return notFound("user", name)
 	}
-	if expectARN != "" && u.ARN != expectARN {
-		return conflict(UserChanged)
+	if stale(u.ARN, expectARN) {
+		return changed(UserChanged)
 	}
 	target := name
 	if newName != "" {
@@ -539,8 +551,9 @@ func (f *Fake) ListGroups(_ context.Context, a resource.AccountID, prefix string
 }
 
 // UpdateGroup implements Admin. A rename moves the group and its memberships;
-// the id stays the same.
-func (f *Fake) UpdateGroup(_ context.Context, a resource.AccountID, name, newPath, newName string) error {
+// the id stays the same. A non-empty expectARN must be the group's ARN, as in
+// UpdateUser.
+func (f *Fake) UpdateGroup(_ context.Context, a resource.AccountID, name, newPath, newName, expectARN string) error {
 	if err := checkName(groupName, "groupName", name); err != nil {
 		return err
 	}
@@ -564,6 +577,9 @@ func (f *Fake) UpdateGroup(_ context.Context, a resource.AccountID, name, newPat
 	if g == nil {
 		return notFound("group", name)
 	}
+	if stale(g.ARN, expectARN) {
+		return changed(GroupChanged)
+	}
 	target := name
 	if newName != "" {
 		target = newName
@@ -586,14 +602,18 @@ func (f *Fake) UpdateGroup(_ context.Context, a resource.AccountID, name, newPat
 	return nil
 }
 
-// DeleteGroup implements Admin.
-func (f *Fake) DeleteGroup(_ context.Context, a resource.AccountID, name string) error {
+// DeleteGroup implements Admin. A non-empty expectARN must be the group's
+// ARN, as in DeleteUser.
+func (f *Fake) DeleteGroup(_ context.Context, a resource.AccountID, name, expectARN string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	st := f.account(a)
 	g := st.groups[name]
 	if g == nil {
 		return notFound("group", name)
+	}
+	if stale(g.ARN, expectARN) {
+		return changed(GroupChanged)
 	}
 	if len(g.members) > 0 || len(g.attached) > 0 || len(g.inline) > 0 {
 		return conflict(GroupDeleteConflict)
@@ -602,14 +622,19 @@ func (f *Fake) DeleteGroup(_ context.Context, a resource.AccountID, name string)
 	return nil
 }
 
-// AddUserToGroup implements Admin.
-func (f *Fake) AddUserToGroup(_ context.Context, a resource.AccountID, group, user string) error {
+// AddUserToGroup implements Admin. A non-empty expectGroupARN must be the
+// group's ARN, or nothing is written: the group moved since the caller was
+// authorized on it.
+func (f *Fake) AddUserToGroup(_ context.Context, a resource.AccountID, group, user, expectGroupARN string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	st := f.account(a)
 	g, u := st.groups[group], st.users[user]
 	if g == nil {
 		return notFound("group", group)
+	}
+	if stale(g.ARN, expectGroupARN) {
+		return changed(GroupChanged)
 	}
 	if u == nil {
 		return notFound("user", user)
@@ -621,14 +646,18 @@ func (f *Fake) AddUserToGroup(_ context.Context, a resource.AccountID, group, us
 	return nil
 }
 
-// RemoveUserFromGroup implements Admin.
-func (f *Fake) RemoveUserFromGroup(_ context.Context, a resource.AccountID, group, user string) error {
+// RemoveUserFromGroup implements Admin, with expectGroupARN as in
+// AddUserToGroup.
+func (f *Fake) RemoveUserFromGroup(_ context.Context, a resource.AccountID, group, user, expectGroupARN string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	st := f.account(a)
 	g, u := st.groups[group], st.users[user]
 	if g == nil {
 		return notFound("group", group)
+	}
+	if stale(g.ARN, expectGroupARN) {
+		return changed(GroupChanged)
 	}
 	if u == nil || !g.members[user] {
 		return notFound("user", user)

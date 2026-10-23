@@ -1,6 +1,7 @@
 package iam
 
 import (
+	"errors"
 	"strings"
 
 	"github.com/popododo0720/vws-console-api/internal/resource"
@@ -17,10 +18,15 @@ const (
 	UserDeleteConflict = "Cannot delete entity, must delete login profile, access keys, policies and " +
 		"group memberships first."
 	GroupDeleteConflict = "Cannot delete entity, must remove users and policies from group first."
-	// UserChanged is the conflict when a user's ARN moved between the
-	// caller's authorization and the update.
-	UserChanged = "The user changed while the request was in flight."
+	// UserChanged and GroupChanged are the ConcurrentModification when the
+	// entity's ARN moved between the caller's authorization and the change.
+	UserChanged  = "The user changed while the request was in flight."
+	GroupChanged = "The group changed while the request was in flight."
 )
+
+// ConcurrentModification is the Field that marks a Conflict as the AWS
+// ConcurrentModification rather than a DeleteConflict.
+const ConcurrentModification = "ConcurrentModification"
 
 // CheckUserName validates a new user name for field (userName or
 // newUserName): the AWS pattern, 1 to 64 characters, and not the reserved
@@ -55,8 +61,18 @@ func EntityNotFound(what, name string) error { return notFound(what, name) }
 // "Group").
 func EntityExists(what, name string) error { return exists(what, name) }
 
-// Conflict is a DeleteConflict, or a ConcurrentModification on UpdateUser.
+// Conflict is a DeleteConflict.
 func Conflict(msg string) error { return conflict(msg) }
+
+// Changed is the ConcurrentModification of a change whose entity no longer
+// has the ARN the caller was authorized on (UserChanged, GroupChanged).
+func Changed(msg string) error { return changed(msg) }
+
+// IsChanged reports whether err is a Changed error.
+func IsChanged(err error) bool {
+	var e *resource.Error
+	return errors.As(err, &e) && e.Code == resource.CodeConflict && e.Field == ConcurrentModification
+}
 
 // GroupsPerUserExceeded is the LimitExceeded error of AddUserToGroup.
 func GroupsPerUserExceeded() error { return quota(groupsPerUserMsg) }

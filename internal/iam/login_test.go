@@ -44,7 +44,7 @@ func TestLoginProfiles(t *testing.T) {
 	if err != nil || p.UserName != "bob" || !p.Created.Equal(now) {
 		t.Fatalf("get profile %+v %v", p, err)
 	}
-	if err := f.DeleteUser(ctx, a, "bob"); resource.CodeOf(err) != resource.CodeConflict {
+	if err := f.DeleteUser(ctx, a, "bob", ""); resource.CodeOf(err) != resource.CodeConflict {
 		t.Errorf("delete user with a login profile: %v", err)
 	}
 	must(t, f.UpdateLoginProfile(ctx, a, "bob", "brand new pass 3"))

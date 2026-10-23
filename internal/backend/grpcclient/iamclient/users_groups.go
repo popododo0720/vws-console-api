@@ -137,8 +137,8 @@ func backendUnavailable(err error) error {
 
 // entityError maps a vws-iam failure of a user or group call. what is "user"
 // or "group" and name the entity the caller named, so NoSuchEntity and
-// EntityAlreadyExists carry the AWS wording. A lost etag race is a Conflict
-// the caller words.
+// EntityAlreadyExists carry the AWS wording. A lost etag race is a
+// ConcurrentModification (iam.Changed); membership changes read again on it.
 func entityError(err error, what, name string) error {
 	st, ok := status.FromError(err)
 	if !ok {
@@ -150,7 +150,10 @@ func entityError(err error, what, name string) error {
 	case codes.AlreadyExists:
 		return iam.EntityExists(strings.ToUpper(what[:1])+what[1:], name)
 	case codes.Aborted:
-		return &resource.Error{Code: resource.CodeConflict, Message: iam.UserChanged}
+		if what == "group" {
+			return iam.Changed(iam.GroupChanged)
+		}
+		return iam.Changed(iam.UserChanged)
 	case codes.Unavailable, codes.DeadlineExceeded, codes.Canceled:
 		return backendUnavailable(err)
 	}
@@ -169,6 +172,10 @@ func opError(op *longrunningpb.Operation, what, name string) error {
 	}
 	return nil
 }
+
+// stale reports whether a non-empty expectARN differs from arn: the entity
+// moved since the caller was authorized on expectARN.
+func stale(arn, expectARN string) bool { return expectARN != "" && arn != expectARN }
 
 // entityName reports whether name can be a vws-iam user or group: one
 // resource name segment. Anything else addresses another resource and is
@@ -388,8 +395,8 @@ func (a STSAdmin) UpdateUser(
 	if err != nil {
 		return err
 	}
-	if expectARN != "" && u.ARN != expectARN {
-		return iam.Conflict(iam.UserChanged)
+	if stale(u.ARN, expectARN) {
+		return iam.Changed(iam.UserChanged)
 	}
 	if rename {
 		return resource.Unimplemented(
@@ -408,24 +415,34 @@ func (a STSAdmin) UpdateUser(
 	return opError(op, "user", name)
 }
 
-// DeleteUser implements iam.Admin over UserService.DeleteUser. vws-iam
-// refuses while the user has access keys, an MFA device, a login profile, a
-// group or a policy, which is the AWS DeleteConflict.
-func (a STSAdmin) DeleteUser(ctx context.Context, account resource.AccountID, name string) (err error) {
+// DeleteUser implements iam.Admin over UserService.DeleteUser. It reads the
+// user first: a non-empty expectARN must be its ARN, and the delete carries
+// that read's etag, so a user that moved or changed since the caller was
+// authorized is a ConcurrentModification and stays. vws-iam refuses while
+// the user has access keys, an MFA device, a login profile, a group or a
+// policy, which is the AWS DeleteConflict.
+func (a STSAdmin) DeleteUser(ctx context.Context, account resource.AccountID, name, expectARN string) (err error) {
 	ctx, end := a.observe(ctx, "DeleteUser", true, account, name, "")
 	defer func() { end(err) }()
 	if !entityName(name) {
 		return entityNotFound("user", name)
 	}
+	raw, u, err := a.rawUser(ctx, account, name)
+	if err != nil {
+		return err
+	}
+	if stale(u.ARN, expectARN) {
+		return iam.Changed(iam.UserChanged)
+	}
 	op, err := retry(ctx, a.backoff, a.users.DeleteUser, &iamv1.DeleteUserRequest{
-		Name: userResource(account, name), RequestId: newRequestID(),
+		Name: raw.GetName(), Etag: raw.GetEtag(), RequestId: newRequestID(),
 	})
 	if err == nil {
 		err = opError(op, "user", name)
 	} else {
 		err = entityError(err, "user", name)
 	}
-	if resource.CodeOf(err) == resource.CodeConflict {
+	if !iam.IsChanged(err) && resource.CodeOf(err) == resource.CodeConflict {
 		return iam.Conflict(iam.UserDeleteConflict)
 	}
 	return err
@@ -574,10 +591,11 @@ func (a STSAdmin) ListGroups(
 }
 
 // UpdateGroup implements iam.Admin over GroupService.UpdateGroup with a mask
-// on spec.path and the etag of the group it read. A new name answers
-// Unimplemented once the group is known to exist: vws-iam cannot rename.
+// on spec.path and the etag of the group it read. A non-empty expectARN must
+// be the group's ARN, as in UpdateUser. A new name answers Unimplemented
+// once the group is known to exist: vws-iam cannot rename.
 func (a STSAdmin) UpdateGroup(
-	ctx context.Context, account resource.AccountID, name, newPath, newName string,
+	ctx context.Context, account resource.AccountID, name, newPath, newName, expectARN string,
 ) (err error) {
 	ctx, end := a.observe(ctx, "UpdateGroup", true, account, "", name)
 	defer func() { end(err) }()
@@ -598,6 +616,9 @@ func (a STSAdmin) UpdateGroup(
 	raw, g, err := a.rawGroup(ctx, account, name)
 	if err != nil {
 		return err
+	}
+	if stale(g.ARN, expectARN) {
+		return iam.Changed(iam.GroupChanged)
 	}
 	if rename {
 		return resource.Unimplemented(
@@ -623,23 +644,32 @@ func (a STSAdmin) UpdateGroup(
 	return err
 }
 
-// DeleteGroup implements iam.Admin over GroupService.DeleteGroup. vws-iam
-// refuses while the group has members or policies (DeleteConflict).
-func (a STSAdmin) DeleteGroup(ctx context.Context, account resource.AccountID, name string) (err error) {
+// DeleteGroup implements iam.Admin over GroupService.DeleteGroup, reading
+// the group first and binding the delete to expectARN and that read's etag,
+// as DeleteUser does. vws-iam refuses while the group has members or
+// policies (DeleteConflict).
+func (a STSAdmin) DeleteGroup(ctx context.Context, account resource.AccountID, name, expectARN string) (err error) {
 	ctx, end := a.observe(ctx, "DeleteGroup", true, account, "", name)
 	defer func() { end(err) }()
 	if !entityName(name) {
 		return entityNotFound("group", name)
 	}
+	raw, g, err := a.rawGroup(ctx, account, name)
+	if err != nil {
+		return err
+	}
+	if stale(g.ARN, expectARN) {
+		return iam.Changed(iam.GroupChanged)
+	}
 	op, err := retry(ctx, a.backoff, a.groups.DeleteGroup, &iamv1.DeleteGroupRequest{
-		Name: groupResource(account, name), RequestId: newRequestID(),
+		Name: raw.GetName(), Etag: raw.GetEtag(), RequestId: newRequestID(),
 	})
 	if err == nil {
 		err = opError(op, "group", name)
 	} else {
 		err = entityError(err, "group", name)
 	}
-	if resource.CodeOf(err) == resource.CodeConflict {
+	if !iam.IsChanged(err) && resource.CodeOf(err) == resource.CodeConflict {
 		return iam.Conflict(iam.GroupDeleteConflict)
 	}
 	return err
@@ -654,10 +684,14 @@ func memberIndex(members []string, user string) int {
 // AddUserToGroup implements iam.Admin: GroupService.UpdateGroup on
 // spec.members under the etag of the group it read. Adding a member is a
 // no-op, and a user already in MaxGroupsPerUser groups is LimitExceeded.
-func (a STSAdmin) AddUserToGroup(ctx context.Context, account resource.AccountID, group, user string) (err error) {
+// A non-empty expectGroupARN binds the change to the group the caller was
+// authorized on (changeMembers).
+func (a STSAdmin) AddUserToGroup(
+	ctx context.Context, account resource.AccountID, group, user, expectGroupARN string,
+) (err error) {
 	ctx, end := a.observe(ctx, "AddUserToGroup", true, account, user, group)
 	defer func() { end(err) }()
-	return a.changeMembers(ctx, account, group, user, func(members []string, u *iamv1.User) ([]string, error) {
+	change := func(members []string, u *iamv1.User) ([]string, error) {
 		if memberIndex(members, user) >= 0 {
 			return nil, nil
 		}
@@ -665,30 +699,36 @@ func (a STSAdmin) AddUserToGroup(ctx context.Context, account resource.AccountID
 			return nil, iam.GroupsPerUserExceeded()
 		}
 		return append(slices.Clone(members), u.GetName()), nil
-	})
+	}
+	return a.changeMembers(ctx, account, group, user, expectGroupARN, change)
 }
 
 // RemoveUserFromGroup implements iam.Admin as AddUserToGroup does. A user
 // that is not a member is NoSuchEntity, as in AWS.
-func (a STSAdmin) RemoveUserFromGroup(ctx context.Context, account resource.AccountID, group, user string) (err error) {
+func (a STSAdmin) RemoveUserFromGroup(
+	ctx context.Context, account resource.AccountID, group, user, expectGroupARN string,
+) (err error) {
 	ctx, end := a.observe(ctx, "RemoveUserFromGroup", true, account, user, group)
 	defer func() { end(err) }()
-	return a.changeMembers(ctx, account, group, user, func(members []string, _ *iamv1.User) ([]string, error) {
+	change := func(members []string, _ *iamv1.User) ([]string, error) {
 		i := memberIndex(members, user)
 		if i < 0 {
 			return nil, entityNotFound("user", user)
 		}
 		return slices.Delete(slices.Clone(members), i, i+1), nil
-	})
+	}
+	return a.changeMembers(ctx, account, group, user, expectGroupARN, change)
 }
 
 // changeMembers reads the group and the user, asks change for the new member
 // list (nil: nothing to write) and writes it under the group's etag. When
 // another writer moved the etag, or a user or group vanished in between, it
 // reads again, up to membershipAttempts times; then it answers a retryable
-// ServiceUnavailable.
+// ServiceUnavailable. Every read, the first included, must find the group at
+// a non-empty expectGroupARN: a group moved since the caller was authorized
+// is a ConcurrentModification, and nothing is written.
 func (a STSAdmin) changeMembers(
-	ctx context.Context, account resource.AccountID, group, user string,
+	ctx context.Context, account resource.AccountID, group, user, expectGroupARN string,
 	change func(members []string, u *iamv1.User) ([]string, error),
 ) error {
 	if !entityName(group) {
@@ -701,9 +741,12 @@ func (a STSAdmin) changeMembers(
 	defer cancel()
 	var lost error
 	for range membershipAttempts {
-		g, _, err := a.rawGroup(ctx, account, group)
+		g, current, err := a.rawGroup(ctx, account, group)
 		if err != nil {
 			return err
+		}
+		if stale(current.ARN, expectGroupARN) {
+			return iam.Changed(iam.GroupChanged)
 		}
 		u, _, err := a.rawUser(ctx, account, user)
 		if err != nil {

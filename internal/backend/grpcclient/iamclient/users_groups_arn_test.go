@@ -27,7 +27,7 @@ func (a *movingAdmin) GetGroup(
 	g, us, err := a.Admin.GetGroup(ctx, account, name)
 	if err == nil && !a.moved && name == a.group {
 		a.moved = true
-		if err := a.UpdateGroup(ctx, account, name, "/denied/", ""); err != nil {
+		if err := a.UpdateGroup(ctx, account, name, "/denied/", "", ""); err != nil {
 			return iam.Group{}, nil, err
 		}
 	}
@@ -160,5 +160,56 @@ func membersStay(t *testing.T, a iam.Admin, _ *directory, writes int) {
 	}
 	if writes > 0 {
 		t.Errorf("%d member writes reached vws-iam after the group moved", writes)
+	}
+}
+
+// #325 r1: DeleteUser and DeleteGroup read the entity first and send that
+// read's etag. An entity changed in between is a ConcurrentModification, not
+// a DeleteConflict, and stays.
+func TestDeletesCarryTheEtagTheyRead(t *testing.T) {
+	ctx := t.Context()
+	a, d := seeded(ctx, t)
+	if _, err := a.CreateGroup(ctx, account314, "empty", "/team/"); err != nil {
+		t.Fatal(err)
+	}
+	d.mu.Lock()
+	d.deleteRace = 2
+	d.mu.Unlock()
+	err := a.DeleteUser(ctx, account314, "bob", "")
+	if !iam.IsChanged(err) || resource.AsError(err).Message != iam.UserChanged {
+		t.Errorf("DeleteUser of a changed user: %v", err)
+	}
+	err = a.DeleteGroup(ctx, account314, "empty", "")
+	if !iam.IsChanged(err) || resource.AsError(err).Message != iam.GroupChanged {
+		t.Errorf("DeleteGroup of a changed group: %v", err)
+	}
+	if _, err := a.GetUser(ctx, account314, "bob"); err != nil {
+		t.Errorf("bob was deleted: %v", err)
+	}
+	if _, _, err := a.GetGroup(ctx, account314, "empty"); err != nil {
+		t.Errorf("empty was deleted: %v", err)
+	}
+	if err := a.DeleteUser(ctx, account314, "bob", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.DeleteGroup(ctx, account314, "empty", ""); err != nil {
+		t.Fatal(err)
+	}
+	du := d.sent("DeleteUser")
+	dg := d.sent("DeleteGroup")
+	last := du[len(du)-1].(*iamv1.DeleteUserRequest)
+	if last.GetName() != "projects/123456789012/users/bob" || last.GetEtag() == "" ||
+		!uuidV4.MatchString(last.GetRequestId()) {
+		t.Errorf("DeleteUser sent %v", last)
+	}
+	if g := dg[len(dg)-1].(*iamv1.DeleteGroupRequest); g.GetName() != "projects/123456789012/groups/empty" ||
+		g.GetEtag() == "" {
+		t.Errorf("DeleteGroup sent %v", g)
+	}
+	// A member still makes DeleteGroup a DeleteConflict.
+	err = a.DeleteGroup(ctx, account314, "devs", "")
+	if resource.CodeOf(err) != resource.CodeConflict || iam.IsChanged(err) ||
+		resource.AsError(err).Message != iam.GroupDeleteConflict {
+		t.Errorf("DeleteGroup with a member: %v", err)
 	}
 }

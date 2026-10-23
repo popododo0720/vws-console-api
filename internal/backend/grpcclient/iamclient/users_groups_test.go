@@ -45,7 +45,7 @@ func seeded(ctx context.Context, t *testing.T) (STSAdmin, *directory) {
 	if _, err := a.CreateGroup(ctx, account314, "devs", "/team/"); err != nil {
 		t.Fatal(err)
 	}
-	if err := a.AddUserToGroup(ctx, account314, "devs", "alice"); err != nil {
+	if err := a.AddUserToGroup(ctx, account314, "devs", "alice", ""); err != nil {
 		t.Fatal(err)
 	}
 	return a, d
@@ -87,7 +87,7 @@ func TestUserAndGroupRequestsOverGRPC(t *testing.T) {
 	if err := a.UpdateUser(ctx, account314, "bob", "/sre/", "", ""); err != nil {
 		t.Fatal(err)
 	}
-	if err := a.AddUserToGroup(ctx, account314, "devs", "alice"); err != nil {
+	if err := a.AddUserToGroup(ctx, account314, "devs", "alice", ""); err != nil {
 		t.Fatal(err)
 	}
 	if n, m := len(d.sent("UpdateUser")), len(d.sent("UpdateGroup")); n != 1 || m != 1 {
@@ -119,7 +119,7 @@ func TestUserAndGroupMutationsRetrySafely(t *testing.T) {
 		d.mu.Lock()
 		d.failAfter["DeleteUser"] = 1
 		d.mu.Unlock()
-		if err := a.DeleteUser(ctx, account314, "bob"); err != nil {
+		if err := a.DeleteUser(ctx, account314, "bob", ""); err != nil {
 			t.Fatalf("DeleteUser: %v", err)
 		}
 	})
@@ -128,7 +128,7 @@ func TestUserAndGroupMutationsRetrySafely(t *testing.T) {
 		d.mu.Lock()
 		d.failAfter["UpdateGroup"] = 1
 		d.mu.Unlock()
-		if err := a.AddUserToGroup(ctx, account314, "devs", "bob"); err != nil {
+		if err := a.AddUserToGroup(ctx, account314, "devs", "bob", ""); err != nil {
 			t.Fatalf("AddUserToGroup: %v", err)
 		}
 		_, us, err := a.GetGroup(ctx, account314, "devs")
@@ -172,13 +172,13 @@ func TestMembershipChangesRereadALostRace(t *testing.T) {
 	d.mu.Lock()
 	d.race = membershipAttempts - 1
 	d.mu.Unlock()
-	if err := a.AddUserToGroup(ctx, account314, "devs", "bob"); err != nil {
+	if err := a.AddUserToGroup(ctx, account314, "devs", "bob", ""); err != nil {
 		t.Fatalf("AddUserToGroup: %v", err)
 	}
 	d.mu.Lock()
 	d.race = membershipAttempts
 	d.mu.Unlock()
-	err := a.RemoveUserFromGroup(ctx, account314, "devs", "bob")
+	err := a.RemoveUserFromGroup(ctx, account314, "devs", "bob", "")
 	if resource.CodeOf(err) != resource.CodeUnavailable {
 		t.Fatalf("RemoveUserFromGroup: %v", err)
 	}
@@ -204,10 +204,10 @@ func TestRenameIsNotServedOverGRPC(t *testing.T) {
 	if resource.CodeOf(err) != resource.CodeInvalidArgument {
 		t.Errorf("UpdateUser rename to root: %v", err)
 	}
-	if err := a.UpdateGroup(ctx, account314, "devs", "", "ops"); resource.CodeOf(err) != resource.CodeUnimplemented {
+	if err := a.UpdateGroup(ctx, account314, "devs", "", "ops", ""); resource.CodeOf(err) != resource.CodeUnimplemented {
 		t.Errorf("UpdateGroup rename: %v", err)
 	}
-	if err := a.UpdateGroup(ctx, account314, "ghost", "", "ops"); resource.CodeOf(err) != resource.CodeNotFound {
+	if err := a.UpdateGroup(ctx, account314, "ghost", "", "ops", ""); resource.CodeOf(err) != resource.CodeNotFound {
 		t.Errorf("UpdateGroup rename of a missing group: %v", err)
 	}
 	if n := len(d.sent("UpdateUser")); n != 0 {

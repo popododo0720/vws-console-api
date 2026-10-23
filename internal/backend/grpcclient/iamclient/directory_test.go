@@ -53,7 +53,10 @@ type directory struct {
 	race int
 	// racePath, when set, is the path that other writer moved the group to.
 	racePath string
-	calls    map[string][]proto.Message
+	// deleteRace is the number of DeleteUser and DeleteGroup calls that find
+	// the entity changed by another writer since it was read.
+	deleteRace int
+	calls      map[string][]proto.Message
 }
 
 type dirEntity struct {
@@ -362,6 +365,10 @@ func (d *directory) DeleteUser(_ context.Context, req *iamv1.DeleteUserRequest) 
 	if u == nil {
 		return nil, awsErr(codes.NotFound, "NOT_FOUND", "NoSuchEntity")
 	}
+	if d.deleteRace > 0 {
+		d.deleteRace--
+		u.version++
+	}
 	if e := req.GetEtag(); e != "" && e != strconv.Itoa(u.version) {
 		return nil, awsErr(codes.Aborted, "ETAG_MISMATCH", "ConcurrentModification")
 	}
@@ -495,6 +502,10 @@ func (d *directory) DeleteGroup(_ context.Context, req *iamv1.DeleteGroupRequest
 	g := d.groups[fold(req.GetName())]
 	if g == nil {
 		return nil, awsErr(codes.NotFound, "NOT_FOUND", "NoSuchEntity")
+	}
+	if d.deleteRace > 0 {
+		d.deleteRace--
+		g.version++
 	}
 	if e := req.GetEtag(); e != "" && e != strconv.Itoa(g.version) {
 		return nil, awsErr(codes.Aborted, "ETAG_MISMATCH", "ConcurrentModification")

@@ -142,7 +142,9 @@ func groupARN(h *handler, c *exchange) string {
 
 // authorizeMovedGroup checks iam:UpdateGroup on the group's new ARN too, as
 // AWS does when a request changes its name or path. A missing group is left
-// for UpdateGroup to report.
+// for UpdateGroup to report. A group that moved since the action was
+// authorized is a ConcurrentModification: its target would be computed from
+// a path the caller was never authorized on.
 func authorizeMovedGroup(h *handler, c *exchange) error {
 	newPath, newName := c.form("NewPath"), c.form("NewGroupName")
 	if newPath == "" && newName == "" {
@@ -154,6 +156,9 @@ func authorizeMovedGroup(h *handler, c *exchange) error {
 			return nil
 		}
 		return err
+	}
+	if c.authorized != "" && g.ARN != c.authorized {
+		return iam.Changed(iam.GroupChanged)
 	}
 	path, name := g.Path, g.Name
 	if newPath != "" {
@@ -420,7 +425,7 @@ func iamActions() map[string]spec {
 			if err := required(c, "UserName"); err != nil {
 				return nil, err
 			}
-			return nil, h.cfg.Admin.DeleteUser(c.r.Context(), c.caller.Account, c.form("UserName"))
+			return nil, h.cfg.Admin.DeleteUser(c.r.Context(), c.caller.Account, c.form("UserName"), c.authorized)
 		}),
 		"CreateLoginProfile": admin([]string{"UserName", "Password", "PasswordResetRequired"}, userARN, func(h *handler, c *exchange) (any, error) {
 			if err := loginProfileInput(c); err != nil {
@@ -560,26 +565,29 @@ func iamActions() map[string]spec {
 					return nil, err
 				}
 				return nil, h.cfg.Admin.UpdateGroup(
-					c.r.Context(), c.caller.Account, c.form("GroupName"), c.form("NewPath"), c.form("NewGroupName"))
+					c.r.Context(), c.caller.Account, c.form("GroupName"), c.form("NewPath"), c.form("NewGroupName"),
+					c.authorized)
 			},
 		),
 		"DeleteGroup": admin([]string{"GroupName"}, groupARN, func(h *handler, c *exchange) (any, error) {
 			if err := required(c, "GroupName"); err != nil {
 				return nil, err
 			}
-			return nil, h.cfg.Admin.DeleteGroup(c.r.Context(), c.caller.Account, c.form("GroupName"))
+			return nil, h.cfg.Admin.DeleteGroup(c.r.Context(), c.caller.Account, c.form("GroupName"), c.authorized)
 		}),
 		"AddUserToGroup": admin([]string{"GroupName", "UserName"}, groupARN, func(h *handler, c *exchange) (any, error) {
 			if err := required(c, "GroupName", "UserName"); err != nil {
 				return nil, err
 			}
-			return nil, h.cfg.Admin.AddUserToGroup(c.r.Context(), c.caller.Account, c.form("GroupName"), c.form("UserName"))
+			return nil, h.cfg.Admin.AddUserToGroup(
+				c.r.Context(), c.caller.Account, c.form("GroupName"), c.form("UserName"), c.authorized)
 		}),
 		"RemoveUserFromGroup": admin([]string{"GroupName", "UserName"}, groupARN, func(h *handler, c *exchange) (any, error) {
 			if err := required(c, "GroupName", "UserName"); err != nil {
 				return nil, err
 			}
-			return nil, h.cfg.Admin.RemoveUserFromGroup(c.r.Context(), c.caller.Account, c.form("GroupName"), c.form("UserName"))
+			return nil, h.cfg.Admin.RemoveUserFromGroup(
+				c.r.Context(), c.caller.Account, c.form("GroupName"), c.form("UserName"), c.authorized)
 		}),
 		"ListGroupsForUser": {params: []string{"UserName"}, list: true, needsAdmin: true, resource: userARN, run: func(h *handler, c *exchange) (any, error) {
 			if err := required(c, "UserName"); err != nil {

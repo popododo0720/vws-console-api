@@ -26,12 +26,12 @@ func TestIAMListsPageWithMarkerAndMaxItems(t *testing.T) {
 		if _, err := f.CreateGroup(ctx, cred.Account, g, "/"); err != nil {
 			t.Fatal(err)
 		}
-		if err := f.AddUserToGroup(ctx, cred.Account, g, "ann"); err != nil {
+		if err := f.AddUserToGroup(ctx, cred.Account, g, "ann", ""); err != nil {
 			t.Fatal(err)
 		}
 	}
 	for _, u := range []string{"ben", "cat"} {
-		if err := f.AddUserToGroup(ctx, cred.Account, "g1", u); err != nil {
+		if err := f.AddUserToGroup(ctx, cred.Account, "g1", u, ""); err != nil {
 			t.Fatal(err)
 		}
 	}

@@ -28,7 +28,7 @@ func (a *movingAdmin) GetGroup(
 	g, us, err := a.Admin.GetGroup(ctx, account, name)
 	if err == nil && !a.moved && name == a.group {
 		a.moved = true
-		if err := a.UpdateGroup(ctx, account, name, "/denied/", ""); err != nil {
+		if err := a.UpdateGroup(ctx, account, name, "/denied/", "", ""); err != nil {
 			return iam.Group{}, nil, err
 		}
 	}
@@ -146,7 +146,7 @@ func authorizedARNHarness(
 			t.Fatal(err)
 		}
 	}
-	if err := f.AddUserToGroup(ctx, root.Account, "devs", "carol"); err != nil {
+	if err := f.AddUserToGroup(ctx, root.Account, "devs", "carol", ""); err != nil {
 		t.Fatal(err)
 	}
 	arn := "arn:vws:iam::" + root.Account.String() + ":"

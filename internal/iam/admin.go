@@ -193,17 +193,20 @@ type AssumedRole struct {
 
 // Admin is the IAM management API behind the IAM and STS Query surface. Every
 // call is scoped to one account. Errors are *resource.Error: NotFound,
-// AlreadyExists, Conflict (delete conflict, or Field "UnmodifiableEntity" for
-// a service-linked role), InvalidArgument (Field "PolicyDocument" for a
+// AlreadyExists, Conflict (delete conflict, Field "UnmodifiableEntity" for a
+// service-linked role, or Field ConcurrentModification for an entity that
+// moved since authorization), InvalidArgument (Field "PolicyDocument" for a
 // malformed policy), ResourceExhausted (a quota), PermissionDenied (AssumeRole
 // trust).
 type Admin interface {
 	CreateUser(ctx context.Context, a resource.AccountID, name, path string) (User, error)
 	GetUser(ctx context.Context, a resource.AccountID, name string) (User, error)
 	ListUsers(ctx context.Context, a resource.AccountID, pathPrefix string) ([]User, error)
-	DeleteUser(ctx context.Context, a resource.AccountID, name string) error
+	// DeleteUser deletes a user. A non-empty expectARN must match the
+	// current ARN, or the delete is a ConcurrentModification (Changed).
+	DeleteUser(ctx context.Context, a resource.AccountID, name, expectARN string) error
 	// UpdateUser moves a user's path or name. A non-empty expectARN must
-	// match the current ARN, or the update is a conflict.
+	// match the current ARN, or the update is a ConcurrentModification.
 	UpdateUser(ctx context.Context, a resource.AccountID, name, newPath, newName, expectARN string) error
 
 	CreateLoginProfile(ctx context.Context, a resource.AccountID, user, password string) (LoginProfile, error)
@@ -219,10 +222,14 @@ type Admin interface {
 	CreateGroup(ctx context.Context, a resource.AccountID, name, path string) (Group, error)
 	GetGroup(ctx context.Context, a resource.AccountID, name string) (Group, []User, error)
 	ListGroups(ctx context.Context, a resource.AccountID, pathPrefix string) ([]Group, error)
-	UpdateGroup(ctx context.Context, a resource.AccountID, name, newPath, newName string) error
-	DeleteGroup(ctx context.Context, a resource.AccountID, name string) error
-	AddUserToGroup(ctx context.Context, a resource.AccountID, group, user string) error
-	RemoveUserFromGroup(ctx context.Context, a resource.AccountID, group, user string) error
+	// UpdateGroup, DeleteGroup, AddUserToGroup and RemoveUserFromGroup take
+	// the group ARN the caller was authorized on. A non-empty one must match
+	// the group's current ARN on every read, or the call is a
+	// ConcurrentModification (Changed) and nothing is written.
+	UpdateGroup(ctx context.Context, a resource.AccountID, name, newPath, newName, expectARN string) error
+	DeleteGroup(ctx context.Context, a resource.AccountID, name, expectARN string) error
+	AddUserToGroup(ctx context.Context, a resource.AccountID, group, user, expectGroupARN string) error
+	RemoveUserFromGroup(ctx context.Context, a resource.AccountID, group, user, expectGroupARN string) error
 	ListGroupsForUser(ctx context.Context, a resource.AccountID, user string) ([]Group, error)
 
 	CreateRole(ctx context.Context, a resource.AccountID, in RoleInput) (Role, error)
