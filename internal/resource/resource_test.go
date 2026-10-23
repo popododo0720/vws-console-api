@@ -150,6 +150,35 @@ func TestVolumeAttachmentIdentityIsTheInstance(t *testing.T) {
 	}
 }
 
+// The EC2 surface sends the model message, so each volume error carries the
+// text EC2 sends for its code (#212). The ids are part of the text.
+func TestVolumeErrorMessages(t *testing.T) {
+	vol, err := Parse[VolumeID]("vol-0123456789abcdef0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const id = "vol-0123456789abcdef0"
+	const idempotent = "Arguments on this idempotent request are inconsistent with arguments used in previous request(s)."
+	for _, tc := range []struct {
+		name string
+		err  *Error
+		want string
+	}{
+		{"not found", NotFound(KindVolume, id), "The volume '" + id + "' does not exist."},
+		{"attachment", AttachmentNotFound(vol), "The volume '" + id + "' is not attached to the instance."},
+		{"not available", VolumeNotAvailable(vol), id + " is not 'available'."},
+		{"not in use", VolumeNotInUse(vol), "Volume '" + id + "' is in the 'available' state."},
+		{"root device", VolumeRootDevice(vol), "Volume '" + id + "' is in use as the root device."},
+		{"idempotency", IdempotencyMismatch(), idempotent},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.err.Message != tc.want {
+				t.Fatalf("message %q, want %q", tc.err.Message, tc.want)
+			}
+		})
+	}
+}
+
 func TestActionsAreDerived(t *testing.T) {
 	got := Actions()
 	if len(got) != 25 {

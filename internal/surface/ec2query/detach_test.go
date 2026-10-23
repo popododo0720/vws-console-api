@@ -35,9 +35,10 @@ func TestDetachVolumeThenDelete(t *testing.T) {
 	mismatch := signed(t, h, cred, now, url.Values{
 		"Action": {"DetachVolume"}, "Version": {Version}, "VolumeId": {vol}, "InstanceId": {inst}, "Device": {"/dev/sdg"},
 	}.Encode())
-	if mismatch.Code != http.StatusBadRequest ||
-		!strings.Contains(mismatch.Body.String(), "<Code>InvalidAttachment.NotFound</Code>") {
-		t.Fatalf("device mismatch %d %s", mismatch.Code, mismatch.Body)
+	if got := ec2ErrorXML(t, mismatch.Body.Bytes()); mismatch.Code != http.StatusBadRequest ||
+		got.Code != "InvalidAttachment.NotFound" ||
+		got.Message != "The volume '"+vol+"' is not attached to the instance." {
+		t.Fatalf("device mismatch %d %+v", mismatch.Code, got)
 	}
 	body := send(url.Values{
 		"Action": {"DetachVolume"}, "VolumeId": {vol}, "InstanceId": {inst},
@@ -54,18 +55,38 @@ func TestDetachVolumeThenDelete(t *testing.T) {
 		}
 	}
 	attachTimeOK(t, body)
+	reused := signed(t, h, cred, now, url.Values{
+		"Action": {"DetachVolume"}, "Version": {Version}, "VolumeId": {vol}, "InstanceId": {inst},
+		"Device": {"/dev/sdg"}, "ClientToken": {"detach-1"},
+	}.Encode())
+	if got := ec2ErrorXML(t, reused.Body.Bytes()); reused.Code != http.StatusBadRequest ||
+		got.Code != "IdempotentParameterMismatch" ||
+		got.Message != "Arguments on this idempotent request are inconsistent with arguments used in previous request(s)." {
+		t.Fatalf("reused token %d %+v", reused.Code, got)
+	}
 	again := signed(t, h, cred, now, url.Values{
 		"Action": {"DetachVolume"}, "Version": {Version}, "VolumeId": {vol}, "InstanceId": {inst}, "Device": {"/dev/sdf"},
 	}.Encode())
-	if again.Code != http.StatusBadRequest || !strings.Contains(again.Body.String(), "<Code>IncorrectState</Code>") {
-		t.Fatalf("second detach %d %s", again.Code, again.Body)
+	if got := ec2ErrorXML(t, again.Body.Bytes()); again.Code != http.StatusBadRequest ||
+		got.Code != "IncorrectState" ||
+		got.Message != "Volume '"+vol+"' is in the 'available' state." {
+		t.Fatalf("second detach %d %+v", again.Code, got)
 	}
 	send(url.Values{"Action": {"DeleteVolume"}, "VolumeId": {vol}})
 	missing := signed(t, h, cred, now, url.Values{
 		"Action": {"DetachVolume"}, "Version": {Version}, "VolumeId": {"vol-0123456789abcdef0"},
 	}.Encode())
-	if missing.Code != http.StatusBadRequest ||
-		!strings.Contains(missing.Body.String(), "<Code>InvalidVolume.NotFound</Code>") {
-		t.Fatalf("missing %d %s", missing.Code, missing.Body)
+	if got := ec2ErrorXML(t, missing.Body.Bytes()); missing.Code != http.StatusBadRequest ||
+		got.Code != "InvalidVolume.NotFound" ||
+		got.Message != "The volume 'vol-0123456789abcdef0' does not exist." {
+		t.Fatalf("missing %d %+v", missing.Code, got)
+	}
+	described := signed(t, h, cred, now, url.Values{
+		"Action": {"DescribeVolumes"}, "Version": {Version}, "VolumeId.1": {vol},
+	}.Encode())
+	if got := ec2ErrorXML(t, described.Body.Bytes()); described.Code != http.StatusBadRequest ||
+		got.Code != "InvalidVolume.NotFound" ||
+		got.Message != "The volume '"+vol+"' does not exist." {
+		t.Fatalf("describe a deleted volume %d %+v", described.Code, got)
 	}
 }

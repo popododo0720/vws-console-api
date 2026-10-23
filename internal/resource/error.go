@@ -155,8 +155,13 @@ func Malformed(kind Kind, id string) *Error {
 }
 
 // NotFound reports a missing resource. Callers in another account get the same code.
+// EC2 names a missing volume in its own sentence (#212, #243).
 func NotFound(kind Kind, id string) *Error {
-	return &Error{Code: CodeNotFound, Kind: kind, ID: id, Message: "not found"}
+	message := "not found"
+	if kind == KindVolume {
+		message = "The volume '" + id + "' does not exist."
+	}
+	return &Error{Code: CodeNotFound, Kind: kind, ID: id, Message: message}
 }
 
 // AlreadyExists reports a resource the caller cannot create again.
@@ -189,8 +194,13 @@ func Conflict(kind Kind, id, message string) *Error {
 }
 
 // IdempotencyMismatch reports a client token reused with different parameters.
+// The text is EC2's own, from the errors page of the API Reference.
+// https://docs.aws.amazon.com/AWSEC2/latest/APIReference/errors-overview.html
 func IdempotencyMismatch() *Error {
-	return &Error{Code: CodeIdempotencyMismatch, Message: "client token reused with different parameters"}
+	return &Error{
+		Code:    CodeIdempotencyMismatch,
+		Message: "Arguments on this idempotent request are inconsistent with arguments used in previous request(s).",
+	}
 }
 
 // Unauthenticated reports a missing or rejected credential.

@@ -46,6 +46,14 @@ func TestAttachVolumeAnswersAttaching(t *testing.T) {
 			t.Fatalf("AttachVolume: no %s in %s", want, body)
 		}
 	}
+	taken := signed(t, h, cred, now, url.Values{
+		"Action": {"AttachVolume"}, "Version": {Version}, "VolumeId": {vol},
+		"InstanceId": {inst}, "Device": {"/dev/sdg"}, "ClientToken": {"attach-taken"},
+	}.Encode())
+	if got := ec2ErrorXML(t, taken.Body.Bytes()); taken.Code != http.StatusBadRequest ||
+		got.Code != "IncorrectState" || got.Message != vol+" is not 'available'." {
+		t.Fatalf("attach a taken volume %d %+v", taken.Code, got)
+	}
 	described := send(url.Values{"Action": {"DescribeVolumes"}, "VolumeId.1": {vol}})
 	for _, want := range []string{
 		"<status>in-use</status>", "<instanceId>" + inst + "</instanceId>",
