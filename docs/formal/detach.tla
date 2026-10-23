@@ -50,11 +50,12 @@ CONSTANTS
     FixPruneExpiredOnly, \* prune drops expired records only (#303)
     FixPendingExpires, \* an expired record no longer holds (pendingDetachOps, #322)
     FixEtagReread, \* an etag mismatch rereads the instance (DetachVolume's loop)
-    FixArchive     \* a new record moves another request's record aside (#353)
+    FixArchive,    \* a new record moves another request's record aside (#353)
+    FixResendRecover \* a write refused as a mismatch next to this request's record saves an op (#352)
 
 ASSUME Budgets \subseteq Nat /\ MaxReplays \in Nat /\ MaxRestarts \in Nat /\ MaxReattach \in Nat
 
-Live == {"read", "write", "pread", "pwrite"}
+Live == {"read", "write", "rread", "recover", "pread", "pwrite"}
 Results == {"ok", "exhausted", "noroom", "notinuse", "mismatch", "params", "capacity", "lost"}
 
 VARIABLES
@@ -257,11 +258,49 @@ Write(c) ==
               \* etagMismatchError: DetachVolume rereads.
               /\ pc' = [pc EXCEPT ![c] = IF FixEtagReread THEN "read" ELSE "write"]
               /\ UNCHANGED <<inst, etag, heldPruned, liveDropped, reqStore, accepted, applied, result, retop>>
+         [] r = "mismatch" /\ FixResendRecover ->
+              \* IDEMPOTENCY_CONFLICT: writeDetach rereads the instance (RRead).
+              /\ pc' = [pc EXCEPT ![c] = "rread"]
+              /\ UNCHANGED <<inst, etag, heldPruned, liveDropped, reqStore, accepted, applied, result, retop>>
          [] OTHER ->
               /\ Finish(c, r, None)
               /\ UNCHANGED <<inst, etag, heldPruned, liveDropped, reqStore, accepted, applied>>
     /\ UNCHANGED <<tokOf, volOf, Budget, expired, snap, pay, tpc, tsnap, tpay, acked,
                    restarts, reattaches>>
+
+\* writeDetach after IDEMPOTENCY_CONFLICT (#352): this request's record on
+\* the instance proves its detach was applied, but compute cannot replay the
+\* write, as the instance changed since. No record: the token was used with
+\* other parameters.
+RRead(c) ==
+    LET t == tokOf[c]
+        v == volOf[t]
+    IN
+    /\ pc[c] = "rread"
+    /\ IF inst.rec[v] = t
+       THEN /\ snap' = [snap EXCEPT ![c] = etag]
+            /\ pay' = [pay EXCEPT ![c] = inst]
+            /\ pc' = [pc EXCEPT ![c] = "recover"]
+            /\ UNCHANGED <<result, retop>>
+       ELSE Finish(c, "mismatch", None) /\ UNCHANGED <<snap, pay>>
+    /\ UNCHANGED <<tokOf, volOf, Budget, inst, etag, expired, reqStore, tpc, tsnap, tpay,
+                   acked, accepted, applied, heldPruned, liveDropped, restarts, reattaches>>
+
+\* The instance as reread, under requestUUID(key, "detach-recover", etag):
+\* its op ends when the instance reaches that spec, and is saved as this
+\* detach's (PRead).
+Recover(c) ==
+    LET r == Compute(None, snap[c], pay[c]) IN
+    /\ pc[c] = "recover"
+    /\ CASE r = "applied" ->
+              Apply(pay[c], None) /\ pc' = [pc EXCEPT ![c] = "pread"] /\ UNCHANGED <<result, retop>>
+         [] r = "etag" ->
+              /\ pc' = [pc EXCEPT ![c] = IF FixEtagReread THEN "read" ELSE "recover"]
+              /\ UNCHANGED <<inst, etag, heldPruned, liveDropped, result, retop>>
+         [] OTHER ->
+              Finish(c, r, None) /\ UNCHANGED <<inst, etag, heldPruned, liveDropped>>
+    /\ UNCHANGED <<tokOf, volOf, Budget, expired, reqStore, snap, pay, tpc, tsnap, tpay,
+                   acked, accepted, applied, restarts, reattaches>>
 
 \* persistDetachOp: GetInstance, then save the op id unless a later detach
 \* owns the record.
@@ -366,7 +405,7 @@ Done ==
     /\ \A k \in TagKeys : tpc[k] \notin {"read", "write"}
     /\ UNCHANGED vars
 
-Progress(c) == Read(c) \/ Write(c) \/ PRead(c) \/ PWrite(c)
+Progress(c) == Read(c) \/ Write(c) \/ RRead(c) \/ Recover(c) \/ PRead(c) \/ PWrite(c)
 
 Next ==
     \/ \E c \in Callers : Progress(c) \/ Restart(c) \/ Abandon(c)
