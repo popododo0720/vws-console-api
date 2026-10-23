@@ -114,19 +114,63 @@ func TestPolicyTagErrors(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		values map[string]string
+		code   string
+		member string
 	}{
-		{"invalid key character", map[string]string{"Tags.member.1.Key": "bad#key", "Tags.member.1.Value": "v"}},
-		{"invalid value character", map[string]string{"Tags.member.1.Key": "k", "Tags.member.1.Value": "bad#value"}},
-		{"reserved key prefix", map[string]string{"Tags.member.1.Key": "aws:team", "Tags.member.1.Value": "v"}},
-		{"reserved value prefix", map[string]string{"Tags.member.1.Key": "k", "Tags.member.1.Value": "aws:value"}},
-		{"empty key", map[string]string{"Tags.member.1.Key": "", "Tags.member.1.Value": "v"}},
+		{
+			"invalid key character",
+			map[string]string{"Tags.member.1.Key": "bad#key", "Tags.member.1.Value": "v"},
+			"ValidationError", "tags.1.member.key",
+		},
+		{
+			"invalid value character",
+			map[string]string{"Tags.member.1.Key": "k", "Tags.member.1.Value": "bad#value"},
+			"ValidationError", "tags.1.member.value",
+		},
+		{
+			"key too long",
+			map[string]string{
+				"Tags.member.1.Key": strings.Repeat("k", iam.MaxTagKeyLen+1), "Tags.member.1.Value": "v",
+			},
+			"ValidationError", "tags.1.member.key",
+		},
+		{
+			"value too long",
+			map[string]string{
+				"Tags.member.1.Key": "k", "Tags.member.1.Value": strings.Repeat("v", iam.MaxTagValueLen+1),
+			},
+			"ValidationError", "tags.1.member.value",
+		},
+		{"invalid key at the second member", map[string]string{
+			"Tags.member.1.Key": "ok", "Tags.member.1.Value": "v",
+			"Tags.member.2.Key": "bad#key", "Tags.member.2.Value": "v",
+		}, "ValidationError", "tags.2.member.key"},
+		{
+			"reserved key prefix",
+			map[string]string{"Tags.member.1.Key": "aws:team", "Tags.member.1.Value": "v"},
+			"InvalidInput", "",
+		},
+		{
+			"reserved value prefix",
+			map[string]string{"Tags.member.1.Key": "k", "Tags.member.1.Value": "aws:value"},
+			"InvalidInput", "",
+		},
+		{
+			"empty key",
+			map[string]string{"Tags.member.1.Key": "", "Tags.member.1.Value": "v"},
+			"ValidationError", "tags.1.member.key",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			form := url.Values{"Action": {"TagPolicy"}, "PolicyArn": {policyTagARN}}
 			for k, v := range tc.values {
 				form.Set(k, v)
 			}
-			has(t, call(t, h, root, sigv4.ServiceIAM, form), http.StatusBadRequest, `<Code>InvalidInput</Code>`)
+			res := call(t, h, root, sigv4.ServiceIAM, form)
+			has(t, res, http.StatusBadRequest, "<Code>"+tc.code+"</Code>")
+			if tc.member != "" {
+				has(t, res, http.StatusBadRequest, tc.member, "failed to satisfy constraint")
+			}
 		})
 	}
 	many := url.Values{"Action": {"TagPolicy"}, "PolicyArn": {policyTagARN}}
@@ -140,6 +184,18 @@ func TestPolicyTagErrors(t *testing.T) {
 	has(t, call(t, h, root, sigv4.ServiceIAM, url.Values{
 		"Action": {"UntagPolicy"}, "PolicyArn": {policyTagARN},
 		"TagKeys.member.1": {"bad#key"},
+	}), http.StatusBadRequest, `<Code>ValidationError</Code>`, "failed to satisfy constraint")
+	has(t, call(t, h, root, sigv4.ServiceIAM, url.Values{
+		"Action": {"UntagPolicy"}, "PolicyArn": {policyTagARN},
+		"TagKeys.member.1": {strings.Repeat("k", iam.MaxTagKeyLen+1)},
+	}), http.StatusBadRequest, `<Code>ValidationError</Code>`, "failed to satisfy constraint")
+	has(t, call(t, h, root, sigv4.ServiceIAM, url.Values{
+		"Action": {"UntagPolicy"}, "PolicyArn": {policyTagARN},
+		"TagKeys.member.1": {""},
+	}), http.StatusBadRequest, `<Code>ValidationError</Code>`, "failed to satisfy constraint")
+	has(t, call(t, h, root, sigv4.ServiceIAM, url.Values{
+		"Action": {"UntagPolicy"}, "PolicyArn": {policyTagARN},
+		"TagKeys.member.1": {"aws:team"},
 	}), http.StatusBadRequest, `<Code>InvalidInput</Code>`)
 	for _, maxItems := range []string{"0", "1001", "many"} {
 		form := url.Values{"Action": {"ListPolicyTags"}, "PolicyArn": {policyTagARN}, "MaxItems": {maxItems}}

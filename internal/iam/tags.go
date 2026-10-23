@@ -41,37 +41,35 @@ type TagPage struct {
 // and _ . : / = + - @.
 const tagAlphabet = `[\p{L}\p{Z}\p{N}_.:/=+\-@]`
 
+const (
+	tagKeyPattern   = tagAlphabet + "+"
+	tagValuePattern = tagAlphabet + "*"
+)
+
 var (
-	tagKeyRE   = regexp.MustCompile("^" + tagAlphabet + "+$")
-	tagValueRE = regexp.MustCompile("^" + tagAlphabet + "*$")
+	tagKeyRE   = regexp.MustCompile("^" + tagKeyPattern + "$")
+	tagValueRE = regexp.MustCompile("^" + tagValuePattern + "$")
 )
 
 // reservedTagPrefix is the tag key and value prefix AWS reserves.
 const reservedTagPrefix = "aws:"
 
-// ValidateTag reports an invalid tag as AWS InvalidInput.
-func ValidateTag(tag Tag) error {
-	if n := utf8.RuneCountInString(tag.Key); n < 1 || n > MaxTagKeyLen {
-		return resource.Invalid("TagKey", "the tag key must be 1 to "+strconv.Itoa(MaxTagKeyLen)+" characters")
+// ValidateTag reports an invalid tag outside a request. The AWS Query surface
+// calls ValidateTagAt with the tag's member index instead.
+func ValidateTag(tag Tag) error { return validateTag(tag, "tags.member") }
+
+// ValidateTagAt reports an invalid tag at the one-based index of the request's
+// Tags list. A length or pattern failure is AWS ValidationError; a reserved
+// key prefix is InvalidInput.
+func ValidateTagAt(tag Tag, index int) error {
+	return validateTag(tag, "tags."+strconv.Itoa(index)+".member")
+}
+
+func validateTag(tag Tag, member string) error {
+	if err := validateTagKey(tag.Key, member+".key"); err != nil {
+		return err
 	}
-	if !tagKeyRE.MatchString(tag.Key) {
-		return resource.Invalid("TagKey", "the tag key "+strconv.Quote(tag.Key)+
-			" has a character outside the allowed alphabet")
-	}
-	if strings.HasPrefix(strings.ToLower(tag.Key), reservedTagPrefix) {
-		return resource.Invalid("TagKey", "the tag key "+strconv.Quote(tag.Key)+" begins with the reserved prefix aws:")
-	}
-	if n := utf8.RuneCountInString(tag.Value); n > MaxTagValueLen {
-		return resource.Invalid("TagValue", "the tag value must be at most "+strconv.Itoa(MaxTagValueLen)+" characters")
-	}
-	if !tagValueRE.MatchString(tag.Value) {
-		return resource.Invalid("TagValue", "the tag value "+strconv.Quote(tag.Value)+
-			" has a character outside the allowed alphabet")
-	}
-	if strings.HasPrefix(strings.ToLower(tag.Value), reservedTagPrefix) {
-		return resource.Invalid("TagValue", "the tag value "+strconv.Quote(tag.Value)+" begins with the reserved prefix aws:")
-	}
-	return nil
+	return validateTagValue(tag.Value, member+".value")
 }
 
 // ValidateTags reports the first invalid tag of tags.
@@ -84,9 +82,41 @@ func ValidateTags(tags []Tag) error {
 	return nil
 }
 
-// ValidateTagKey reports an invalid tag key as AWS InvalidInput.
-func ValidateTagKey(key string) error {
-	return ValidateTag(Tag{Key: key})
+// ValidateTagKey reports an invalid tag key outside a request.
+func ValidateTagKey(key string) error { return validateTagKey(key, "tagKeys.member") }
+
+// ValidateTagKeyAt reports an invalid tag key at the one-based index of the
+// request's TagKeys list.
+func ValidateTagKeyAt(key string, index int) error {
+	return validateTagKey(key, "tagKeys."+strconv.Itoa(index)+".member")
+}
+
+func validateTagKey(key, member string) error {
+	if n := utf8.RuneCountInString(key); n < 1 {
+		return validationError(member, "Member must have length greater than or equal to 1")
+	} else if n > MaxTagKeyLen {
+		return validationError(member, "Member must have length less than or equal to "+strconv.Itoa(MaxTagKeyLen))
+	}
+	if !tagKeyRE.MatchString(key) {
+		return validationError(member, "Member must satisfy regular expression pattern: "+tagKeyPattern)
+	}
+	if strings.HasPrefix(strings.ToLower(key), reservedTagPrefix) {
+		return resource.Invalid("TagKey", "the tag key "+strconv.Quote(key)+" begins with the reserved prefix aws:")
+	}
+	return nil
+}
+
+func validateTagValue(value, member string) error {
+	if n := utf8.RuneCountInString(value); n > MaxTagValueLen {
+		return validationError(member, "Member must have length less than or equal to "+strconv.Itoa(MaxTagValueLen))
+	}
+	if !tagValueRE.MatchString(value) {
+		return validationError(member, "Member must satisfy regular expression pattern: "+tagValuePattern)
+	}
+	if strings.HasPrefix(strings.ToLower(value), reservedTagPrefix) {
+		return resource.Invalid("TagValue", "the tag value "+strconv.Quote(value)+" begins with the reserved prefix aws:")
+	}
+	return nil
 }
 
 // validationError is the AWS Query failure for a request member constraint.
