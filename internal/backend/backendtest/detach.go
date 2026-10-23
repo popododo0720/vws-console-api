@@ -30,7 +30,9 @@ func DetachReplay(t *testing.T, newSet Harness) {
 	first, second := detachInstances(ctx, t, set, scope, mut)
 	newVol := func(t *testing.T, key string) resource.VolumeID {
 		t.Helper()
-		vol, err := set.Compute.CreateVolume(ctx, mut(key), resource.CreateVolumeRequest{SizeGiB: 8, Zone: resource.ZoneName})
+		vol, err := set.Compute.CreateVolume(ctx, mut(key), resource.CreateVolumeRequest{
+			SizeGiB: 8, Zone: resource.ZoneName, Type: resource.VolumeGP2,
+		})
 		if err != nil {
 			t.Fatal(err)
 		}

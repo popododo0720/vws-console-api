@@ -153,6 +153,8 @@ func (c computeClient) RunInstances(ctx context.Context, m backend.Mutation, req
 }
 
 // bootVolume is the disk RunInstances creates from the machine image.
+// It is gp2, the CreateVolume default, because a VWS image carries no block
+// device mapping and RunInstances takes none yet (#323 gaps).
 // volume.proto sources a volume from a compute image. InstanceSpec has no
 // image field; the instance attaches this volume and marks it boot.
 func bootVolume(projectID, fingerprint string, image resource.ImageID, instance string) *storagev1.Volume {
@@ -160,7 +162,7 @@ func bootVolume(projectID, fingerprint string, image resource.ImageID, instance 
 		Labels: map[string]string{labelFingerprint: clip(fingerprint, 63), labelInstance: instance},
 		Spec: &storagev1.VolumeSpec{
 			SizeGib: 8,
-			Type:    storagev1.VolumeType_VOLUME_TYPE_SSD,
+			Type:    storagev1.VolumeType_VOLUME_TYPE_GP2,
 			Source:  &storagev1.VolumeSpec_Image{Image: imageName(projectID, image.String())},
 		},
 	}

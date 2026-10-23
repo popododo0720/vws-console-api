@@ -130,6 +130,9 @@ func (c compute) CreateVolume(ctx context.Context, m backend.Mutation, req resou
 	if err := ctx.Err(); err != nil {
 		return resource.Accepted[resource.Volume]{}, err
 	}
+	if !req.Type.Valid() {
+		return resource.Accepted[resource.Volume]{}, resource.Invalid("volumeType", "unsupported")
+	}
 	c.w.mu.Lock()
 	defer c.w.mu.Unlock()
 	c.w.settle(c.w.now())

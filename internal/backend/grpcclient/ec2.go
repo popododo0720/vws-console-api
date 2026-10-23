@@ -228,8 +228,12 @@ func (c computeClient) writeInstanceLabels(
 }
 
 func (c computeClient) CreateVolume(ctx context.Context, m backend.Mutation, req resource.CreateVolumeRequest) (resource.Accepted[resource.Volume], error) {
+	typ := storageType(req.Type)
+	if typ == storagev1.VolumeType_VOLUME_TYPE_UNSPECIFIED {
+		return resource.Accepted[resource.Volume]{}, resource.Invalid("volumeType", "unsupported")
+	}
 	projectID := project(m.Account)
-	spec := &storagev1.VolumeSpec{SizeGib: req.SizeGiB, Type: storageType(req.Type)}
+	spec := &storagev1.VolumeSpec{SizeGib: req.SizeGiB, Type: typ}
 	if !req.SnapshotID.IsZero() {
 		// A size of 0 is the snapshot size, which only the snapshot knows.
 		snap, err := c.getSnapshot(ctx, projectID, req.SnapshotID.String())
@@ -1806,9 +1810,14 @@ func volumeModel(in *storagev1.Volume) (resource.Volume, error) {
 		}
 		snap = parsed
 	}
+	typ := volumeTypeOf(in.GetSpec().GetType())
+	if typ == "" {
+		bad := in.GetSpec().GetType().String()
+		return resource.Volume{}, resource.Internal(errors.New("volume " + id.String() + " has unknown type " + bad))
+	}
 	vol := resource.Volume{
 		ID: id, OwnerID: owner, SizeGiB: in.GetSpec().GetSizeGib(), Zone: parts[3], SnapshotID: snap,
-		Type: volumeTypeOf(in.GetSpec().GetType()), State: state, InstanceID: inst, Device: in.GetStatus().GetDeviceName(),
+		Type: typ, State: state, InstanceID: inst, Device: in.GetStatus().GetDeviceName(),
 		CreateTime: in.GetCreateTime().AsTime().UTC(),
 	}
 	if rootVolume(in) {
@@ -1884,7 +1893,7 @@ func volumeProto(v resource.Volume, projectID string) *storagev1.Volume {
 	if !v.CreateTime.IsZero() {
 		created = timestamppb.New(v.CreateTime)
 	}
-	spec := &storagev1.VolumeSpec{SizeGib: v.SizeGiB, Type: storagev1.VolumeType_VOLUME_TYPE_SSD}
+	spec := &storagev1.VolumeSpec{SizeGib: v.SizeGiB, Type: storageType(v.Type)}
 	if !v.SnapshotID.IsZero() {
 		spec.Source = &storagev1.VolumeSpec_Snapshot{Snapshot: snapshotName(projectID, v.SnapshotID.String())}
 	}
@@ -2228,20 +2237,50 @@ func (c computeClient) nextImport(
 	return importStep{nonce: nonce, reused: true}, true, nil
 }
 
-// storageType maps an EC2 volume type to the storage tier. The storage proto
-// has only STANDARD and SSD, so gp2 and gp3 both land on SSD.
+// storageType maps an EC2 volume type to the storage VolumeType of the same
+// name. Anything else is UNSPECIFIED, which callers refuse before any call.
 func storageType(t resource.VolumeType) storagev1.VolumeType {
-	if t == resource.VolumeStandard {
+	switch t {
+	case resource.VolumeStandard:
 		return storagev1.VolumeType_VOLUME_TYPE_STANDARD
+	case resource.VolumeGP2:
+		return storagev1.VolumeType_VOLUME_TYPE_GP2
+	case resource.VolumeGP3:
+		return storagev1.VolumeType_VOLUME_TYPE_GP3
+	case resource.VolumeIO1:
+		return storagev1.VolumeType_VOLUME_TYPE_IO1
+	case resource.VolumeIO2:
+		return storagev1.VolumeType_VOLUME_TYPE_IO2
+	case resource.VolumeST1:
+		return storagev1.VolumeType_VOLUME_TYPE_ST1
+	case resource.VolumeSC1:
+		return storagev1.VolumeType_VOLUME_TYPE_SC1
 	}
-	return storagev1.VolumeType_VOLUME_TYPE_SSD
+	return storagev1.VolumeType_VOLUME_TYPE_UNSPECIFIED
 }
 
-// volumeTypeOf reports an SSD volume as gp2 because storage does not keep
-// which SSD type was asked for.
+// volumeTypeOf maps a stored VolumeType to its EC2 name. The deprecated SSD
+// tier reads as gp2 (vws-storage#123). UNSPECIFIED or a number this build
+// does not know is empty, and volumeModel refuses the record.
 func volumeTypeOf(t storagev1.VolumeType) resource.VolumeType {
-	if t == storagev1.VolumeType_VOLUME_TYPE_STANDARD {
+	switch t {
+	case storagev1.VolumeType_VOLUME_TYPE_STANDARD:
 		return resource.VolumeStandard
+	case storagev1.VolumeType_VOLUME_TYPE_SSD, //nolint:staticcheck // SA1019: old records carry SSD.
+		storagev1.VolumeType_VOLUME_TYPE_GP2:
+		return resource.VolumeGP2
+	case storagev1.VolumeType_VOLUME_TYPE_GP3:
+		return resource.VolumeGP3
+	case storagev1.VolumeType_VOLUME_TYPE_IO1:
+		return resource.VolumeIO1
+	case storagev1.VolumeType_VOLUME_TYPE_IO2:
+		return resource.VolumeIO2
+	case storagev1.VolumeType_VOLUME_TYPE_ST1:
+		return resource.VolumeST1
+	case storagev1.VolumeType_VOLUME_TYPE_SC1:
+		return resource.VolumeSC1
+	case storagev1.VolumeType_VOLUME_TYPE_UNSPECIFIED:
+		return ""
 	}
-	return resource.VolumeGP2
+	return ""
 }

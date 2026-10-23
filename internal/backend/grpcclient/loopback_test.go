@@ -986,7 +986,9 @@ func (s *volumeSrv) CreateVolume(ctx context.Context, req *storagev1.CreateVolum
 	}
 	acc, err := s.w.set.Compute.CreateVolume(ctx, backend.Mutation{
 		Scope: backend.Scope{Account: account}, Key: req.GetRequestId(), Fingerprint: fp,
-	}, resource.CreateVolumeRequest{SizeGiB: spec.GetSizeGib(), Zone: resource.ZoneName, SnapshotID: snap})
+	}, resource.CreateVolumeRequest{
+		SizeGiB: spec.GetSizeGib(), Zone: resource.ZoneName, Type: volumeTypeOf(spec.GetType()), SnapshotID: snap,
+	})
 	if err != nil {
 		return nil, toStatus(err)
 	}

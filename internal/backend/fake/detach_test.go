@@ -47,7 +47,7 @@ func TestDetachAttachTimeIsTheAttachCall(t *testing.T) {
 	}
 	volMut := backend.Mutation{Scope: scope, Key: "vol", Fingerprint: "vol"}
 	vol, err := set.Compute.CreateVolume(ctx, volMut, resource.CreateVolumeRequest{
-		SizeGiB: 4, Zone: resource.ZoneName,
+		SizeGiB: 4, Zone: resource.ZoneName, Type: resource.VolumeGP2,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -117,7 +117,7 @@ func TestDeleteVolumeFollowsBlockDevices(t *testing.T) {
 	}
 	volMut := backend.Mutation{Scope: scope, Key: "vol", Fingerprint: "vol"}
 	vol, err := set.Compute.CreateVolume(ctx, volMut, resource.CreateVolumeRequest{
-		SizeGiB: 4, Zone: resource.ZoneName,
+		SizeGiB: 4, Zone: resource.ZoneName, Type: resource.VolumeGP2,
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -53,7 +53,7 @@ func exerciseEC2(ctx context.Context, t *testing.T, set backend.Set, account res
 		t.Fatalf("delete vpc: %v", err)
 	}
 
-	volReq := resource.CreateVolumeRequest{SizeGiB: 8, Zone: resource.ZoneName}
+	volReq := resource.CreateVolumeRequest{SizeGiB: 8, Zone: resource.ZoneName, Type: resource.VolumeGP2}
 	volM := backend.Mutation{Scope: scope, Key: "k-vol", Fingerprint: "fp-vol"}
 	vol, err := set.Compute.CreateVolume(ctx, volM, volReq)
 	if err != nil || vol.Items[0].State != resource.VolumeCreating {
