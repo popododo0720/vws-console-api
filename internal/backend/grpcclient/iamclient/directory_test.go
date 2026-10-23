@@ -36,6 +36,7 @@ import (
 type directory struct {
 	iamv1.UnimplementedUserServiceServer
 	iamv1.UnimplementedGroupServiceServer
+	iamv1.UnimplementedAccessKeyServiceServer
 
 	mu     sync.Mutex
 	seq    int
@@ -57,6 +58,20 @@ type directory struct {
 	// the entity changed by another writer since it was read.
 	deleteRace int
 	calls      map[string][]proto.Message
+	// keys are the access keys by id (#314 bundle 2), as vws-iam 04488bd
+	// internal/grpcapi/keys.go and internal/accesskey serve them.
+	keys map[string]*dirKey
+	// keyState, when set, is the state ListAccessKeys and GetAccessKey report
+	// for every key, so tests see INACTIVE and states vws-iam never sends.
+	keyState iamv1.AccessKeyState
+	// createSecret, when set, replaces the secret CreateAccessKey returns.
+	createSecret *string
+}
+
+type dirKey struct {
+	id, user string // user: the folded user resource name
+	created  time.Time
+	version  int
 }
 
 type dirEntity struct {
@@ -76,7 +91,7 @@ var dirNameRE = regexp.MustCompile(`^[A-Za-z0-9+=,.@_-]{1,64}$`)
 
 func newDirectory() *directory {
 	return &directory{
-		users: map[string]*dirEntity{}, groups: map[string]*dirEntity{}, ops: map[string]dirOp{},
+		users: map[string]*dirEntity{}, groups: map[string]*dirEntity{}, ops: map[string]dirOp{}, keys: map[string]*dirKey{},
 		maxPage: 1000, failBefore: map[string]int{}, failAfter: map[string]int{}, calls: map[string][]proto.Message{},
 	}
 }
@@ -89,6 +104,7 @@ func dirHarness(t *testing.T) (*Client, *directory) {
 	g := grpc.NewServer()
 	iamv1.RegisterUserServiceServer(g, d)
 	iamv1.RegisterGroupServiceServer(g, d)
+	iamv1.RegisterAccessKeyServiceServer(g, d)
 	go func() { _ = g.Serve(lis) }()
 	t.Cleanup(g.Stop)
 	conn, err := grpc.NewClient("passthrough:///bufnet",
@@ -372,7 +388,7 @@ func (d *directory) DeleteUser(_ context.Context, req *iamv1.DeleteUserRequest) 
 	if e := req.GetEtag(); e != "" && e != strconv.Itoa(u.version) {
 		return nil, awsErr(codes.Aborted, "ETAG_MISMATCH", "ConcurrentModification")
 	}
-	if len(d.userProto(u).GetStatus().GetGroups()) > 0 {
+	if len(d.userProto(u).GetStatus().GetGroups()) > 0 || d.keysOf(fold(u.name)) > 0 {
 		return nil, awsErr(codes.FailedPrecondition, "DELETE_CONFLICT", "DeleteConflict")
 	}
 	delete(d.users, fold(req.GetName()))
@@ -515,4 +531,176 @@ func (d *directory) DeleteGroup(_ context.Context, req *iamv1.DeleteGroupRequest
 	}
 	delete(d.groups, fold(req.GetName()))
 	return d.done("DeleteGroup", req.GetRequestId(), req, nil)
+}
+
+// --- AccessKeyService ---
+
+var dirKeyIDRE = regexp.MustCompile(`^AKIA[A-Z2-7]{16}$`)
+
+func (d *directory) keysOf(user string) int {
+	n := 0
+	for _, k := range d.keys {
+		if k.user == user {
+			n++
+		}
+	}
+	return n
+}
+
+func (d *directory) keyProto(k *dirKey) *iamv1.AccessKey {
+	st := iamv1.AccessKeyState_ACCESS_KEY_STATE_ACTIVE
+	if d.keyState != iamv1.AccessKeyState_ACCESS_KEY_STATE_UNSPECIFIED {
+		st = d.keyState
+	}
+	return &iamv1.AccessKey{
+		Name: d.users[k.user].name + "/accessKeys/" + k.id, Etag: strconv.Itoa(k.version),
+		Spec: &iamv1.AccessKeySpec{State: st}, Status: &iamv1.AccessKeyStatus{},
+		CreateTime: timestamppb.New(k.created),
+	}
+}
+
+// keyRef parses projects/P/users/U/accessKeys/ID as vws-iam does: the id
+// must be an AKIA key id.
+func keyRef(name string) (user, id string, err error) {
+	i := strings.LastIndex(name, "/accessKeys/")
+	if i < 0 {
+		return "", "", status.Error(codes.InvalidArgument, "bad name "+name)
+	}
+	if _, _, err := split(name[:i], "users"); err != nil {
+		return "", "", err
+	}
+	id = name[i+len("/accessKeys/"):]
+	if !dirKeyIDRE.MatchString(id) {
+		return "", "", status.Error(codes.InvalidArgument, "bad access key id")
+	}
+	return fold(name[:i]), id, nil
+}
+
+// CreateAccessKey is not an operation and is never replayed: vws-iam keeps
+// no plaintext secret, so a lost response means another key.
+func (d *directory) CreateAccessKey(
+	_ context.Context, req *iamv1.CreateAccessKeyRequest,
+) (*iamv1.CreateAccessKeyResponse, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if err := d.enter("CreateAccessKey", req); err != nil {
+		return nil, err
+	}
+	if _, _, err := split(req.GetParent(), "users"); err != nil {
+		return nil, err
+	}
+	user := fold(req.GetParent())
+	if d.users[user] == nil {
+		return nil, awsErr(codes.NotFound, "NOT_FOUND", "NoSuchEntity")
+	}
+	if d.keysOf(user) >= 2 {
+		return nil, awsErr(codes.ResourceExhausted, "QUOTA_EXCEEDED", "LimitExceeded")
+	}
+	d.seq++
+	id := fmt.Sprintf("AKIA%016d", d.seq)
+	id = strings.NewReplacer("0", "A", "1", "B", "8", "I", "9", "J").Replace(id[:4]) +
+		strings.NewReplacer("0", "A", "1", "B", "8", "I", "9", "J").Replace(id[4:])
+	k := &dirKey{id: id, user: user, created: time.Now().UTC().Truncate(time.Second), version: 1}
+	d.keys[id] = k
+	secret := fmt.Sprintf("%040d", d.seq) // 40 characters, as vws-iam sends
+	secret = "s3cr3t" + secret[6:]
+	if d.createSecret != nil {
+		secret = *d.createSecret
+	}
+	if d.failAfter["CreateAccessKey"] > 0 {
+		d.failAfter["CreateAccessKey"]--
+		return nil, status.Error(codes.Unavailable, "injected after the change")
+	}
+	return &iamv1.CreateAccessKeyResponse{AccessKey: d.keyProto(k), SecretAccessKey: secret}, nil
+}
+
+func (d *directory) GetAccessKey(_ context.Context, req *iamv1.GetAccessKeyRequest) (*iamv1.AccessKey, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if err := d.enter("GetAccessKey", req); err != nil {
+		return nil, err
+	}
+	user, id, err := keyRef(req.GetName())
+	if err != nil {
+		return nil, err
+	}
+	k := d.keys[id]
+	if k == nil || k.user != user {
+		return nil, awsErr(codes.NotFound, "NOT_FOUND", "NoSuchEntity")
+	}
+	return d.keyProto(k), nil
+}
+
+func (d *directory) ListAccessKeys(
+	_ context.Context, req *iamv1.ListAccessKeysRequest,
+) (*iamv1.ListAccessKeysResponse, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if err := d.enter("ListAccessKeys", req); err != nil {
+		return nil, err
+	}
+	if _, _, err := split(req.GetParent(), "users"); err != nil {
+		return nil, err
+	}
+	user := fold(req.GetParent())
+	if d.users[user] == nil {
+		return nil, awsErr(codes.NotFound, "NOT_FOUND", "NoSuchEntity")
+	}
+	ids := []string{}
+	for id, k := range d.keys {
+		if k.user == user {
+			ids = append(ids, id)
+		}
+	}
+	sort.Strings(ids)
+	n := int(req.GetPageSize())
+	if n <= 0 {
+		n = 50
+	}
+	n = min(n, 1000, d.maxPage)
+	start := 0
+	if t := req.GetPageToken(); t != "" {
+		after, err := base64.RawURLEncoding.DecodeString(t)
+		if err != nil {
+			return nil, status.Error(codes.InvalidArgument, "bad page token")
+		}
+		start = sort.SearchStrings(ids, string(after)+"\x00")
+	}
+	end := min(start+n, len(ids))
+	out := &iamv1.ListAccessKeysResponse{}
+	for _, id := range ids[start:end] {
+		k := d.keyProto(d.keys[id])
+		k.Etag = "" // vws-iam lists keys without an etag
+		out.AccessKeys = append(out.AccessKeys, k)
+	}
+	if end < len(ids) {
+		out.NextPageToken = base64.RawURLEncoding.EncodeToString([]byte(ids[end-1]))
+	}
+	return out, nil
+}
+
+func (d *directory) DeleteAccessKey(
+	_ context.Context, req *iamv1.DeleteAccessKeyRequest,
+) (*longrunningpb.Operation, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if err := d.enter("DeleteAccessKey", req); err != nil {
+		return nil, err
+	}
+	user, id, err := keyRef(req.GetName())
+	if err != nil {
+		return nil, err
+	}
+	if op, found, err := d.replay("DeleteAccessKey", req.GetRequestId(), req); found {
+		return op, err
+	}
+	k := d.keys[id]
+	if k == nil || k.user != user {
+		return nil, awsErr(codes.NotFound, "NOT_FOUND", "NoSuchEntity")
+	}
+	if e := req.GetEtag(); e != "" && e != strconv.Itoa(k.version) {
+		return nil, awsErr(codes.Aborted, "ETAG_MISMATCH", "ConcurrentModification")
+	}
+	delete(d.keys, id)
+	return d.done("DeleteAccessKey", req.GetRequestId(), req, nil)
 }
