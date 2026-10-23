@@ -421,7 +421,7 @@ func (c computeClient) detachOnce(
 	// the volume was attached again since (EC2 client-token rules: the same
 	// token and parameters succeed with no further action).
 	if got != nil {
-		if rec, ok := detachReplayFrom(got.GetLabels(), vol.ID.String()); ok && rec.requestHex == requestHex {
+		if rec, _, ok := detachReplayFor(got.GetLabels(), vol.ID.String(), requestHex); ok {
 			rec.instanceID = model.ID
 			switch rec.opMatch(m.Fingerprint) {
 			case opSaved:
@@ -625,8 +625,8 @@ func (c computeClient) findDetachReplay(
 			return nil, resource.Instance{}, detachReplay{}, false, fromRPC(err)
 		}
 		for _, item := range out.GetInstances() {
-			rec, ok := detachReplayFrom(item.GetLabels(), id.String())
-			if !ok || rec.requestHex != requestHex {
+			rec, _, ok := detachReplayFor(item.GetLabels(), id.String(), requestHex)
+			if !ok {
 				continue
 			}
 			model, err := instanceModel(item)
@@ -665,19 +665,24 @@ func (c computeClient) writeDetach(
 	}
 	now := c.clock()
 	recordKey := labelDetachPrefix + vol.ID.String()
+	raw := got.GetLabels()
 	var record map[string]string
 	switch {
 	case !drop:
 		// This resends the update that wrote the record, by its request id,
-		// so the records are the ones stored, stamps included.
-		if stored, ok := got.GetLabels()[recordKey]; ok {
-			record = map[string]string{recordKey: stored}
+		// so the records are the ones stored, stamps included. A record a
+		// later detach archived (#353) leaves the volume's key to that one.
+		if rec, ok := detachReplayFrom(raw, vol.ID.String()); ok && rec.requestHex == detachRequestHex(m.Key) {
+			record = map[string]string{recordKey: raw[recordKey]}
 		}
 	case m.MintedToken:
 		// No caller can send this token again: no record, and an older
 		// detach's record of this volume stays for that detach's retries.
 	default:
-		if detachRecordsInWindow(got.GetLabels(), now, vol.ID.String()) >= backend.MaxDetachReplays {
+		// Another request's record of this volume moves aside, so its retry
+		// still finds it (#353).
+		raw = archiveDetachRecord(raw, vol.ID.String(), detachRequestHex(m.Key))
+		if detachRecordsInWindow(raw, now, vol.ID.String()) >= backend.MaxDetachReplays {
 			return zero, backend.DetachReplaysExhausted(model.ID)
 		}
 		record = map[string]string{recordKey: detachRecordValue(detachRequestHex(m.Key), device, now)}
@@ -686,7 +691,7 @@ func (c computeClient) writeDetach(
 	var err error
 	if drop {
 		labels, err = instanceUpdateLabels(
-			model, got.GetLabels(), resource.ActionDetachVolume, m.Fingerprint, record, now,
+			model, raw, resource.ActionDetachVolume, m.Fingerprint, record, now,
 		)
 	} else {
 		// The resend must be the update that was written, byte for byte, or
@@ -768,7 +773,6 @@ func (c computeClient) writeDetach(
 // The id is known only after UpdateInstance returns, and a later retry has to
 // read it without rebuilding the volume list that request fingerprinted.
 func (c computeClient) persistDetachOp(ctx context.Context, m backend.Mutation, name, volID, opLocal string) error {
-	key := labelDetachOpPrefix + volID
 	requestHex := detachRequestHex(m.Key)
 	value := opLocal + " " + detachFPToken(requestHex, m.Fingerprint)
 	for attempt := 0; attempt < 5; attempt++ {
@@ -779,13 +783,14 @@ func (c computeClient) persistDetachOp(ctx context.Context, m backend.Mutation, 
 		if err != nil {
 			return fromNamedRPC(name, err)
 		}
-		if got.GetLabels()[key] == value {
+		// A later detach of this volume may have archived the record
+		// (#353): the id goes next to it there.
+		_, slot, ok := detachReplayFor(got.GetLabels(), volID, requestHex)
+		if !ok {
 			return nil
 		}
-		// A later detach of this volume owns the record now. This id would
-		// pair with its request, so it is not written; a retry of this
-		// request then asks compute by request id (detachOnce, opUnknown).
-		if rec, ok := detachReplayFrom(got.GetLabels(), volID); !ok || rec.requestHex != requestHex {
+		key := labelDetachOpPrefix + slot
+		if got.GetLabels()[key] == value {
 			return nil
 		}
 		labels := maps.Clone(got.GetLabels())
@@ -1138,6 +1143,50 @@ func (r detachReplay) opMatch(fingerprint string) opMatch {
 
 func detachRecordKey(key string) bool {
 	return strings.HasPrefix(key, labelDetachPrefix) || strings.HasPrefix(key, labelDetachOpPrefix)
+}
+
+// detachArchiveSlot is the key suffix a record of volID moves to when a
+// later detach of the volume takes the volume's key (#353). The suffix reads
+// as a volume id to every label scan, so pruning, the window count and the
+// pending op ids treat an archived record like any other. A key stays
+// within 63 bytes: "vws-detach-" + a 21-byte volume id + 17.
+func detachArchiveSlot(volID, requestHex string) string {
+	return volID + "-" + requestHex[:min(16, len(requestHex))]
+}
+
+// detachReplayFor returns this request's record of volID, from the volume's
+// key or its archive slot, and the slot it is under.
+func detachReplayFor(labels map[string]string, volID, requestHex string) (detachReplay, string, bool) {
+	for _, slot := range []string{volID, detachArchiveSlot(volID, requestHex)} {
+		if rec, ok := detachReplayFrom(labels, slot); ok && rec.requestHex == requestHex {
+			return rec, slot, true
+		}
+	}
+	return detachReplay{}, "", false
+}
+
+// archiveDetachRecord moves another request's record of volID, with its
+// saved operation id, to that request's archive slot, so a new record can
+// take the volume's key without erasing it (#353). An expired record moves
+// too; pruning drops it as before.
+func archiveDetachRecord(raw map[string]string, volID, requestHex string) map[string]string {
+	value, ok := raw[labelDetachPrefix+volID]
+	if !ok {
+		return raw
+	}
+	old, _, _, _, ok := parseDetachRecord(value)
+	if !ok || old == requestHex {
+		return raw
+	}
+	out := maps.Clone(raw)
+	slot := detachArchiveSlot(volID, old)
+	delete(out, labelDetachPrefix+volID)
+	out[labelDetachPrefix+slot] = value
+	if op, ok := raw[labelDetachOpPrefix+volID]; ok {
+		delete(out, labelDetachOpPrefix+volID)
+		out[labelDetachOpPrefix+slot] = op
+	}
+	return out
 }
 
 func detachReplayFrom(labels map[string]string, volID string) (detachReplay, bool) {

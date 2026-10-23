@@ -49,7 +49,8 @@ CONSTANTS
     FixOpBinding,      \* a saved op id is bound to its request and dropped by a new record (#213, #302)
     FixPruneExpiredOnly, \* prune drops expired records only (#303)
     FixPendingExpires, \* an expired record no longer holds (pendingDetachOps, #322)
-    FixEtagReread  \* an etag mismatch rereads the instance (DetachVolume's loop)
+    FixEtagReread, \* an etag mismatch rereads the instance (DetachVolume's loop)
+    FixArchive     \* a new record moves another request's record aside (#353)
 
 ASSUME Budgets \subseteq Nat /\ MaxReplays \in Nat /\ MaxRestarts \in Nat /\ MaxReattach \in Nat
 
@@ -79,8 +80,12 @@ vars == <<tokOf, volOf, Budget, inst, etag, expired, reqStore, pc, snap, pay, re
 -----------------------------------------------------------------------------
 \* Labels of an instance image.
 
-Recs(i) == {v \in Vols : i.rec[v] # None}
-Ops(i)  == {v \in Vols : i.dop[v] # None}
+\* A record slot: a volume's own key, or the archive slot <<v, t>> a later
+\* detach of v moved t's record to (vws-detach-<vol>-<16 hex>, #353).
+Slots == Vols \cup (Vols \X Tokens)
+
+Recs(i) == {s \in Slots : i.rec[s] # None}
+Ops(i)  == {s \in Slots : i.dop[s] # None}
 Count(i) == Cardinality(Recs(i)) + Cardinality(Ops(i)) + Cardinality(i.tags)
 
 \* pendingDetachOps: records within the window with no saved op id.
@@ -97,8 +102,23 @@ Drop(i, v) == IF FixPruneExpiredOnly
               ELSE (i.rec[v] \in expired /\ ~Hold(i)) \/ i.dop[v] = None
 Prune(i) ==
     LET kept == {v \in Recs(i) : ~Drop(i, v)}
-    IN [i EXCEPT !.rec = [v \in Vols |-> IF v \in kept THEN i.rec[v] ELSE None],
-                 !.dop = [v \in Vols |-> IF v \in kept THEN i.dop[v] ELSE None]]
+    IN [i EXCEPT !.rec = [s \in Slots |-> IF s \in kept THEN i.rec[s] ELSE None],
+                 !.dop = [s \in Slots |-> IF s \in kept THEN i.dop[s] ELSE None]]
+
+\* detachReplayFor: the slot holding t's record of v, or None.
+RecSlot(i, v, t) ==
+    IF i.rec[v] = t THEN v
+    ELSE IF i.rec[<<v, t>>] = t THEN <<v, t>>
+    ELSE None
+
+\* archiveDetachRecord: before t's new record of v, another request's record
+\* of v moves to its archive slot with its op id.
+Arch(i, v, t) ==
+    LET o == i.rec[v] IN
+    IF FixArchive /\ o # None /\ o # t
+    THEN [i EXCEPT !.rec[<<v, o>>] = o, !.dop[<<v, o>>] = i.dop[v],
+                   !.rec[v] = None, !.dop[v] = None]
+    ELSE i
 
 \* detachRecordsInWindow, without the record of skip.
 InWindow(i, skip) ==
@@ -146,8 +166,8 @@ Init ==
     /\ volOf \in [Tokens -> Vols]
     /\ Budget \in Budgets
     /\ \E start \in SUBSET InitTags :
-           inst = [spec |-> Vols, rec |-> [v \in Vols |-> None],
-                   dop |-> [v \in Vols |-> None], tags |-> start]
+           inst = [spec |-> Vols, rec |-> [s \in Slots |-> None],
+                   dop |-> [s \in Slots |-> None], tags |-> start]
     /\ etag = 0
     /\ expired = {}
     /\ reqStore = [t \in Tokens |-> None]
@@ -180,26 +200,27 @@ Read(c) ==
     LET t == tokOf[c]
         v == volOf[t]
         i == inst
+        s == RecSlot(inst, v, t)
     IN
     /\ pc[c] = "read"
     /\ snap' = [snap EXCEPT ![c] = etag]
-    /\ CASE i.rec[v] = t /\ OpSaved(i, v, t) ->
+    /\ CASE s # None /\ OpSaved(i, s, t) ->
               \* opSaved: acceptDetachReplay
-              Finish(c, "ok", i.dop[v]) /\ UNCHANGED pay
-         [] i.rec[v] = t /\ i.dop[v] # None ->
+              Finish(c, "ok", i.dop[s]) /\ UNCHANGED pay
+         [] s # None /\ i.dop[s] # None ->
               \* opOtherParams
               Finish(c, "params", None) /\ UNCHANGED pay
-         [] i.rec[v] = t /\ v \notin i.spec ->
+         [] s # None /\ v \notin i.spec ->
               \* opUnknown, not bound: writeDetach(drop=false) resends the
               \* stored records unpruned (storedDetachRecords).
-              /\ pay' = [pay EXCEPT ![c] = [i EXCEPT !.dop[v] = None]]
+              /\ pay' = [pay EXCEPT ![c] = [i EXCEPT !.dop[s] = None]]
               /\ pc' = [pc EXCEPT ![c] = "write"]
               /\ UNCHANGED <<result, retop>>
          [] v \in i.spec ->
               \* bound: writeDetach(drop=true), a new record.
-              IF InWindow(i, v) >= MaxReplays
+              IF InWindow(Arch(i, v, t), v) >= MaxReplays
               THEN Finish(c, "exhausted", None) /\ UNCHANGED pay
-              ELSE LET q == Prune(i)
+              ELSE LET q == Prune(Arch(i, v, t))
                        p == [q EXCEPT !.spec = @ \ {v}, !.rec[v] = t,
                                       !.dop[v] = IF FixOpBinding THEN None ELSE @]
                    IN IF Fits(p, TRUE)
@@ -249,10 +270,10 @@ PRead(c) ==
         v == volOf[t]
     IN
     /\ pc[c] = "pread"
-    /\ IF inst.dop[v] = t \/ inst.rec[v] # t
+    /\ IF RecSlot(inst, v, t) = None \/ inst.dop[RecSlot(inst, v, t)] = t
        THEN Finish(c, "ok", t) /\ UNCHANGED <<snap, pay>>
        ELSE /\ snap' = [snap EXCEPT ![c] = etag]
-            /\ pay' = [pay EXCEPT ![c] = [inst EXCEPT !.dop[v] = t]]
+            /\ pay' = [pay EXCEPT ![c] = [inst EXCEPT !.dop[RecSlot(inst, v, t)] = t]]
             /\ pc' = [pc EXCEPT ![c] = "pwrite"]
             /\ UNCHANGED <<result, retop>>
     /\ UNCHANGED <<tokOf, volOf, Budget, inst, etag, expired, reqStore, tpc, tsnap, tpay,
@@ -366,7 +387,7 @@ Spec ==
 TypeOK ==
     /\ inst.spec \subseteq Vols
     /\ inst.tags \subseteq InitTags \cup TagKeys
-    /\ \A v \in Vols : inst.rec[v] \in Tokens \cup {None} /\ inst.dop[v] \in Tokens \cup {None}
+    /\ \A s \in Slots : inst.rec[s] \in Tokens \cup {None} /\ inst.dop[s] \in Tokens \cup {None}
     /\ \A c \in Callers : pc[c] \in Live \cup {"done", "gone"} /\ result[c] \in Results \cup {None}
 
 \* No volume is detached twice for one op id. ec2.go detachOnce checks the
@@ -413,8 +434,8 @@ NoLostUpdate == acked \subseteq inst.tags
 ResendMatchesOriginal == \A c \in Callers : result[c] # "mismatch"
 
 \* A retry of an accepted detach is never answered "not in use": the record
-\* it replays survives a later detach of the same volume. ec2.go keeps one
-\* record per volume (vws-detach-<vol>), and writeDetach overwrites it.
+\* it replays survives a later detach of the same volume. writeDetach moves
+\* another request's record to its archive slot (archiveDetachRecord, #353).
 ReplaySurvivesLaterDetach ==
     \A c \in Callers : tokOf[c] \in accepted => result[c] # "notinuse"
 
