@@ -471,3 +471,37 @@ func TestListMFADevicesUnavailableLookupAuthorizesNothing(t *testing.T) {
 		t.Errorf("authorized on a guessed ARN: %v", rec.seen)
 	}
 }
+
+// #330 r2: ListMFADevices lists the devices of the user the caller was
+// authorized on. When the user moves to a denied path between the
+// authorization and the read (a concurrent UpdateUser NewPath), the answer is
+// 409 ConcurrentModification and no device. Without the move the same
+// request succeeds, so the policy allows it.
+func TestListMFADevicesActsOnTheAuthorizedARN(t *testing.T) {
+	form := url.Values{"Action": {"ListMFADevices"}, "UserName": {"erin"}}
+	seed := func(t *testing.T, f *iam.Fake, account resource.AccountID) string {
+		t.Helper()
+		serial := f.AddMfaDevice(account, "erin-phone")
+		if err := f.AssignMfaDevice(account, serial, "erin", now); err != nil {
+			t.Fatal(err)
+		}
+		return serial
+	}
+	t.Run("not moved", func(t *testing.T) {
+		h, f, account, bob := authorizedARNHarness(t, nil)
+		serial := seed(t, f, account)
+		has(t, call(t, h, bob, sigv4.ServiceIAM, form), http.StatusOK, `<SerialNumber>`+serial+`</SerialNumber>`)
+	})
+	t.Run("moved after authorization", func(t *testing.T) {
+		h, f, account, bob := authorizedARNHarness(t, &movingAdmin{user: "erin"})
+		serial := seed(t, f, account)
+		res := call(t, h, bob, sigv4.ServiceIAM, form)
+		has(t, res, http.StatusConflict, "<Code>ConcurrentModification</Code>")
+		if body := res.Body.String(); strings.Contains(body, serial) || strings.Contains(body, "<MFADevices>") {
+			t.Errorf("a moved user's devices were answered: %s", body)
+		}
+		if u, err := f.GetUser(t.Context(), account, "erin"); err != nil || u.Path != "/denied/" {
+			t.Fatalf("erin did not move: %+v, %v", u, err)
+		}
+	})
+}

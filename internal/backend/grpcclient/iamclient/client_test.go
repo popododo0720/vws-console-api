@@ -103,6 +103,10 @@ type server struct {
 	getUser             []*iamv1.GetUserRequest
 	getUserRes          map[string]*iamv1.User
 	getUserErr          error
+	// onCall, when set, runs with s.mu held after GetUser or ListMfaDevices
+	// records its request and before it answers, so a test can change what
+	// vws-iam holds between two calls (a concurrent UpdateUser).
+	onCall func(method string)
 	// Group calls. A name missing from getGroupRes is NotFound.
 	getGroup    []*iamv1.GetGroupRequest
 	getGroupRes map[string]*iamv1.Group
@@ -356,6 +360,9 @@ func (s *server) ListMfaDevices(
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.listMfaDevices = append(s.listMfaDevices, req)
+	if s.onCall != nil {
+		s.onCall("ListMfaDevices")
+	}
 	if s.listMfaDevicesErr != nil {
 		return nil, s.listMfaDevicesErr
 	}
@@ -372,6 +379,9 @@ func (s *server) GetUser(ctx context.Context, req *iamv1.GetUserRequest) (*iamv1
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.getUser = append(s.getUser, req)
+	if s.onCall != nil {
+		s.onCall("GetUser")
+	}
 	if s.getUserErr != nil {
 		return nil, s.getUserErr
 	}
