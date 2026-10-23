@@ -98,6 +98,12 @@ to fail, so a fix shows up as a failing CI step: then move the property into
    detach of v1 is accepted, its op id not yet saved; `CreateTags` adds a
    tag; a retry with the same token resends with the new tag; compute
    refuses it.
+   With `FixResendRecover` (#352: on `IDEMPOTENCY_CONFLICT`, `writeDetach`
+   rereads the instance and, next to this request's record, saves an op of
+   the instance as it is) the property holds with `MaxReattach = 0`. With a
+   reattach it still fails, but only through finding 2: a later detach
+   overwrites the record the recovery looks for. It moves into
+   `detach.cfg` once both are fixed.
 2. `ReplaySurvivesLaterDetach`: there is one record per volume. After a
    reattach, a detach with another token overwrites the first detach's
    record, so the first detach's retry answers `IncorrectState` (volume
