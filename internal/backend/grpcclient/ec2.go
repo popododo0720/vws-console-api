@@ -260,9 +260,31 @@ func (c computeClient) CreateVolume(ctx context.Context, m backend.Mutation, req
 		},
 	})
 	if err := rpcErr(created, err); err != nil {
-		return resource.Accepted[resource.Volume]{}, err
+		return resource.Accepted[resource.Volume]{}, unsupportedVolumeType(err)
 	}
 	return acceptedVolume(created, req, resource.VolumeCreating)
+}
+
+// unsupportedVolumeType turns vws-storage's refusal of a type it does not
+// serve (InvalidArgument / INVALID_SPEC "volume type X is unsupported", for
+// example a type no StorageClass is mapped to) into the same volumeType error
+// as a type console-api cannot map, which EC2 calls UnknownVolumeType. Any
+// other refusal, such as IOPS, throughput or size out of range, is unchanged
+// and stays InvalidParameterValue.
+func unsupportedVolumeType(err error) error {
+	var re *resource.Error
+	if !errors.As(err, &re) || re.Code != resource.CodeInvalidArgument || re.Field != "" {
+		return err
+	}
+	_, rest, ok := strings.Cut(re.Message, "volume type ")
+	if !ok {
+		return err
+	}
+	name, tail, ok := strings.Cut(rest, " ")
+	if !ok || name == "" || !strings.HasPrefix(tail, "is unsupported") {
+		return err
+	}
+	return resource.Invalid("volumeType", "unsupported")
 }
 
 func (c computeClient) AttachVolume(ctx context.Context, m backend.Mutation, req resource.AttachVolumeRequest) (resource.Accepted[resource.Volume], error) {
