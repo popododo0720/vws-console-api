@@ -80,10 +80,18 @@ goes in gRPC metadata. The static root key cannot assume a role (as in AWS).
 Each call has a 5 s timeout, or the request's deadline if earlier;
 `Authenticate`, `Authorize`, `ValidateSession` and `Logout` retry `UNAVAILABLE`
 up to 3 times with doubling backoff; `Login` and `AssumeRole` are never
-retried. The IAM management actions (users, groups, roles, policies, access
-keys, login profiles) are not mapped to vws-iam's services yet and answer
-`InvalidAction` in this mode, except `GetRole`, `UpdateRole` and
-`UpdateRoleDescription`, which read and update a role through `RoleService`.
+retried. User and group management (`CreateUser`, `GetUser`, `ListUsers`,
+`UpdateUser`, `DeleteUser`, `CreateGroup`, `GetGroup`, `ListGroups`,
+`UpdateGroup`, `DeleteGroup`, `AddUserToGroup`, `RemoveUserFromGroup`,
+`ListGroupsForUser`) goes to `UserService` and `GroupService`: creates and
+deletes carry a `request_id` and updates the etag they read, so a retry of
+`UNAVAILABLE` (up to 3 times) cannot apply a change twice; a vws-iam that
+stays down is `503`. Renaming a user or group (`NewUserName`,
+`NewGroupName`) is `InvalidAction`, because vws-iam cannot rename. `GetRole`,
+`UpdateRole` and `UpdateRoleDescription` go to `RoleService`. IAM
+management actions that are not mapped to vws-iam yet (among them the user
+and group policy, access key and login profile actions) answer
+`InvalidAction` in this mode.
 
 ```sh
 aws --endpoint-url http://127.0.0.1:8084 --region vws-1 iam create-user --user-name bob

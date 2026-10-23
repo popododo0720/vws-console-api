@@ -14,7 +14,8 @@ const MaxGroupsPerUser = maxGroupsPerUser
 
 // Delete conflict messages, as AWS words them.
 const (
-	UserDeleteConflict  = "Cannot delete entity, must delete login profile, access keys, policies and group memberships first."
+	UserDeleteConflict = "Cannot delete entity, must delete login profile, access keys, policies and " +
+		"group memberships first."
 	GroupDeleteConflict = "Cannot delete entity, must remove users and policies from group first."
 	// UserChanged is the conflict when a user's ARN moved between the
 	// caller's authorization and the update.

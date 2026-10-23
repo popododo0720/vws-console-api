@@ -642,6 +642,24 @@ def identity():
     step("IAM ListUsers PathPrefix", lambda: check(
         [u["UserName"] for u in iam.list_users(PathPrefix="/e2e/")["Users"]] == ["e2e-bob"], "list"))
     step("IAM GetUser missing is NoSuchEntity", lambda: aws_error("NoSuchEntity", lambda: iam.get_user(UserName="nobody")))
+    # #314: paging, UpdateUser and DeleteUser on a user of its own.
+    step("IAM CreateUser e2e-dave", lambda: iam.create_user(UserName="e2e-dave", Path="/e2e/"))
+    first = step("IAM ListUsers MaxItems 1 is truncated", lambda: iam.list_users(PathPrefix="/e2e/", MaxItems=1))
+    step("IAM ListUsers first page", lambda: check(
+        [u["UserName"] for u in first["Users"]] == ["e2e-bob"] and first["IsTruncated"] and first["Marker"], first))
+    step("IAM ListUsers Marker returns the next page", lambda: check(
+        [u["UserName"] for u in iam.list_users(PathPrefix="/e2e/", Marker=first["Marker"])["Users"]] == ["e2e-dave"],
+        "page 2"))
+    step("IAM ListUsers MaxItems 0 is ValidationError", lambda: aws_error(
+        "ValidationError", lambda: iam.list_users(MaxItems=0)))
+    step("IAM UpdateUser NewPath", lambda: iam.update_user(UserName="e2e-dave", NewPath="/e2e/moved/"))
+    step("IAM GetUser after UpdateUser", lambda: check(
+        iam.get_user(UserName="e2e-dave")["User"]["Arn"] == f"arn:vws:iam::{account}:user/e2e/moved/e2e-dave", "arn"))
+    step("IAM UpdateUser missing is NoSuchEntity", lambda: aws_error(
+        "NoSuchEntity", lambda: iam.update_user(UserName="nobody", NewPath="/")))
+    step("IAM DeleteUser e2e-dave", lambda: iam.delete_user(UserName="e2e-dave"))
+    step("IAM DeleteUser again is NoSuchEntity", lambda: aws_error(
+        "NoSuchEntity", lambda: iam.delete_user(UserName="e2e-dave")))
     S["policy_arn"] = step("IAM CreatePolicy", lambda: iam.create_policy(
         PolicyName="e2e-describe", PolicyDocument=describe)["Policy"]["Arn"])
     step("IAM CreatePolicy malformed is MalformedPolicyDocument", lambda: aws_error(
@@ -672,6 +690,11 @@ def identity():
     step("IAM DeletePolicyVersion non-default v1", lambda: iam.delete_policy_version(
         PolicyArn=S["policy_arn"], VersionId="v1"))
     step("IAM CreateGroup", lambda: iam.create_group(GroupName="e2e-readers"))
+    step("IAM CreateGroup again is EntityAlreadyExists", lambda: aws_error(
+        "EntityAlreadyExists", lambda: iam.create_group(GroupName="e2e-readers")))
+    step("IAM UpdateGroup NewPath", lambda: iam.update_group(GroupName="e2e-readers", NewPath="/e2e/"))
+    step("IAM ListGroups PathPrefix", lambda: check(
+        [g["GroupName"] for g in iam.list_groups(PathPrefix="/e2e/")["Groups"]] == ["e2e-readers"], "groups"))
     step("IAM AttachGroupPolicy", lambda: iam.attach_group_policy(GroupName="e2e-readers", PolicyArn=S["policy_arn"]))
     step("IAM AddUserToGroup", lambda: iam.add_user_to_group(GroupName="e2e-readers", UserName="e2e-bob"))
     step("IAM GetGroup lists the member", lambda: check(

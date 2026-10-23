@@ -46,24 +46,63 @@ func TestIAMListsPageWithMarkerAndMaxItems(t *testing.T) {
 		page page
 		not  []string
 	}{
-		{"ListUsers first page", page{url.Values{"Action": {"ListUsers"}, "MaxItems": {"2"}},
-			[]string{"<UserName>ann</UserName>", "<UserName>ben</UserName>", "<IsTruncated>true</IsTruncated>", "<Marker>ben</Marker>"}, 2, true},
-			[]string{"<UserName>cat</UserName>"}},
-		{"ListUsers next page", page{url.Values{"Action": {"ListUsers"}, "MaxItems": {"2"}, "Marker": {"ben"}},
-			[]string{"<UserName>cat</UserName>", "<UserName>dan</UserName>", "<IsTruncated>false</IsTruncated>"}, 2, false},
-			[]string{"<Marker>", "<UserName>ben</UserName>"}},
-		{"ListUsers path prefix pages too", page{url.Values{"Action": {"ListUsers"}, "PathPrefix": {"/p/"}, "MaxItems": {"2"}, "Marker": {"ben"}},
-			[]string{"<UserName>cat</UserName>", "<IsTruncated>false</IsTruncated>"}, 1, false},
-			[]string{"<UserName>dan</UserName>"}},
-		{"ListUsers default is everything up to 100", page{url.Values{"Action": {"ListUsers"}},
-			[]string{"<UserName>dan</UserName>", "<IsTruncated>false</IsTruncated>"}, 4, false}, nil},
-		{"ListGroups pages", page{url.Values{"Action": {"ListGroups"}, "MaxItems": {"1"}, "Marker": {"g1"}},
-			[]string{"<GroupName>g2</GroupName>", "<IsTruncated>true</IsTruncated>", "<Marker>g2</Marker>"}, 1, true}, nil},
-		{"ListGroupsForUser pages", page{url.Values{"Action": {"ListGroupsForUser"}, "UserName": {"ann"}, "MaxItems": {"2"}},
-			[]string{"<GroupName>g1</GroupName>", "<GroupName>g2</GroupName>", "<Marker>g2</Marker>"}, 2, true}, nil},
-		{"GetGroup pages members", page{url.Values{"Action": {"GetGroup"}, "GroupName": {"g1"}, "MaxItems": {"1"}, "Marker": {"ann"}},
-			[]string{"<GroupName>g1</GroupName>", "<UserName>ben</UserName>", "<IsTruncated>true</IsTruncated>", "<Marker>ben</Marker>"}, 1, true},
-			[]string{"<UserName>cat</UserName>"}},
+		{
+			"ListUsers first page",
+			page{
+				url.Values{"Action": {"ListUsers"}, "MaxItems": {"2"}},
+				[]string{
+					"<UserName>ann</UserName>", "<UserName>ben</UserName>",
+					"<IsTruncated>true</IsTruncated>", "<Marker>ben</Marker>",
+				},
+				2, true,
+			},
+			[]string{"<UserName>cat</UserName>"},
+		},
+		{
+			"ListUsers next page",
+			page{
+				url.Values{"Action": {"ListUsers"}, "MaxItems": {"2"}, "Marker": {"ben"}},
+				[]string{"<UserName>cat</UserName>", "<UserName>dan</UserName>", "<IsTruncated>false</IsTruncated>"},
+				2, false,
+			},
+			[]string{"<Marker>", "<UserName>ben</UserName>"},
+		},
+		{
+			"ListUsers path prefix pages too",
+			page{
+				url.Values{"Action": {"ListUsers"}, "PathPrefix": {"/p/"}, "MaxItems": {"2"}, "Marker": {"ben"}},
+				[]string{"<UserName>cat</UserName>", "<IsTruncated>false</IsTruncated>"},
+				1, false,
+			},
+			[]string{"<UserName>dan</UserName>"},
+		},
+		{"ListUsers default is everything up to 100", page{
+			url.Values{"Action": {"ListUsers"}},
+			[]string{"<UserName>dan</UserName>", "<IsTruncated>false</IsTruncated>"},
+			4, false,
+		}, nil},
+		{"ListGroups pages", page{
+			url.Values{"Action": {"ListGroups"}, "MaxItems": {"1"}, "Marker": {"g1"}},
+			[]string{"<GroupName>g2</GroupName>", "<IsTruncated>true</IsTruncated>", "<Marker>g2</Marker>"},
+			1, true,
+		}, nil},
+		{"ListGroupsForUser pages", page{
+			url.Values{"Action": {"ListGroupsForUser"}, "UserName": {"ann"}, "MaxItems": {"2"}},
+			[]string{"<GroupName>g1</GroupName>", "<GroupName>g2</GroupName>", "<Marker>g2</Marker>"},
+			2, true,
+		}, nil},
+		{
+			"GetGroup pages members",
+			page{
+				url.Values{"Action": {"GetGroup"}, "GroupName": {"g1"}, "MaxItems": {"1"}, "Marker": {"ann"}},
+				[]string{
+					"<GroupName>g1</GroupName>", "<UserName>ben</UserName>",
+					"<IsTruncated>true</IsTruncated>", "<Marker>ben</Marker>",
+				},
+				1, true,
+			},
+			[]string{"<UserName>cat</UserName>"},
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			res := call(t, h, cred, "iam", tc.page.form)
@@ -74,7 +113,8 @@ func TestIAMListsPageWithMarkerAndMaxItems(t *testing.T) {
 				}
 			}
 			tag := "<member>"
-			if got := strings.Count(res.Body.String(), tag) - strings.Count(res.Body.String(), "<Group><member>"); got != tc.page.wantN {
+			body := res.Body.String()
+			if got := strings.Count(body, tag) - strings.Count(body, "<Group><member>"); got != tc.page.wantN {
 				t.Errorf("%d members, want %d: %s", got, tc.page.wantN, res.Body.String())
 			}
 		})
@@ -95,12 +135,20 @@ func TestIAMListParametersAreValidated(t *testing.T) {
 	}{
 		{"MaxItems zero", url.Values{"Action": {"ListUsers"}, "MaxItems": {"0"}}, "ValidationError"},
 		{"MaxItems over 1000", url.Values{"Action": {"ListGroups"}, "MaxItems": {"1001"}}, "ValidationError"},
-		{"MaxItems not a number", url.Values{"Action": {"GetGroup"}, "GroupName": {"g1"}, "MaxItems": {"x"}}, "ValidationError"},
+		{
+			"MaxItems not a number",
+			url.Values{"Action": {"GetGroup"}, "GroupName": {"g1"}, "MaxItems": {"x"}},
+			"ValidationError",
+		},
 		{"empty Marker", url.Values{"Action": {"ListUsers"}, "Marker": {""}}, "InvalidInput"},
 		{"Marker out of range", url.Values{"Action": {"ListGroups"}, "Marker": {"a\x01"}}, "InvalidInput"},
 		{"PathPrefix without a slash", url.Values{"Action": {"ListUsers"}, "PathPrefix": {"eng"}}, "ValidationError"},
 		{"empty PathPrefix", url.Values{"Action": {"ListGroups"}, "PathPrefix": {""}}, "ValidationError"},
-		{"PathPrefix too long", url.Values{"Action": {"ListUsers"}, "PathPrefix": {"/" + strings.Repeat("a", 512)}}, "ValidationError"},
+		{
+			"PathPrefix too long",
+			url.Values{"Action": {"ListUsers"}, "PathPrefix": {"/" + strings.Repeat("a", 512)}},
+			"ValidationError",
+		},
 		{"ListGroupsForUser without UserName", url.Values{"Action": {"ListGroupsForUser"}}, "ValidationError"},
 		{"DeleteGroup without GroupName", url.Values{"Action": {"DeleteGroup"}}, "ValidationError"},
 	} {

@@ -17,10 +17,12 @@ import (
 	"github.com/popododo0720/vws-console-api/internal/resource"
 )
 
-// STSAdmin serves the IAM Query surface's STS calls over vws-iam. Most IAM
-// management calls are not mapped to vws-iam's User, Group, Role, Policy and
-// AccessKey services yet; each answers Unimplemented, which the surface
-// returns as InvalidAction. CreatePolicyVersion, GetPolicyVersion,
+// STSAdmin serves the IAM Query surface's STS calls over vws-iam. The user
+// and group calls are mapped to UserService and GroupService (see
+// users_groups.go), except a rename, which vws-iam cannot do. The other IAM
+// management calls are not mapped to vws-iam's Role, Policy and AccessKey
+// services yet; each answers Unimplemented, which the surface returns as
+// InvalidAction. CreatePolicyVersion, GetPolicyVersion,
 // ListPolicyVersions, SetDefaultPolicyVersion, DeletePolicyVersion, the policy
 // and MFA device tag calls, ListVirtualMFADevices, GetRole, UpdateRole,
 // UpdateRoleDescription and GetAccessKeyLastUsed are mapped. GetMFADevice
@@ -31,52 +33,6 @@ var _ iam.Admin = STSAdmin{}
 
 func notServed(op string) error {
 	return resource.Unimplemented(op + " is not served over vws-iam gRPC yet")
-}
-
-// CreateUser implements iam.Admin.
-func (STSAdmin) CreateUser(_ context.Context, _ resource.AccountID, _, _ string) (iam.User, error) {
-	return iam.User{}, notServed("CreateUser")
-}
-
-// GetUser implements iam.Admin over UserService.GetUser. The IAM Query
-// surface also uses it to authorize on a user's real ARN, path included.
-func (a STSAdmin) GetUser(ctx context.Context, account resource.AccountID, name string) (iam.User, error) {
-	if !entityName(name) {
-		return iam.User{}, entityNotFound("user", name)
-	}
-	u, err := a.userFor(ctx, account, "projects/"+account.String()+"/users/"+name)
-	if resource.CodeOf(err) == resource.CodeNotFound {
-		return iam.User{}, entityNotFound("user", name)
-	}
-	return u, err
-}
-
-// entityName reports whether name can be a vws-iam user or group: one
-// resource name segment. Anything else addresses another resource and is
-// answered as missing without a call.
-func entityName(name string) bool {
-	return name != "" && !strings.Contains(name, "/")
-}
-
-// entityNotFound is the AWS NoSuchEntity answer for a user or group.
-func entityNotFound(what, name string) error {
-	msg := "The " + what + " with name " + name + " cannot be found."
-	return &resource.Error{Code: resource.CodeNotFound, Message: msg}
-}
-
-// ListUsers implements iam.Admin.
-func (STSAdmin) ListUsers(_ context.Context, _ resource.AccountID, _ string) ([]iam.User, error) {
-	return nil, notServed("ListUsers")
-}
-
-// DeleteUser implements iam.Admin.
-func (STSAdmin) DeleteUser(_ context.Context, _ resource.AccountID, _ string) error {
-	return notServed("DeleteUser")
-}
-
-// UpdateUser implements iam.Admin.
-func (STSAdmin) UpdateUser(_ context.Context, _ resource.AccountID, _, _, _, _ string) error {
-	return notServed("UpdateUser")
 }
 
 // CreateAccessKey implements iam.Admin.
@@ -157,93 +113,6 @@ func lastUsedOf(key *iamv1.AccessKey, user *iamv1.User) (iam.AccessKeyLastUsed, 
 // DeleteAccessKey implements iam.Admin.
 func (STSAdmin) DeleteAccessKey(_ context.Context, _ resource.AccountID, _, _ string) error {
 	return notServed("DeleteAccessKey")
-}
-
-// CreateGroup implements iam.Admin.
-func (STSAdmin) CreateGroup(_ context.Context, _ resource.AccountID, _, _ string) (iam.Group, error) {
-	return iam.Group{}, notServed("CreateGroup")
-}
-
-// GetGroup implements iam.Admin over GroupService.GetGroup, with each member
-// read over UserService.GetUser. A member deleted since the group was read is
-// left out. The IAM Query surface also uses it to authorize on a group's real
-// ARN, path included.
-func (a STSAdmin) GetGroup(
-	ctx context.Context, account resource.AccountID, name string,
-) (iam.Group, []iam.User, error) {
-	if !entityName(name) {
-		return iam.Group{}, nil, entityNotFound("group", name)
-	}
-	resourceName := "projects/" + account.String() + "/groups/" + name
-	g, err := retry(ctx, a.backoff, a.groups.GetGroup, &iamv1.GetGroupRequest{Name: resourceName})
-	if err != nil {
-		if err = authError(err); resource.CodeOf(err) == resource.CodeNotFound {
-			return iam.Group{}, nil, entityNotFound("group", name)
-		}
-		return iam.Group{}, nil, err
-	}
-	if g.GetName() != resourceName {
-		return iam.Group{}, nil, resource.Internal(
-			errors.New("vws-iam GetGroup returned " + g.GetName() + ", want " + resourceName))
-	}
-	arn := g.GetStatus().GetArn()
-	if !strings.HasPrefix(arn, "arn:vws:iam::"+account.String()+":group/") {
-		return iam.Group{}, nil, resource.Internal(
-			errors.New("vws-iam GetGroup returned a group outside the caller's account"))
-	}
-	out := iam.Group{Name: name, Path: g.GetSpec().GetPath(), ID: g.GetStatus().GetUniqueId(), ARN: arn}
-	if out.Path == "" {
-		out.Path = "/"
-	}
-	if t := g.GetCreateTime(); t != nil {
-		out.Created = t.AsTime()
-	}
-	members := make([]iam.User, 0, len(g.GetSpec().GetMembers()))
-	for _, m := range g.GetSpec().GetMembers() {
-		if !userResourceInAccount(account, m) {
-			return iam.Group{}, nil, resource.Internal(
-				errors.New("vws-iam GetGroup returned a member outside the caller's account"))
-		}
-		u, err := a.userFor(ctx, account, m)
-		if resource.CodeOf(err) == resource.CodeNotFound {
-			continue
-		}
-		if err != nil {
-			return iam.Group{}, nil, err
-		}
-		members = append(members, u)
-	}
-	return out, members, nil
-}
-
-// ListGroups implements iam.Admin.
-func (STSAdmin) ListGroups(_ context.Context, _ resource.AccountID, _ string) ([]iam.Group, error) {
-	return nil, notServed("ListGroups")
-}
-
-// UpdateGroup implements iam.Admin.
-func (STSAdmin) UpdateGroup(_ context.Context, _ resource.AccountID, _, _, _ string) error {
-	return notServed("UpdateGroup")
-}
-
-// DeleteGroup implements iam.Admin.
-func (STSAdmin) DeleteGroup(_ context.Context, _ resource.AccountID, _ string) error {
-	return notServed("DeleteGroup")
-}
-
-// AddUserToGroup implements iam.Admin.
-func (STSAdmin) AddUserToGroup(_ context.Context, _ resource.AccountID, _, _ string) error {
-	return notServed("AddUserToGroup")
-}
-
-// RemoveUserFromGroup implements iam.Admin.
-func (STSAdmin) RemoveUserFromGroup(_ context.Context, _ resource.AccountID, _, _ string) error {
-	return notServed("RemoveUserFromGroup")
-}
-
-// ListGroupsForUser implements iam.Admin.
-func (STSAdmin) ListGroupsForUser(_ context.Context, _ resource.AccountID, _ string) ([]iam.Group, error) {
-	return nil, notServed("ListGroupsForUser")
 }
 
 // CreateRole implements iam.Admin.
@@ -849,43 +718,6 @@ func (a STSAdmin) virtualMFADevice(
 	out.User = &user
 	if t := status.GetEnableTime(); t != nil {
 		out.EnableDate = t.AsTime()
-	}
-	return out, nil
-}
-
-// userResourceInAccount reports whether a vws-iam user resource name belongs to
-// account.
-func userResourceInAccount(account resource.AccountID, resourceName string) bool {
-	rest, ok := strings.CutPrefix(resourceName, "projects/"+account.String()+"/users/")
-	return ok && rest != ""
-}
-
-// userFor reads one vws-iam user for the AWS User structure a
-// ListVirtualMFADevices row carries. A user outside the caller's account is an
-// internal error.
-func (a STSAdmin) userFor(ctx context.Context, account resource.AccountID, resourceName string) (iam.User, error) {
-	u, err := retry(ctx, a.backoff, a.users.GetUser, &iamv1.GetUserRequest{Name: resourceName})
-	if err != nil {
-		return iam.User{}, authError(err)
-	}
-	if u.GetName() != resourceName {
-		return iam.User{}, resource.Internal(
-			errors.New("vws-iam GetUser returned " + u.GetName() + ", want " + resourceName))
-	}
-	arn := u.GetStatus().GetArn()
-	if !strings.HasPrefix(arn, "arn:vws:iam::"+account.String()+":user/") {
-		return iam.User{}, resource.Internal(
-			errors.New("vws-iam GetUser returned a user outside the caller's account"))
-	}
-	out := iam.User{
-		Name: resourceName[strings.LastIndex(resourceName, "/")+1:], Path: u.GetSpec().GetPath(),
-		ID: u.GetStatus().GetUniqueId(), ARN: arn,
-	}
-	if out.Path == "" {
-		out.Path = "/"
-	}
-	if t := u.GetCreateTime(); t != nil {
-		out.Created = t.AsTime()
 	}
 	return out, nil
 }
