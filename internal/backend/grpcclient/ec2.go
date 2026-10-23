@@ -415,7 +415,7 @@ func (c computeClient) detachOnce(
 		}
 		if bind.Boot {
 			// instance.proto rejects a spec without exactly one boot entry, stopped or running.
-			return zero, resource.Conflict(resource.KindVolume, vol.ID.String(), "volume is the root device")
+			return zero, resource.VolumeRootDevice(vol.ID)
 		}
 		return c.writeDetach(ctx, m, vol, got, model, bind, true)
 	}
@@ -435,7 +435,7 @@ func (c computeClient) detachOnce(
 		return zero, err
 	}
 	if !ok {
-		return zero, resource.Conflict(resource.KindVolume, vol.ID.String(), "volume is not in use")
+		return zero, resource.VolumeNotInUse(vol.ID)
 	}
 	switch rec.opMatch(m.Fingerprint) {
 	case opSaved:
@@ -467,8 +467,7 @@ func (c computeClient) detachBind(
 			if onSpec || !vol.InstanceID.IsZero() {
 				return nil, resource.Instance{}, backend.VolumeBind{}, false, resource.AttachmentNotFound(vol.ID)
 			}
-			return nil, resource.Instance{}, backend.VolumeBind{}, false, resource.Conflict(
-				resource.KindVolume, vol.ID.String(), "volume is not in use")
+			return nil, resource.Instance{}, backend.VolumeBind{}, false, resource.VolumeNotInUse(vol.ID)
 		}
 		if bind, ok := backend.BindOf(model, vol.ID); ok {
 			return got, model, bind, true, nil
@@ -627,7 +626,7 @@ func (c computeClient) writeDetach(
 		volumes = append(volumes, v)
 	}
 	if protoBootCount(volumes) != 1 {
-		return zero, resource.Conflict(resource.KindVolume, vol.ID.String(), "volume is the root device")
+		return zero, resource.VolumeRootDevice(vol.ID)
 	}
 	device := bind.Device
 	if device == "" {
@@ -662,7 +661,7 @@ func (c computeClient) writeDetach(
 		// The volume was read above, so a not-found from that replay attempt
 		// is the not-in-use conflict.
 		if !drop && resource.CodeOf(err) == resource.CodeNotFound {
-			return zero, resource.Conflict(resource.KindVolume, vol.ID.String(), "volume is not in use")
+			return zero, resource.VolumeNotInUse(vol.ID)
 		}
 		return zero, err
 	}
@@ -678,7 +677,7 @@ func (c computeClient) writeDetach(
 			return zero, fromNamedRPC(got.GetName(), err)
 		}
 		if after.GetEtag() != got.GetEtag() {
-			return zero, resource.Conflict(resource.KindVolume, vol.ID.String(), "volume is not in use")
+			return zero, resource.VolumeNotInUse(vol.ID)
 		}
 	}
 	if err := c.persistDetachOp(ctx, m, got.GetName(), vol.ID.String(), op.ID.Local()); err != nil {

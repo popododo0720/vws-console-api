@@ -221,17 +221,36 @@ func (r DetachVolumeRequest) Normalize() (DetachVolumeRequest, error) {
 }
 
 // AttachmentNotFound reports a DetachVolume whose volume is bound and whose
-// InstanceId or Device does not name that bind.
+// InstanceId or Device does not name that bind. EC2 answers this with
+// InvalidAttachment.NotFound and a sentence about the volume (#212).
 func AttachmentNotFound(id VolumeID) *Error {
 	return &Error{
 		Code: CodeNotFound, Kind: KindVolume, ID: id.String(),
-		Field: "attachment", Message: "attachment not found",
+		Field: "attachment", Message: "The volume '" + id.String() + "' is not attached to the instance.",
 	}
 }
 
 // IsAttachmentNotFound reports whether e came from AttachmentNotFound.
 func IsAttachmentNotFound(e *Error) bool {
 	return e != nil && e.Code == CodeNotFound && e.Kind == KindVolume && e.Field == "attachment"
+}
+
+// VolumeNotAvailable reports an AttachVolume for a volume that is not
+// available. EC2 answers IncorrectState with this sentence (#212).
+func VolumeNotAvailable(id VolumeID) *Error {
+	return Conflict(KindVolume, id.String(), id.String()+" is not 'available'.")
+}
+
+// VolumeNotInUse reports a DetachVolume for a volume with no attachment.
+// EC2 answers IncorrectState with this sentence (#212).
+func VolumeNotInUse(id VolumeID) *Error {
+	return Conflict(KindVolume, id.String(), "Volume '"+id.String()+"' is in the 'available' state.")
+}
+
+// VolumeRootDevice reports a DetachVolume for an attached boot volume.
+// EC2 answers IncorrectState with this sentence (#212).
+func VolumeRootDevice(id VolumeID) *Error {
+	return Conflict(KindVolume, id.String(), "Volume '"+id.String()+"' is in use as the root device.")
 }
 
 // AttachVolumeRequest attaches a volume to an instance.

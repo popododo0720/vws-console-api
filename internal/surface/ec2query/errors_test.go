@@ -26,6 +26,15 @@ func ec2Wire(t *testing.T, e *resource.Error) wireErr {
 	return wireErr{rec.Code, body.Code}
 }
 
+func ec2ErrorXML(t *testing.T, body []byte) errorXML {
+	t.Helper()
+	var out errorXML
+	if err := xml.Unmarshal(body, &out); err != nil {
+		t.Fatalf("%s: %v", body, err)
+	}
+	return out
+}
+
 // TestEveryCodeHasAnEC2Error pins the EC2 code and status for each model
 // code. A new code fails here until it has a row.
 //

@@ -196,7 +196,7 @@ func (c compute) AttachVolume(ctx context.Context, m backend.Mutation, req resou
 		return resource.Accepted[resource.Volume]{}, resource.NotFound(resource.KindInstance, req.InstanceID.String())
 	}
 	if vol.State != resource.VolumeAvailable {
-		return resource.Accepted[resource.Volume]{}, resource.Conflict(resource.KindVolume, vol.ID.String(), "volume is not available")
+		return resource.Accepted[resource.Volume]{}, resource.VolumeNotAvailable(vol.ID)
 	}
 	if inst.State != resource.InstanceRunning && inst.State != resource.InstanceStopped {
 		return resource.Accepted[resource.Volume]{}, resource.Conflict(resource.KindInstance, inst.ID.String(), "instance cannot accept a volume from "+inst.State.String())
@@ -253,7 +253,7 @@ func (c compute) DetachVolume(
 	}
 	inst, bind, found := c.w.bindOfVolume(m.Account, vol.ID)
 	if !found {
-		return zero, resource.Conflict(resource.KindVolume, vol.ID.String(), "volume is not in use")
+		return zero, resource.VolumeNotInUse(vol.ID)
 	}
 	// A wrong instance or device is not this attachment, including on the root
 	// device. DropBind would otherwise report the root conflict first.

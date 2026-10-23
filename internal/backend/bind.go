@@ -32,11 +32,10 @@ func BindOf(inst resource.Instance, id resource.VolumeID) (VolumeBind, bool) {
 func DropBind(inst resource.Instance, id resource.VolumeID) (resource.Instance, VolumeBind, error) {
 	bind, ok := BindOf(inst, id)
 	if !ok {
-		return resource.Instance{}, VolumeBind{}, resource.Conflict(resource.KindVolume, id.String(), "volume is not in use")
+		return resource.Instance{}, VolumeBind{}, resource.VolumeNotInUse(id)
 	}
 	if bind.Boot {
-		return resource.Instance{}, VolumeBind{}, resource.Conflict(
-			resource.KindVolume, id.String(), "volume is the root device")
+		return resource.Instance{}, VolumeBind{}, resource.VolumeRootDevice(id)
 	}
 	blocks := make([]resource.BlockDevice, 0, len(inst.BlockDevices)-1)
 	for _, block := range inst.BlockDevices {
