@@ -347,16 +347,35 @@ func (e *badRecordNameError) Error() string { return e.err.Error() }
 
 func (e *badRecordNameError) Unwrap() error { return e.err }
 
+// unknownVolumeTypeError marks a stored volume whose storage type this build
+// cannot name: UNSPECIFIED, or a type a later vws-proto added. Its type is
+// never guessed. A listing skips it and logs; an explicit id read still
+// fails, and DeleteVolume still reaches it (#335 review).
+type unknownVolumeTypeError struct {
+	id  resource.VolumeID
+	typ storagev1.VolumeType
+}
+
+func (e *unknownVolumeTypeError) Error() string {
+	return "volume " + e.id.String() + " has unknown type " + e.typ.String()
+}
+
 // skipBadRecord reports whether err marks a record a listing must leave out.
 // It logs the record's name so a skipped resource stays auditable.
 func (a *api) skipBadRecord(ctx context.Context, name string, err error) bool {
 	var bad *badRecordNameError
-	if !errors.As(err, &bad) {
-		return false
+	if errors.As(err, &bad) {
+		a.logger().WarnContext(ctx, "skipping a record with an invalid resource name",
+			slog.String("name", name), slog.Any("err", err))
+		return true
 	}
-	a.logger().WarnContext(ctx, "skipping a record with an invalid resource name",
-		slog.String("name", name), slog.Any("err", err))
-	return true
+	var typ *unknownVolumeTypeError
+	if errors.As(err, &typ) {
+		a.logger().WarnContext(ctx, "skipping a volume with an unknown volume type",
+			slog.String("name", name), slog.String("type", typ.typ.String()))
+		return true
+	}
+	return false
 }
 
 func instanceModel(in *computev1.Instance) (resource.Instance, error) {

@@ -12,15 +12,18 @@ import (
 	"cloud.google.com/go/longrunning/autogen/longrunningpb"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/test/bufconn"
+	"google.golang.org/protobuf/types/known/anypb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	commonv1 "github.com/popododo0720/vws-proto/gen/go/vws/common/v1"
+	computev1 "github.com/popododo0720/vws-proto/gen/go/vws/compute/v1"
 	storagev1 "github.com/popododo0720/vws-proto/gen/go/vws/storage/v1"
 
 	"github.com/popododo0720/vws-console-api/internal/backend"
 	"github.com/popododo0720/vws-console-api/internal/resource"
 )
 
-// unknownTypeWorld is invalidNameWorld's volume side, whose DeleteVolume
+// unknownTypeWorld is an invalidNameWorld with no instances, whose DeleteVolume
 // accepts any listed volume and records the names it deleted.
 type unknownTypeWorld struct {
 	invalidNameWorld
@@ -35,8 +38,14 @@ func (s *unknownTypeWorld) DeleteVolume(
 	defer s.mu.Unlock()
 	s.deleted = append(s.deleted, req.GetName())
 	projectID := strings.Split(req.GetName(), "/")[1]
+	meta, err := anypb.New(&commonv1.OperationMetadata{
+		Resource: req.GetName(), Verb: commonv1.OperationVerb_OPERATION_VERB_DELETE, CreateTime: timestamppb.Now(),
+	})
+	if err != nil {
+		return nil, err
+	}
 	return &longrunningpb.Operation{
-		Name: "projects/" + projectID + "/operations/op-" + twentyHex, Done: true,
+		Name: "projects/" + projectID + "/operations/op-" + twentyHex, Metadata: meta, Done: true,
 	}, nil
 }
 
@@ -44,10 +53,11 @@ func dialUnknownTypeWorld(t *testing.T, world *unknownTypeWorld) (computeClient,
 	t.Helper()
 	lis := bufconn.Listen(MaxMessageBytes())
 	srv := grpc.NewServer()
+	computev1.RegisterInstanceServiceServer(srv, world)
 	storagev1.RegisterVolumeServiceServer(srv, world)
 	go func() { _ = srv.Serve(lis) }()
 	t.Cleanup(srv.Stop)
-	conn, err := grpc.NewClient("passthrough:///storage",
+	conn, err := grpc.NewClient("passthrough:///compute",
 		append(dialOptions(), grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) {
 			return lis.DialContext(ctx)
 		}))...,
@@ -58,8 +68,9 @@ func dialUnknownTypeWorld(t *testing.T, world *unknownTypeWorld) (computeClient,
 	t.Cleanup(func() { _ = conn.Close() })
 	var logs bytes.Buffer
 	return computeClient{&api{
-		volumes: storagev1.NewVolumeServiceClient(conn),
-		log:     slog.New(slog.NewJSONHandler(&logs, nil)),
+		instances: computev1.NewInstanceServiceClient(conn),
+		volumes:   storagev1.NewVolumeServiceClient(conn),
+		log:       slog.New(slog.NewJSONHandler(&logs, nil)),
 	}}, &logs
 }
 

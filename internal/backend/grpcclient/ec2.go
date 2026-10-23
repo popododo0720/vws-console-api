@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"log/slog"
 	"maps"
 	"strconv"
 	"strings"
@@ -1146,7 +1147,15 @@ func protoBootCount(vols []*computev1.VolumeAttachment) int {
 func (c computeClient) DeleteVolume(ctx context.Context, m backend.Mutation, req resource.DeleteVolumeRequest) (resource.Accepted[resource.Volume], error) {
 	projectID := project(m.Account)
 	vol, err := c.getVolume(ctx, projectID, req.ID.String())
-	if err != nil {
+	var unknownType *unknownVolumeTypeError
+	switch {
+	case errors.As(err, &unknownType):
+		// Deleting needs no type, so a volume this build cannot name can
+		// still be cleaned up (#335 review).
+		c.logger().WarnContext(ctx, "deleting a volume with an unknown volume type",
+			slog.String("name", volumeName(projectID, req.ID.String())),
+			slog.String("type", unknownType.typ.String()))
+	case err != nil:
 		return resource.Accepted[resource.Volume]{}, err
 	}
 	deleted, err := c.volumes.DeleteVolume(ctx, &storagev1.DeleteVolumeRequest{
@@ -1810,15 +1819,15 @@ func volumeModel(in *storagev1.Volume) (resource.Volume, error) {
 		}
 		snap = parsed
 	}
-	typ := volumeTypeOf(in.GetSpec().GetType())
-	if typ == "" {
-		bad := in.GetSpec().GetType().String()
-		return resource.Volume{}, resource.Internal(errors.New("volume " + id.String() + " has unknown type " + bad))
-	}
 	vol := resource.Volume{
 		ID: id, OwnerID: owner, SizeGiB: in.GetSpec().GetSizeGib(), Zone: parts[3], SnapshotID: snap,
-		Type: typ, State: state, InstanceID: inst, Device: in.GetStatus().GetDeviceName(),
-		CreateTime: in.GetCreateTime().AsTime().UTC(),
+		Type: volumeTypeOf(in.GetSpec().GetType()), State: state, InstanceID: inst,
+		Device: in.GetStatus().GetDeviceName(), CreateTime: in.GetCreateTime().AsTime().UTC(),
+	}
+	if vol.Type == "" {
+		// The volume is returned with no type beside the error, so only
+		// DeleteVolume, which needs no type, can act on it.
+		return vol, resource.Internal(&unknownVolumeTypeError{id: id, typ: in.GetSpec().GetType()})
 	}
 	if rootVolume(in) {
 		// RunInstances made it from the image, and compute deletes it with
