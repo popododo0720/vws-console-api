@@ -51,10 +51,15 @@ tlc() {
 # (NONE for none), checking only PROPERTY (KIND is INVARIANTS or PROPERTIES).
 variant() {
   local name=$1 flip=$2 kind=$3 prop=$4 file=${out}/$1.cfg
-  sed -e '/^INVARIANTS/,$d' -e "s/^\( *${flip} = \)TRUE$/\1FALSE/" "$cfg" >"$file"
-  if [[ $flip != NONE ]] && ! grep -q "^ *${flip} = FALSE$" "$file"; then
-    die "${name}: ${flip} is not a TRUE constant in ${cfg}"
-  fi
+  # flip is one constant, a comma list of constants, or NONE.
+  cp "$cfg" "$file"
+  sed -i '/^INVARIANTS/,$d' "$file"
+  local f
+  for f in ${flip//,/ }; do
+    [[ $f == NONE ]] && continue
+    sed -i "s/^\( *${f} = \)TRUE$/\1FALSE/" "$file"
+    grep -q "^ *${f} = FALSE$" "$file" || die "${name}: ${f} is not a TRUE constant in ${cfg}"
+  done
   printf '%s\n    %s\n' "$kind" "$prop" >>"$file"
   echo "$file"
 }
@@ -74,19 +79,19 @@ if [[ ${1:-all} == all ]]; then
 seed-327-reserve FixPendingReserve INVARIANTS LabelBudget
 seed-hold FixHold INVARIANTS HoldBlocksPrune
 seed-etag-cas FixEtagCAS INVARIANTS NoLostUpdate
-seed-op-binding FixOpBinding INVARIANTS ReplayReturnsFirst
+seed-op-binding FixOpBinding,FixArchive INVARIANTS ReplayReturnsFirst
 seed-prune FixPruneExpiredOnly INVARIANTS PruneKeepsLive
 seed-window WithinWindow INVARIANTS DetachOnce
 seed-hold-expires FixPendingExpires PROPERTIES HoldEnds
 seed-etag-reread FixEtagReread PROPERTIES CallsFinish
+seed-archive FixArchive INVARIANTS ReplaySurvivesLaterDetach
 SEEDS
   # Known findings in the current code (docs/formal/README.md). When one
   # passes, the code was fixed: move it into detach.cfg and delete it here.
-  for prop in ResendMatchesOriginal ReplaySurvivesLaterDetach; do
-    got=$(tlc "finding-${prop}" "$(variant "finding-${prop}" NONE INVARIANTS "$prop")")
-    echo "finding ${prop}: ${got}, want ${prop}"
-    [[ $got == "$prop" ]] || fail=1
-  done
+  prop=ResendMatchesOriginal
+  got=$(tlc "finding-${prop}" "$(variant "finding-${prop}" NONE INVARIANTS "$prop")")
+  echo "finding ${prop}: ${got}, want ${prop}"
+  [[ $got == "$prop" ]] || fail=1
 fi
 
 echo "logs: ${out}"

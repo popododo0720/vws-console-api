@@ -42,13 +42,14 @@ atomically. `AttachVolume`'s read-modify-write is one step.
 | Property | Plain meaning | Code it guards | Seeded bug that breaks it |
 | --- | --- | --- | --- |
 | `DetachOnce` | No volume is detached twice for one client token. | `detachOnce` checks the record first; `writeDetach` sends `RequestId` `requestUUID(key, "detach")` | `WithinWindow=FALSE`: a retry after the window, after a reattach |
-| `ReplayReturnsFirst` | A successful retry answers its own operation, never another detach's. | `detachReplay.opMatch`, `detachFPToken`; `writeDetach` deletes the old `vws-dop-` | `FixOpBinding=FALSE` (before #213, #302) |
+| `ReplayReturnsFirst` | A successful retry answers its own operation, never another detach's. | `detachReplay.opMatch`, `detachFPToken`; `writeDetach` deletes the old `vws-dop-` | `FixOpBinding=FALSE` with `FixArchive=FALSE` (before #213, #302; the archive moves the old op id with its record, so it hides this seed alone) |
 | `LabelBudget` | Labels never pass the limit, and compute never refuses a write for it: an accepted detach always has room for its op id. | `instanceUpdateLabels` (`pendingDetachOps`), `detachRoomErr` | `FixPendingReserve=FALSE`: the #327 race |
 | `PruneKeepsLive` | No write removes a record a running caller's retry still reads. | `pruneDetachRecords` | `FixPruneExpiredOnly=FALSE` |
 | `HoldBlocksPrune` | No write prunes an expired record while a recovery is pending. | `detachRecoveryPending`, `pruneDetachRecords` | `FixHold=FALSE` (before #319) |
 | `NoLostUpdate` | A tag write that compute applied is never overwritten by a concurrent write. | the etag on every `UpdateInstance` in `writeDetach`, `persistDetachOp`, `CreateTags` | `FixEtagCAS=FALSE` |
 | `CallsFinish` (liveness) | Every `DetachVolume` call returns. | the reread loop in `DetachVolume` | `FixEtagReread=FALSE`: resend the stale write on an etag mismatch |
 | `HoldEnds` (liveness) | Every pending recovery ends. | `pendingDetachOps` skips expired records (#322) | `FixPendingExpires=FALSE` |
+| `ReplaySurvivesLaterDetach` | A retry of an accepted detach is never answered "not in use" after a later detach of the volume. | `archiveDetachRecord`, `detachReplayFor` (#353); archive slots `<<v, t>>` | `FixArchive=FALSE` |
 
 `scripts/tla-detach.sh` checks the real design (every `Fix*` TRUE) with all
 properties, then each seeded bug against the property it guards, and fails
@@ -84,9 +85,11 @@ accepted detach answers an error with no op id saved.
 
 ## Findings in the current code
 
-Two properties fail on the real design. `scripts/tla-detach.sh` expects them
+One property fails on the real design. `scripts/tla-detach.sh` expects it
 to fail, so a fix shows up as a failing CI step: then move the property into
 `detach.cfg` and drop it from the script's finding list.
+`ReplaySurvivesLaterDetach` was the second finding (#353); it now holds,
+since a new record moves another request's record to an archive slot.
 
 1. `ResendMatchesOriginal`: a retry of a detach whose op id was not saved
    rebuilds the `UpdateInstance` from the instance as it is now. If
@@ -98,12 +101,6 @@ to fail, so a fix shows up as a failing CI step: then move the property into
    detach of v1 is accepted, its op id not yet saved; `CreateTags` adds a
    tag; a retry with the same token resends with the new tag; compute
    refuses it.
-2. `ReplaySurvivesLaterDetach`: there is one record per volume. After a
-   reattach, a detach with another token overwrites the first detach's
-   record, so the first detach's retry answers `IncorrectState` (volume
-   available) instead of its result. TLC: detach A of v1 is accepted, the
-   client restarts; v1 is attached again; detach B of v1 is accepted; A's
-   retry finds no record for its token.
 
 ## Coverage
 
