@@ -690,12 +690,15 @@ func (a STSAdmin) ListVirtualMFADevices(
 // ListMFADevices implements iam.Admin over MfaDeviceService.ListMfaDevices.
 // vws-iam pages every device of the account before the user filter, so this
 // reads every page and then filters and pages to keep AWS's MaxItems and
-// Marker semantics.
+// Marker semantics. A non-empty expectARN must be the user's ARN when the
+// user is read before the device pages and again after them, so a user that
+// moved since the caller was authorized, or while the pages were read, is a
+// ConcurrentModification with no device.
 func (a STSAdmin) ListMFADevices(
-	ctx context.Context, account resource.AccountID, user, marker string, maxItems int,
+	ctx context.Context, account resource.AccountID, user, marker string, maxItems int, expectARN string,
 ) (iam.MFADevicePage, error) {
 	resourceName := "projects/" + account.String() + "/users/" + user
-	if _, err := a.GetUser(ctx, account, user); err != nil {
+	if err := a.userAt(ctx, account, user, expectARN); err != nil {
 		return iam.MFADevicePage{}, err
 	}
 	var devices []iam.MFADevice
@@ -737,9 +740,26 @@ func (a STSAdmin) ListMFADevices(
 		}
 		token = resp.GetNextPageToken()
 		if token == "" {
-			return iam.PageMFADevices(devices, marker, maxItems), nil
+			break
 		}
 	}
+	if err := a.userAt(ctx, account, user, expectARN); err != nil {
+		return iam.MFADevicePage{}, err
+	}
+	return iam.PageMFADevices(devices, marker, maxItems), nil
+}
+
+// userAt reads the user and checks that a non-empty expectARN is its ARN: a
+// user that moved since the caller was authorized is Changed(UserChanged).
+func (a STSAdmin) userAt(ctx context.Context, account resource.AccountID, user, expectARN string) error {
+	u, err := a.GetUser(ctx, account, user)
+	if err != nil {
+		return err
+	}
+	if stale(u.ARN, expectARN) {
+		return iam.Changed(iam.UserChanged)
+	}
+	return nil
 }
 
 // virtualMFADevice maps one vws-iam device to an AWS row. A device with a user

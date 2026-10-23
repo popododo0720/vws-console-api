@@ -139,7 +139,7 @@ func TestFakeListMFADevices(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	page, err := f.ListMFADevices(ctx, account, "alice", "", 0)
+	page, err := f.ListMFADevices(ctx, account, "alice", "", 0, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,7 +164,7 @@ func TestFakeListMFADevices(t *testing.T) {
 		}
 	}
 
-	page, err = f.ListMFADevices(ctx, account, "alice", "", 1)
+	page, err = f.ListMFADevices(ctx, account, "alice", "", 1, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,7 +172,7 @@ func TestFakeListMFADevices(t *testing.T) {
 		page.Devices[0].SerialNumber != aliceA {
 		t.Fatalf("first page %+v, %v", page, err)
 	}
-	page, err = f.ListMFADevices(ctx, account, "alice", page.Marker, 1)
+	page, err = f.ListMFADevices(ctx, account, "alice", page.Marker, 1, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -180,8 +180,40 @@ func TestFakeListMFADevices(t *testing.T) {
 		t.Fatalf("second page %+v, %v", page, err)
 	}
 
-	if _, err := f.ListMFADevices(ctx, account, "nobody", "", 0); resource.CodeOf(err) != resource.CodeNotFound {
+	if _, err := f.ListMFADevices(ctx, account, "nobody", "", 0, ""); resource.CodeOf(err) != resource.CodeNotFound {
 		t.Fatalf("missing user: %v", err)
+	}
+}
+
+// #330 r2: a non-empty expectARN must be the user's ARN, checked under the
+// same lock as the read; otherwise the answer is Changed(UserChanged) and no
+// device. NotFound wins over the ARN check.
+func TestFakeListMFADevicesExpectsTheARN(t *testing.T) {
+	f := NewFake()
+	account, err := resource.Parse[resource.AccountID]("123456789012")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	u, err := f.CreateUser(ctx, account, "alice", "/ok/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	serial := f.AddMfaDevice(account, "alice-phone")
+	if err := f.AssignMfaDevice(account, serial, "alice", time.Date(2026, 10, 9, 10, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatal(err)
+	}
+	page, err := f.ListMFADevices(ctx, account, "alice", "", 0, u.ARN)
+	if err != nil || len(page.Devices) != 1 || page.Devices[0].SerialNumber != serial {
+		t.Fatalf("at the expected ARN: %+v, %v", page, err)
+	}
+	moved := "arn:vws:iam::123456789012:user/denied/alice"
+	page, err = f.ListMFADevices(ctx, account, "alice", "", 0, moved)
+	if !IsChanged(err) || len(page.Devices) != 0 {
+		t.Fatalf("at another ARN: %+v, %v", page, err)
+	}
+	if _, err := f.ListMFADevices(ctx, account, "nobody", "", 0, moved); resource.CodeOf(err) != resource.CodeNotFound {
+		t.Fatalf("a missing user with an expected ARN: %v", err)
 	}
 }
 

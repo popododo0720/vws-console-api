@@ -1191,15 +1191,21 @@ func (f *Fake) ListVirtualMFADevices(
 }
 
 // ListMFADevices implements Admin. Only devices enabled for the named user are
-// listed; a missing user is NotFound.
+// listed; a missing user is NotFound. A non-empty expectARN must be the
+// user's ARN; the check and the read share one lock, so a user that moved
+// since the caller was authorized lists nothing.
 func (f *Fake) ListMFADevices(
-	_ context.Context, a resource.AccountID, user, marker string, maxItems int,
+	_ context.Context, a resource.AccountID, user, marker string, maxItems int, expectARN string,
 ) (MFADevicePage, error) {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
 	st := f.account(a)
-	if st.users[user] == nil {
+	u := st.users[user]
+	if u == nil {
 		return MFADevicePage{}, notFound("user", user)
+	}
+	if stale(u.ARN, expectARN) {
+		return MFADevicePage{}, changed(UserChanged)
 	}
 	devices := make([]MFADevice, 0, len(st.mfa))
 	for serial, d := range st.mfa {

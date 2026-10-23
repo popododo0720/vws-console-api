@@ -918,8 +918,13 @@ func iamActions() map[string]spec {
 				if err := mfaDeviceMarkerParam(c); err != nil {
 					return nil, err
 				}
+				// The backend reads only the user at the authorized ARN, so a
+				// user moved since the authorization lists nothing.
 				page, err := h.cfg.Admin.ListMFADevices(
-					c.r.Context(), c.caller.Account, user, c.form("Marker"), maxItems)
+					c.r.Context(), c.caller.Account, user, c.form("Marker"), maxItems, c.authorized)
+				if err != nil {
+					return nil, err
+				}
 				out := mfaDevicesResult{
 					MFADevices:  []listedMFADeviceXML{},
 					IsTruncated: page.IsTruncated,
@@ -928,7 +933,7 @@ func iamActions() map[string]spec {
 				for _, d := range page.Devices {
 					out.MFADevices = append(out.MFADevices, toListedMFADevice(d))
 				}
-				return out, err
+				return out, nil
 			},
 		},
 		// AWS GetMFADevice is authorized on the user, the named one or else the

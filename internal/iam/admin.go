@@ -280,9 +280,11 @@ type Admin interface {
 	) (VirtualMFADevicePage, error)
 
 	// ListMFADevices lists the devices enabled for one user. The user
-	// argument is the AWS UserName, not an ARN.
+	// argument is the AWS UserName, not an ARN. A non-empty expectARN must be
+	// the user's ARN for the whole read, or the answer is a
+	// ConcurrentModification (Changed(UserChanged)) with no device.
 	ListMFADevices(
-		ctx context.Context, a resource.AccountID, user, marker string, maxItems int,
+		ctx context.Context, a resource.AccountID, user, marker string, maxItems int, expectARN string,
 	) (MFADevicePage, error)
 
 	// The MFA device argument is the device serial number, the ARN the AWS

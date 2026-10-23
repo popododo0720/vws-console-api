@@ -227,7 +227,7 @@ func TestListMFADevicesOverGRPC(t *testing.T) {
 	}
 
 	admin := STSAdmin{Client: c}
-	page, err := admin.ListMFADevices(ctx, accountID(t), "alice", "", 2)
+	page, err := admin.ListMFADevices(ctx, accountID(t), "alice", "", 2, "arn:vws:iam::123456789012:user/alice")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -242,7 +242,8 @@ func TestListMFADevicesOverGRPC(t *testing.T) {
 		got.GetPageSize() != iam.MaxMFADevicePageSize || got.GetPageToken() != "next" {
 		t.Errorf("second request %+v", got)
 	}
-	if len(s.getUser) != 1 || s.getUser[0].GetName() != alice {
+	// The user is read before the device pages and again after them.
+	if len(s.getUser) != 2 || s.getUser[0].GetName() != alice || s.getUser[1].GetName() != alice {
 		t.Errorf("user reads %v", s.getUser)
 	}
 	if !page.IsTruncated || page.Marker != serialB || len(page.Devices) != 2 {
@@ -261,7 +262,7 @@ func TestListMFADevicesOverGRPC(t *testing.T) {
 		t.Errorf("enable dates %v %v", page.Devices[0].Enabled, page.Devices[1].Enabled)
 	}
 
-	rest, err := admin.ListMFADevices(ctx, accountID(t), "alice", page.Marker, 2)
+	rest, err := admin.ListMFADevices(ctx, accountID(t), "alice", page.Marker, 2, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -283,7 +284,7 @@ func TestListMFADevicesErrorsOverGRPC(t *testing.T) {
 	c, s := harness(t)
 	s.getUserErr = awsErr(codes.NotFound, "RESOURCE_NOT_FOUND", "NoSuchEntity")
 	if _, err := (STSAdmin{Client: c}).ListMFADevices(
-		t.Context(), accountID(t), "alice", "", 0,
+		t.Context(), accountID(t), "alice", "", 0, "",
 	); resource.CodeOf(err) != resource.CodeNotFound {
 		t.Fatalf("a missing user mapped to %v", err)
 	}
@@ -295,7 +296,7 @@ func TestListMFADevicesErrorsOverGRPC(t *testing.T) {
 	s.getUserRes = aliceUser
 	s.listMfaDevicesErr = awsErr(codes.ResourceExhausted, "QUOTA_EXCEEDED", "")
 	if _, err := (STSAdmin{Client: c}).ListMFADevices(
-		t.Context(), accountID(t), "alice", "", 0,
+		t.Context(), accountID(t), "alice", "", 0, "",
 	); resource.CodeOf(err) != resource.CodeResourceExhausted {
 		t.Fatalf("a failed list mapped to %v", err)
 	}
@@ -306,7 +307,7 @@ func TestListMFADevicesErrorsOverGRPC(t *testing.T) {
 		Status: &iamv1.MfaDeviceStatus{User: alice},
 	}}}
 	if _, err := (STSAdmin{Client: c}).ListMFADevices(
-		t.Context(), accountID(t), "alice", "", 0,
+		t.Context(), accountID(t), "alice", "", 0, "",
 	); resource.CodeOf(err) != resource.CodeInternal {
 		t.Fatalf("a device without a serial number mapped to %v", err)
 	}
@@ -319,7 +320,7 @@ func TestListMFADevicesErrorsOverGRPC(t *testing.T) {
 		},
 	}}}
 	if _, err := (STSAdmin{Client: c}).ListMFADevices(
-		t.Context(), accountID(t), "alice", "", 0,
+		t.Context(), accountID(t), "alice", "", 0, "",
 	); resource.CodeOf(err) != resource.CodeInternal {
 		t.Fatalf("a foreign device serial mapped to %v", err)
 	}
@@ -332,7 +333,7 @@ func TestListMFADevicesErrorsOverGRPC(t *testing.T) {
 		},
 	}}}
 	if _, err := (STSAdmin{Client: c}).ListMFADevices(
-		t.Context(), accountID(t), "alice", "", 0,
+		t.Context(), accountID(t), "alice", "", 0, "",
 	); resource.CodeOf(err) != resource.CodeInternal {
 		t.Fatalf("a device without an enable time mapped to %v", err)
 	}
@@ -346,8 +347,68 @@ func TestListMFADevicesErrorsOverGRPC(t *testing.T) {
 		},
 	}}}
 	if _, err := (STSAdmin{Client: c}).ListMFADevices(
-		t.Context(), accountID(t), "alice", "", 0,
+		t.Context(), accountID(t), "alice", "", 0, "",
 	); resource.CodeOf(err) != resource.CodeInternal {
 		t.Fatalf("a foreign user mapped to %v", err)
+	}
+}
+
+// #330 r2: a non-empty expectARN must be the user's ARN before the device
+// pages are read and again after them; otherwise the answer is
+// Changed(UserChanged) with no device. NotFound wins over the ARN check.
+func TestListMFADevicesExpectsTheARNOverGRPC(t *testing.T) {
+	const (
+		alice    = "projects/123456789012/users/alice"
+		aliceARN = "arn:vws:iam::123456789012:user/alice"
+		movedARN = "arn:vws:iam::123456789012:user/denied/alice"
+		serial   = "arn:vws:iam::123456789012:mfa/alice-phone"
+	)
+	user := func(arn string) *iamv1.User {
+		return &iamv1.User{Name: alice, Status: &iamv1.UserStatus{Arn: arn}}
+	}
+	devices := &iamv1.ListMfaDevicesResponse{MfaDevices: []*iamv1.MfaDevice{{Status: &iamv1.MfaDeviceStatus{
+		SerialNumber: serial, User: alice, EnableTime: timestamppb.New(time.Date(2026, 10, 9, 10, 0, 0, 0, time.UTC)),
+	}}}}
+
+	c, s := harness(t)
+	s.getUserRes = map[string]*iamv1.User{alice: user(movedARN)}
+	s.listMfaDevicesRes = devices
+	page, err := (STSAdmin{Client: c}).ListMFADevices(t.Context(), accountID(t), "alice", "", 0, aliceARN)
+	if !iam.IsChanged(err) || len(page.Devices) != 0 {
+		t.Fatalf("a user moved before the read: %+v, %v", page, err)
+	}
+	if len(s.listMfaDevices) != 0 {
+		t.Fatalf("listed devices of a moved user: %v", s.listMfaDevices)
+	}
+
+	c, s = harness(t)
+	s.getUserRes = map[string]*iamv1.User{alice: user(aliceARN)}
+	s.listMfaDevicesRes = devices
+	s.onCall = func(method string) {
+		if method == "ListMfaDevices" {
+			s.getUserRes[alice] = user(movedARN)
+		}
+	}
+	page, err = (STSAdmin{Client: c}).ListMFADevices(t.Context(), accountID(t), "alice", "", 0, aliceARN)
+	if !iam.IsChanged(err) || len(page.Devices) != 0 {
+		t.Fatalf("a user moved during the read: %+v, %v", page, err)
+	}
+
+	// Without an expected ARN there is no authorization to keep, so the
+	// devices are listed wherever the user is.
+	c, s = harness(t)
+	s.getUserRes = map[string]*iamv1.User{alice: user(movedARN)}
+	s.listMfaDevicesRes = devices
+	page, err = (STSAdmin{Client: c}).ListMFADevices(t.Context(), accountID(t), "alice", "", 0, "")
+	if err != nil || len(page.Devices) != 1 {
+		t.Fatalf("no expected ARN: %+v, %v", page, err)
+	}
+
+	c, s = harness(t)
+	s.getUserErr = awsErr(codes.NotFound, "RESOURCE_NOT_FOUND", "NoSuchEntity")
+	if _, err := (STSAdmin{Client: c}).ListMFADevices(
+		t.Context(), accountID(t), "alice", "", 0, aliceARN,
+	); resource.CodeOf(err) != resource.CodeNotFound {
+		t.Fatalf("a missing user with an expected ARN mapped to %v", err)
 	}
 }
