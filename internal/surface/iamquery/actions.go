@@ -900,8 +900,12 @@ func iamActions() map[string]spec {
 				return out, err
 			},
 		},
+		// AWS ListMFADevices is authorized on the user, the named one or else
+		// the caller, so a policy on user/${aws:username} covers only the
+		// caller's own devices. It takes Marker and MaxItems but not
+		// PathPrefix, so the spec lists them rather than setting list.
 		"ListMFADevices": {
-			params: []string{"UserName", "Marker", "MaxItems"}, needsAdmin: true,
+			params: []string{"UserName", "Marker", "MaxItems"}, needsAdmin: true, resource: listMFADevicesARN,
 			run: func(h *handler, c *exchange) (any, error) {
 				user, err := listMFADevicesUserName(c)
 				if err != nil {

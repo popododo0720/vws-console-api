@@ -58,6 +58,20 @@ func toListedMFADevice(d iam.MFADevice) listedMFADeviceXML {
 	}
 }
 
+// listMFADevicesARN is the ARN ListMFADevices is authorized on. AWS checks
+// UserName first, then authorizes iam:ListMFADevices on the user whose
+// devices are listed: the named user, else the caller. A malformed UserName
+// is answered before anything is authorized or looked up.
+func listMFADevicesARN(h *handler, c *exchange) string {
+	if c.r.Form.Has("UserName") {
+		if _, err := listMFADevicesUserName(c); err != nil {
+			c.resourceErr = err
+			return ""
+		}
+	}
+	return userARN(h, c)
+}
+
 // listMFADevicesUserName reads ListMFADevices UserName. AWS requires 1 to 128
 // characters from its user name pattern; when the member is omitted the
 // caller's user is used.
