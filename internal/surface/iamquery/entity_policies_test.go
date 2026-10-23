@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/popododo0720/vws-console-api/internal/backend/backendtest"
 	"github.com/popododo0720/vws-console-api/internal/iam"
 	"github.com/popododo0720/vws-console-api/internal/resource"
 	"github.com/popododo0720/vws-console-api/internal/sigv4"
@@ -26,7 +27,9 @@ func seedManaged(t *testing.T, f *iam.Fake, account resource.AccountID, name, pa
 
 func attachedTo(t *testing.T, f *iam.Fake, account resource.AccountID, kind iam.Entity, name string) []string {
 	t.Helper()
-	ps, err := f.ListAttachedPolicies(t.Context(), account, kind, name, "")
+	ps, err := f.ListAttachedPolicies(
+		t.Context(), account, kind, name, backendtest.EntityGrant(t.Context(), t, f, account, kind, name),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -39,7 +42,9 @@ func attachedTo(t *testing.T, f *iam.Fake, account resource.AccountID, kind iam.
 
 func inlineOf(t *testing.T, f *iam.Fake, account resource.AccountID, kind iam.Entity, name string) []string {
 	t.Helper()
-	ns, err := f.ListInlinePolicies(t.Context(), account, kind, name, "")
+	ns, err := f.ListInlinePolicies(
+		t.Context(), account, kind, name, backendtest.EntityGrant(t.Context(), t, f, account, kind, name),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,7 +84,7 @@ func TestEntityPolicyCallsActOnTheAuthorizedARN(t *testing.T) {
 				var mover *movingAdmin
 				if moved {
 					name = tc.action + "/moved after authorization"
-					mover = &movingAdmin{}
+					mover = &movingAdmin{tb: t}
 					if e.kind == iam.EntityUser {
 						mover.user = e.name
 					} else {
@@ -92,10 +97,14 @@ func TestEntityPolicyCallsActOnTheAuthorizedARN(t *testing.T) {
 						"Kept": seedManaged(t, f, account, "Kept", "/"), "Other": seedManaged(t, f, account, "Other", "/"),
 					}
 					ctx := t.Context()
-					if err := f.AttachPolicy(ctx, account, e.kind, e.name, arns["Kept"], ""); err != nil {
+					if err := f.AttachPolicy(
+						ctx, account, e.kind, e.name, arns["Kept"], backendtest.EntityGrant(ctx, t, f, account, e.kind, e.name),
+					); err != nil {
 						t.Fatal(err)
 					}
-					if err := f.PutInlinePolicy(ctx, account, e.kind, e.name, "keep", s3Doc, ""); err != nil {
+					if err := f.PutInlinePolicy(
+						ctx, account, e.kind, e.name, "keep", s3Doc, backendtest.EntityGrant(ctx, t, f, account, e.kind, e.name),
+					); err != nil {
 						t.Fatal(err)
 					}
 					form := url.Values{"Action": {tc.action}, e.key: {e.name}}
@@ -137,10 +146,14 @@ func TestEntityPolicyListsPage(t *testing.T) {
 		arn := seedManaged(t, f, account, p[0], p[1])
 		for _, kind := range []iam.Entity{iam.EntityUser, iam.EntityGroup} {
 			name := map[iam.Entity]string{iam.EntityUser: "carol", iam.EntityGroup: "devs"}[kind]
-			if err := f.AttachPolicy(ctx, account, kind, name, arn, ""); err != nil {
+			if err := f.AttachPolicy(
+				ctx, account, kind, name, arn, backendtest.EntityGrant(ctx, t, f, account, kind, name),
+			); err != nil {
 				t.Fatal(err)
 			}
-			if err := f.PutInlinePolicy(ctx, account, kind, name, strings.ToLower(p[0]), s3Doc, ""); err != nil {
+			if err := f.PutInlinePolicy(
+				ctx, account, kind, name, strings.ToLower(p[0]), s3Doc, backendtest.EntityGrant(ctx, t, f, account, kind, name),
+			); err != nil {
 				t.Fatal(err)
 			}
 		}

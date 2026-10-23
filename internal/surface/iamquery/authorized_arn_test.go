@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/popododo0720/vws-console-api/internal/backend/backendtest"
 	"github.com/popododo0720/vws-console-api/internal/iam"
 	"github.com/popododo0720/vws-console-api/internal/resource"
 	"github.com/popododo0720/vws-console-api/internal/sigv4"
@@ -18,6 +19,7 @@ import (
 // between the authorization and the change.
 type movingAdmin struct {
 	iam.Admin
+	tb          testing.TB
 	group, user string
 	moved       bool
 }
@@ -28,7 +30,9 @@ func (a *movingAdmin) GetGroup(
 	g, us, err := a.Admin.GetGroup(ctx, account, name)
 	if err == nil && !a.moved && name == a.group {
 		a.moved = true
-		if err := a.UpdateGroup(ctx, account, name, "/denied/", "", ""); err != nil {
+		if err := a.UpdateGroup(
+			ctx, account, name, "/denied/", "", backendtest.GroupGrant(ctx, a.tb, a, account, name),
+		); err != nil {
 			return iam.Group{}, nil, err
 		}
 	}
@@ -39,7 +43,9 @@ func (a *movingAdmin) GetUser(ctx context.Context, account resource.AccountID, n
 	u, err := a.Admin.GetUser(ctx, account, name)
 	if err == nil && !a.moved && name == a.user {
 		a.moved = true
-		if err := a.UpdateUser(ctx, account, name, "/denied/", "", ""); err != nil {
+		if err := a.UpdateUser(
+			ctx, account, name, "/denied/", "", backendtest.UserGrant(ctx, a.tb, a, account, name),
+		); err != nil {
 			return iam.User{}, err
 		}
 	}
@@ -108,7 +114,7 @@ func TestGroupAndUserChangesActOnTheAuthorizedARN(t *testing.T) {
 			has(t, call(t, h, bob, sigv4.ServiceIAM, tc.form), http.StatusOK)
 		})
 		t.Run(tc.name+"/moved after authorization", func(t *testing.T) {
-			h, f, account, bob := authorizedARNHarness(t, &movingAdmin{group: tc.group, user: tc.user})
+			h, f, account, bob := authorizedARNHarness(t, &movingAdmin{tb: t, group: tc.group, user: tc.user})
 			res := call(t, h, bob, sigv4.ServiceIAM, tc.form)
 			has(t, res, http.StatusConflict, "<Code>ConcurrentModification</Code>")
 			tc.unchanged(t, state{f, account})
@@ -146,17 +152,27 @@ func authorizedARNHarness(
 			t.Fatal(err)
 		}
 	}
-	if err := f.AddUserToGroup(ctx, root.Account, "devs", "carol", ""); err != nil {
+	if err := f.AddUserToGroup(
+		ctx, root.Account, "devs", "carol", backendtest.GroupGrant(ctx, t, f, root.Account, "devs"),
+	); err != nil {
 		t.Fatal(err)
 	}
 	arn := "arn:vws:iam::" + root.Account.String() + ":"
 	policy := `{"Statement":[` +
 		`{"Effect":"Allow","Action":"iam:*","Resource":["` + arn + `group/ok/*","` + arn + `user/ok/*"]},` +
 		`{"Effect":"Deny","Action":"iam:*","Resource":["` + arn + `group/denied/*","` + arn + `user/denied/*"]}]}`
-	if err := f.PutInlinePolicy(ctx, root.Account, iam.EntityUser, "bob", "ok", policy, ""); err != nil {
+	if err := f.PutInlinePolicy(
+		ctx,
+		root.Account,
+		iam.EntityUser,
+		"bob",
+		"ok",
+		policy,
+		backendtest.EntityGrant(ctx, t, f, root.Account, iam.EntityUser, "bob"),
+	); err != nil {
 		t.Fatal(err)
 	}
-	key, err := f.CreateAccessKey(ctx, root.Account, "bob", "")
+	key, err := f.CreateAccessKey(ctx, root.Account, "bob", backendtest.UserGrant(ctx, t, f, root.Account, "bob"))
 	if err != nil {
 		t.Fatal(err)
 	}

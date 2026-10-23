@@ -17,6 +17,7 @@ import (
 
 	iamv1 "github.com/popododo0720/vws-proto/gen/go/vws/iam/v1"
 
+	"github.com/popododo0720/vws-console-api/internal/backend/backendtest"
 	"github.com/popododo0720/vws-console-api/internal/iam"
 	"github.com/popododo0720/vws-console-api/internal/resource"
 	"github.com/popododo0720/vws-console-api/internal/sigv4"
@@ -372,7 +373,9 @@ func seededFake(t *testing.T) *iam.Fake {
 	if _, err := f.CreateUser(t.Context(), account(t), "bob", "/"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.CreateLoginProfile(t.Context(), account(t), "bob", "correct horse 1"); err != nil {
+	if _, err := f.CreateLoginProfile(
+		t.Context(), account(t), "bob", "correct horse 1", backendtest.UserGrant(t.Context(), t, f, account(t), "bob"),
+	); err != nil {
 		t.Fatal(err)
 	}
 	return f

@@ -75,7 +75,7 @@ func attachedARNs(ps []iam.ManagedPolicy) []string {
 
 func wantAttached(ctx context.Context, t *testing.T, a iam.Admin, kind iam.Entity, name string, want ...string) {
 	t.Helper()
-	ps, err := a.ListAttachedPolicies(ctx, iamAccount(), kind, name, "")
+	ps, err := a.ListAttachedPolicies(ctx, iamAccount(), kind, name, EntityGrant(ctx, t, a, iamAccount(), kind, name))
 	wantOK(t, "ListAttachedPolicies "+name, err)
 	if want == nil {
 		want = []string{}
@@ -92,7 +92,7 @@ func wantAttached(ctx context.Context, t *testing.T, a iam.Admin, kind iam.Entit
 
 func wantInline(ctx context.Context, t *testing.T, a iam.Admin, kind iam.Entity, name string, want ...string) {
 	t.Helper()
-	got, err := a.ListInlinePolicies(ctx, iamAccount(), kind, name, "")
+	got, err := a.ListInlinePolicies(ctx, iamAccount(), kind, name, EntityGrant(ctx, t, a, iamAccount(), kind, name))
 	wantOK(t, "ListInlinePolicies "+name, err)
 	if want == nil {
 		want = []string{}
@@ -134,11 +134,21 @@ func iamPolicyRows() []policyRow {
 		) {
 			for _, h := range holders() {
 				wantAttached(ctx, t, a, h.kind, h.name)
-				wantOK(t, "Attach ReadOnly", a.AttachPolicy(ctx, iamAccount(), h.kind, h.name, p.readOnly, ""))
-				wantOK(t, "Attach Ops", a.AttachPolicy(ctx, iamAccount(), h.kind, h.name, p.ops, h.arn))
-				wantOK(t, "Attach Ops again", a.AttachPolicy(ctx, iamAccount(), h.kind, h.name, p.ops, ""))
+				wantOK(
+					t,
+					"Attach ReadOnly",
+					a.AttachPolicy(
+						ctx, iamAccount(), h.kind, h.name, p.readOnly, EntityGrant(ctx, t, a, iamAccount(), h.kind, h.name),
+					),
+				)
+				wantOK(t, "Attach Ops", a.AttachPolicy(ctx, iamAccount(), h.kind, h.name, p.ops, Grant(ctx, t, h.arn)))
+				wantOK(
+					t,
+					"Attach Ops again",
+					a.AttachPolicy(ctx, iamAccount(), h.kind, h.name, p.ops, EntityGrant(ctx, t, a, iamAccount(), h.kind, h.name)),
+				)
 				wantAttached(ctx, t, a, h.kind, h.name, p.ops, p.readOnly)
-				ps, err := a.ListAttachedPolicies(ctx, iamAccount(), h.kind, h.name, h.arn)
+				ps, err := a.ListAttachedPolicies(ctx, iamAccount(), h.kind, h.name, Grant(ctx, t, h.arn))
 				wantOK(t, "ListAttachedPolicies at the ARN", err)
 				if len(ps) != 2 || ps[0].Name != "Ops" || ps[0].ARN != arnPrefix+"policy/team/Ops" ||
 					ps[1].Name != "ReadOnly" || ps[1].ARN != arnPrefix+"policy/ReadOnly" {
@@ -156,27 +166,60 @@ func iamPolicyRows() []policyRow {
 			}
 			for _, h := range holders() {
 				for _, arn := range arns[:10] {
-					wantOK(t, "Attach "+arn, a.AttachPolicy(ctx, iamAccount(), h.kind, h.name, arn, ""))
+					wantOK(
+						t,
+						"Attach "+arn,
+						a.AttachPolicy(ctx, iamAccount(), h.kind, h.name, arn, EntityGrant(ctx, t, a, iamAccount(), h.kind, h.name)),
+					)
 				}
-				err := a.AttachPolicy(ctx, iamAccount(), h.kind, h.name, arns[10], "")
+				err := a.AttachPolicy(
+					ctx, iamAccount(), h.kind, h.name, arns[10], EntityGrant(ctx, t, a, iamAccount(), h.kind, h.name),
+				)
 				wantErr(t, "Attach an 11th", err, resource.CodeResourceExhausted,
 					"Cannot exceed quota for PoliciesPer"+h.word+": 10")
-				wantOK(t, "Attach one of the 10 again", a.AttachPolicy(ctx, iamAccount(), h.kind, h.name, arns[3], ""))
+				wantOK(
+					t,
+					"Attach one of the 10 again",
+					a.AttachPolicy(ctx, iamAccount(), h.kind, h.name, arns[3], EntityGrant(ctx, t, a, iamAccount(), h.kind, h.name)),
+				)
 				wantAttached(ctx, t, a, h.kind, h.name, arns[:10]...)
 			}
-			wantOK(t, "the quota is per entity", a.AttachPolicy(ctx, iamAccount(), iam.EntityUser, "alice", arns[10], ""))
+			wantOK(
+				t,
+				"the quota is per entity",
+				a.AttachPolicy(
+					ctx,
+					iamAccount(),
+					iam.EntityUser,
+					"alice",
+					arns[10],
+					EntityGrant(ctx, t, a, iamAccount(), iam.EntityUser, "alice"),
+				),
+			)
 		}},
 		{"Detach removes; a policy that is not attached is NoSuchEntity", func(
 			ctx context.Context, t *testing.T, a iam.Admin, p seededPolicies,
 		) {
 			for _, h := range holders() {
-				err := a.DetachPolicy(ctx, iamAccount(), h.kind, h.name, p.ops, "")
+				err := a.DetachPolicy(
+					ctx, iamAccount(), h.kind, h.name, p.ops, EntityGrant(ctx, t, a, iamAccount(), h.kind, h.name),
+				)
 				wantErr(t, "Detach before attach", err, resource.CodeNotFound, "Policy "+p.ops+" was not found.")
-				wantOK(t, "Attach", a.AttachPolicy(ctx, iamAccount(), h.kind, h.name, p.ops, ""))
-				wantOK(t, "Attach", a.AttachPolicy(ctx, iamAccount(), h.kind, h.name, p.readOnly, ""))
-				wantOK(t, "Detach", a.DetachPolicy(ctx, iamAccount(), h.kind, h.name, p.ops, h.arn))
+				wantOK(
+					t,
+					"Attach",
+					a.AttachPolicy(ctx, iamAccount(), h.kind, h.name, p.ops, EntityGrant(ctx, t, a, iamAccount(), h.kind, h.name)),
+				)
+				wantOK(
+					t,
+					"Attach",
+					a.AttachPolicy(
+						ctx, iamAccount(), h.kind, h.name, p.readOnly, EntityGrant(ctx, t, a, iamAccount(), h.kind, h.name),
+					),
+				)
+				wantOK(t, "Detach", a.DetachPolicy(ctx, iamAccount(), h.kind, h.name, p.ops, Grant(ctx, t, h.arn)))
 				wantAttached(ctx, t, a, h.kind, h.name, p.readOnly)
-				err = a.DetachPolicy(ctx, iamAccount(), h.kind, h.name, p.ops, "")
+				err = a.DetachPolicy(ctx, iamAccount(), h.kind, h.name, p.ops, EntityGrant(ctx, t, a, iamAccount(), h.kind, h.name))
 				wantErr(t, "Detach again", err, resource.CodeNotFound, "Policy "+p.ops+" was not found.")
 			}
 		}},
@@ -188,9 +231,9 @@ func iamPolicyRows() []policyRow {
 					arnPrefix + "policy/Ghost", arnPrefix + "policy/other/Ops", arnPrefix + "policy/Ops",
 					"arn:vws:iam::210987654321:policy/team/Ops",
 				} {
-					err := a.AttachPolicy(ctx, iamAccount(), h.kind, h.name, arn, "")
+					err := a.AttachPolicy(ctx, iamAccount(), h.kind, h.name, arn, EntityGrant(ctx, t, a, iamAccount(), h.kind, h.name))
 					wantErr(t, "Attach "+arn, err, resource.CodeNotFound, "Policy "+arn+" does not exist or is not attachable.")
-					err = a.DetachPolicy(ctx, iamAccount(), h.kind, h.name, arn, "")
+					err = a.DetachPolicy(ctx, iamAccount(), h.kind, h.name, arn, EntityGrant(ctx, t, a, iamAccount(), h.kind, h.name))
 					wantErr(t, "Detach "+arn, err, resource.CodeNotFound, "Policy "+arn+" does not exist or is not attachable.")
 				}
 				wantAttached(ctx, t, a, h.kind, h.name)
@@ -204,20 +247,42 @@ func iamPolicyRows() []policyRow {
 				what string
 			}{{iam.EntityUser, "user"}, {iam.EntityGroup, "group"}} {
 				msg := "The " + h.what + " with name ghost cannot be found."
-				wantErr(t, "Attach", a.AttachPolicy(ctx, iamAccount(), h.kind, "ghost", p.ops, ""), resource.CodeNotFound, msg)
-				wantErr(t, "Detach", a.DetachPolicy(ctx, iamAccount(), h.kind, "ghost", p.ops, ""), resource.CodeNotFound, msg)
-				_, err := a.ListAttachedPolicies(ctx, iamAccount(), h.kind, "ghost", "")
+				wantErr(
+					t,
+					"Attach",
+					a.AttachPolicy(ctx, iamAccount(), h.kind, "ghost", p.ops, EntityGrant(ctx, t, a, iamAccount(), h.kind, "ghost")),
+					resource.CodeNotFound,
+					msg,
+				)
+				wantErr(
+					t,
+					"Detach",
+					a.DetachPolicy(ctx, iamAccount(), h.kind, "ghost", p.ops, EntityGrant(ctx, t, a, iamAccount(), h.kind, "ghost")),
+					resource.CodeNotFound,
+					msg,
+				)
+				_, err := a.ListAttachedPolicies(
+					ctx, iamAccount(), h.kind, "ghost", EntityGrant(ctx, t, a, iamAccount(), h.kind, "ghost"),
+				)
 				wantErr(t, "ListAttached", err, resource.CodeNotFound, msg)
-				err = a.PutInlinePolicy(ctx, iamAccount(), h.kind, "ghost", "p", identityDoc("*"), "")
+				err = a.PutInlinePolicy(
+					ctx, iamAccount(), h.kind, "ghost", "p", identityDoc("*"), EntityGrant(ctx, t, a, iamAccount(), h.kind, "ghost"),
+				)
 				wantErr(t, "Put", err, resource.CodeNotFound, msg)
-				_, err = a.GetInlinePolicy(ctx, iamAccount(), h.kind, "ghost", "p", "")
+				_, err = a.GetInlinePolicy(
+					ctx, iamAccount(), h.kind, "ghost", "p", EntityGrant(ctx, t, a, iamAccount(), h.kind, "ghost"),
+				)
 				wantErr(t, "Get", err, resource.CodeNotFound, msg)
-				err = a.DeleteInlinePolicy(ctx, iamAccount(), h.kind, "ghost", "p", "")
+				err = a.DeleteInlinePolicy(
+					ctx, iamAccount(), h.kind, "ghost", "p", EntityGrant(ctx, t, a, iamAccount(), h.kind, "ghost"),
+				)
 				wantErr(t, "Delete", err, resource.CodeNotFound, msg)
-				_, err = a.ListInlinePolicies(ctx, iamAccount(), h.kind, "ghost", "")
+				_, err = a.ListInlinePolicies(
+					ctx, iamAccount(), h.kind, "ghost", EntityGrant(ctx, t, a, iamAccount(), h.kind, "ghost"),
+				)
 				wantErr(t, "List", err, resource.CodeNotFound, msg)
 				// The entity is looked up before the ARN is compared.
-				_, err = a.ListInlinePolicies(ctx, iamAccount(), h.kind, "ghost", arnPrefix+h.what+"/ghost")
+				_, err = a.ListInlinePolicies(ctx, iamAccount(), h.kind, "ghost", Grant(ctx, t, arnPrefix+h.what+"/ghost"))
 				wantErr(t, "List at an ARN", err, resource.CodeNotFound, msg)
 			}
 		}},
@@ -228,17 +293,31 @@ func iamPolicyRows() []policyRow {
 				"\"Action\": [\"ec2:*\"], \"Resource\": \"*\"}\n}\n"
 			for _, h := range holders() {
 				wantInline(ctx, t, a, h.kind, h.name)
-				wantOK(t, "Put s3", a.PutInlinePolicy(ctx, iamAccount(), h.kind, h.name, "s3", identityDoc("*"), ""))
-				wantOK(t, "Put ec2", a.PutInlinePolicy(ctx, iamAccount(), h.kind, h.name, "ec2", spaced, h.arn))
+				wantOK(
+					t,
+					"Put s3",
+					a.PutInlinePolicy(
+						ctx, iamAccount(), h.kind, h.name, "s3", identityDoc("*"), EntityGrant(ctx, t, a, iamAccount(), h.kind, h.name),
+					),
+				)
+				wantOK(t, "Put ec2", a.PutInlinePolicy(ctx, iamAccount(), h.kind, h.name, "ec2", spaced, Grant(ctx, t, h.arn)))
 				wantInline(ctx, t, a, h.kind, h.name, "ec2", "s3")
-				got, err := a.GetInlinePolicy(ctx, iamAccount(), h.kind, h.name, "ec2", h.arn)
+				got, err := a.GetInlinePolicy(ctx, iamAccount(), h.kind, h.name, "ec2", Grant(ctx, t, h.arn))
 				wantOK(t, "Get ec2", err)
 				if got != spaced {
 					t.Fatalf("Get ec2: %q, want %q", got, spaced)
 				}
 				other := identityDoc("arn:vws:s3:::other/*")
-				wantOK(t, "Put s3 again", a.PutInlinePolicy(ctx, iamAccount(), h.kind, h.name, "s3", other, ""))
-				got, err = a.GetInlinePolicy(ctx, iamAccount(), h.kind, h.name, "s3", "")
+				wantOK(
+					t,
+					"Put s3 again",
+					a.PutInlinePolicy(
+						ctx, iamAccount(), h.kind, h.name, "s3", other, EntityGrant(ctx, t, a, iamAccount(), h.kind, h.name),
+					),
+				)
+				got, err = a.GetInlinePolicy(
+					ctx, iamAccount(), h.kind, h.name, "s3", EntityGrant(ctx, t, a, iamAccount(), h.kind, h.name),
+				)
 				wantOK(t, "Get s3", err)
 				if got != other {
 					t.Fatalf("Get s3 after the replace: %q", got)
@@ -252,17 +331,37 @@ func iamPolicyRows() []policyRow {
 		) {
 			for _, h := range holders() {
 				msg := "The " + h.kind.String() + " policy with name s3 cannot be found."
-				_, err := a.GetInlinePolicy(ctx, iamAccount(), h.kind, h.name, "s3", "")
+				_, err := a.GetInlinePolicy(
+					ctx, iamAccount(), h.kind, h.name, "s3", EntityGrant(ctx, t, a, iamAccount(), h.kind, h.name),
+				)
 				wantErr(t, "Get before Put", err, resource.CodeNotFound, msg)
-				wantErr(t, "Delete before Put", a.DeleteInlinePolicy(ctx, iamAccount(), h.kind, h.name, "s3", ""),
+				wantErr(t, "Delete before Put", a.DeleteInlinePolicy(
+					ctx, iamAccount(), h.kind, h.name, "s3", EntityGrant(ctx, t, a, iamAccount(), h.kind, h.name),
+				),
 					resource.CodeNotFound, msg)
-				wantOK(t, "Put", a.PutInlinePolicy(ctx, iamAccount(), h.kind, h.name, "s3", identityDoc("*"), ""))
-				wantOK(t, "Put", a.PutInlinePolicy(ctx, iamAccount(), h.kind, h.name, "ec2", identityDoc("*"), ""))
-				wantOK(t, "Delete", a.DeleteInlinePolicy(ctx, iamAccount(), h.kind, h.name, "s3", h.arn))
+				wantOK(
+					t,
+					"Put",
+					a.PutInlinePolicy(
+						ctx, iamAccount(), h.kind, h.name, "s3", identityDoc("*"), EntityGrant(ctx, t, a, iamAccount(), h.kind, h.name),
+					),
+				)
+				wantOK(
+					t,
+					"Put",
+					a.PutInlinePolicy(
+						ctx, iamAccount(), h.kind, h.name, "ec2", identityDoc("*"), EntityGrant(ctx, t, a, iamAccount(), h.kind, h.name),
+					),
+				)
+				wantOK(t, "Delete", a.DeleteInlinePolicy(ctx, iamAccount(), h.kind, h.name, "s3", Grant(ctx, t, h.arn)))
 				wantInline(ctx, t, a, h.kind, h.name, "ec2")
-				_, err = a.GetInlinePolicy(ctx, iamAccount(), h.kind, h.name, "s3", "")
+				_, err = a.GetInlinePolicy(
+					ctx, iamAccount(), h.kind, h.name, "s3", EntityGrant(ctx, t, a, iamAccount(), h.kind, h.name),
+				)
 				wantErr(t, "Get after Delete", err, resource.CodeNotFound, msg)
-				wantErr(t, "Delete again", a.DeleteInlinePolicy(ctx, iamAccount(), h.kind, h.name, "s3", ""),
+				wantErr(t, "Delete again", a.DeleteInlinePolicy(
+					ctx, iamAccount(), h.kind, h.name, "s3", EntityGrant(ctx, t, a, iamAccount(), h.kind, h.name),
+				),
 					resource.CodeNotFound, msg)
 			}
 		}},
@@ -277,7 +376,9 @@ func iamPolicyRows() []policyRow {
 					`{"Version":"2012-10-17","Statement":[{"Effect":"Maybe","Action":"s3:*","Resource":"*"}]}`,
 					`{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":"*","Action":"s3:*","Resource":"*"}]}`,
 				} {
-					err := a.PutInlinePolicy(ctx, iamAccount(), h.kind, h.name, "bad", doc, "")
+					err := a.PutInlinePolicy(
+						ctx, iamAccount(), h.kind, h.name, "bad", doc, EntityGrant(ctx, t, a, iamAccount(), h.kind, h.name),
+					)
 					wantField(t, "Put "+doc, err, resource.CodeInvalidArgument, "PolicyDocument")
 				}
 				wantInline(ctx, t, a, h.kind, h.name)
@@ -288,11 +389,19 @@ func iamPolicyRows() []policyRow {
 		) {
 			for _, h := range holders() {
 				for _, name := range []string{"", "bad name", "a/b", strings.Repeat("p", 129)} {
-					err := a.PutInlinePolicy(ctx, iamAccount(), h.kind, h.name, name, identityDoc("*"), "")
+					err := a.PutInlinePolicy(
+						ctx, iamAccount(), h.kind, h.name, name, identityDoc("*"), EntityGrant(ctx, t, a, iamAccount(), h.kind, h.name),
+					)
 					wantField(t, "Put "+name, err, resource.CodeInvalidArgument, "policyName")
 				}
 				ok := "p+=,.@_-9"
-				wantOK(t, "Put "+ok, a.PutInlinePolicy(ctx, iamAccount(), h.kind, h.name, ok, identityDoc("*"), ""))
+				wantOK(
+					t,
+					"Put "+ok,
+					a.PutInlinePolicy(
+						ctx, iamAccount(), h.kind, h.name, ok, identityDoc("*"), EntityGrant(ctx, t, a, iamAccount(), h.kind, h.name),
+					),
+				)
 				wantInline(ctx, t, a, h.kind, h.name, ok)
 			}
 		}},
@@ -306,47 +415,193 @@ func iamPolicyRows() []policyRow {
 				limit int
 			}{{iam.EntityUser, "bob", "user", 2048}, {iam.EntityGroup, "devs", "group", 5120}} {
 				msg := "Maximum policy size of " + strconv.Itoa(h.limit) + " bytes exceeded for " + h.what + " " + h.name + "."
-				err := a.PutInlinePolicy(ctx, iamAccount(), h.kind, h.name, "big", docOfSize(t, h.limit+1, 0), "")
+				err := a.PutInlinePolicy(
+					ctx,
+					iamAccount(),
+					h.kind,
+					h.name,
+					"big",
+					docOfSize(t, h.limit+1, 0),
+					EntityGrant(ctx, t, a, iamAccount(), h.kind, h.name),
+				)
 				wantErr(t, "Put one over the limit", err, resource.CodeResourceExhausted, msg)
 				wantOK(t, "Put at the limit with white space",
-					a.PutInlinePolicy(ctx, iamAccount(), h.kind, h.name, "big", docOfSize(t, h.limit-200, 400), ""))
-				err = a.PutInlinePolicy(ctx, iamAccount(), h.kind, h.name, "more", docOfSize(t, 201, 0), "")
+					a.PutInlinePolicy(
+						ctx,
+						iamAccount(),
+						h.kind,
+						h.name,
+						"big",
+						docOfSize(t, h.limit-200, 400),
+						EntityGrant(ctx, t, a, iamAccount(), h.kind, h.name),
+					))
+				err = a.PutInlinePolicy(
+					ctx,
+					iamAccount(),
+					h.kind,
+					h.name,
+					"more",
+					docOfSize(t, 201, 0),
+					EntityGrant(ctx, t, a, iamAccount(), h.kind, h.name),
+				)
 				wantErr(t, "Put past the sum", err, resource.CodeResourceExhausted, msg)
 				wantOK(t, "Put up to the sum",
-					a.PutInlinePolicy(ctx, iamAccount(), h.kind, h.name, "more", docOfSize(t, 200, 0), ""))
+					a.PutInlinePolicy(
+						ctx,
+						iamAccount(),
+						h.kind,
+						h.name,
+						"more",
+						docOfSize(t, 200, 0),
+						EntityGrant(ctx, t, a, iamAccount(), h.kind, h.name),
+					))
 				wantOK(t, "a replaced policy counts once",
-					a.PutInlinePolicy(ctx, iamAccount(), h.kind, h.name, "big", docOfSize(t, h.limit-200, 0), ""))
+					a.PutInlinePolicy(
+						ctx,
+						iamAccount(),
+						h.kind,
+						h.name,
+						"big",
+						docOfSize(t, h.limit-200, 0),
+						EntityGrant(ctx, t, a, iamAccount(), h.kind, h.name),
+					))
 				wantInline(ctx, t, a, h.kind, h.name, "big", "more")
 			}
 		}},
 		{"DeleteUser and DeleteGroup with a policy are DeleteConflict", func(
 			ctx context.Context, t *testing.T, a iam.Admin, p seededPolicies,
 		) {
-			wantOK(t, "Attach", a.AttachPolicy(ctx, iamAccount(), iam.EntityUser, "bob", p.ops, ""))
-			wantErr(t, "DeleteUser", a.DeleteUser(ctx, iamAccount(), "bob", ""), resource.CodeConflict, iam.UserDeleteConflict)
-			wantOK(t, "Detach", a.DetachPolicy(ctx, iamAccount(), iam.EntityUser, "bob", p.ops, ""))
-			wantOK(t, "Put", a.PutInlinePolicy(ctx, iamAccount(), iam.EntityUser, "bob", "s3", identityDoc("*"), ""))
-			wantErr(t, "DeleteUser", a.DeleteUser(ctx, iamAccount(), "bob", ""), resource.CodeConflict, iam.UserDeleteConflict)
-			wantOK(t, "Delete inline", a.DeleteInlinePolicy(ctx, iamAccount(), iam.EntityUser, "bob", "s3", ""))
-			wantOK(t, "DeleteUser once the policies are gone", a.DeleteUser(ctx, iamAccount(), "bob", ""))
+			wantOK(
+				t,
+				"Attach",
+				a.AttachPolicy(
+					ctx, iamAccount(), iam.EntityUser, "bob", p.ops, EntityGrant(ctx, t, a, iamAccount(), iam.EntityUser, "bob"),
+				),
+			)
+			wantErr(
+				t,
+				"DeleteUser",
+				a.DeleteUser(ctx, iamAccount(), "bob", UserGrant(ctx, t, a, iamAccount(), "bob")),
+				resource.CodeConflict,
+				iam.UserDeleteConflict,
+			)
+			wantOK(
+				t,
+				"Detach",
+				a.DetachPolicy(
+					ctx, iamAccount(), iam.EntityUser, "bob", p.ops, EntityGrant(ctx, t, a, iamAccount(), iam.EntityUser, "bob"),
+				),
+			)
+			wantOK(
+				t,
+				"Put",
+				a.PutInlinePolicy(
+					ctx,
+					iamAccount(),
+					iam.EntityUser,
+					"bob",
+					"s3",
+					identityDoc("*"),
+					EntityGrant(ctx, t, a, iamAccount(), iam.EntityUser, "bob"),
+				),
+			)
+			wantErr(
+				t,
+				"DeleteUser",
+				a.DeleteUser(ctx, iamAccount(), "bob", UserGrant(ctx, t, a, iamAccount(), "bob")),
+				resource.CodeConflict,
+				iam.UserDeleteConflict,
+			)
+			wantOK(
+				t,
+				"Delete inline",
+				a.DeleteInlinePolicy(
+					ctx, iamAccount(), iam.EntityUser, "bob", "s3", EntityGrant(ctx, t, a, iamAccount(), iam.EntityUser, "bob"),
+				),
+			)
+			wantOK(
+				t,
+				"DeleteUser once the policies are gone",
+				a.DeleteUser(ctx, iamAccount(), "bob", UserGrant(ctx, t, a, iamAccount(), "bob")),
+			)
 
-			wantOK(t, "RemoveUserFromGroup", a.RemoveUserFromGroup(ctx, iamAccount(), "devs", "alice", ""))
-			wantOK(t, "Put", a.PutInlinePolicy(ctx, iamAccount(), iam.EntityGroup, "devs", "s3", identityDoc("*"), ""))
-			wantErr(t, "DeleteGroup", a.DeleteGroup(ctx, iamAccount(), "devs", ""),
+			wantOK(
+				t,
+				"RemoveUserFromGroup",
+				a.RemoveUserFromGroup(ctx, iamAccount(), "devs", "alice", GroupGrant(ctx, t, a, iamAccount(), "devs")),
+			)
+			wantOK(
+				t,
+				"Put",
+				a.PutInlinePolicy(
+					ctx,
+					iamAccount(),
+					iam.EntityGroup,
+					"devs",
+					"s3",
+					identityDoc("*"),
+					EntityGrant(ctx, t, a, iamAccount(), iam.EntityGroup, "devs"),
+				),
+			)
+			wantErr(t, "DeleteGroup", a.DeleteGroup(ctx, iamAccount(), "devs", GroupGrant(ctx, t, a, iamAccount(), "devs")),
 				resource.CodeConflict, iam.GroupDeleteConflict)
-			wantOK(t, "Delete inline", a.DeleteInlinePolicy(ctx, iamAccount(), iam.EntityGroup, "devs", "s3", ""))
-			wantOK(t, "Attach", a.AttachPolicy(ctx, iamAccount(), iam.EntityGroup, "devs", p.readOnly, ""))
-			wantErr(t, "DeleteGroup", a.DeleteGroup(ctx, iamAccount(), "devs", ""),
+			wantOK(
+				t,
+				"Delete inline",
+				a.DeleteInlinePolicy(
+					ctx, iamAccount(), iam.EntityGroup, "devs", "s3", EntityGrant(ctx, t, a, iamAccount(), iam.EntityGroup, "devs"),
+				),
+			)
+			wantOK(
+				t,
+				"Attach",
+				a.AttachPolicy(
+					ctx,
+					iamAccount(),
+					iam.EntityGroup,
+					"devs",
+					p.readOnly,
+					EntityGrant(ctx, t, a, iamAccount(), iam.EntityGroup, "devs"),
+				),
+			)
+			wantErr(t, "DeleteGroup", a.DeleteGroup(ctx, iamAccount(), "devs", GroupGrant(ctx, t, a, iamAccount(), "devs")),
 				resource.CodeConflict, iam.GroupDeleteConflict)
-			wantOK(t, "Detach", a.DetachPolicy(ctx, iamAccount(), iam.EntityGroup, "devs", p.readOnly, ""))
-			wantOK(t, "DeleteGroup once the policies are gone", a.DeleteGroup(ctx, iamAccount(), "devs", ""))
+			wantOK(
+				t,
+				"Detach",
+				a.DetachPolicy(
+					ctx,
+					iamAccount(),
+					iam.EntityGroup,
+					"devs",
+					p.readOnly,
+					EntityGrant(ctx, t, a, iamAccount(), iam.EntityGroup, "devs"),
+				),
+			)
+			wantOK(
+				t,
+				"DeleteGroup once the policies are gone",
+				a.DeleteGroup(ctx, iamAccount(), "devs", GroupGrant(ctx, t, a, iamAccount(), "devs")),
+			)
 		}},
 		{"every call at a stale ARN is ConcurrentModification and writes nothing", func(
 			ctx context.Context, t *testing.T, a iam.Admin, p seededPolicies,
 		) {
 			for _, h := range holders() {
-				wantOK(t, "Attach", a.AttachPolicy(ctx, iamAccount(), h.kind, h.name, p.readOnly, ""))
-				wantOK(t, "Put", a.PutInlinePolicy(ctx, iamAccount(), h.kind, h.name, "s3", identityDoc("*"), ""))
+				wantOK(
+					t,
+					"Attach",
+					a.AttachPolicy(
+						ctx, iamAccount(), h.kind, h.name, p.readOnly, EntityGrant(ctx, t, a, iamAccount(), h.kind, h.name),
+					),
+				)
+				wantOK(
+					t,
+					"Put",
+					a.PutInlinePolicy(
+						ctx, iamAccount(), h.kind, h.name, "s3", identityDoc("*"), EntityGrant(ctx, t, a, iamAccount(), h.kind, h.name),
+					),
+				)
 				old := strings.Replace(h.arn, "/eng/", "/old/", 1)
 				old = strings.Replace(old, "/team/", "/old/", 1)
 				msg := iam.UserChanged
@@ -360,18 +615,20 @@ func iamPolicyRows() []policyRow {
 						t.Fatalf("%s: %v is not a ConcurrentModification", what, err)
 					}
 				}
-				changed("Attach", a.AttachPolicy(ctx, iamAccount(), h.kind, h.name, p.ops, old))
-				changed("Attach of an attached policy", a.AttachPolicy(ctx, iamAccount(), h.kind, h.name, p.readOnly, old))
-				changed("Detach", a.DetachPolicy(ctx, iamAccount(), h.kind, h.name, p.readOnly, old))
-				_, err := a.ListAttachedPolicies(ctx, iamAccount(), h.kind, h.name, old)
+				changed("Attach", a.AttachPolicy(ctx, iamAccount(), h.kind, h.name, p.ops, Grant(ctx, t, old)))
+				changed(
+					"Attach of an attached policy", a.AttachPolicy(ctx, iamAccount(), h.kind, h.name, p.readOnly, Grant(ctx, t, old)),
+				)
+				changed("Detach", a.DetachPolicy(ctx, iamAccount(), h.kind, h.name, p.readOnly, Grant(ctx, t, old)))
+				_, err := a.ListAttachedPolicies(ctx, iamAccount(), h.kind, h.name, Grant(ctx, t, old))
 				changed("ListAttached", err)
-				changed("Put", a.PutInlinePolicy(ctx, iamAccount(), h.kind, h.name, "ec2", identityDoc("*"), old))
-				_, err = a.GetInlinePolicy(ctx, iamAccount(), h.kind, h.name, "s3", old)
+				changed("Put", a.PutInlinePolicy(ctx, iamAccount(), h.kind, h.name, "ec2", identityDoc("*"), Grant(ctx, t, old)))
+				_, err = a.GetInlinePolicy(ctx, iamAccount(), h.kind, h.name, "s3", Grant(ctx, t, old))
 				changed("Get", err)
-				_, err = a.GetInlinePolicy(ctx, iamAccount(), h.kind, h.name, "missing", old)
+				_, err = a.GetInlinePolicy(ctx, iamAccount(), h.kind, h.name, "missing", Grant(ctx, t, old))
 				changed("Get of a missing policy", err)
-				changed("Delete", a.DeleteInlinePolicy(ctx, iamAccount(), h.kind, h.name, "s3", old))
-				_, err = a.ListInlinePolicies(ctx, iamAccount(), h.kind, h.name, old)
+				changed("Delete", a.DeleteInlinePolicy(ctx, iamAccount(), h.kind, h.name, "s3", Grant(ctx, t, old)))
+				_, err = a.ListInlinePolicies(ctx, iamAccount(), h.kind, h.name, Grant(ctx, t, old))
 				changed("List", err)
 				wantAttached(ctx, t, a, h.kind, h.name, p.readOnly)
 				wantInline(ctx, t, a, h.kind, h.name, "s3")
@@ -380,14 +637,46 @@ func iamPolicyRows() []policyRow {
 		{"another account sees none of the policies", func(
 			ctx context.Context, t *testing.T, a iam.Admin, p seededPolicies,
 		) {
-			wantOK(t, "Attach", a.AttachPolicy(ctx, iamAccount(), iam.EntityUser, "bob", p.ops, ""))
-			wantOK(t, "Put", a.PutInlinePolicy(ctx, iamAccount(), iam.EntityUser, "bob", "s3", identityDoc("*"), ""))
-			_, err := a.ListAttachedPolicies(ctx, iamOther(), iam.EntityUser, "bob", "")
+			wantOK(
+				t,
+				"Attach",
+				a.AttachPolicy(
+					ctx, iamAccount(), iam.EntityUser, "bob", p.ops, EntityGrant(ctx, t, a, iamAccount(), iam.EntityUser, "bob"),
+				),
+			)
+			wantOK(
+				t,
+				"Put",
+				a.PutInlinePolicy(
+					ctx,
+					iamAccount(),
+					iam.EntityUser,
+					"bob",
+					"s3",
+					identityDoc("*"),
+					EntityGrant(ctx, t, a, iamAccount(), iam.EntityUser, "bob"),
+				),
+			)
+			_, err := a.ListAttachedPolicies(
+				ctx, iamOther(), iam.EntityUser, "bob", EntityGrant(ctx, t, a, iamOther(), iam.EntityUser, "bob"),
+			)
 			wantErr(t, "ListAttached", err, resource.CodeNotFound, "")
-			_, err = a.GetInlinePolicy(ctx, iamOther(), iam.EntityUser, "bob", "s3", "")
+			_, err = a.GetInlinePolicy(
+				ctx, iamOther(), iam.EntityUser, "bob", "s3", EntityGrant(ctx, t, a, iamOther(), iam.EntityUser, "bob"),
+			)
 			wantErr(t, "Get", err, resource.CodeNotFound, "")
-			wantErr(t, "Detach", a.DetachPolicy(ctx, iamOther(), iam.EntityUser, "bob", p.ops, ""), resource.CodeNotFound, "")
-			wantErr(t, "Delete", a.DeleteInlinePolicy(ctx, iamOther(), iam.EntityUser, "bob", "s3", ""),
+			wantErr(
+				t,
+				"Detach",
+				a.DetachPolicy(
+					ctx, iamOther(), iam.EntityUser, "bob", p.ops, EntityGrant(ctx, t, a, iamOther(), iam.EntityUser, "bob"),
+				),
+				resource.CodeNotFound,
+				"",
+			)
+			wantErr(t, "Delete", a.DeleteInlinePolicy(
+				ctx, iamOther(), iam.EntityUser, "bob", "s3", EntityGrant(ctx, t, a, iamOther(), iam.EntityUser, "bob"),
+			),
 				resource.CodeNotFound, "")
 			wantAttached(ctx, t, a, iam.EntityUser, "bob", p.ops)
 			wantInline(ctx, t, a, iam.EntityUser, "bob", "s3")

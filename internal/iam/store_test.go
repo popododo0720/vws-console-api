@@ -44,10 +44,11 @@ func TestUsersGroupsAndPolicies(t *testing.T) {
 	if _, err := f.CreateGroup(ctx, a, "readers", "/"); err != nil {
 		t.Fatal(err)
 	}
-	must(t, f.AttachPolicy(ctx, a, EntityGroup, "readers", p.ARN, ""))
-	must(t, f.AddUserToGroup(ctx, a, "readers", "bob", ""))
+	must(t, f.AttachPolicy(ctx, a, EntityGroup, "readers", p.ARN, testEntityGrant(ctx, t, f, a, EntityGroup, "readers")))
+	must(t, f.AddUserToGroup(ctx, a, "readers", "bob", testGroupGrant(ctx, t, f, a, "readers")))
 	must(t, f.PutInlinePolicy(ctx, a, EntityUser, "bob", "deny-vols",
-		`{"Version":"2012-10-17","Statement":{"Effect":"Deny","Action":"ec2:DescribeVolumes","Resource":"*"}}`, ""))
+		`{"Version":"2012-10-17","Statement":{"Effect":"Deny","Action":"ec2:DescribeVolumes","Resource":"*"}}`,
+		testEntityGrant(ctx, t, f, a, EntityUser, "bob")))
 
 	bob := Principal{Account: a, ARN: u.ARN}
 	for _, tc := range []struct {
@@ -65,15 +66,17 @@ func TestUsersGroupsAndPolicies(t *testing.T) {
 	if err := f.DeletePolicy(ctx, a, p.ARN); resource.CodeOf(err) != resource.CodeConflict {
 		t.Errorf("delete attached policy: %v", err)
 	}
-	if err := f.DeleteUser(ctx, a, "bob", ""); resource.CodeOf(err) != resource.CodeConflict {
+	if err := f.DeleteUser(
+		ctx, a, "bob", testUserGrant(ctx, t, f, a, "bob"),
+	); resource.CodeOf(err) != resource.CodeConflict {
 		t.Errorf("delete user in a group with a policy: %v", err)
 	}
-	must(t, f.RemoveUserFromGroup(ctx, a, "readers", "bob", ""))
-	must(t, f.DeleteInlinePolicy(ctx, a, EntityUser, "bob", "deny-vols", ""))
-	must(t, f.DeleteUser(ctx, a, "bob", ""))
-	must(t, f.DetachPolicy(ctx, a, EntityGroup, "readers", p.ARN, ""))
+	must(t, f.RemoveUserFromGroup(ctx, a, "readers", "bob", testGroupGrant(ctx, t, f, a, "readers")))
+	must(t, f.DeleteInlinePolicy(ctx, a, EntityUser, "bob", "deny-vols", testEntityGrant(ctx, t, f, a, EntityUser, "bob")))
+	must(t, f.DeleteUser(ctx, a, "bob", testUserGrant(ctx, t, f, a, "bob")))
+	must(t, f.DetachPolicy(ctx, a, EntityGroup, "readers", p.ARN, testEntityGrant(ctx, t, f, a, EntityGroup, "readers")))
 	must(t, f.DeletePolicy(ctx, a, p.ARN))
-	must(t, f.DeleteGroup(ctx, a, "readers", ""))
+	must(t, f.DeleteGroup(ctx, a, "readers", testGroupGrant(ctx, t, f, a, "readers")))
 }
 
 func TestAccessKeysAuthenticate(t *testing.T) {
@@ -84,18 +87,18 @@ func TestAccessKeysAuthenticate(t *testing.T) {
 	if _, err := f.CreateUser(ctx, a, "bob", "/"); err != nil {
 		t.Fatal(err)
 	}
-	k, err := f.CreateAccessKey(ctx, a, "bob", "")
+	k, err := f.CreateAccessKey(ctx, a, "bob", testUserGrant(ctx, t, f, a, "bob"))
 	if err != nil || !strings.HasPrefix(k.AccessKeyID, "AKIA") || len(k.AccessKeyID) != 20 || len(k.Secret) != 40 || k.Status != "Active" {
 		t.Fatalf("create key %+v %v", k, err)
 	}
 	if c, err := verify(t, f, credOf(k.AccessKeyID, k.Secret, "")); err != nil || c.Principal != "arn:vws:iam::123456789012:user/bob" {
 		t.Fatalf("new key: %+v %v", c, err)
 	}
-	keys, err := f.ListAccessKeys(ctx, a, "bob", "")
+	keys, err := f.ListAccessKeys(ctx, a, "bob", testUserGrant(ctx, t, f, a, "bob"))
 	if err != nil || len(keys) != 1 || keys[0].AccessKeyID != k.AccessKeyID {
 		t.Fatalf("list keys %+v %v", keys, err)
 	}
-	must(t, f.DeleteAccessKey(ctx, a, "bob", k.AccessKeyID, ""))
+	must(t, f.DeleteAccessKey(ctx, a, "bob", k.AccessKeyID, testUserGrant(ctx, t, f, a, "bob")))
 	if _, err := verify(t, f, credOf(k.AccessKeyID, k.Secret, "")); resource.CodeOf(err) != resource.CodeUnauthenticated {
 		t.Fatalf("deleted key still works: %v", err)
 	}
@@ -109,11 +112,11 @@ func TestGetAccessKeyLastUsed(t *testing.T) {
 	if _, err := f.CreateUser(ctx, a, "bob", "/"); err != nil {
 		t.Fatal(err)
 	}
-	used, err := f.CreateAccessKey(ctx, a, "bob", "")
+	used, err := f.CreateAccessKey(ctx, a, "bob", testUserGrant(ctx, t, f, a, "bob"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	fresh, err := f.CreateAccessKey(ctx, a, "bob", "")
+	fresh, err := f.CreateAccessKey(ctx, a, "bob", testUserGrant(ctx, t, f, a, "bob"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,8 +154,18 @@ func TestAssumeRole(t *testing.T) {
 	if err != nil || r.ARN != "arn:vws:iam::123456789012:role/ops" || r.MaxSessionDuration != 3600 {
 		t.Fatalf("create role %+v %v", r, err)
 	}
-	vpcs := `{"Statement":[{"Effect":"Allow","Action":"ec2:CreateVpc","Resource":"*"}]}`
-	must(t, f.PutInlinePolicy(ctx, a, EntityRole, "ops", "vpcs", vpcs, ""))
+	must(
+		t,
+		f.PutInlinePolicy(
+			ctx,
+			a,
+			EntityRole,
+			"ops",
+			"vpcs",
+			`{"Statement":[{"Effect":"Allow","Action":"ec2:CreateVpc","Resource":"*"}]}`,
+			testEntityGrant(ctx, t, f, a, EntityRole, "ops"),
+		),
+	)
 
 	got, err := f.AssumeRole(ctx, Principal{Account: a, ARN: u.ARN}, r.ARN, "s1", 15*time.Minute)
 	if err != nil || !strings.HasPrefix(got.Key.AccessKey, "ASIA") || got.Key.SessionToken == "" || !got.Key.Expires.Equal(now.Add(15*time.Minute)) ||
@@ -201,26 +214,41 @@ func TestUpdateGroup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	must(t, f.AttachPolicy(ctx, a, EntityGroup, "dev", p.ARN, ""))
-	must(t, f.PutInlinePolicy(ctx, a, EntityGroup, "dev", "inline", describeOnly, ""))
-	must(t, f.AddUserToGroup(ctx, a, "dev", "bob", ""))
+	must(t, f.AttachPolicy(ctx, a, EntityGroup, "dev", p.ARN, testEntityGrant(ctx, t, f, a, EntityGroup, "dev")))
+	must(
+		t,
+		f.PutInlinePolicy(
+			ctx, a, EntityGroup, "dev", "inline", describeOnly, testEntityGrant(ctx, t, f, a, EntityGroup, "dev"),
+		),
+	)
+	must(t, f.AddUserToGroup(ctx, a, "dev", "bob", testGroupGrant(ctx, t, f, a, "dev")))
 	if _, err := f.CreateGroup(ctx, a, "taken", "/"); err != nil {
 		t.Fatal(err)
 	}
 
-	if err := f.UpdateGroup(ctx, a, "missing", "/new/", "ops", ""); resource.CodeOf(err) != resource.CodeNotFound {
+	if err := f.UpdateGroup(
+		ctx, a, "missing", "/new/", "ops", testGroupGrant(ctx, t, f, a, "missing"),
+	); resource.CodeOf(err) != resource.CodeNotFound {
 		t.Errorf("missing group: %v", err)
 	}
-	if err := f.UpdateGroup(ctx, a, "dev", "/new/", "taken", ""); resource.CodeOf(err) != resource.CodeAlreadyExists {
+	if err := f.UpdateGroup(
+		ctx, a, "dev", "/new/", "taken", testGroupGrant(ctx, t, f, a, "dev"),
+	); resource.CodeOf(err) != resource.CodeAlreadyExists {
 		t.Errorf("duplicate name: %v", err)
 	}
-	if err := f.UpdateGroup(ctx, a, "dev", "new", "", ""); resource.CodeOf(err) != resource.CodeInvalidArgument {
+	if err := f.UpdateGroup(
+		ctx, a, "dev", "new", "", testGroupGrant(ctx, t, f, a, "dev"),
+	); resource.CodeOf(err) != resource.CodeInvalidArgument {
 		t.Errorf("bad path: %v", err)
 	}
-	if err := f.UpdateGroup(ctx, a, "bad name!", "", "", ""); resource.CodeOf(err) != resource.CodeInvalidArgument {
+	if err := f.UpdateGroup(
+		ctx, a, "bad name!", "", "", testGroupGrant(ctx, t, f, a, "bad name!"),
+	); resource.CodeOf(err) != resource.CodeInvalidArgument {
 		t.Errorf("bad group name: %v", err)
 	}
-	if err := f.UpdateGroup(ctx, a, "dev", "", "bad name!", ""); resource.CodeOf(err) != resource.CodeInvalidArgument {
+	if err := f.UpdateGroup(
+		ctx, a, "dev", "", "bad name!", testGroupGrant(ctx, t, f, a, "dev"),
+	); resource.CodeOf(err) != resource.CodeInvalidArgument {
 		t.Errorf("bad new name: %v", err)
 	}
 	if got, _, err := f.GetGroup(ctx, a, "dev"); err != nil || got.Path != "/old/" {
@@ -230,19 +258,19 @@ func TestUpdateGroup(t *testing.T) {
 	if _, err := f.CreateGroup(ctx, a, "moved", "/old/"); err != nil {
 		t.Fatal(err)
 	}
-	must(t, f.UpdateGroup(ctx, a, "moved", "/moved/", "", ""))
+	must(t, f.UpdateGroup(ctx, a, "moved", "/moved/", "", testGroupGrant(ctx, t, f, a, "moved")))
 	if got, _, err := f.GetGroup(ctx, a, "moved"); err != nil || got.Name != "moved" || got.Path != "/moved/" {
 		t.Errorf("path-only update %+v, want moved at /moved/: %v", got, err)
 	}
 	if _, err := f.CreateGroup(ctx, a, "renamed", "/keep/"); err != nil {
 		t.Fatal(err)
 	}
-	must(t, f.UpdateGroup(ctx, a, "renamed", "", "newer", ""))
+	must(t, f.UpdateGroup(ctx, a, "renamed", "", "newer", testGroupGrant(ctx, t, f, a, "renamed")))
 	if got, _, err := f.GetGroup(ctx, a, "newer"); err != nil || got.Name != "newer" || got.Path != "/keep/" {
 		t.Errorf("name-only update %+v, want newer at /keep/: %v", got, err)
 	}
 
-	must(t, f.UpdateGroup(ctx, a, "dev", "/new/", "platform", ""))
+	must(t, f.UpdateGroup(ctx, a, "dev", "/new/", "platform", testGroupGrant(ctx, t, f, a, "dev")))
 	if _, _, err := f.GetGroup(ctx, a, "dev"); resource.CodeOf(err) != resource.CodeNotFound {
 		t.Errorf("old name still found: %v", err)
 	}
@@ -256,20 +284,24 @@ func TestUpdateGroup(t *testing.T) {
 	if len(users) != 1 || users[0].Name != "bob" {
 		t.Errorf("members after rename %v, want bob", users)
 	}
-	groups, err := f.ListGroupsForUser(ctx, a, "bob")
+	groups, err := f.ListGroupsForUser(ctx, a, "bob", testUserGrant(ctx, t, f, a, "bob"))
 	if err != nil || len(groups) != 1 || groups[0].Name != "platform" {
 		t.Errorf("groups for bob %v, want platform: %v", groups, err)
 	}
-	attached, err := f.ListAttachedPolicies(ctx, a, EntityGroup, "platform", "")
+	attached, err := f.ListAttachedPolicies(
+		ctx, a, EntityGroup, "platform", testEntityGrant(ctx, t, f, a, EntityGroup, "platform"),
+	)
 	if err != nil || len(attached) != 1 || attached[0].ARN != p.ARN {
 		t.Errorf("attached policies after rename %v, want %s: %v", attached, p.ARN, err)
 	}
-	inline, err := f.ListInlinePolicies(ctx, a, EntityGroup, "platform", "")
+	inline, err := f.ListInlinePolicies(
+		ctx, a, EntityGroup, "platform", testEntityGrant(ctx, t, f, a, EntityGroup, "platform"),
+	)
 	if err != nil || len(inline) != 1 || inline[0] != "inline" {
 		t.Errorf("inline policies after rename %v, want inline: %v", inline, err)
 	}
 
-	must(t, f.UpdateGroup(ctx, a, "platform", "", "", ""))
+	must(t, f.UpdateGroup(ctx, a, "platform", "", "", testGroupGrant(ctx, t, f, a, "platform")))
 	if got, _, err := f.GetGroup(ctx, a, "platform"); err != nil || got.Path != "/new/" {
 		t.Errorf("empty update changed the group to %+v: %v", got, err)
 	}
@@ -293,9 +325,14 @@ func TestUpdateUser(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	must(t, f.AddUserToGroup(ctx, a, "dev", "bob", ""))
-	must(t, f.AttachPolicy(ctx, a, EntityUser, "bob", p.ARN, ""))
-	must(t, f.PutInlinePolicy(ctx, a, EntityUser, "bob", "inline", describeOnly, ""))
+	must(t, f.AddUserToGroup(ctx, a, "dev", "bob", testGroupGrant(ctx, t, f, a, "dev")))
+	must(t, f.AttachPolicy(ctx, a, EntityUser, "bob", p.ARN, testEntityGrant(ctx, t, f, a, EntityUser, "bob")))
+	must(
+		t,
+		f.PutInlinePolicy(
+			ctx, a, EntityUser, "bob", "inline", describeOnly, testEntityGrant(ctx, t, f, a, EntityUser, "bob"),
+		),
+	)
 
 	for _, tc := range []struct {
 		name             string
@@ -311,7 +348,9 @@ func TestUpdateUser(t *testing.T) {
 		{"bad source", "bad name!", "", "", resource.CodeInvalidArgument},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if err := f.UpdateUser(ctx, a, tc.source, tc.path, tc.to, ""); resource.CodeOf(err) != tc.want {
+			if err := f.UpdateUser(
+				ctx, a, tc.source, tc.path, tc.to, testUserGrant(ctx, t, f, a, tc.source),
+			); resource.CodeOf(err) != tc.want {
 				t.Errorf("UpdateUser(%q, %q, %q) = %v, want %v", tc.source, tc.path, tc.to, err, tc.want)
 			}
 		})
@@ -323,20 +362,22 @@ func TestUpdateUser(t *testing.T) {
 		t.Fatalf("a rejected update changed the members to %v: %v", users, err)
 	}
 
-	must(t, f.UpdateUser(ctx, a, "bob", "/moved/", "", ""))
-	must(t, f.UpdateUser(ctx, a, "bob", "/moved/", "", "")) // the same request again is a no-op
+	must(t, f.UpdateUser(ctx, a, "bob", "/moved/", "", testUserGrant(ctx, t, f, a, "bob")))
+	must(
+		t, f.UpdateUser(ctx, a, "bob", "/moved/", "", testUserGrant(ctx, t, f, a, "bob")),
+	) // the same request again is a no-op
 	got, err := f.GetUser(ctx, a, "bob")
 	if err != nil || got.Path != "/moved/" || got.ARN != "arn:vws:iam::123456789012:user/moved/bob" {
 		t.Fatalf("path-only update %+v: %v", got, err)
 	}
-	must(t, f.UpdateUser(ctx, a, "bob", "", "robert", ""))
+	must(t, f.UpdateUser(ctx, a, "bob", "", "robert", testUserGrant(ctx, t, f, a, "bob")))
 	if got, err := f.GetUser(ctx, a, "robert"); err != nil || got.Path != "/moved/" {
 		t.Fatalf("name-only update %+v: %v", got, err)
 	}
 	if _, err := f.GetUser(ctx, a, "bob"); resource.CodeOf(err) != resource.CodeNotFound {
 		t.Errorf("old name still found: %v", err)
 	}
-	must(t, f.UpdateUser(ctx, a, "robert", "/new/", "platform", ""))
+	must(t, f.UpdateUser(ctx, a, "robert", "/new/", "platform", testUserGrant(ctx, t, f, a, "robert")))
 	if _, err := f.GetUser(ctx, a, "robert"); resource.CodeOf(err) != resource.CodeNotFound {
 		t.Errorf("old name still found: %v", err)
 	}
@@ -352,19 +393,23 @@ func TestUpdateUser(t *testing.T) {
 	if err != nil || len(users) != 1 || users[0].Name != "platform" {
 		t.Errorf("members after rename %v: %v", users, err)
 	}
-	groups, err := f.ListGroupsForUser(ctx, a, "platform")
+	groups, err := f.ListGroupsForUser(ctx, a, "platform", testUserGrant(ctx, t, f, a, "platform"))
 	if err != nil || len(groups) != 1 || groups[0].Name != "dev" {
 		t.Errorf("groups for platform %v: %v", groups, err)
 	}
-	attached, err := f.ListAttachedPolicies(ctx, a, EntityUser, "platform", "")
+	attached, err := f.ListAttachedPolicies(
+		ctx, a, EntityUser, "platform", testEntityGrant(ctx, t, f, a, EntityUser, "platform"),
+	)
 	if err != nil || len(attached) != 1 || attached[0].ARN != p.ARN {
 		t.Errorf("attached policies after rename %v: %v", attached, err)
 	}
-	inline, err := f.ListInlinePolicies(ctx, a, EntityUser, "platform", "")
+	inline, err := f.ListInlinePolicies(
+		ctx, a, EntityUser, "platform", testEntityGrant(ctx, t, f, a, EntityUser, "platform"),
+	)
 	if err != nil || len(inline) != 1 || inline[0] != "inline" {
 		t.Errorf("inline policies after rename %v: %v", inline, err)
 	}
-	must(t, f.UpdateUser(ctx, a, "platform", "", "", ""))
+	must(t, f.UpdateUser(ctx, a, "platform", "", "", testUserGrant(ctx, t, f, a, "platform")))
 	if got, err := f.GetUser(ctx, a, "platform"); err != nil || got.Path != "/new/" {
 		t.Errorf("empty update changed the user to %+v: %v", got, err)
 	}
@@ -378,12 +423,17 @@ func TestUpdateUserKeepsKeysAndSessions(t *testing.T) {
 	if _, err := f.CreateUser(ctx, a, "bob", "/old/"); err != nil {
 		t.Fatal(err)
 	}
-	must(t, f.PutInlinePolicy(ctx, a, EntityUser, "bob", "describe", describeOnly, ""))
-	k, err := f.CreateAccessKey(ctx, a, "bob", "")
+	must(
+		t,
+		f.PutInlinePolicy(
+			ctx, a, EntityUser, "bob", "describe", describeOnly, testEntityGrant(ctx, t, f, a, EntityUser, "bob"),
+		),
+	)
+	k, err := f.CreateAccessKey(ctx, a, "bob", testUserGrant(ctx, t, f, a, "bob"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.CreateLoginProfile(ctx, a, "bob", "correct horse 1"); err != nil {
+	if _, err := f.CreateLoginProfile(ctx, a, "bob", "correct horse 1", testUserGrant(ctx, t, f, a, "bob")); err != nil {
 		t.Fatal(err)
 	}
 	sess, err := f.Login(ctx, LoginRequest{Account: a, UserName: "bob", Password: "correct horse 1"})
@@ -408,13 +458,13 @@ func TestUpdateUserKeepsKeysAndSessions(t *testing.T) {
 		}
 	}
 
-	must(t, f.UpdateUser(ctx, a, "bob", "/moved/", "", ""))
+	must(t, f.UpdateUser(ctx, a, "bob", "/moved/", "", testUserGrant(ctx, t, f, a, "bob")))
 	check(t, "arn:vws:iam::123456789012:user/moved/bob")
-	must(t, f.UpdateUser(ctx, a, "bob", "", "robert", ""))
+	must(t, f.UpdateUser(ctx, a, "bob", "", "robert", testUserGrant(ctx, t, f, a, "bob")))
 	check(t, "arn:vws:iam::123456789012:user/moved/robert")
-	must(t, f.UpdateUser(ctx, a, "robert", "/new/", "platform", ""))
+	must(t, f.UpdateUser(ctx, a, "robert", "/new/", "platform", testUserGrant(ctx, t, f, a, "robert")))
 	check(t, "arn:vws:iam::123456789012:user/new/platform")
-	if _, err := f.GetLoginProfile(ctx, a, "platform"); err != nil {
+	if _, err := f.GetLoginProfile(ctx, a, "platform", testUserGrant(ctx, t, f, a, "platform")); err != nil {
 		t.Errorf("login profile after rename: %v", err)
 	}
 }
@@ -427,8 +477,10 @@ func TestUpdateUserRejectsAStaleARN(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	must(t, f.UpdateUser(ctx, a, "bob", "/new/", "", u.ARN))
-	if err := f.UpdateUser(ctx, a, "bob", "/other/", "", u.ARN); resource.CodeOf(err) != resource.CodeConflict {
+	must(t, f.UpdateUser(ctx, a, "bob", "/new/", "", testGrant(ctx, t, u.ARN)))
+	if err := f.UpdateUser(
+		ctx, a, "bob", "/other/", "", testGrant(ctx, t, u.ARN),
+	); resource.CodeOf(err) != resource.CodeConflict {
 		t.Errorf("stale update: %v", err)
 	}
 	if got, err := f.GetUser(ctx, a, "bob"); err != nil || got.Path != "/new/" {
@@ -451,20 +503,26 @@ func TestUpdateAssumeRolePolicy(t *testing.T) {
 		t.Fatal(err)
 	}
 	malformed := `{"Statement":[{"Effect":"Allow","Action":"sts:AssumeRole"}]}`
-	if err := f.UpdateAssumeRolePolicy(ctx, a, "ops", malformed); resource.CodeOf(err) != resource.CodeInvalidArgument {
+	if err := f.UpdateAssumeRolePolicy(
+		ctx, a, "ops", malformed, testRoleGrant(ctx, t, f, a, "ops"),
+	); resource.CodeOf(err) != resource.CodeInvalidArgument {
 		t.Errorf("malformed trust policy: %v", err)
 	}
 	if got, _ := f.GetRole(ctx, a, "ops"); got.TrustPolicy != oldTrust {
 		t.Errorf("a malformed update changed the trust policy to %s", got.TrustPolicy)
 	}
-	if err := f.UpdateAssumeRolePolicy(ctx, a, "none", newTrust); resource.CodeOf(err) != resource.CodeNotFound {
+	if err := f.UpdateAssumeRolePolicy(
+		ctx, a, "none", newTrust, testRoleGrant(ctx, t, f, a, "none"),
+	); resource.CodeOf(err) != resource.CodeNotFound {
 		t.Errorf("missing role: %v", err)
 	}
 	oversized := strings.Repeat("x", maxPolicyBytes+1)
-	if err := f.UpdateAssumeRolePolicy(ctx, a, "ops", oversized); resource.CodeOf(err) != resource.CodeResourceExhausted {
+	if err := f.UpdateAssumeRolePolicy(
+		ctx, a, "ops", oversized, testRoleGrant(ctx, t, f, a, "ops"),
+	); resource.CodeOf(err) != resource.CodeResourceExhausted {
 		t.Errorf("oversized policy: %v", err)
 	}
-	must(t, f.UpdateAssumeRolePolicy(ctx, a, "ops", newTrust))
+	must(t, f.UpdateAssumeRolePolicy(ctx, a, "ops", newTrust, testRoleGrant(ctx, t, f, a, "ops")))
 	if got, _ := f.GetRole(ctx, a, "ops"); got.TrustPolicy != newTrust {
 		t.Fatalf("trust policy %s, want %s", got.TrustPolicy, newTrust)
 	}
@@ -679,7 +737,7 @@ func TestDefaultPolicyVersionChangesAuthorization(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	must(t, f.AttachPolicy(ctx, a, EntityUser, "bob", p.ARN, ""))
+	must(t, f.AttachPolicy(ctx, a, EntityUser, "bob", p.ARN, testEntityGrant(ctx, t, f, a, EntityUser, "bob")))
 	deny := `{"Statement":[{"Effect":"Deny","Action":"s3:GetObject","Resource":"*"}]}`
 	v, err := f.CreatePolicyVersion(ctx, a, p.ARN, deny, true)
 	if err != nil || !v.IsDefaultVersion {
@@ -747,25 +805,31 @@ func TestUpdateRoleDescription(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := f.UpdateRoleDescription(ctx, a, "ops", "new")
+	got, err := f.UpdateRoleDescription(ctx, a, "ops", "new", testRoleGrant(ctx, t, f, a, "ops"))
 	if err != nil || got.Description != "new" || got.ARN != r.ARN {
 		t.Fatalf("update description %+v %v", got, err)
 	}
 	if stored, _ := f.GetRole(ctx, a, "ops"); stored.Description != "new" {
 		t.Errorf("stored description %q, want new", stored.Description)
 	}
-	if _, err := f.UpdateRoleDescription(ctx, a, "none", "new"); resource.CodeOf(err) != resource.CodeNotFound {
+	if _, err := f.UpdateRoleDescription(
+		ctx, a, "none", "new", testRoleGrant(ctx, t, f, a, "none"),
+	); resource.CodeOf(err) != resource.CodeNotFound {
 		t.Errorf("missing role: %v", err)
 	}
 	long := strings.Repeat("x", MaxRoleDescription+1)
-	if _, err := f.UpdateRoleDescription(ctx, a, "ops", long); resource.CodeOf(err) != resource.CodeInvalidArgument {
+	if _, err := f.UpdateRoleDescription(
+		ctx, a, "ops", long, testRoleGrant(ctx, t, f, a, "ops"),
+	); resource.CodeOf(err) != resource.CodeInvalidArgument {
 		t.Errorf("oversized description: %v", err)
 	}
 	if stored, _ := f.GetRole(ctx, a, "ops"); stored.Description != "new" {
 		t.Errorf("a rejected update changed the description to %q", stored.Description)
 	}
 	for _, invalid := range []string{"\u007f", "\u0080", "\u00a0", "\u0100"} {
-		if _, err := f.UpdateRoleDescription(ctx, a, "ops", invalid); resource.CodeOf(err) != resource.CodeInvalidArgument {
+		if _, err := f.UpdateRoleDescription(
+			ctx, a, "ops", invalid, testRoleGrant(ctx, t, f, a, "ops"),
+		); resource.CodeOf(err) != resource.CodeInvalidArgument {
 			t.Errorf("description %q outside the AWS pattern: %v", invalid, err)
 		}
 	}
@@ -773,12 +837,14 @@ func TestUpdateRoleDescription(t *testing.T) {
 		t.Errorf("a rejected update changed the description to %q", stored.Description)
 	}
 	for _, valid := range []string{"\t", " ", "~", "\u00a1"} {
-		if _, err := f.UpdateRoleDescription(ctx, a, "ops", valid); err != nil {
+		if _, err := f.UpdateRoleDescription(ctx, a, "ops", valid, testRoleGrant(ctx, t, f, a, "ops")); err != nil {
 			t.Errorf("description %q inside the AWS pattern: %v", valid, err)
 		}
 	}
 	wide := strings.Repeat("\u00ff", MaxRoleDescription)
-	if got, err := f.UpdateRoleDescription(ctx, a, "ops", wide); err != nil || got.Description != wide {
+	if got, err := f.UpdateRoleDescription(
+		ctx, a, "ops", wide, testRoleGrant(ctx, t, f, a, "ops"),
+	); err != nil || got.Description != wide {
 		t.Errorf("1000-character description: %+v %v", got, err)
 	}
 	if _, err := f.CreateRole(ctx, a, RoleInput{
@@ -786,7 +852,7 @@ func TestUpdateRoleDescription(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	_, err = f.UpdateRoleDescription(ctx, a, "svc", "new")
+	_, err = f.UpdateRoleDescription(ctx, a, "svc", "new", testRoleGrant(ctx, t, f, a, "svc"))
 	if resource.CodeOf(err) != resource.CodeConflict {
 		t.Errorf("service-linked role: %v", err)
 	}
@@ -807,14 +873,14 @@ func TestUpdateRole(t *testing.T) {
 		t.Fatal(err)
 	}
 	description := "new"
-	must(t, f.UpdateRole(ctx, a, "ops", RoleUpdate{Description: &description}))
+	must(t, f.UpdateRole(ctx, a, "ops", RoleUpdate{Description: &description}, testRoleGrant(ctx, t, f, a, "ops")))
 	got, err := f.GetRole(ctx, a, "ops")
 	if err != nil || got.Description != "new" || got.MaxSessionDuration != 7200 {
 		t.Fatalf("description update %+v %v", got, err)
 	}
 
 	seconds := 43200
-	must(t, f.UpdateRole(ctx, a, "ops", RoleUpdate{MaxSessionDuration: &seconds}))
+	must(t, f.UpdateRole(ctx, a, "ops", RoleUpdate{MaxSessionDuration: &seconds}, testRoleGrant(ctx, t, f, a, "ops")))
 	got, err = f.GetRole(ctx, a, "ops")
 	if err != nil || got.Description != "new" || got.MaxSessionDuration != 43200 {
 		t.Fatalf("duration update %+v %v", got, err)
@@ -822,29 +888,39 @@ func TestUpdateRole(t *testing.T) {
 
 	empty := ""
 	seconds = 3600
-	must(t, f.UpdateRole(ctx, a, "ops", RoleUpdate{Description: &empty, MaxSessionDuration: &seconds}))
+	must(
+		t,
+		f.UpdateRole(
+			ctx, a, "ops", RoleUpdate{Description: &empty, MaxSessionDuration: &seconds}, testRoleGrant(ctx, t, f, a, "ops"),
+		),
+	)
 	got, err = f.GetRole(ctx, a, "ops")
 	if err != nil || got.Description != "" || got.MaxSessionDuration != 3600 {
 		t.Fatalf("both fields %+v %v", got, err)
 	}
-	must(t, f.UpdateRole(ctx, a, "ops", RoleUpdate{Description: &empty, MaxSessionDuration: &seconds}))
+	must(
+		t,
+		f.UpdateRole(
+			ctx, a, "ops", RoleUpdate{Description: &empty, MaxSessionDuration: &seconds}, testRoleGrant(ctx, t, f, a, "ops"),
+		),
+	)
 
-	err = f.UpdateRole(ctx, a, "none", RoleUpdate{Description: &description})
+	err = f.UpdateRole(ctx, a, "none", RoleUpdate{Description: &description}, testRoleGrant(ctx, t, f, a, "none"))
 	if resource.CodeOf(err) != resource.CodeNotFound {
 		t.Errorf("missing role: %v", err)
 	}
 	short := 3599
-	err = f.UpdateRole(ctx, a, "ops", RoleUpdate{MaxSessionDuration: &short})
+	err = f.UpdateRole(ctx, a, "ops", RoleUpdate{MaxSessionDuration: &short}, testRoleGrant(ctx, t, f, a, "ops"))
 	if resource.CodeOf(err) != resource.CodeInvalidArgument {
 		t.Errorf("short duration: %v", err)
 	}
 	tooLong := 43201
-	err = f.UpdateRole(ctx, a, "ops", RoleUpdate{MaxSessionDuration: &tooLong})
+	err = f.UpdateRole(ctx, a, "ops", RoleUpdate{MaxSessionDuration: &tooLong}, testRoleGrant(ctx, t, f, a, "ops"))
 	if resource.CodeOf(err) != resource.CodeInvalidArgument {
 		t.Errorf("long duration: %v", err)
 	}
 	long := strings.Repeat("x", MaxRoleDescription+1)
-	err = f.UpdateRole(ctx, a, "ops", RoleUpdate{Description: &long})
+	err = f.UpdateRole(ctx, a, "ops", RoleUpdate{Description: &long}, testRoleGrant(ctx, t, f, a, "ops"))
 	if resource.CodeOf(err) != resource.CodeInvalidArgument {
 		t.Errorf("oversized description: %v", err)
 	}
@@ -857,7 +933,7 @@ func TestUpdateRole(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	err = f.UpdateRole(ctx, a, "svc", RoleUpdate{Description: &description})
+	err = f.UpdateRole(ctx, a, "svc", RoleUpdate{Description: &description}, testRoleGrant(ctx, t, f, a, "svc"))
 	var e *resource.Error
 	if !errors.As(err, &e) || e.Code != resource.CodeConflict || e.Field != "UnmodifiableEntity" {
 		t.Errorf("service-linked role: %+v", err)
@@ -884,7 +960,7 @@ func TestUpdateRoleStaysInAccount(t *testing.T) {
 		}
 	}
 	description := "new"
-	must(t, f.UpdateRole(ctx, a, "ops", RoleUpdate{Description: &description}))
+	must(t, f.UpdateRole(ctx, a, "ops", RoleUpdate{Description: &description}, testRoleGrant(ctx, t, f, a, "ops")))
 	if got, _ := f.GetRole(ctx, a, "ops"); got.Description != "new" {
 		t.Errorf("caller role description %q, want new", got.Description)
 	}

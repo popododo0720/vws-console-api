@@ -8,6 +8,7 @@ import (
 
 	iamv1 "github.com/popododo0720/vws-proto/gen/go/vws/iam/v1"
 
+	"github.com/popododo0720/vws-console-api/internal/backend/backendtest"
 	"github.com/popododo0720/vws-console-api/internal/iam"
 	"github.com/popododo0720/vws-console-api/internal/resource"
 )
@@ -17,6 +18,7 @@ import (
 // between the authorization and the change.
 type movingAdmin struct {
 	iam.Admin
+	tb          testing.TB
 	group, user string
 	moved       bool
 }
@@ -27,7 +29,9 @@ func (a *movingAdmin) GetGroup(
 	g, us, err := a.Admin.GetGroup(ctx, account, name)
 	if err == nil && !a.moved && name == a.group {
 		a.moved = true
-		if err := a.UpdateGroup(ctx, account, name, "/denied/", "", ""); err != nil {
+		if err := a.UpdateGroup(
+			ctx, account, name, "/denied/", "", backendtest.GroupGrant(ctx, a.tb, a, account, name),
+		); err != nil {
 			return iam.Group{}, nil, err
 		}
 	}
@@ -38,7 +42,9 @@ func (a *movingAdmin) GetUser(ctx context.Context, account resource.AccountID, n
 	u, err := a.Admin.GetUser(ctx, account, name)
 	if err == nil && !a.moved && name == a.user {
 		a.moved = true
-		if err := a.UpdateUser(ctx, account, name, "/denied/", "", ""); err != nil {
+		if err := a.UpdateUser(
+			ctx, account, name, "/denied/", "", backendtest.UserGrant(ctx, a.tb, a, account, name),
+		); err != nil {
 			return iam.User{}, err
 		}
 	}
@@ -122,7 +128,7 @@ func TestGroupAndUserChangesActOnTheAuthorizedARNOverGRPC(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			mover := &movingAdmin{group: tc.group, user: tc.user}
+			mover := &movingAdmin{tb: t, group: tc.group, user: tc.user}
 			h, _, d := dirQueryHarnessWith(t, func(a iam.Admin) iam.Admin {
 				mover.Admin = a
 				return mover
@@ -175,11 +181,11 @@ func TestDeletesCarryTheEtagTheyRead(t *testing.T) {
 	d.mu.Lock()
 	d.deleteRace = 2
 	d.mu.Unlock()
-	err := a.DeleteUser(ctx, account314, "bob", "")
+	err := a.DeleteUser(ctx, account314, "bob", backendtest.UserGrant(ctx, t, a, account314, "bob"))
 	if !iam.IsChanged(err) || resource.AsError(err).Message != iam.UserChanged {
 		t.Errorf("DeleteUser of a changed user: %v", err)
 	}
-	err = a.DeleteGroup(ctx, account314, "empty", "")
+	err = a.DeleteGroup(ctx, account314, "empty", backendtest.GroupGrant(ctx, t, a, account314, "empty"))
 	if !iam.IsChanged(err) || resource.AsError(err).Message != iam.GroupChanged {
 		t.Errorf("DeleteGroup of a changed group: %v", err)
 	}
@@ -189,10 +195,10 @@ func TestDeletesCarryTheEtagTheyRead(t *testing.T) {
 	if _, _, err := a.GetGroup(ctx, account314, "empty"); err != nil {
 		t.Errorf("empty was deleted: %v", err)
 	}
-	if err := a.DeleteUser(ctx, account314, "bob", ""); err != nil {
+	if err := a.DeleteUser(ctx, account314, "bob", backendtest.UserGrant(ctx, t, a, account314, "bob")); err != nil {
 		t.Fatal(err)
 	}
-	if err := a.DeleteGroup(ctx, account314, "empty", ""); err != nil {
+	if err := a.DeleteGroup(ctx, account314, "empty", backendtest.GroupGrant(ctx, t, a, account314, "empty")); err != nil {
 		t.Fatal(err)
 	}
 	du := d.sent("DeleteUser")
@@ -207,7 +213,7 @@ func TestDeletesCarryTheEtagTheyRead(t *testing.T) {
 		t.Errorf("DeleteGroup sent %v", g)
 	}
 	// A member still makes DeleteGroup a DeleteConflict.
-	err = a.DeleteGroup(ctx, account314, "devs", "")
+	err = a.DeleteGroup(ctx, account314, "devs", backendtest.GroupGrant(ctx, t, a, account314, "devs"))
 	if resource.CodeOf(err) != resource.CodeConflict || iam.IsChanged(err) ||
 		resource.AsError(err).Message != iam.GroupDeleteConflict {
 		t.Errorf("DeleteGroup with a member: %v", err)

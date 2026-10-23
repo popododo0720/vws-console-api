@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/popododo0720/vws-console-api/internal/backend/backendtest"
 	"github.com/popododo0720/vws-console-api/internal/backend/fake"
 	"github.com/popododo0720/vws-console-api/internal/cloud"
 	"github.com/popododo0720/vws-console-api/internal/iam"
@@ -41,11 +42,20 @@ func newLoginEnv(t *testing.T) loginEnv {
 	if _, err := f.CreateUser(ctx, account, "bob", "/"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.CreateLoginProfile(ctx, account, "bob", "correct horse 1"); err != nil {
+	if _, err := f.CreateLoginProfile(
+		ctx, account, "bob", "correct horse 1", backendtest.UserGrant(ctx, t, f, account, "bob"),
+	); err != nil {
 		t.Fatal(err)
 	}
-	read := `{"Statement":[{"Effect":"Allow","Action":["ec2:Describe*","s3:ListAllMyBuckets"],"Resource":"*"}]}`
-	if err := f.PutInlinePolicy(ctx, account, iam.EntityUser, "bob", "read", read, ""); err != nil {
+	if err := f.PutInlinePolicy(
+		ctx,
+		account,
+		iam.EntityUser,
+		"bob",
+		"read",
+		`{"Statement":[{"Effect":"Allow","Action":["ec2:Describe*","s3:ListAllMyBuckets"],"Resource":"*"}]}`,
+		backendtest.EntityGrant(ctx, t, f, account, iam.EntityUser, "bob"),
+	); err != nil {
 		t.Fatal(err)
 	}
 	return loginEnv{clock: clock, h: h, account: account, fake: f, root: root}
@@ -169,8 +179,15 @@ func TestSessionIsAuthorizedPerRequest(t *testing.T) {
 	if rec := e.do(t, http.MethodPost, "/api/v1/vpcs", `{"cidrBlock":"10.4.0.0/16"}`, mutate, session); rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "PermissionDenied") {
 		t.Errorf("denied mutation: %d %s", rec.Code, rec.Body)
 	}
-	vpcs := `{"Statement":[{"Effect":"Allow","Action":"ec2:CreateVpc","Resource":"*"}]}`
-	if err := e.fake.PutInlinePolicy(t.Context(), e.account, iam.EntityUser, "bob", "vpcs", vpcs, ""); err != nil {
+	if err := e.fake.PutInlinePolicy(
+		t.Context(),
+		e.account,
+		iam.EntityUser,
+		"bob",
+		"vpcs",
+		`{"Statement":[{"Effect":"Allow","Action":"ec2:CreateVpc","Resource":"*"}]}`,
+		backendtest.EntityGrant(t.Context(), t, e.fake, e.account, iam.EntityUser, "bob"),
+	); err != nil {
 		t.Fatal(err)
 	}
 	if rec := e.do(t, http.MethodPost, "/api/v1/vpcs", `{"cidrBlock":"10.4.0.0/16"}`, mutate, session); rec.Code != http.StatusAccepted {
@@ -302,8 +319,15 @@ func TestStateChangingSessionRequestsNeedOriginAndJSON(t *testing.T) {
 	}
 	session, csrf := e.login(t)
 	write := map[string]string{"Idempotency-Key": "vpc-origin-1", CSRFHeader: csrf.Value}
-	vpcs := `{"Statement":[{"Effect":"Allow","Action":"ec2:CreateVpc","Resource":"*"}]}`
-	if err := e.fake.PutInlinePolicy(t.Context(), e.account, iam.EntityUser, "bob", "vpcs", vpcs, ""); err != nil {
+	if err := e.fake.PutInlinePolicy(
+		t.Context(),
+		e.account,
+		iam.EntityUser,
+		"bob",
+		"vpcs",
+		`{"Statement":[{"Effect":"Allow","Action":"ec2:CreateVpc","Resource":"*"}]}`,
+		backendtest.EntityGrant(t.Context(), t, e.fake, e.account, iam.EntityUser, "bob"),
+	); err != nil {
 		t.Fatal(err)
 	}
 	for name, extra := range map[string]map[string]string{

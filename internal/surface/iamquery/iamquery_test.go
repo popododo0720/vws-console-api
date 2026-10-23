@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/popododo0720/vws-console-api/internal/backend/backendtest"
 	"github.com/popododo0720/vws-console-api/internal/iam"
 	"github.com/popododo0720/vws-console-api/internal/resource"
 	"github.com/popododo0720/vws-console-api/internal/sigv4"
@@ -199,7 +200,7 @@ func TestUpdateGroupAuthorizesTheNewARN(t *testing.T) {
 	if _, err := f.CreateUser(ctx, root.Account, "bob", "/"); err != nil {
 		t.Fatal(err)
 	}
-	key, err := f.CreateAccessKey(ctx, root.Account, "bob", "")
+	key, err := f.CreateAccessKey(ctx, root.Account, "bob", backendtest.UserGrant(ctx, t, f, root.Account, "bob"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -208,7 +209,15 @@ func TestUpdateGroupAuthorizesTheNewARN(t *testing.T) {
 	allow := func(resources string) string {
 		return `{"Statement":[{"Effect":"Allow","Action":"iam:UpdateGroup","Resource":` + resources + `}]}`
 	}
-	if err := f.PutInlinePolicy(ctx, root.Account, iam.EntityUser, "bob", "update", allow(`"`+old+`"`), ""); err != nil {
+	if err := f.PutInlinePolicy(
+		ctx,
+		root.Account,
+		iam.EntityUser,
+		"bob",
+		"update",
+		allow(`"`+old+`"`),
+		backendtest.EntityGrant(ctx, t, f, root.Account, iam.EntityUser, "bob"),
+	); err != nil {
 		t.Fatal(err)
 	}
 	bob := sigv4.Credential{AccessKey: key.AccessKeyID, Secret: key.Secret}
@@ -220,7 +229,15 @@ func TestUpdateGroupAuthorizesTheNewARN(t *testing.T) {
 		t.Fatalf("denied update changed the group to %+v: %v", group, err)
 	}
 	both := allow(`["` + old + `","` + moved + `"]`)
-	if err := f.PutInlinePolicy(ctx, root.Account, iam.EntityUser, "bob", "update", both, ""); err != nil {
+	if err := f.PutInlinePolicy(
+		ctx,
+		root.Account,
+		iam.EntityUser,
+		"bob",
+		"update",
+		both,
+		backendtest.EntityGrant(ctx, t, f, root.Account, iam.EntityUser, "bob"),
+	); err != nil {
 		t.Fatal(err)
 	}
 	res = call(t, h, bob, sigv4.ServiceIAM, url.Values{
@@ -311,7 +328,7 @@ func TestUpdateUserAuthorizesTheNewARN(t *testing.T) {
 	if _, err := f.CreateUser(ctx, root.Account, "bob", "/"); err != nil {
 		t.Fatal(err)
 	}
-	key, err := f.CreateAccessKey(ctx, root.Account, "bob", "")
+	key, err := f.CreateAccessKey(ctx, root.Account, "bob", backendtest.UserGrant(ctx, t, f, root.Account, "bob"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -320,7 +337,15 @@ func TestUpdateUserAuthorizesTheNewARN(t *testing.T) {
 	allow := func(resources string) string {
 		return `{"Statement":[{"Effect":"Allow","Action":"iam:UpdateUser","Resource":` + resources + `}]}`
 	}
-	if err := f.PutInlinePolicy(ctx, root.Account, iam.EntityUser, "bob", "update", allow(`"`+old+`"`), ""); err != nil {
+	if err := f.PutInlinePolicy(
+		ctx,
+		root.Account,
+		iam.EntityUser,
+		"bob",
+		"update",
+		allow(`"`+old+`"`),
+		backendtest.EntityGrant(ctx, t, f, root.Account, iam.EntityUser, "bob"),
+	); err != nil {
 		t.Fatal(err)
 	}
 	bob := sigv4.Credential{AccessKey: key.AccessKeyID, Secret: key.Secret}
@@ -332,7 +357,15 @@ func TestUpdateUserAuthorizesTheNewARN(t *testing.T) {
 		t.Fatalf("denied update changed the user to %+v: %v", u, err)
 	}
 	both := allow(`["` + old + `","` + moved + `"]`)
-	if err := f.PutInlinePolicy(ctx, root.Account, iam.EntityUser, "bob", "update", both, ""); err != nil {
+	if err := f.PutInlinePolicy(
+		ctx,
+		root.Account,
+		iam.EntityUser,
+		"bob",
+		"update",
+		both,
+		backendtest.EntityGrant(ctx, t, f, root.Account, iam.EntityUser, "bob"),
+	); err != nil {
 		t.Fatal(err)
 	}
 	res = call(t, h, bob, sigv4.ServiceIAM, url.Values{
@@ -479,13 +512,21 @@ func TestCreatePolicyVersionAuthorizes(t *testing.T) {
 	if _, err := f.CreateUser(ctx, root.Account, "bob", "/"); err != nil {
 		t.Fatal(err)
 	}
-	key, err := f.CreateAccessKey(ctx, root.Account, "bob", "")
+	key, err := f.CreateAccessKey(ctx, root.Account, "bob", backendtest.UserGrant(ctx, t, f, root.Account, "bob"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	bob := sigv4.Credential{AccessKey: key.AccessKeyID, Secret: key.Secret}
 	allow := `{"Statement":[{"Effect":"Allow","Action":"iam:CreatePolicyVersion","Resource":"` + p.ARN + `"}]}`
-	if err := f.PutInlinePolicy(ctx, root.Account, iam.EntityUser, "bob", "default", allow, ""); err != nil {
+	if err := f.PutInlinePolicy(
+		ctx,
+		root.Account,
+		iam.EntityUser,
+		"bob",
+		"default",
+		allow,
+		backendtest.EntityGrant(ctx, t, f, root.Account, iam.EntityUser, "bob"),
+	); err != nil {
 		t.Fatal(err)
 	}
 	has(t, call(t, h, bob, sigv4.ServiceIAM, url.Values{
@@ -547,13 +588,21 @@ func TestSetDefaultPolicyVersionAuthorizes(t *testing.T) {
 	if _, err := f.CreateUser(ctx, root.Account, "bob", "/"); err != nil {
 		t.Fatal(err)
 	}
-	key, err := f.CreateAccessKey(ctx, root.Account, "bob", "")
+	key, err := f.CreateAccessKey(ctx, root.Account, "bob", backendtest.UserGrant(ctx, t, f, root.Account, "bob"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	bob := sigv4.Credential{AccessKey: key.AccessKeyID, Secret: key.Secret}
 	allow := `{"Statement":[{"Effect":"Allow","Action":"iam:SetDefaultPolicyVersion","Resource":"` + p.ARN + `"}]}`
-	if err := f.PutInlinePolicy(ctx, root.Account, iam.EntityUser, "bob", "default", allow, ""); err != nil {
+	if err := f.PutInlinePolicy(
+		ctx,
+		root.Account,
+		iam.EntityUser,
+		"bob",
+		"default",
+		allow,
+		backendtest.EntityGrant(ctx, t, f, root.Account, iam.EntityUser, "bob"),
+	); err != nil {
 		t.Fatal(err)
 	}
 	has(t, call(t, h, bob, sigv4.ServiceIAM, url.Values{
@@ -697,13 +746,21 @@ func TestListPolicyVersionsAuthorizes(t *testing.T) {
 	if _, err := f.CreateUser(ctx, root.Account, "bob", "/"); err != nil {
 		t.Fatal(err)
 	}
-	key, err := f.CreateAccessKey(ctx, root.Account, "bob", "")
+	key, err := f.CreateAccessKey(ctx, root.Account, "bob", backendtest.UserGrant(ctx, t, f, root.Account, "bob"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	bob := sigv4.Credential{AccessKey: key.AccessKeyID, Secret: key.Secret}
 	allow := `{"Statement":[{"Effect":"Allow","Action":"iam:ListPolicyVersions","Resource":"` + p.ARN + `"}]}`
-	if err := f.PutInlinePolicy(ctx, root.Account, iam.EntityUser, "bob", "default", allow, ""); err != nil {
+	if err := f.PutInlinePolicy(
+		ctx,
+		root.Account,
+		iam.EntityUser,
+		"bob",
+		"default",
+		allow,
+		backendtest.EntityGrant(ctx, t, f, root.Account, iam.EntityUser, "bob"),
+	); err != nil {
 		t.Fatal(err)
 	}
 	has(t, call(t, h, bob, sigv4.ServiceIAM, url.Values{
@@ -721,11 +778,11 @@ func TestGetAccessKeyLastUsed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	used, err := f.CreateAccessKey(ctx, root.Account, "bob", "")
+	used, err := f.CreateAccessKey(ctx, root.Account, "bob", backendtest.UserGrant(ctx, t, f, root.Account, "bob"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	fresh, err := f.CreateAccessKey(ctx, root.Account, "bob", "")
+	fresh, err := f.CreateAccessKey(ctx, root.Account, "bob", backendtest.UserGrant(ctx, t, f, root.Account, "bob"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -766,16 +823,17 @@ func TestGetAccessKeyLastUsed(t *testing.T) {
 	if _, err := f.CreateUser(ctx, root.Account, "carol", "/"); err != nil {
 		t.Fatal(err)
 	}
-	aliceKey, err := f.CreateAccessKey(ctx, root.Account, "alice", "")
+	aliceKey, err := f.CreateAccessKey(ctx, root.Account, "alice", backendtest.UserGrant(ctx, t, f, root.Account, "alice"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	carolKey, err := f.CreateAccessKey(ctx, root.Account, "carol", "")
+	carolKey, err := f.CreateAccessKey(ctx, root.Account, "carol", backendtest.UserGrant(ctx, t, f, root.Account, "carol"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := f.PutInlinePolicy(ctx, root.Account, iam.EntityUser, "alice", "lastused",
-		`{"Statement":[{"Effect":"Allow","Action":"iam:GetAccessKeyLastUsed","Resource":"`+bob.ARN+`"}]}`, ""); err != nil {
+		`{"Statement":[{"Effect":"Allow","Action":"iam:GetAccessKeyLastUsed","Resource":"`+bob.ARN+`"}]}`,
+		backendtest.EntityGrant(ctx, t, f, root.Account, iam.EntityUser, "alice")); err != nil {
 		t.Fatal(err)
 	}
 	alice := sigv4.Credential{AccessKey: aliceKey.AccessKeyID, Secret: aliceKey.Secret}
@@ -806,12 +864,18 @@ func TestLimitedUserAndSTS(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	doc := `{"Statement":[{"Effect":"Allow",` +
-		`"Action":["iam:GetUser","sts:GetCallerIdentity","sts:AssumeRole"],"Resource":"*"}]}`
-	if err := f.PutInlinePolicy(ctx, root.Account, iam.EntityUser, "bob", "p", doc, ""); err != nil {
+	if err := f.PutInlinePolicy(
+		ctx,
+		root.Account,
+		iam.EntityUser,
+		"bob",
+		"p",
+		`{"Statement":[{"Effect":"Allow","Action":["iam:GetUser","sts:GetCallerIdentity","sts:AssumeRole"],"Resource":"*"}]}`,
+		backendtest.EntityGrant(ctx, t, f, root.Account, iam.EntityUser, "bob"),
+	); err != nil {
 		t.Fatal(err)
 	}
-	k, err := f.CreateAccessKey(ctx, root.Account, "bob", "")
+	k, err := f.CreateAccessKey(ctx, root.Account, "bob", backendtest.UserGrant(ctx, t, f, root.Account, "bob"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -853,7 +917,9 @@ func TestGetCallerIdentitySkipsAuthorizeButNotAuthentication(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	k, err := f.CreateAccessKey(t.Context(), root.Account, "nobody", "")
+	k, err := f.CreateAccessKey(
+		t.Context(), root.Account, "nobody", backendtest.UserGrant(t.Context(), t, f, root.Account, "nobody"),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1087,10 +1153,18 @@ func TestUpdateRoleFailsClosedWhenTheRoleLookupFails(t *testing.T) {
 	}
 	policy := `{"Statement":[{"Effect":"Allow","Action":"iam:UpdateRole",` +
 		`"Resource":"arn:vws:iam::123456789012:role/ops"}]}`
-	if err := f.PutInlinePolicy(ctx, root.Account, iam.EntityUser, "bob", "update", policy, ""); err != nil {
+	if err := f.PutInlinePolicy(
+		ctx,
+		root.Account,
+		iam.EntityUser,
+		"bob",
+		"update",
+		policy,
+		backendtest.EntityGrant(ctx, t, f, root.Account, iam.EntityUser, "bob"),
+	); err != nil {
 		t.Fatal(err)
 	}
-	key, err := f.CreateAccessKey(ctx, root.Account, "bob", "")
+	key, err := f.CreateAccessKey(ctx, root.Account, "bob", backendtest.UserGrant(ctx, t, f, root.Account, "bob"))
 	if err != nil {
 		t.Fatal(err)
 	}
