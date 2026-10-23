@@ -43,6 +43,7 @@ func stampOf(at time.Time) string { return strconv.FormatInt(at.Unix(), 36) }
 // so two writers that read the same labels write the same records.
 func TestPruneDetachRecords(t *testing.T) {
 	t.Run("sub-second boundary", pruneSubSecondBoundary)
+	t.Run("held while a recovery is pending", pruneHeldForRecovery)
 	now := time.Unix(1_700_000_000, 0).UTC()
 	const grace = backend.ClientTokenGrace
 	req := strings.Repeat("ab", 16)
@@ -55,10 +56,14 @@ func TestPruneDetachRecords(t *testing.T) {
 		labelDetachPrefix + "vol-b":   req + " /dev/sdg " + stampOf(now.Add(-backend.ClientTokenWindow-grace-time.Second)),
 		labelDetachOpPrefix + "vol-b": "0000000000000002 0123456789abcdef",
 		labelDetachPrefix + "vol-c":   req + " /dev/sdh",
+		labelDetachOpPrefix + "vol-c": "0000000000000004 0123456789abcdef",
 		labelDetachPrefix + "vol-d":   req + " /dev/sdi " + stampOf(now.Add(time.Hour)),
+		labelDetachOpPrefix + "vol-d": "0000000000000005 0123456789abcdef",
 		labelDetachPrefix + "vol-e":   req + " /dev/sdj " + stampOf(now.Add(-backend.ClientTokenWindow-grace)),
+		labelDetachOpPrefix + "vol-e": "0000000000000006 0123456789abcdef",
 		labelDetachOpPrefix + "vol-f": "0000000000000003 0123456789abcdef",
 		labelDetachPrefix + "vol-g":   req + " " + longDevice,
+		labelDetachOpPrefix + "vol-g": "0000000000000007 0123456789abcdef",
 		labelDetachPrefix + "vol-h":   "garbage",
 		labelDetachPrefix + "vol-i":   req + " /dev/sdk notastamp!",
 	}
@@ -66,13 +71,17 @@ func TestPruneDetachRecords(t *testing.T) {
 		labelDetachPrefix + "vol-a":   raw[labelDetachPrefix+"vol-a"],
 		labelDetachOpPrefix + "vol-a": raw[labelDetachOpPrefix+"vol-a"],
 		// Written before #303: the window starts now.
-		labelDetachPrefix + "vol-c": req + " /dev/sdh " + stampOf(now),
+		labelDetachPrefix + "vol-c":   req + " /dev/sdh " + stampOf(now),
+		labelDetachOpPrefix + "vol-c": raw[labelDetachOpPrefix+"vol-c"],
 		// A stamp ahead of this clock is another replica's skew, not expiry.
-		labelDetachPrefix + "vol-d": raw[labelDetachPrefix+"vol-d"],
+		labelDetachPrefix + "vol-d":   raw[labelDetachPrefix+"vol-d"],
+		labelDetachOpPrefix + "vol-d": raw[labelDetachOpPrefix+"vol-d"],
 		// Exactly the window and the grace old is still within it.
-		labelDetachPrefix + "vol-e": raw[labelDetachPrefix+"vol-e"],
+		labelDetachPrefix + "vol-e":   raw[labelDetachPrefix+"vol-e"],
+		labelDetachOpPrefix + "vol-e": raw[labelDetachOpPrefix+"vol-e"],
 		// Too long to stamp: kept as it is, as before #303.
-		labelDetachPrefix + "vol-g": raw[labelDetachPrefix+"vol-g"],
+		labelDetachPrefix + "vol-g":   raw[labelDetachPrefix+"vol-g"],
+		labelDetachOpPrefix + "vol-g": raw[labelDetachOpPrefix+"vol-g"],
 	}
 	got := pruneDetachRecords(raw, now)
 	if !maps.Equal(got, want) {
@@ -121,6 +130,45 @@ func pruneSubSecondBoundary(t *testing.T) {
 		if kept != tc.kept {
 			t.Errorf("%s: kept %v, want %v", tc.label, kept, tc.kept)
 		}
+	}
+}
+
+// A record within the window with no saved operation id is a detach whose
+// operation id write failed; its retry resends the original update by
+// request id, and that update carried every record then stored. While such
+// a record is within the window, pruning keeps the expired records too, so
+// the resend still matches. A held record is not within the window, so it
+// does not count toward backend.MaxDetachReplays. Once the operation id is
+// saved, or the pending record expires, the expired records go (#319 review).
+func pruneHeldForRecovery(t *testing.T) {
+	const grace = backend.ClientTokenGrace
+	now := time.Unix(1_700_000_000, 0).UTC()
+	req := strings.Repeat("ef", 16)
+	expired := stampOf(now.Add(-backend.ClientTokenWindow - grace - time.Second))
+	pending := map[string]string{
+		labelDetachPrefix + "vol-a":   req + " /dev/sdf " + expired,
+		labelDetachOpPrefix + "vol-a": "0000000000000001 0123456789abcdef",
+		labelDetachPrefix + "vol-b":   req + " /dev/sdg " + stampOf(now.Add(-time.Hour)),
+	}
+	got := pruneDetachRecords(pending, now)
+	if !maps.Equal(got, pending) {
+		t.Fatalf("records with a recovery pending:\n got %v\nwant %v", got, pending)
+	}
+	if n := detachRecordsInWindow(pending, now, ""); n != 1 {
+		t.Fatalf("%d records within the window, want 1: a held record is not counted", n)
+	}
+	saved := maps.Clone(pending)
+	saved[labelDetachOpPrefix+"vol-b"] = "0000000000000002 0123456789abcdef"
+	want := map[string]string{
+		labelDetachPrefix + "vol-b":   saved[labelDetachPrefix+"vol-b"],
+		labelDetachOpPrefix + "vol-b": saved[labelDetachOpPrefix+"vol-b"],
+	}
+	if got := pruneDetachRecords(saved, now); !maps.Equal(got, want) {
+		t.Fatalf("records once the operation id is saved:\n got %v\nwant %v", got, want)
+	}
+	later := now.Add(backend.ClientTokenWindow + grace)
+	if got := pruneDetachRecords(pending, later); len(got) != 0 {
+		t.Fatalf("records once the pending record expired: %v, want none", got)
 	}
 }
 
@@ -296,6 +344,8 @@ func TestDetachRecordsLeaveRoomForFiftyTags(t *testing.T) {
 // retry's clock, or compute answers a fingerprint mismatch.
 func TestDetachRecoveryResendsTheOriginalStamp(t *testing.T) {
 	t.Run("a record that expired meanwhile", recoveryKeepsExpiredRecords)
+	t.Run("an intervening tag write", func(t *testing.T) { recoveryAfterInterveningWrite(t, interveningTags) })
+	t.Run("an intervening stop", func(t *testing.T) { recoveryAfterInterveningWrite(t, interveningStop) })
 	world, client, name, vols, inst := capacityWorld(t, 1)
 	start := time.Unix(1_700_000_000, 0).UTC()
 	var offset atomic.Int64
@@ -373,5 +423,90 @@ func recoveryKeepsExpiredRecords(t *testing.T) {
 	}
 	if again.Operation.ID != op.ID {
 		t.Fatalf("recovery gave op %s, want B's %s", again.Operation.ID, op.ID)
+	}
+}
+
+func interveningTags(ctx context.Context, client computeClient, scope backend.Scope, inst resource.InstanceID) error {
+	return tagEnvProd(ctx, client, scope, inst, "k-tag-2")
+}
+
+// tagEnvProd writes the same tag value under a new client token each time.
+func tagEnvProd(
+	ctx context.Context, client computeClient, scope backend.Scope, inst resource.InstanceID, key string,
+) error {
+	_, err := client.CreateTags(ctx, backend.Mutation{Scope: scope, Key: key, Fingerprint: "fp-" + key},
+		resource.CreateTagsRequest{IDs: []resource.InstanceID{inst}, Tags: map[string]string{"env": "prod"}})
+	return err
+}
+
+func interveningStop(ctx context.Context, client computeClient, scope backend.Scope, inst resource.InstanceID) error {
+	_, err := client.StopInstances(ctx, backend.Mutation{Scope: scope, Key: "k-stop", Fingerprint: "fp-stop"},
+		resource.StopInstancesRequest{IDs: []resource.InstanceID{inst}})
+	return err
+}
+
+// B's record is written but its operation id is not. A expires, and another
+// label write on the instance (the same tag value again, or a stop) runs
+// before B's retry. That write must not prune A while B's recovery is
+// pending, or B's resend differs from B's original update and compute
+// answers a fingerprint mismatch. Once B's operation id is saved, the next
+// write prunes A (#319 review).
+func recoveryAfterInterveningWrite(
+	t *testing.T, write func(context.Context, computeClient, backend.Scope, resource.InstanceID) error,
+) {
+	const grace = backend.ClientTokenGrace
+	world, client, name, vols, inst := capacityWorld(t, 2)
+	start := time.Unix(1_700_000_000, 0).UTC()
+	var offset atomic.Int64
+	client.now = func() time.Time { return start.Add(time.Duration(offset.Load())) }
+	scope := backend.Scope{Account: mustAccount(t)}
+	ctx := context.Background()
+	if err := tagEnvProd(ctx, client, scope, inst, "k-tag-1"); err != nil {
+		t.Fatalf("first tag write: %v", err)
+	}
+	mA := backend.Mutation{Scope: scope, Key: "k-expire-a", Fingerprint: "fp-expire-a"}
+	reqA := resource.DetachVolumeRequest{VolumeID: vols[0], InstanceID: inst}
+	if _, err := client.DetachVolume(ctx, mA, reqA); err != nil {
+		t.Fatalf("detach A: %v", err)
+	}
+	recordA := labelDetachPrefix + vols[0].String()
+	offset.Store(int64(backend.ClientTokenWindow - time.Minute))
+	mB := backend.Mutation{Scope: scope, Key: "k-expire-b", Fingerprint: "fp-expire-b"}
+	reqB := resource.DetachVolumeRequest{VolumeID: vols[1], InstanceID: inst}
+	world.mu.Lock()
+	world.failSameSpec = 1 // the write that saves B's operation id fails
+	world.mu.Unlock()
+	if _, err := client.DetachVolume(ctx, mB, reqB); resource.CodeOf(err) != resource.CodeUnavailable {
+		t.Fatalf("interrupted detach B: %v", err)
+	}
+	offset.Store(int64(backend.ClientTokenWindow + grace + 2*time.Minute))
+	if err := write(ctx, client, scope, inst); err != nil {
+		t.Fatalf("intervening write: %v", err)
+	}
+	if _, ok := world.labelsOf(name)[recordA]; !ok {
+		t.Error("the intervening write pruned A while B's recovery was pending")
+	}
+	again, err := client.DetachVolume(ctx, mB, reqB)
+	if err != nil {
+		t.Fatalf("B's recovery after the intervening write: %v", err)
+	}
+	world.mu.Lock()
+	rec := world.byRequest[requestUUID(mB.Key, "detach")]
+	world.mu.Unlock()
+	op, err := operationFrom(rec.op, resource.ServiceCompute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.Operation.ID != op.ID {
+		t.Fatalf("recovery gave op %s, want B's %s", again.Operation.ID, op.ID)
+	}
+	if _, ok := world.labelsOf(name)[labelDetachOpPrefix+vols[1].String()]; !ok {
+		t.Fatal("B's recovery did not save its operation id")
+	}
+	if err := tagEnvProd(ctx, client, scope, inst, "k-tag-3"); err != nil {
+		t.Fatalf("tag write after B's recovery: %v", err)
+	}
+	if _, ok := world.labelsOf(name)[recordA]; ok {
+		t.Fatal("A was kept after B's operation id was saved")
 	}
 }
