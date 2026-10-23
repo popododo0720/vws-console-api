@@ -574,7 +574,8 @@ func detachOpIDBoundary(t *testing.T, tagCount int, fits bool) {
 	ctx := context.Background()
 	for i := range 3 {
 		m := backend.Mutation{Scope: scope, Key: fmt.Sprintf("k-old-%d", i), Fingerprint: fmt.Sprintf("fp-old-%d", i)}
-		if _, err := client.DetachVolume(ctx, m, resource.DetachVolumeRequest{VolumeID: vols[i], InstanceID: inst}); err != nil {
+		req := resource.DetachVolumeRequest{VolumeID: vols[i], InstanceID: inst}
+		if _, err := client.DetachVolume(ctx, m, req); err != nil {
 			t.Fatalf("detach %d: %v", i, err)
 		}
 	}
@@ -583,12 +584,14 @@ func detachOpIDBoundary(t *testing.T, tagCount int, fits bool) {
 	world.failSameSpec = 1 // the pending detach's operation id write fails
 	world.mu.Unlock()
 	mP := backend.Mutation{Scope: scope, Key: "k-pending", Fingerprint: "fp-pending"}
-	if _, err := client.DetachVolume(ctx, mP, resource.DetachVolumeRequest{VolumeID: vols[3], InstanceID: inst}); resource.CodeOf(err) != resource.CodeUnavailable {
+	reqP := resource.DetachVolumeRequest{VolumeID: vols[3], InstanceID: inst}
+	if _, err := client.DetachVolume(ctx, mP, reqP); resource.CodeOf(err) != resource.CodeUnavailable {
 		t.Fatalf("interrupted pending detach: %v", err)
 	}
 	offset.Store(int64(backend.ClientTokenWindow + backend.ClientTokenGrace + 2*time.Minute))
 	mX := backend.Mutation{Scope: scope, Key: "k-extra", Fingerprint: "fp-extra"}
-	if _, err := client.DetachVolume(ctx, mX, resource.DetachVolumeRequest{VolumeID: vols[4], InstanceID: inst}); err != nil {
+	reqX := resource.DetachVolumeRequest{VolumeID: vols[4], InstanceID: inst}
+	if _, err := client.DetachVolume(ctx, mX, reqX); err != nil {
 		t.Fatalf("extra detach: %v", err)
 	}
 	tags := map[string]string{}
@@ -750,7 +753,8 @@ func pruneUnstampedDuringHold(t *testing.T) {
 		t.Fatalf("%d records within the window, want 1: an unstamped record is not counted during a hold", n)
 	}
 	expired := maps.Clone(held)
-	expired[labelDetachPrefix+"vol-a"] = req + " /dev/sdg " + stampOf(now.Add(-backend.ClientTokenWindow-grace-time.Second))
+	past := now.Add(-backend.ClientTokenWindow - grace - time.Second)
+	expired[labelDetachPrefix+"vol-a"] = req + " /dev/sdg " + stampOf(past)
 	want := map[string]string{labelDetachPrefix + "vol-legacy": req + " /dev/sdf " + stampOf(now)}
 	if got := pruneDetachRecords(expired, now); !maps.Equal(got, want) {
 		t.Fatalf("records once a stamped record expired:\n got %v\nwant %v", got, want)
