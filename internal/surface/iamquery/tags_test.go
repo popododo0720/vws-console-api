@@ -223,7 +223,7 @@ func TestPolicyTagNeedsListPermission(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := f.PutInlinePolicy(ctx, root.Account, iam.EntityUser, "bob", "tag",
-		`{"Statement":[{"Effect":"Allow","Action":["iam:TagPolicy"],"Resource":"*"}]}`); err != nil {
+		`{"Statement":[{"Effect":"Allow","Action":["iam:TagPolicy"],"Resource":"*"}]}`, ""); err != nil {
 		t.Fatal(err)
 	}
 	k, err := f.CreateAccessKey(ctx, root.Account, "bob", "")
@@ -238,13 +238,13 @@ func TestPolicyTagNeedsListPermission(t *testing.T) {
 	has(t, call(t, h, bob, sigv4.ServiceIAM, tag), http.StatusForbidden, `<Code>AccessDenied</Code>`)
 	// Removing tags needs iam:UntagPolicy only; the list permission is not required.
 	if err := f.PutInlinePolicy(ctx, root.Account, iam.EntityUser, "bob", "untag",
-		`{"Statement":[{"Effect":"Allow","Action":["iam:UntagPolicy"],"Resource":"*"}]}`); err != nil {
+		`{"Statement":[{"Effect":"Allow","Action":["iam:UntagPolicy"],"Resource":"*"}]}`, ""); err != nil {
 		t.Fatal(err)
 	}
 	untag := url.Values{"Action": {"UntagPolicy"}, "PolicyArn": {policyTagARN}, "TagKeys.member.1": {"k"}}
 	has(t, call(t, h, bob, sigv4.ServiceIAM, untag), http.StatusOK, `<UntagPolicyResponse>`)
 	if err := f.PutInlinePolicy(ctx, root.Account, iam.EntityUser, "bob", "tag",
-		`{"Statement":[{"Effect":"Allow","Action":["iam:TagPolicy","iam:ListPolicyTags"],"Resource":"*"}]}`); err != nil {
+		`{"Statement":[{"Effect":"Allow","Action":["iam:TagPolicy","iam:ListPolicyTags"],"Resource":"*"}]}`, ""); err != nil {
 		t.Fatal(err)
 	}
 	has(t, call(t, h, bob, sigv4.ServiceIAM, tag), http.StatusOK, `<TagPolicyResponse>`)
@@ -302,7 +302,7 @@ func TestPolicyTagWrongPathScopedUser(t *testing.T) {
 	}
 	allow := `{"Statement":[{"Effect":"Allow","Action":["iam:TagPolicy","iam:UntagPolicy","iam:ListPolicyTags"],` +
 		`"Resource":"arn:vws:iam::123456789012:policy/team/*"}]}`
-	if err := f.PutInlinePolicy(ctx, root.Account, iam.EntityUser, "bob", "team", allow); err != nil {
+	if err := f.PutInlinePolicy(ctx, root.Account, iam.EntityUser, "bob", "team", allow, ""); err != nil {
 		t.Fatal(err)
 	}
 	k, err := f.CreateAccessKey(ctx, root.Account, "bob", "")

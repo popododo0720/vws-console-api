@@ -1047,16 +1047,16 @@ func iamActions() map[string]spec {
 			if err := required(c, e.key, "PolicyArn"); err != nil {
 				return nil, err
 			}
-			return nil, h.cfg.Admin.AttachPolicy(c.r.Context(), c.caller.Account, kind, c.form(e.key), c.form("PolicyArn"))
+			return nil, h.cfg.Admin.AttachPolicy(c.r.Context(), c.caller.Account, kind, c.form(e.key), c.form("PolicyArn"), "")
 		})
 		m["Detach"+e.word+"Policy"] = admin([]string{e.key, "PolicyArn"}, e.arn, func(h *handler, c *exchange) (any, error) {
 			if err := required(c, e.key, "PolicyArn"); err != nil {
 				return nil, err
 			}
-			return nil, h.cfg.Admin.DetachPolicy(c.r.Context(), c.caller.Account, kind, c.form(e.key), c.form("PolicyArn"))
+			return nil, h.cfg.Admin.DetachPolicy(c.r.Context(), c.caller.Account, kind, c.form(e.key), c.form("PolicyArn"), "")
 		})
 		m["ListAttached"+e.word+"Policies"] = spec{params: []string{e.key}, list: true, needsAdmin: true, resource: e.arn, run: func(h *handler, c *exchange) (any, error) {
-			ps, err := h.cfg.Admin.ListAttachedPolicies(c.r.Context(), c.caller.Account, kind, c.form(e.key))
+			ps, err := h.cfg.Admin.ListAttachedPolicies(c.r.Context(), c.caller.Account, kind, c.form(e.key), "")
 			out := attachedResult{AttachedPolicies: []attachedXML{}}
 			for _, p := range ps {
 				out.AttachedPolicies = append(out.AttachedPolicies, attachedXML{PolicyName: p.Name, PolicyArn: p.ARN})
@@ -1067,10 +1067,10 @@ func iamActions() map[string]spec {
 			if err := required(c, e.key, "PolicyName", "PolicyDocument"); err != nil {
 				return nil, err
 			}
-			return nil, h.cfg.Admin.PutInlinePolicy(c.r.Context(), c.caller.Account, kind, c.form(e.key), c.form("PolicyName"), c.form("PolicyDocument"))
+			return nil, h.cfg.Admin.PutInlinePolicy(c.r.Context(), c.caller.Account, kind, c.form(e.key), c.form("PolicyName"), c.form("PolicyDocument"), "")
 		})
 		m["Get"+e.word+"Policy"] = admin([]string{e.key, "PolicyName"}, e.arn, func(h *handler, c *exchange) (any, error) {
-			doc, err := h.cfg.Admin.GetInlinePolicy(c.r.Context(), c.caller.Account, kind, c.form(e.key), c.form("PolicyName"))
+			doc, err := h.cfg.Admin.GetInlinePolicy(c.r.Context(), c.caller.Account, kind, c.form(e.key), c.form("PolicyName"), "")
 			out := struct {
 				Entity         string `xml:",innerxml"`
 				PolicyName     string `xml:"PolicyName"`
@@ -1080,10 +1080,10 @@ func iamActions() map[string]spec {
 			return out, err
 		})
 		m["Delete"+e.word+"Policy"] = admin([]string{e.key, "PolicyName"}, e.arn, func(h *handler, c *exchange) (any, error) {
-			return nil, h.cfg.Admin.DeleteInlinePolicy(c.r.Context(), c.caller.Account, kind, c.form(e.key), c.form("PolicyName"))
+			return nil, h.cfg.Admin.DeleteInlinePolicy(c.r.Context(), c.caller.Account, kind, c.form(e.key), c.form("PolicyName"), "")
 		})
 		m["List"+e.word+"Policies"] = spec{params: []string{e.key}, list: true, needsAdmin: true, resource: e.arn, run: func(h *handler, c *exchange) (any, error) {
-			names, err := h.cfg.Admin.ListInlinePolicies(c.r.Context(), c.caller.Account, kind, c.form(e.key))
+			names, err := h.cfg.Admin.ListInlinePolicies(c.r.Context(), c.caller.Account, kind, c.form(e.key), "")
 			return namesResult{PolicyNames: names}, err
 		}}
 	}

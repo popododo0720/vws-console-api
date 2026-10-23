@@ -145,13 +145,13 @@ func TestListVirtualMFADevicesAuthorizes(t *testing.T) {
 	}
 	bob := sigv4.Credential{AccessKey: key.AccessKeyID, Secret: key.Secret}
 	allowTags := `{"Statement":[{"Effect":"Allow","Action":"iam:ListMFADeviceTags","Resource":"*"}]}`
-	if err := f.PutInlinePolicy(ctx, root.Account, iam.EntityUser, "bob", "default", allowTags); err != nil {
+	if err := f.PutInlinePolicy(ctx, root.Account, iam.EntityUser, "bob", "default", allowTags, ""); err != nil {
 		t.Fatal(err)
 	}
 	has(t, call(t, h, bob, sigv4.ServiceIAM, url.Values{"Action": {"ListVirtualMFADevices"}}),
 		http.StatusForbidden, `<Code>AccessDenied</Code>`)
 	allowList := `{"Statement":[{"Effect":"Allow","Action":"iam:ListVirtualMFADevices","Resource":"*"}]}`
-	if err := f.PutInlinePolicy(ctx, root.Account, iam.EntityUser, "bob", "default", allowList); err != nil {
+	if err := f.PutInlinePolicy(ctx, root.Account, iam.EntityUser, "bob", "default", allowList, ""); err != nil {
 		t.Fatal(err)
 	}
 	has(t, call(t, h, bob, sigv4.ServiceIAM, url.Values{"Action": {"ListVirtualMFADevices"}}),
@@ -307,7 +307,7 @@ func TestListMFADevicesAuthorizes(t *testing.T) {
 	has(t, call(t, h, bob, sigv4.ServiceIAM, url.Values{"Action": {"ListMFADevices"}}),
 		http.StatusForbidden, `<Code>AccessDenied</Code>`)
 	allow := `{"Statement":[{"Effect":"Allow","Action":"iam:ListMFADevices","Resource":"*"}]}`
-	if err := f.PutInlinePolicy(ctx, root.Account, iam.EntityUser, "bob", "default", allow); err != nil {
+	if err := f.PutInlinePolicy(ctx, root.Account, iam.EntityUser, "bob", "default", allow, ""); err != nil {
 		t.Fatal(err)
 	}
 	has(t, call(t, h, bob, sigv4.ServiceIAM, url.Values{"Action": {"ListMFADevices"}}),
@@ -334,7 +334,7 @@ func TestListMFADevicesDefaultsToCaller(t *testing.T) {
 	}
 	bob := sigv4.Credential{AccessKey: key.AccessKeyID, Secret: key.Secret}
 	allow := `{"Statement":[{"Effect":"Allow","Action":"iam:ListMFADevices","Resource":"*"}]}`
-	if err := f.PutInlinePolicy(ctx, root.Account, iam.EntityUser, "bob", "default", allow); err != nil {
+	if err := f.PutInlinePolicy(ctx, root.Account, iam.EntityUser, "bob", "default", allow, ""); err != nil {
 		t.Fatal(err)
 	}
 	has(t, call(t, h, bob, sigv4.ServiceIAM, url.Values{"Action": {"ListMFADevices"}}),
@@ -373,7 +373,7 @@ func TestListMFADevicesIsScopedToTheUser(t *testing.T) {
 	forBob := url.Values{"Action": {"ListMFADevices"}, "UserName": {"bob"}}
 	put := func(policy string) {
 		t.Helper()
-		if err := f.PutInlinePolicy(ctx, root.Account, iam.EntityUser, "alice", "list", policy); err != nil {
+		if err := f.PutInlinePolicy(ctx, root.Account, iam.EntityUser, "alice", "list", policy, ""); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -455,7 +455,7 @@ func TestListMFADevicesUnavailableLookupAuthorizesNothing(t *testing.T) {
 	policy := `{"Statement":[` +
 		`{"Effect":"Allow","Action":"iam:ListMFADevices","Resource":"` + users + `alice"},` +
 		`{"Effect":"Deny","Action":"iam:ListMFADevices","Resource":"` + users + `restricted/*"}]}`
-	if err := f.PutInlinePolicy(ctx, root.Account, iam.EntityUser, "bob", "list", policy); err != nil {
+	if err := f.PutInlinePolicy(ctx, root.Account, iam.EntityUser, "bob", "list", policy, ""); err != nil {
 		t.Fatal(err)
 	}
 	key, err := f.CreateAccessKey(ctx, root.Account, "bob", "")

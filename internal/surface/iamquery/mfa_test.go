@@ -128,14 +128,14 @@ func TestGetMFADeviceNeedsPermission(t *testing.T) {
 	has(t, call(t, h, bob, sigv4.ServiceIAM, self), http.StatusForbidden, `<Code>AccessDenied</Code>`)
 	// Permission on bob's own ARN covers bob, not alice.
 	policy := `{"Statement":[{"Effect":"Allow","Action":["iam:GetMFADevice"],"Resource":"` + bobUser.ARN + `"}]}`
-	if err := f.PutInlinePolicy(ctx, root.Account, iam.EntityUser, "bob", "get", policy); err != nil {
+	if err := f.PutInlinePolicy(ctx, root.Account, iam.EntityUser, "bob", "get", policy, ""); err != nil {
 		t.Fatal(err)
 	}
 	has(t, call(t, h, bob, sigv4.ServiceIAM, forAlice), http.StatusForbidden, `<Code>AccessDenied</Code>`)
 	has(t, call(t, h, bob, sigv4.ServiceIAM, self), http.StatusNotFound, noSuchMFADevice)
 	// Permission on alice's ARN covers alice, not bob.
 	policy = `{"Statement":[{"Effect":"Allow","Action":["iam:GetMFADevice"],"Resource":"` + alice.ARN + `"}]}`
-	if err := f.PutInlinePolicy(ctx, root.Account, iam.EntityUser, "bob", "get", policy); err != nil {
+	if err := f.PutInlinePolicy(ctx, root.Account, iam.EntityUser, "bob", "get", policy, ""); err != nil {
 		t.Fatal(err)
 	}
 	has(t, call(t, h, bob, sigv4.ServiceIAM, forAlice), http.StatusNotFound, noSuchMFADevice)
@@ -161,7 +161,7 @@ func TestGetMFADeviceNeedsPermission(t *testing.T) {
 		policy := `{"Statement":[` +
 			`{"Effect":"Allow","Action":"iam:GetMFADevice","Resource":"` + users + `alice"},` +
 			`{"Effect":"Deny","Action":"iam:GetMFADevice","Resource":"` + users + `restricted/*"}]}`
-		if err := f.PutInlinePolicy(ctx, root.Account, iam.EntityUser, "bob", "get", policy); err != nil {
+		if err := f.PutInlinePolicy(ctx, root.Account, iam.EntityUser, "bob", "get", policy, ""); err != nil {
 			t.Fatal(err)
 		}
 		k, err := f.CreateAccessKey(ctx, root.Account, "bob", "")
@@ -184,7 +184,7 @@ func TestGetMFADeviceNeedsPermission(t *testing.T) {
 		ctx := t.Context()
 		policy := `{"Statement":[{"Effect":"Allow","Action":"iam:GetMFADevice","Resource":"*"},` +
 			`{"Effect":"Deny","Action":"iam:GetMFADevice","Resource":"arn:vws:iam::` + root.Account.String() + `:user/ghost"}]}`
-		if err := f.PutInlinePolicy(ctx, root.Account, iam.EntityUser, "bob", "get", policy); err != nil {
+		if err := f.PutInlinePolicy(ctx, root.Account, iam.EntityUser, "bob", "get", policy, ""); err != nil {
 			t.Fatal(err)
 		}
 		ghost := url.Values{"Action": {"GetMFADevice"}, "SerialNumber": {fido}, "UserName": {"ghost"}}

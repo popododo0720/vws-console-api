@@ -407,37 +407,39 @@ func (a STSAdmin) DeletePolicyVersion(
 }
 
 // AttachPolicy implements iam.Admin.
-func (STSAdmin) AttachPolicy(_ context.Context, _ resource.AccountID, _ iam.Entity, _, _ string) error {
+func (STSAdmin) AttachPolicy(_ context.Context, _ resource.AccountID, _ iam.Entity, _, _, _ string) error {
 	return notServed("AttachPolicy")
 }
 
 // DetachPolicy implements iam.Admin.
-func (STSAdmin) DetachPolicy(_ context.Context, _ resource.AccountID, _ iam.Entity, _, _ string) error {
+func (STSAdmin) DetachPolicy(_ context.Context, _ resource.AccountID, _ iam.Entity, _, _, _ string) error {
 	return notServed("DetachPolicy")
 }
 
 // ListAttachedPolicies implements iam.Admin.
-func (STSAdmin) ListAttachedPolicies(_ context.Context, _ resource.AccountID, _ iam.Entity, _ string) ([]iam.ManagedPolicy, error) {
+func (STSAdmin) ListAttachedPolicies(
+	_ context.Context, _ resource.AccountID, _ iam.Entity, _, _ string,
+) ([]iam.ManagedPolicy, error) {
 	return nil, notServed("ListAttachedPolicies")
 }
 
 // PutInlinePolicy implements iam.Admin.
-func (STSAdmin) PutInlinePolicy(_ context.Context, _ resource.AccountID, _ iam.Entity, name, _, _ string) error {
+func (STSAdmin) PutInlinePolicy(_ context.Context, _ resource.AccountID, _ iam.Entity, _, _, _, _ string) error {
 	return notServed("PutInlinePolicy")
 }
 
 // GetInlinePolicy implements iam.Admin.
-func (STSAdmin) GetInlinePolicy(_ context.Context, _ resource.AccountID, _ iam.Entity, _, _ string) (string, error) {
+func (STSAdmin) GetInlinePolicy(_ context.Context, _ resource.AccountID, _ iam.Entity, _, _, _ string) (string, error) {
 	return "", notServed("GetInlinePolicy")
 }
 
 // DeleteInlinePolicy implements iam.Admin.
-func (STSAdmin) DeleteInlinePolicy(_ context.Context, _ resource.AccountID, _ iam.Entity, _, _ string) error {
+func (STSAdmin) DeleteInlinePolicy(_ context.Context, _ resource.AccountID, _ iam.Entity, _, _, _ string) error {
 	return notServed("DeleteInlinePolicy")
 }
 
 // ListInlinePolicies implements iam.Admin.
-func (STSAdmin) ListInlinePolicies(_ context.Context, _ resource.AccountID, _ iam.Entity, _ string) ([]string, error) {
+func (STSAdmin) ListInlinePolicies(_ context.Context, _ resource.AccountID, _ iam.Entity, _, _ string) ([]string, error) {
 	return nil, notServed("ListInlinePolicies")
 }
 

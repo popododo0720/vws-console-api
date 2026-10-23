@@ -153,7 +153,7 @@ func authorizedARNHarness(
 	policy := `{"Statement":[` +
 		`{"Effect":"Allow","Action":"iam:*","Resource":["` + arn + `group/ok/*","` + arn + `user/ok/*"]},` +
 		`{"Effect":"Deny","Action":"iam:*","Resource":["` + arn + `group/denied/*","` + arn + `user/denied/*"]}]}`
-	if err := f.PutInlinePolicy(ctx, root.Account, iam.EntityUser, "bob", "ok", policy); err != nil {
+	if err := f.PutInlinePolicy(ctx, root.Account, iam.EntityUser, "bob", "ok", policy, ""); err != nil {
 		t.Fatal(err)
 	}
 	key, err := f.CreateAccessKey(ctx, root.Account, "bob", "")

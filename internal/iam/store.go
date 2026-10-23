@@ -1363,7 +1363,7 @@ func (st *store) holderOf(kind Entity, name string) (*holder, error) {
 }
 
 // AttachPolicy implements Admin.
-func (f *Fake) AttachPolicy(_ context.Context, a resource.AccountID, kind Entity, name, arn string) error {
+func (f *Fake) AttachPolicy(_ context.Context, a resource.AccountID, kind Entity, name, arn, _ string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	st := f.account(a)
@@ -1387,7 +1387,7 @@ func (f *Fake) AttachPolicy(_ context.Context, a resource.AccountID, kind Entity
 }
 
 // DetachPolicy implements Admin.
-func (f *Fake) DetachPolicy(_ context.Context, a resource.AccountID, kind Entity, name, arn string) error {
+func (f *Fake) DetachPolicy(_ context.Context, a resource.AccountID, kind Entity, name, arn, _ string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	st := f.account(a)
@@ -1408,7 +1408,9 @@ func (f *Fake) DetachPolicy(_ context.Context, a resource.AccountID, kind Entity
 }
 
 // ListAttachedPolicies implements Admin.
-func (f *Fake) ListAttachedPolicies(_ context.Context, a resource.AccountID, kind Entity, name string) ([]ManagedPolicy, error) {
+func (f *Fake) ListAttachedPolicies(
+	_ context.Context, a resource.AccountID, kind Entity, name, _ string,
+) ([]ManagedPolicy, error) {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
 	st := f.account(a)
@@ -1427,7 +1429,9 @@ func (f *Fake) ListAttachedPolicies(_ context.Context, a resource.AccountID, kin
 // --- inline policies ---
 
 // PutInlinePolicy implements Admin. It replaces a policy of the same name.
-func (f *Fake) PutInlinePolicy(_ context.Context, a resource.AccountID, kind Entity, name, policy, document string) error {
+func (f *Fake) PutInlinePolicy(
+	_ context.Context, a resource.AccountID, kind Entity, name, policy, document, _ string,
+) error {
 	if err := checkName(policyName, "policyName", policy); err != nil {
 		return err
 	}
@@ -1446,7 +1450,9 @@ func (f *Fake) PutInlinePolicy(_ context.Context, a resource.AccountID, kind Ent
 }
 
 // GetInlinePolicy implements Admin.
-func (f *Fake) GetInlinePolicy(_ context.Context, a resource.AccountID, kind Entity, name, policy string) (string, error) {
+func (f *Fake) GetInlinePolicy(
+	_ context.Context, a resource.AccountID, kind Entity, name, policy, _ string,
+) (string, error) {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
 	h, err := f.account(a).holderOf(kind, name)
@@ -1461,7 +1467,7 @@ func (f *Fake) GetInlinePolicy(_ context.Context, a resource.AccountID, kind Ent
 }
 
 // DeleteInlinePolicy implements Admin.
-func (f *Fake) DeleteInlinePolicy(_ context.Context, a resource.AccountID, kind Entity, name, policy string) error {
+func (f *Fake) DeleteInlinePolicy(_ context.Context, a resource.AccountID, kind Entity, name, policy, _ string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	h, err := f.account(a).holderOf(kind, name)
@@ -1477,7 +1483,9 @@ func (f *Fake) DeleteInlinePolicy(_ context.Context, a resource.AccountID, kind 
 }
 
 // ListInlinePolicies implements Admin.
-func (f *Fake) ListInlinePolicies(_ context.Context, a resource.AccountID, kind Entity, name string) ([]string, error) {
+func (f *Fake) ListInlinePolicies(
+	_ context.Context, a resource.AccountID, kind Entity, name, _ string,
+) ([]string, error) {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
 	h, err := f.account(a).holderOf(kind, name)

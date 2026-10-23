@@ -208,7 +208,7 @@ func TestUpdateGroupAuthorizesTheNewARN(t *testing.T) {
 	allow := func(resources string) string {
 		return `{"Statement":[{"Effect":"Allow","Action":"iam:UpdateGroup","Resource":` + resources + `}]}`
 	}
-	if err := f.PutInlinePolicy(ctx, root.Account, iam.EntityUser, "bob", "update", allow(`"`+old+`"`)); err != nil {
+	if err := f.PutInlinePolicy(ctx, root.Account, iam.EntityUser, "bob", "update", allow(`"`+old+`"`), ""); err != nil {
 		t.Fatal(err)
 	}
 	bob := sigv4.Credential{AccessKey: key.AccessKeyID, Secret: key.Secret}
@@ -220,7 +220,7 @@ func TestUpdateGroupAuthorizesTheNewARN(t *testing.T) {
 		t.Fatalf("denied update changed the group to %+v: %v", group, err)
 	}
 	both := allow(`["` + old + `","` + moved + `"]`)
-	if err := f.PutInlinePolicy(ctx, root.Account, iam.EntityUser, "bob", "update", both); err != nil {
+	if err := f.PutInlinePolicy(ctx, root.Account, iam.EntityUser, "bob", "update", both, ""); err != nil {
 		t.Fatal(err)
 	}
 	res = call(t, h, bob, sigv4.ServiceIAM, url.Values{
@@ -320,7 +320,7 @@ func TestUpdateUserAuthorizesTheNewARN(t *testing.T) {
 	allow := func(resources string) string {
 		return `{"Statement":[{"Effect":"Allow","Action":"iam:UpdateUser","Resource":` + resources + `}]}`
 	}
-	if err := f.PutInlinePolicy(ctx, root.Account, iam.EntityUser, "bob", "update", allow(`"`+old+`"`)); err != nil {
+	if err := f.PutInlinePolicy(ctx, root.Account, iam.EntityUser, "bob", "update", allow(`"`+old+`"`), ""); err != nil {
 		t.Fatal(err)
 	}
 	bob := sigv4.Credential{AccessKey: key.AccessKeyID, Secret: key.Secret}
@@ -332,7 +332,7 @@ func TestUpdateUserAuthorizesTheNewARN(t *testing.T) {
 		t.Fatalf("denied update changed the user to %+v: %v", u, err)
 	}
 	both := allow(`["` + old + `","` + moved + `"]`)
-	if err := f.PutInlinePolicy(ctx, root.Account, iam.EntityUser, "bob", "update", both); err != nil {
+	if err := f.PutInlinePolicy(ctx, root.Account, iam.EntityUser, "bob", "update", both, ""); err != nil {
 		t.Fatal(err)
 	}
 	res = call(t, h, bob, sigv4.ServiceIAM, url.Values{
@@ -485,7 +485,7 @@ func TestCreatePolicyVersionAuthorizes(t *testing.T) {
 	}
 	bob := sigv4.Credential{AccessKey: key.AccessKeyID, Secret: key.Secret}
 	allow := `{"Statement":[{"Effect":"Allow","Action":"iam:CreatePolicyVersion","Resource":"` + p.ARN + `"}]}`
-	if err := f.PutInlinePolicy(ctx, root.Account, iam.EntityUser, "bob", "default", allow); err != nil {
+	if err := f.PutInlinePolicy(ctx, root.Account, iam.EntityUser, "bob", "default", allow, ""); err != nil {
 		t.Fatal(err)
 	}
 	has(t, call(t, h, bob, sigv4.ServiceIAM, url.Values{
@@ -553,7 +553,7 @@ func TestSetDefaultPolicyVersionAuthorizes(t *testing.T) {
 	}
 	bob := sigv4.Credential{AccessKey: key.AccessKeyID, Secret: key.Secret}
 	allow := `{"Statement":[{"Effect":"Allow","Action":"iam:SetDefaultPolicyVersion","Resource":"` + p.ARN + `"}]}`
-	if err := f.PutInlinePolicy(ctx, root.Account, iam.EntityUser, "bob", "default", allow); err != nil {
+	if err := f.PutInlinePolicy(ctx, root.Account, iam.EntityUser, "bob", "default", allow, ""); err != nil {
 		t.Fatal(err)
 	}
 	has(t, call(t, h, bob, sigv4.ServiceIAM, url.Values{
@@ -703,7 +703,7 @@ func TestListPolicyVersionsAuthorizes(t *testing.T) {
 	}
 	bob := sigv4.Credential{AccessKey: key.AccessKeyID, Secret: key.Secret}
 	allow := `{"Statement":[{"Effect":"Allow","Action":"iam:ListPolicyVersions","Resource":"` + p.ARN + `"}]}`
-	if err := f.PutInlinePolicy(ctx, root.Account, iam.EntityUser, "bob", "default", allow); err != nil {
+	if err := f.PutInlinePolicy(ctx, root.Account, iam.EntityUser, "bob", "default", allow, ""); err != nil {
 		t.Fatal(err)
 	}
 	has(t, call(t, h, bob, sigv4.ServiceIAM, url.Values{
@@ -775,7 +775,7 @@ func TestGetAccessKeyLastUsed(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := f.PutInlinePolicy(ctx, root.Account, iam.EntityUser, "alice", "lastused",
-		`{"Statement":[{"Effect":"Allow","Action":"iam:GetAccessKeyLastUsed","Resource":"`+bob.ARN+`"}]}`); err != nil {
+		`{"Statement":[{"Effect":"Allow","Action":"iam:GetAccessKeyLastUsed","Resource":"`+bob.ARN+`"}]}`, ""); err != nil {
 		t.Fatal(err)
 	}
 	alice := sigv4.Credential{AccessKey: aliceKey.AccessKeyID, Secret: aliceKey.Secret}
@@ -806,7 +806,7 @@ func TestLimitedUserAndSTS(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := f.PutInlinePolicy(ctx, root.Account, iam.EntityUser, "bob", "p", `{"Statement":[{"Effect":"Allow","Action":["iam:GetUser","sts:GetCallerIdentity","sts:AssumeRole"],"Resource":"*"}]}`); err != nil {
+	if err := f.PutInlinePolicy(ctx, root.Account, iam.EntityUser, "bob", "p", `{"Statement":[{"Effect":"Allow","Action":["iam:GetUser","sts:GetCallerIdentity","sts:AssumeRole"],"Resource":"*"}]}`, ""); err != nil {
 		t.Fatal(err)
 	}
 	k, err := f.CreateAccessKey(ctx, root.Account, "bob", "")
@@ -1085,7 +1085,7 @@ func TestUpdateRoleFailsClosedWhenTheRoleLookupFails(t *testing.T) {
 	}
 	policy := `{"Statement":[{"Effect":"Allow","Action":"iam:UpdateRole",` +
 		`"Resource":"arn:vws:iam::123456789012:role/ops"}]}`
-	if err := f.PutInlinePolicy(ctx, root.Account, iam.EntityUser, "bob", "update", policy); err != nil {
+	if err := f.PutInlinePolicy(ctx, root.Account, iam.EntityUser, "bob", "update", policy, ""); err != nil {
 		t.Fatal(err)
 	}
 	key, err := f.CreateAccessKey(ctx, root.Account, "bob", "")
