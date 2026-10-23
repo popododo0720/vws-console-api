@@ -677,6 +677,15 @@ func (c computeClient) writeDetach(
 		// detach. Next to this request's record it would replay that detach,
 		// so it goes. This request's own id is written by persistDetachOp.
 		delete(labels, labelDetachOpPrefix+vol.ID.String())
+		// That second write adds one label. Held expired records take labels
+		// without counting toward the budget, so a detach that fits now may
+		// not fit its operation id: refuse it here, before compute is
+		// called, so it changes nothing and a same-token retry is refused
+		// the same way until there is room (#322). A recovery resend is
+		// left alone: it replays a first write that already passed this.
+		if drop && len(labels)+1 > labelMax {
+			return zero, tagCapacityErr()
+		}
 	}
 	updated, callErr := c.instances.UpdateInstance(ctx, &computev1.UpdateInstanceRequest{
 		RequestId:  requestUUID(m.Key, "detach"),
