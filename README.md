@@ -96,11 +96,20 @@ access key is in the `CreateAccessKey` response and nowhere else: console-api
 never logs, traces or keeps it. `CreateAccessKey` is never retried, because
 vws-iam does not replay it and a retry would create a second key; a third key
 for a user is `LimitExceeded`. `DeleteAccessKey` carries a `request_id` and
-is retried. `GetRole`,
+is retried.
+The user and group policy actions (`Attach`, `Detach`, `ListAttached`, `Put`,
+`Get`, `Delete` and `List` for `User` and `Group` policies) write the
+`attached_policies` or `inline_policies` field of the user or group under the
+etag they read, with a `request_id`, and read again when another writer won,
+for the entity at the authorized ARN only. A user or group holds at most 10
+managed policies, and its inline documents at most 2,048 (user) or 5,120
+(group) characters without white space. vws-iam accepts inline policy names
+of at most 64 characters, so a longer one, which AWS allows, is
+`ValidationError`. Policy documents never reach a log or a span. `GetRole`,
 `UpdateRole` and `UpdateRoleDescription` go to `RoleService`. IAM
-management actions that are not mapped to vws-iam yet (among them the user
-and group policy, `UpdateAccessKey` and login profile actions) answer
-`InvalidAction` in this mode.
+management actions that are not mapped to vws-iam yet (among them the role
+policy, `UpdateAccessKey` and login profile actions) answer `InvalidAction`
+in this mode.
 
 ```sh
 aws --endpoint-url http://127.0.0.1:8084 --region vws-1 iam create-user --user-name bob
