@@ -165,9 +165,9 @@ func AlreadyExists(kind Kind, id string) *Error {
 }
 
 // BucketOwnedMessage is the text S3 sends with BucketAlreadyOwnedByYou, from
-// the error code table of the S3 API Reference (API Version 2006-03-01,
-// https://awsdocs.s3.amazonaws.com/S3/latest/s3-api.pdf). The current
-// ErrorResponses page describes the code in other words.
+// the List of Error Codes in the S3 API Reference PDF (API Version
+// 2006-03-01). The current ErrorResponses page describes the code in other
+// words.
 const BucketOwnedMessage = "Your previous request to create the named bucket succeeded and you already own it."
 
 // BucketAlreadyOwned reports a bucket create for a name the caller already
