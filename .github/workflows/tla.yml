@@ -1,0 +1,46 @@
+# Model-checks docs/formal/detach.tla (the DetachVolume recovery path, #343)
+# when the spec or the code it models changes. See docs/formal/README.md.
+name: tla
+
+on:
+  pull_request:
+    paths:
+      - docs/formal/**
+      - scripts/tla-detach.sh
+      - .github/workflows/tla.yml
+      - internal/backend/grpcclient/ec2.go
+      - internal/backend/grpcclient/names.go
+      - internal/backend/backend.go
+  push:
+    branches: [main]
+    paths:
+      - docs/formal/**
+      - scripts/tla-detach.sh
+      - .github/workflows/tla.yml
+      - internal/backend/grpcclient/ec2.go
+      - internal/backend/grpcclient/names.go
+      - internal/backend/backend.go
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tla-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  detach:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/vws
+          key: tla2tools-1.8.0
+      - name: TLC passes the real design, fails every seeded bug and each known finding
+        run: scripts/tla-detach.sh
