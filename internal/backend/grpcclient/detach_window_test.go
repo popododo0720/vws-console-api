@@ -172,6 +172,38 @@ func pruneHeldForRecovery(t *testing.T) {
 	}
 }
 
+// Kept expired records still count toward compute's 64 labels: a write they
+// would push past it is the tag capacity error, not a truncated label map.
+func TestHeldDetachRecordsKeepTheLabelGuard(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0).UTC()
+	req := strings.Repeat("ef", 16)
+	expired := stampOf(now.Add(-backend.ClientTokenWindow - backend.ClientTokenGrace - time.Second))
+	raw := map[string]string{
+		labelDetachPrefix + "vol-pending": req + " /dev/sdz " + stampOf(now.Add(-time.Hour)),
+	}
+	for i := range 2 * backend.MaxDetachReplays {
+		vol := fmt.Sprintf("vol-held-%d", i)
+		raw[labelDetachPrefix+vol] = req + " /dev/sdf " + expired
+		raw[labelDetachOpPrefix+vol] = "0000000000000001 0123456789abcdef"
+	}
+	inst := resource.Instance{Tags: map[string]string{}}
+	for i := range resource.MaxTags {
+		inst.Tags[fmt.Sprintf("k%02d", i)] = "v"
+	}
+	_, err := instanceUpdateLabels(inst, raw, resource.ActionCreateTags, "fp", nil, now)
+	if resource.CodeOf(err) != resource.CodeInvalidArgument {
+		t.Fatalf("50 tags next to %d held records: %v, want the tag capacity error", 2*backend.MaxDetachReplays, err)
+	}
+	inst.Tags = map[string]string{"env": "prod"}
+	labels, err := instanceUpdateLabels(inst, raw, resource.ActionCreateTags, "fp", nil, now)
+	if err != nil {
+		t.Fatalf("one tag next to the held records: %v", err)
+	}
+	if _, ok := labels[labelDetachPrefix+"vol-held-0"]; !ok {
+		t.Fatal("a held record was dropped while the recovery is pending")
+	}
+}
+
 // capacityWorld is one running instance with a root volume and n data
 // volumes, behind a compute stub that enforces the label limits.
 func capacityWorld(

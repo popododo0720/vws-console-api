@@ -911,12 +911,16 @@ func parseDetachRecord(raw string) (requestHex, device string, at time.Time, sta
 // operation ids, that a retry may still need at now (#303). A record that
 // has expired (backend.ClientTokenExpired: more than the window and its
 // grace past the stamp) is dropped with its operation id: the request id it
-// would replay is past compute's window too. A record with no
+// would replay is past compute's window too. While a recovery is pending
+// (detachRecoveryPending), expired records are kept as stored: the pending
+// detach's retry resends its original update, which carried them, and must
+// match it byte for byte (#319 review). A record with no
 // stamp is stamped now, so its window starts at the first write that sees
 // it. A stamp ahead of now is clock skew and is kept. An operation id with
 // no record, and a value no request can match, are dropped. The result
 // depends only on raw and now, so pruning twice changes nothing.
 func pruneDetachRecords(raw map[string]string, now time.Time) map[string]string {
+	hold := detachRecoveryPending(raw, now)
 	out := map[string]string{}
 	for key, value := range raw {
 		volID, ok := strings.CutPrefix(key, labelDetachPrefix)
@@ -929,7 +933,7 @@ func pruneDetachRecords(raw map[string]string, now time.Time) map[string]string 
 		}
 		if !stamped {
 			value = detachRecordValue(requestHex, device, now)
-		} else if backend.ClientTokenExpired(at, now) {
+		} else if !hold && backend.ClientTokenExpired(at, now) {
 			continue
 		}
 		out[key] = value
@@ -940,6 +944,27 @@ func pruneDetachRecords(raw map[string]string, now time.Time) map[string]string 
 	return out
 }
 
+// detachRecoveryPending reports whether raw holds a detach record within the
+// window at now with no saved operation id: a detach whose operation id
+// write failed, so its retry resends the original update by request id. It
+// ends when that id is saved or the record expires.
+func detachRecoveryPending(raw map[string]string, now time.Time) bool {
+	for key, value := range raw {
+		volID, ok := strings.CutPrefix(key, labelDetachPrefix)
+		if !ok {
+			continue
+		}
+		_, _, at, stamped, ok := parseDetachRecord(value)
+		if !ok || (stamped && backend.ClientTokenExpired(at, now)) {
+			continue
+		}
+		if _, saved := raw[labelDetachOpPrefix+volID]; !saved {
+			return true
+		}
+	}
+	return false
+}
+
 // Every user tag EC2 allows and every detach record within the window fit
 // next to the internal labels, whose count withInternalLabels reserves: two
 // labels per record (vws-detach-, vws-dop-). The array length is negative,
@@ -948,12 +973,19 @@ var _ [labelMax - resource.MaxTags - labelReserve - 2*backend.MaxDetachReplays]s
 
 // detachRecordsInWindow counts the records a retry may still need at now,
 // apart from one for skipVolID, which a new detach of that volume replaces.
+// An expired record kept for a pending recovery is not within the window,
+// so it does not count toward backend.MaxDetachReplays.
 func detachRecordsInWindow(raw map[string]string, now time.Time, skipVolID string) int {
 	n := 0
-	for key := range pruneDetachRecords(raw, now) {
-		if volID, ok := strings.CutPrefix(key, labelDetachPrefix); ok && volID != skipVolID {
-			n++
+	for key, value := range pruneDetachRecords(raw, now) {
+		volID, ok := strings.CutPrefix(key, labelDetachPrefix)
+		if !ok || volID == skipVolID {
+			continue
 		}
+		if _, _, at, stamped, _ := parseDetachRecord(value); stamped && backend.ClientTokenExpired(at, now) {
+			continue
+		}
+		n++
 	}
 	return n
 }
