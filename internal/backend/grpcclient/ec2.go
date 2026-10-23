@@ -675,17 +675,9 @@ func (c computeClient) writeDetach(
 	if record != nil {
 		// The operation id saved for this volume belongs to the previous
 		// detach. Next to this request's record it would replay that detach,
-		// so it goes. This request's own id is written by persistDetachOp.
+		// so it goes (instanceUpdateLabels drops it on a new record). This
+		// request's own id is written by persistDetachOp.
 		delete(labels, labelDetachOpPrefix+vol.ID.String())
-		// That second write adds one label. Held expired records take labels
-		// without counting toward the budget, so a detach that fits now may
-		// not fit its operation id: refuse it here, before compute is
-		// called, so it changes nothing and a same-token retry is refused
-		// the same way until there is room (#322). A recovery resend is
-		// left alone: it replays a first write that already passed this.
-		if drop && len(labels)+1 > labelMax {
-			return zero, tagCapacityErr()
-		}
 	}
 	updated, callErr := c.instances.UpdateInstance(ctx, &computev1.UpdateInstanceRequest{
 		RequestId:  requestUUID(m.Key, "detach"),
@@ -837,13 +829,35 @@ func detachAttachTime(vol resource.Volume, inst resource.Instance) time.Time {
 // image, reservation, or launch labels instanceModel and RunInstances stored.
 // It carries the detach records over, pruned at now (pruneDetachRecords), so
 // every label write frees the room of records no retry can need any more.
+//
+// A record within the window with no saved operation id reserves the label
+// its id will take (pendingDetachOps), from the detach's first write until
+// persistDetachOp saves it. A write whose labels and reserved labels pass
+// compute's 64 is the tag capacity error and writes nothing, so a detach
+// refused for room changes nothing and no write in between can take the
+// label a detach already accepted needs (#322, #327 review). Saving the id
+// fills its own reserved label, so it is not checked again. A recovery
+// resend (instanceLabels) is not checked either: it replays a first write
+// that already passed.
 func instanceUpdateLabels(
 	inst resource.Instance, raw map[string]string, action resource.Action, fingerprint string,
 	record map[string]string, now time.Time,
 ) (map[string]string, error) {
 	records := pruneDetachRecords(raw, now)
+	for key := range record {
+		if volID, ok := strings.CutPrefix(key, labelDetachPrefix); ok {
+			delete(records, labelDetachOpPrefix+volID)
+		}
+	}
 	maps.Copy(records, record)
-	return instanceLabels(inst, raw, action, fingerprint, records)
+	labels, err := instanceLabels(inst, raw, action, fingerprint, records)
+	if err != nil {
+		return nil, err
+	}
+	if len(labels)+pendingDetachOps(records, now) > labelMax {
+		return nil, tagCapacityErr()
+	}
+	return labels, nil
 }
 
 // instanceLabels is instanceUpdateLabels with the detach records given as
@@ -966,7 +980,14 @@ func pruneDetachRecords(raw map[string]string, now time.Time) map[string]string 
 // Every stamped record was stamped after #303 was deployed, so after that
 // record was written: once a stamped record has expired, so has it (#322).
 func detachRecoveryPending(raw map[string]string, now time.Time) bool {
+	return pendingDetachOps(raw, now) > 0
+}
+
+// pendingDetachOps counts the records of raw that detachRecoveryPending
+// holds for: each still needs a label for its operation id.
+func pendingDetachOps(raw map[string]string, now time.Time) int {
 	aged := stampedRecordExpired(raw, now)
+	n := 0
 	for key, value := range raw {
 		volID, ok := strings.CutPrefix(key, labelDetachPrefix)
 		if !ok {
@@ -980,10 +1001,10 @@ func detachRecoveryPending(raw map[string]string, now time.Time) bool {
 			continue
 		}
 		if _, saved := raw[labelDetachOpPrefix+volID]; !saved {
-			return true
+			n++
 		}
 	}
-	return false
+	return n
 }
 
 // stampedRecordExpired reports whether raw holds a stamped detach record
