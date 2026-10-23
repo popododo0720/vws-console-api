@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/popododo0720/vws-console-api/internal/backend/backendtest"
 	"github.com/popododo0720/vws-console-api/internal/iam"
 	"github.com/popododo0720/vws-console-api/internal/resource"
 	"github.com/popododo0720/vws-console-api/internal/sigv4"
@@ -139,19 +140,35 @@ func TestListVirtualMFADevicesAuthorizes(t *testing.T) {
 	if _, err := f.CreateUser(ctx, root.Account, "bob", "/"); err != nil {
 		t.Fatal(err)
 	}
-	key, err := f.CreateAccessKey(ctx, root.Account, "bob", "")
+	key, err := f.CreateAccessKey(ctx, root.Account, "bob", backendtest.UserGrant(ctx, t, f, root.Account, "bob"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	bob := sigv4.Credential{AccessKey: key.AccessKeyID, Secret: key.Secret}
 	allowTags := `{"Statement":[{"Effect":"Allow","Action":"iam:ListMFADeviceTags","Resource":"*"}]}`
-	if err := f.PutInlinePolicy(ctx, root.Account, iam.EntityUser, "bob", "default", allowTags, ""); err != nil {
+	if err := f.PutInlinePolicy(
+		ctx,
+		root.Account,
+		iam.EntityUser,
+		"bob",
+		"default",
+		allowTags,
+		backendtest.EntityGrant(ctx, t, f, root.Account, iam.EntityUser, "bob"),
+	); err != nil {
 		t.Fatal(err)
 	}
 	has(t, call(t, h, bob, sigv4.ServiceIAM, url.Values{"Action": {"ListVirtualMFADevices"}}),
 		http.StatusForbidden, `<Code>AccessDenied</Code>`)
 	allowList := `{"Statement":[{"Effect":"Allow","Action":"iam:ListVirtualMFADevices","Resource":"*"}]}`
-	if err := f.PutInlinePolicy(ctx, root.Account, iam.EntityUser, "bob", "default", allowList, ""); err != nil {
+	if err := f.PutInlinePolicy(
+		ctx,
+		root.Account,
+		iam.EntityUser,
+		"bob",
+		"default",
+		allowList,
+		backendtest.EntityGrant(ctx, t, f, root.Account, iam.EntityUser, "bob"),
+	); err != nil {
 		t.Fatal(err)
 	}
 	has(t, call(t, h, bob, sigv4.ServiceIAM, url.Values{"Action": {"ListVirtualMFADevices"}}),
@@ -298,7 +315,7 @@ func TestListMFADevicesAuthorizes(t *testing.T) {
 	if err := f.AssignMfaDevice(root.Account, serial, "bob", now); err != nil {
 		t.Fatal(err)
 	}
-	key, err := f.CreateAccessKey(ctx, root.Account, "bob", "")
+	key, err := f.CreateAccessKey(ctx, root.Account, "bob", backendtest.UserGrant(ctx, t, f, root.Account, "bob"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -307,7 +324,15 @@ func TestListMFADevicesAuthorizes(t *testing.T) {
 	has(t, call(t, h, bob, sigv4.ServiceIAM, url.Values{"Action": {"ListMFADevices"}}),
 		http.StatusForbidden, `<Code>AccessDenied</Code>`)
 	allow := `{"Statement":[{"Effect":"Allow","Action":"iam:ListMFADevices","Resource":"*"}]}`
-	if err := f.PutInlinePolicy(ctx, root.Account, iam.EntityUser, "bob", "default", allow, ""); err != nil {
+	if err := f.PutInlinePolicy(
+		ctx,
+		root.Account,
+		iam.EntityUser,
+		"bob",
+		"default",
+		allow,
+		backendtest.EntityGrant(ctx, t, f, root.Account, iam.EntityUser, "bob"),
+	); err != nil {
 		t.Fatal(err)
 	}
 	has(t, call(t, h, bob, sigv4.ServiceIAM, url.Values{"Action": {"ListMFADevices"}}),
@@ -328,13 +353,21 @@ func TestListMFADevicesDefaultsToCaller(t *testing.T) {
 	if err := f.AssignMfaDevice(root.Account, serial, "bob", now); err != nil {
 		t.Fatal(err)
 	}
-	key, err := f.CreateAccessKey(ctx, root.Account, "bob", "")
+	key, err := f.CreateAccessKey(ctx, root.Account, "bob", backendtest.UserGrant(ctx, t, f, root.Account, "bob"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	bob := sigv4.Credential{AccessKey: key.AccessKeyID, Secret: key.Secret}
 	allow := `{"Statement":[{"Effect":"Allow","Action":"iam:ListMFADevices","Resource":"*"}]}`
-	if err := f.PutInlinePolicy(ctx, root.Account, iam.EntityUser, "bob", "default", allow, ""); err != nil {
+	if err := f.PutInlinePolicy(
+		ctx,
+		root.Account,
+		iam.EntityUser,
+		"bob",
+		"default",
+		allow,
+		backendtest.EntityGrant(ctx, t, f, root.Account, iam.EntityUser, "bob"),
+	); err != nil {
 		t.Fatal(err)
 	}
 	has(t, call(t, h, bob, sigv4.ServiceIAM, url.Values{"Action": {"ListMFADevices"}}),
@@ -363,7 +396,7 @@ func TestListMFADevicesIsScopedToTheUser(t *testing.T) {
 	if err := f.AssignMfaDevice(root.Account, bobPhone, "bob", now); err != nil {
 		t.Fatal(err)
 	}
-	key, err := f.CreateAccessKey(ctx, root.Account, "alice", "")
+	key, err := f.CreateAccessKey(ctx, root.Account, "alice", backendtest.UserGrant(ctx, t, f, root.Account, "alice"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -373,7 +406,15 @@ func TestListMFADevicesIsScopedToTheUser(t *testing.T) {
 	forBob := url.Values{"Action": {"ListMFADevices"}, "UserName": {"bob"}}
 	put := func(policy string) {
 		t.Helper()
-		if err := f.PutInlinePolicy(ctx, root.Account, iam.EntityUser, "alice", "list", policy, ""); err != nil {
+		if err := f.PutInlinePolicy(
+			ctx,
+			root.Account,
+			iam.EntityUser,
+			"alice",
+			"list",
+			policy,
+			backendtest.EntityGrant(ctx, t, f, root.Account, iam.EntityUser, "alice"),
+		); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -420,7 +461,7 @@ func TestListMFADevicesValidatesBeforeAuthorization(t *testing.T) {
 	if _, err := f.CreateUser(ctx, root.Account, "bob", "/"); err != nil {
 		t.Fatal(err)
 	}
-	key, err := f.CreateAccessKey(ctx, root.Account, "bob", "")
+	key, err := f.CreateAccessKey(ctx, root.Account, "bob", backendtest.UserGrant(ctx, t, f, root.Account, "bob"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -455,10 +496,18 @@ func TestListMFADevicesUnavailableLookupAuthorizesNothing(t *testing.T) {
 	policy := `{"Statement":[` +
 		`{"Effect":"Allow","Action":"iam:ListMFADevices","Resource":"` + users + `alice"},` +
 		`{"Effect":"Deny","Action":"iam:ListMFADevices","Resource":"` + users + `restricted/*"}]}`
-	if err := f.PutInlinePolicy(ctx, root.Account, iam.EntityUser, "bob", "list", policy, ""); err != nil {
+	if err := f.PutInlinePolicy(
+		ctx,
+		root.Account,
+		iam.EntityUser,
+		"bob",
+		"list",
+		policy,
+		backendtest.EntityGrant(ctx, t, f, root.Account, iam.EntityUser, "bob"),
+	); err != nil {
 		t.Fatal(err)
 	}
-	key, err := f.CreateAccessKey(ctx, root.Account, "bob", "")
+	key, err := f.CreateAccessKey(ctx, root.Account, "bob", backendtest.UserGrant(ctx, t, f, root.Account, "bob"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -493,7 +542,7 @@ func TestListMFADevicesActsOnTheAuthorizedARN(t *testing.T) {
 		has(t, call(t, h, bob, sigv4.ServiceIAM, form), http.StatusOK, `<SerialNumber>`+serial+`</SerialNumber>`)
 	})
 	t.Run("moved after authorization", func(t *testing.T) {
-		h, f, account, bob := authorizedARNHarness(t, &movingAdmin{user: "erin"})
+		h, f, account, bob := authorizedARNHarness(t, &movingAdmin{tb: t, user: "erin"})
 		serial := seed(t, f, account)
 		res := call(t, h, bob, sigv4.ServiceIAM, form)
 		has(t, res, http.StatusConflict, "<Code>ConcurrentModification</Code>")

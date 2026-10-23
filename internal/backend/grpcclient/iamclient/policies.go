@@ -30,8 +30,9 @@ import (
 // which vws-iam replays, so a retry on UNAVAILABLE applies it once. When
 // another writer moved the etag, it reads again, up to membershipAttempts
 // times, as group membership changes do. Every read, the first included,
-// must find the entity at a non-empty expectARN: one moved since the caller
-// was authorized is a ConcurrentModification, and nothing is written.
+// must find the entity at the AuthorizedARN: one moved since the caller was
+// authorized is a ConcurrentModification, and nothing is written. A zero
+// AuthorizedARN is Internal before anything is sent.
 //
 // The AWS rules are checked here, before vws-iam's: the PoliciesPerUser and
 // PoliciesPerGroup quotas, the policy grammar and the aggregate inline
@@ -124,9 +125,9 @@ func entityWord(kind iam.Entity) string {
 }
 
 // readHolder reads the user or group name of kind and checks it is still at
-// a non-empty expectARN.
+// the authorized ARN.
 func (a STSAdmin) readHolder(
-	ctx context.Context, account resource.AccountID, kind iam.Entity, name, expectARN string,
+	ctx context.Context, account resource.AccountID, kind iam.Entity, name string, want iam.AuthorizedARN,
 ) (policyHolder, error) {
 	if !entityName(name) {
 		return policyHolder{}, entityNotFound(entityWord(kind), name)
@@ -148,10 +149,23 @@ func (a STSAdmin) readHolder(
 		h = policyHolder{raw.GetName(), raw.GetEtag(), raw.GetSpec().GetAttachedPolicies(), raw.GetSpec().GetInlinePolicies()}
 		arn = u.ARN
 	}
-	if stale(arn, expectARN) {
-		return policyHolder{}, iam.ChangedFor(kind)
+	if err := want.Bind(arn, changedMessage(kind)); err != nil {
+		return policyHolder{}, err
 	}
 	return h, nil
+}
+
+// changedMessage is the ConcurrentModification message of a policy call on
+// kind.
+func changedMessage(kind iam.Entity) string {
+	switch kind {
+	case iam.EntityGroup:
+		return iam.GroupChanged
+	case iam.EntityRole:
+		return iam.RoleChanged
+	case iam.EntityUser:
+	}
+	return iam.UserChanged
 }
 
 // writeHolder writes one policy field of h under its etag.
@@ -183,14 +197,14 @@ func (a STSAdmin) writeHolder(ctx context.Context, kind iam.Entity, name string,
 // changePolicies reads the holder, asks change for the new field and writes
 // it, reading again when another writer won, as changeMembers does.
 func (a STSAdmin) changePolicies(
-	ctx context.Context, account resource.AccountID, kind iam.Entity, name, expectARN string,
+	ctx context.Context, account resource.AccountID, kind iam.Entity, name string, want iam.AuthorizedARN,
 	change func(ctx context.Context, h policyHolder) (policyChange, error),
 ) error {
 	ctx, cancel := context.WithTimeout(ctx, OperationTimeout)
 	defer cancel()
 	var lost error
 	for range membershipAttempts {
-		h, err := a.readHolder(ctx, account, kind, name, expectARN)
+		h, err := a.readHolder(ctx, account, kind, name, want)
 		if err != nil {
 			return err
 		}
@@ -217,8 +231,11 @@ func attachedIndex(attached []string, resourceName string) int {
 // attached policy is a no-op; one more than MaxAttachedPolicies is
 // LimitExceeded.
 func (a STSAdmin) AttachPolicy(
-	ctx context.Context, account resource.AccountID, kind iam.Entity, name, arn, expectARN string,
+	ctx context.Context, account resource.AccountID, kind iam.Entity, name, arn string, want iam.AuthorizedARN,
 ) (err error) {
+	if err := want.Require(); err != nil {
+		return err
+	}
 	if kind == iam.EntityRole {
 		return notServed("AttachRolePolicy")
 	}
@@ -237,14 +254,17 @@ func (a STSAdmin) AttachPolicy(
 		}
 		return policyChange{mask: "spec.attached_policies", attached: append(slices.Clone(h.attached), p)}, nil
 	}
-	return a.changePolicies(ctx, account, kind, name, expectARN, change)
+	return a.changePolicies(ctx, account, kind, name, want, change)
 }
 
 // DetachPolicy implements iam.Admin on spec.attached_policies. A policy that
 // is not attached is NoSuchEntity, as in AWS.
 func (a STSAdmin) DetachPolicy(
-	ctx context.Context, account resource.AccountID, kind iam.Entity, name, arn, expectARN string,
+	ctx context.Context, account resource.AccountID, kind iam.Entity, name, arn string, want iam.AuthorizedARN,
 ) (err error) {
+	if err := want.Require(); err != nil {
+		return err
+	}
 	if kind == iam.EntityRole {
 		return notServed("DetachRolePolicy")
 	}
@@ -261,17 +281,20 @@ func (a STSAdmin) DetachPolicy(
 		}
 		return policyChange{mask: "spec.attached_policies", attached: slices.Delete(slices.Clone(h.attached), i, i+1)}, nil
 	}
-	return a.changePolicies(ctx, account, kind, name, expectARN, change)
+	return a.changePolicies(ctx, account, kind, name, want, change)
 }
 
 // ListAttachedPolicies implements iam.Admin: the attached policies of the
 // user or group, each read with PolicyService.GetPolicy, sorted by name. A
-// policy vws-iam no longer has is left out. A non-empty expectARN must be
+// policy vws-iam no longer has is left out. The AuthorizedARN must be
 // the entity's ARN when it is read before the policies and again after
 // them, as in ListAccessKeys.
 func (a STSAdmin) ListAttachedPolicies(
-	ctx context.Context, account resource.AccountID, kind iam.Entity, name, expectARN string,
+	ctx context.Context, account resource.AccountID, kind iam.Entity, name string, want iam.AuthorizedARN,
 ) (out []iam.ManagedPolicy, err error) {
+	if err := want.Require(); err != nil {
+		return nil, err
+	}
 	if kind == iam.EntityRole {
 		return nil, notServed("ListAttachedRolePolicies")
 	}
@@ -279,7 +302,7 @@ func (a STSAdmin) ListAttachedPolicies(
 	defer func() { end(err) }()
 	ctx, cancel := context.WithTimeout(ctx, OperationTimeout)
 	defer cancel()
-	h, err := a.readHolder(ctx, account, kind, name, expectARN)
+	h, err := a.readHolder(ctx, account, kind, name, want)
 	if err != nil {
 		return nil, err
 	}
@@ -298,7 +321,7 @@ func (a STSAdmin) ListAttachedPolicies(
 		}
 		out = append(out, managedFromProto(p))
 	}
-	if _, err := a.readHolder(ctx, account, kind, name, expectARN); err != nil {
+	if _, err := a.readHolder(ctx, account, kind, name, want); err != nil {
 		return nil, err
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
@@ -328,8 +351,12 @@ func managedFromProto(p *iamv1.Policy) iam.ManagedPolicy {
 // the AWS aggregate inline size. Putting the same document again writes
 // nothing.
 func (a STSAdmin) PutInlinePolicy(
-	ctx context.Context, account resource.AccountID, kind iam.Entity, name, policy, document, expectARN string,
+	ctx context.Context, account resource.AccountID, kind iam.Entity, name, policy, document string,
+	want iam.AuthorizedARN,
 ) (err error) {
+	if err := want.Require(); err != nil {
+		return err
+	}
 	if kind == iam.EntityRole {
 		return notServed("PutRolePolicy")
 	}
@@ -358,19 +385,22 @@ func (a STSAdmin) PutInlinePolicy(
 		}
 		return policyChange{mask: "spec.inline_policies", inline: next}, nil
 	}
-	return a.changePolicies(ctx, account, kind, name, expectARN, change)
+	return a.changePolicies(ctx, account, kind, name, want, change)
 }
 
 // GetInlinePolicy implements iam.Admin: the document as stored.
 func (a STSAdmin) GetInlinePolicy(
-	ctx context.Context, account resource.AccountID, kind iam.Entity, name, policy, expectARN string,
+	ctx context.Context, account resource.AccountID, kind iam.Entity, name, policy string, want iam.AuthorizedARN,
 ) (doc string, err error) {
+	if err := want.Require(); err != nil {
+		return "", err
+	}
 	if kind == iam.EntityRole {
 		return "", notServed("GetRolePolicy")
 	}
 	ctx, end := a.observePolicy(ctx, policyAction("Get", kind, "Policy"), false, account, kind, name, policy, "")
 	defer func() { end(err) }()
-	h, err := a.readHolder(ctx, account, kind, name, expectARN)
+	h, err := a.readHolder(ctx, account, kind, name, want)
 	if err != nil {
 		return "", err
 	}
@@ -384,8 +414,11 @@ func (a STSAdmin) GetInlinePolicy(
 // DeleteInlinePolicy implements iam.Admin on spec.inline_policies. A policy
 // the entity does not have is NoSuchEntity.
 func (a STSAdmin) DeleteInlinePolicy(
-	ctx context.Context, account resource.AccountID, kind iam.Entity, name, policy, expectARN string,
+	ctx context.Context, account resource.AccountID, kind iam.Entity, name, policy string, want iam.AuthorizedARN,
 ) (err error) {
+	if err := want.Require(); err != nil {
+		return err
+	}
 	if kind == iam.EntityRole {
 		return notServed("DeleteRolePolicy")
 	}
@@ -399,19 +432,22 @@ func (a STSAdmin) DeleteInlinePolicy(
 		delete(next, policy)
 		return policyChange{mask: "spec.inline_policies", inline: next}, nil
 	}
-	return a.changePolicies(ctx, account, kind, name, expectARN, change)
+	return a.changePolicies(ctx, account, kind, name, want, change)
 }
 
 // ListInlinePolicies implements iam.Admin: the inline policy names, sorted.
 func (a STSAdmin) ListInlinePolicies(
-	ctx context.Context, account resource.AccountID, kind iam.Entity, name, expectARN string,
+	ctx context.Context, account resource.AccountID, kind iam.Entity, name string, want iam.AuthorizedARN,
 ) (out []string, err error) {
+	if err := want.Require(); err != nil {
+		return nil, err
+	}
 	if kind == iam.EntityRole {
 		return nil, notServed("ListRolePolicies")
 	}
 	ctx, end := a.observePolicy(ctx, policyAction("List", kind, "Policies"), false, account, kind, name, "", "")
 	defer func() { end(err) }()
-	h, err := a.readHolder(ctx, account, kind, name, expectARN)
+	h, err := a.readHolder(ctx, account, kind, name, want)
 	if err != nil {
 		return nil, err
 	}

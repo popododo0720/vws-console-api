@@ -38,7 +38,7 @@ func TestFakeGetMFADevice(t *testing.T) {
 	notFound("enabled virtual device", a, virtual)
 	notFound("FIDO security key", a, "arn:vws:iam::"+a.String()+":u2f/alice/testFidoKey-R1234")
 	notFound("unknown serial", a, "arn:vws:iam::"+a.String()+":mfa/ghost")
-	if err := f.UpdateUser(ctx, a, "alice", "", "alicia", ""); err != nil {
+	if err := f.UpdateUser(ctx, a, "alice", "", "alicia", testUserGrant(ctx, t, f, a, "alice")); err != nil {
 		t.Fatal(err)
 	}
 	notFound("renamed owner", a, virtual)

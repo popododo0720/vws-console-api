@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/popododo0720/vws-console-api/internal/backend/backendtest"
 	"github.com/popododo0720/vws-console-api/internal/iam"
 	"github.com/popododo0720/vws-console-api/internal/resource"
 	"github.com/popododo0720/vws-console-api/internal/sigv4"
@@ -130,7 +131,7 @@ func TestCallerActionsAuthorizeOnTheCallerWithoutALookup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	k, err := f.CreateAccessKey(ctx, root.Account, "bob", "")
+	k, err := f.CreateAccessKey(ctx, root.Account, "bob", backendtest.UserGrant(ctx, t, f, root.Account, "bob"))
 	if err != nil {
 		t.Fatal(err)
 	}

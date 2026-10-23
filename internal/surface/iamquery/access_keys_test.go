@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/popododo0720/vws-console-api/internal/backend/backendtest"
 	"github.com/popododo0720/vws-console-api/internal/iam"
 	"github.com/popododo0720/vws-console-api/internal/resource"
 	"github.com/popododo0720/vws-console-api/internal/sigv4"
@@ -14,7 +15,7 @@ import (
 
 func keysOf(t *testing.T, f *iam.Fake, account resource.AccountID, user string) int {
 	t.Helper()
-	ks, err := f.ListAccessKeys(t.Context(), account, user, "")
+	ks, err := f.ListAccessKeys(t.Context(), account, user, backendtest.UserGrant(t.Context(), t, f, account, user))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,11 +72,11 @@ func TestAccessKeyCallsActOnTheAuthorizedARN(t *testing.T) {
 			var mover *movingAdmin
 			if moved {
 				name = tc.name + "/moved after authorization"
-				mover = &movingAdmin{user: tc.user}
+				mover = &movingAdmin{tb: t, user: tc.user}
 			}
 			t.Run(name, func(t *testing.T) {
 				h, f, account, bob := authorizedARNHarness(t, mover)
-				k, err := f.CreateAccessKey(t.Context(), account, "erin", "")
+				k, err := f.CreateAccessKey(t.Context(), account, "erin", backendtest.UserGrant(t.Context(), t, f, account, "erin"))
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -95,11 +96,11 @@ func TestAccessKeyCallsActOnTheAuthorizedARN(t *testing.T) {
 // takes no PathPrefix, and DeleteAccessKey checks the AccessKeyId pattern.
 func TestAccessKeyPagingAndValidation(t *testing.T) {
 	h, f, account, bob := authorizedARNHarness(t, nil)
-	k1, err := f.CreateAccessKey(t.Context(), account, "carol", "")
+	k1, err := f.CreateAccessKey(t.Context(), account, "carol", backendtest.UserGrant(t.Context(), t, f, account, "carol"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	k2, err := f.CreateAccessKey(t.Context(), account, "carol", "")
+	k2, err := f.CreateAccessKey(t.Context(), account, "carol", backendtest.UserGrant(t.Context(), t, f, account, "carol"))
 	if err != nil {
 		t.Fatal(err)
 	}

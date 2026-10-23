@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/popododo0720/vws-console-api/internal/backend/backendtest"
 	"github.com/popododo0720/vws-console-api/internal/iam"
 	"github.com/popododo0720/vws-console-api/internal/sigv4"
 )
@@ -220,10 +221,12 @@ func TestMFADeviceTagNeedsListPermission(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := f.PutInlinePolicy(ctx, root.Account, iam.EntityUser, "bob", "tag",
-		`{"Statement":[{"Effect":"Allow","Action":["iam:TagMFADevice"],"Resource":"*"}]}`, ""); err != nil {
+		`{"Statement":[{"Effect":"Allow","Action":["iam:TagMFADevice"],"Resource":"*"}]}`, backendtest.EntityGrant(
+			ctx, t, f, root.Account, iam.EntityUser, "bob",
+		)); err != nil {
 		t.Fatal(err)
 	}
-	k, err := f.CreateAccessKey(ctx, root.Account, "bob", "")
+	k, err := f.CreateAccessKey(ctx, root.Account, "bob", backendtest.UserGrant(ctx, t, f, root.Account, "bob"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -235,13 +238,23 @@ func TestMFADeviceTagNeedsListPermission(t *testing.T) {
 	has(t, call(t, h, bob, sigv4.ServiceIAM, tag), http.StatusForbidden, `<Code>AccessDenied</Code>`)
 	// Removing tags needs iam:UntagMFADevice only; the list permission is not required.
 	if err := f.PutInlinePolicy(ctx, root.Account, iam.EntityUser, "bob", "untag",
-		`{"Statement":[{"Effect":"Allow","Action":["iam:UntagMFADevice"],"Resource":"*"}]}`, ""); err != nil {
+		`{"Statement":[{"Effect":"Allow","Action":["iam:UntagMFADevice"],"Resource":"*"}]}`, backendtest.EntityGrant(
+			ctx, t, f, root.Account, iam.EntityUser, "bob",
+		)); err != nil {
 		t.Fatal(err)
 	}
 	untag := url.Values{"Action": {"UntagMFADevice"}, "SerialNumber": {serial}, "TagKeys.member.1": {"k"}}
 	has(t, call(t, h, bob, sigv4.ServiceIAM, untag), http.StatusOK, `<UntagMFADeviceResponse>`)
 	tagAndList := `{"Statement":[{"Effect":"Allow","Action":["iam:TagMFADevice","iam:ListMFADeviceTags"],"Resource":"*"}]}`
-	if err := f.PutInlinePolicy(ctx, root.Account, iam.EntityUser, "bob", "tag", tagAndList, ""); err != nil {
+	if err := f.PutInlinePolicy(
+		ctx,
+		root.Account,
+		iam.EntityUser,
+		"bob",
+		"tag",
+		tagAndList,
+		backendtest.EntityGrant(ctx, t, f, root.Account, iam.EntityUser, "bob"),
+	); err != nil {
 		t.Fatal(err)
 	}
 	has(t, call(t, h, bob, sigv4.ServiceIAM, tag), http.StatusOK, `<TagMFADeviceResponse>`)
@@ -296,13 +309,29 @@ func TestMFADeviceTagSerialVariantsStayInScope(t *testing.T) {
 	actions := `["iam:TagMFADevice","iam:UntagMFADevice","iam:ListMFADeviceTags"]`
 	allow := `{"Statement":[{"Effect":"Allow","Action":` + actions + `,"Resource":"*"}]}`
 	deny := `{"Statement":[{"Effect":"Deny","Action":` + actions + `,"Resource":"` + serial + `"}]}`
-	if err := f.PutInlinePolicy(ctx, root.Account, iam.EntityUser, "bob", "allow", allow, ""); err != nil {
+	if err := f.PutInlinePolicy(
+		ctx,
+		root.Account,
+		iam.EntityUser,
+		"bob",
+		"allow",
+		allow,
+		backendtest.EntityGrant(ctx, t, f, root.Account, iam.EntityUser, "bob"),
+	); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.PutInlinePolicy(ctx, root.Account, iam.EntityUser, "bob", "deny", deny, ""); err != nil {
+	if err := f.PutInlinePolicy(
+		ctx,
+		root.Account,
+		iam.EntityUser,
+		"bob",
+		"deny",
+		deny,
+		backendtest.EntityGrant(ctx, t, f, root.Account, iam.EntityUser, "bob"),
+	); err != nil {
 		t.Fatal(err)
 	}
-	k, err := f.CreateAccessKey(ctx, root.Account, "bob", "")
+	k, err := f.CreateAccessKey(ctx, root.Account, "bob", backendtest.UserGrant(ctx, t, f, root.Account, "bob"))
 	if err != nil {
 		t.Fatal(err)
 	}

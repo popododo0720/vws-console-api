@@ -18,6 +18,7 @@ import (
 
 	iamv1 "github.com/popododo0720/vws-proto/gen/go/vws/iam/v1"
 
+	"github.com/popododo0720/vws-console-api/internal/backend/backendtest"
 	"github.com/popododo0720/vws-console-api/internal/iam"
 	"github.com/popododo0720/vws-console-api/internal/resource"
 )
@@ -53,7 +54,9 @@ func TestEntityPolicyRequestsOverGRPC(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := a.AttachPolicy(ctx, account314, iam.EntityUser, "bob", ops, ""); err != nil {
+	if err := a.AttachPolicy(
+		ctx, account314, iam.EntityUser, "bob", ops, backendtest.EntityGrant(ctx, t, a, account314, iam.EntityUser, "bob"),
+	); err != nil {
 		t.Fatal(err)
 	}
 	ws := policyWrites(d)
@@ -66,16 +69,42 @@ func TestEntityPolicyRequestsOverGRPC(t *testing.T) {
 		!slices.Equal(w.GetUser().GetSpec().GetAttachedPolicies(), []string{"projects/123456789012/policies/Ops"}) {
 		t.Errorf("UpdateUser %v", w)
 	}
-	if err := a.AttachPolicy(ctx, account314, iam.EntityUser, "bob", ops, ""); err != nil {
+	if err := a.AttachPolicy(
+		ctx, account314, iam.EntityUser, "bob", ops, backendtest.EntityGrant(ctx, t, a, account314, iam.EntityUser, "bob"),
+	); err != nil {
 		t.Fatal(err)
 	}
-	if err := a.PutInlinePolicy(ctx, account314, iam.EntityGroup, "devs", "s3", policyDoc314, ""); err != nil {
+	if err := a.PutInlinePolicy(
+		ctx,
+		account314,
+		iam.EntityGroup,
+		"devs",
+		"s3",
+		policyDoc314,
+		backendtest.EntityGrant(ctx, t, a, account314, iam.EntityGroup, "devs"),
+	); err != nil {
 		t.Fatal(err)
 	}
-	if err := a.PutInlinePolicy(ctx, account314, iam.EntityGroup, "devs", "ec2", policyDoc314, ""); err != nil {
+	if err := a.PutInlinePolicy(
+		ctx,
+		account314,
+		iam.EntityGroup,
+		"devs",
+		"ec2",
+		policyDoc314,
+		backendtest.EntityGrant(ctx, t, a, account314, iam.EntityGroup, "devs"),
+	); err != nil {
 		t.Fatal(err)
 	}
-	if err := a.PutInlinePolicy(ctx, account314, iam.EntityGroup, "devs", "ec2", policyDoc314, ""); err != nil {
+	if err := a.PutInlinePolicy(
+		ctx,
+		account314,
+		iam.EntityGroup,
+		"devs",
+		"ec2",
+		policyDoc314,
+		backendtest.EntityGrant(ctx, t, a, account314, iam.EntityGroup, "devs"),
+	); err != nil {
 		t.Fatal(err)
 	}
 	ws = policyWrites(d)
@@ -101,7 +130,9 @@ func TestEntityPolicyChangesRetrySafely(t *testing.T) {
 		d.mu.Lock()
 		d.failAfter["UpdateUser"] = 1
 		d.mu.Unlock()
-		if err := a.AttachPolicy(ctx, account314, iam.EntityUser, "bob", ops, ""); err != nil {
+		if err := a.AttachPolicy(
+			ctx, account314, iam.EntityUser, "bob", ops, backendtest.EntityGrant(ctx, t, a, account314, iam.EntityUser, "bob"),
+		); err != nil {
 			t.Fatal(err)
 		}
 		ws := policyWrites(d)
@@ -109,7 +140,9 @@ func TestEntityPolicyChangesRetrySafely(t *testing.T) {
 			ws[0].(*iamv1.UpdateUserRequest).GetRequestId() != ws[1].(*iamv1.UpdateUserRequest).GetRequestId() {
 			t.Fatalf("writes %v, want one request sent twice", ws)
 		}
-		ps, err := a.ListAttachedPolicies(ctx, account314, iam.EntityUser, "bob", "")
+		ps, err := a.ListAttachedPolicies(
+			ctx, account314, iam.EntityUser, "bob", backendtest.EntityGrant(ctx, t, a, account314, iam.EntityUser, "bob"),
+		)
 		if err != nil || len(ps) != 1 {
 			t.Fatalf("attached %+v %v", ps, err)
 		}
@@ -119,7 +152,15 @@ func TestEntityPolicyChangesRetrySafely(t *testing.T) {
 		d.mu.Lock()
 		d.policyRace = 1
 		d.mu.Unlock()
-		if err := a.PutInlinePolicy(ctx, account314, iam.EntityUser, "bob", "s3", policyDoc314, ""); err != nil {
+		if err := a.PutInlinePolicy(
+			ctx,
+			account314,
+			iam.EntityUser,
+			"bob",
+			"s3",
+			policyDoc314,
+			backendtest.EntityGrant(ctx, t, a, account314, iam.EntityUser, "bob"),
+		); err != nil {
 			t.Fatal(err)
 		}
 		ws := policyWrites(d)
@@ -134,18 +175,35 @@ func TestEntityPolicyChangesRetrySafely(t *testing.T) {
 		d.mu.Lock()
 		d.policyRace = membershipAttempts
 		d.mu.Unlock()
-		err := a.DeleteInlinePolicy(ctx, account314, iam.EntityGroup, "devs", "s3", "")
+		err := a.DeleteInlinePolicy(
+			ctx,
+			account314,
+			iam.EntityGroup,
+			"devs",
+			"s3",
+			backendtest.EntityGrant(ctx, t, a, account314, iam.EntityGroup, "devs"),
+		)
 		if resource.CodeOf(err) != resource.CodeNotFound {
 			t.Fatalf("Delete of a missing policy: %v", err)
 		}
-		err = a.PutInlinePolicy(ctx, account314, iam.EntityGroup, "devs", "s3", policyDoc314, "")
+		err = a.PutInlinePolicy(
+			ctx,
+			account314,
+			iam.EntityGroup,
+			"devs",
+			"s3",
+			policyDoc314,
+			backendtest.EntityGrant(ctx, t, a, account314, iam.EntityGroup, "devs"),
+		)
 		if resource.CodeOf(err) != resource.CodeUnavailable {
 			t.Fatalf("Put: %v, want Unavailable", err)
 		}
 		if n := len(policyWrites(d)); n != membershipAttempts {
 			t.Errorf("%d writes, want %d", n, membershipAttempts)
 		}
-		ns, err := a.ListInlinePolicies(ctx, account314, iam.EntityGroup, "devs", "")
+		ns, err := a.ListInlinePolicies(
+			ctx, account314, iam.EntityGroup, "devs", backendtest.EntityGrant(ctx, t, a, account314, iam.EntityGroup, "devs"),
+		)
 		if err != nil || len(ns) != 0 {
 			t.Fatalf("inline %q %v", ns, err)
 		}
@@ -156,7 +214,9 @@ func TestEntityPolicyChangesRetrySafely(t *testing.T) {
 		d.mu.Lock()
 		d.policyRace, d.policyRacePath = 1, "/denied/"
 		d.mu.Unlock()
-		err := a.AttachPolicy(ctx, account314, iam.EntityUser, "bob", ops, "arn:vws:iam::123456789012:user/eng/bob")
+		err := a.AttachPolicy(
+			ctx, account314, iam.EntityUser, "bob", ops, backendtest.Grant(ctx, t, "arn:vws:iam::123456789012:user/eng/bob"),
+		)
 		if !iam.IsChanged(err) {
 			t.Fatalf("Attach: %v, want ConcurrentModification", err)
 		}
@@ -172,7 +232,13 @@ func TestEntityPolicyChangesRetrySafely(t *testing.T) {
 		short, cancel := context.WithTimeout(ctx, 50*time.Millisecond)
 		defer cancel()
 		start := time.Now()
-		_, err := a.ListInlinePolicies(short, account314, iam.EntityGroup, "devs", "")
+		_, err := a.ListInlinePolicies(
+			short,
+			account314,
+			iam.EntityGroup,
+			"devs",
+			backendtest.EntityGrant(short, t, a, account314, iam.EntityGroup, "devs"),
+		)
 		if resource.CodeOf(err) != resource.CodeUnavailable || time.Since(start) > 2*time.Second {
 			t.Fatalf("ListInlinePolicies: %v after %v", err, time.Since(start))
 		}
@@ -186,7 +252,15 @@ func TestEntityPolicyVWSIAMLimits(t *testing.T) {
 	ctx := t.Context()
 	a, d := seeded(ctx, t)
 	long := strings.Repeat("p", 65)
-	err := a.PutInlinePolicy(ctx, account314, iam.EntityUser, "bob", long, policyDoc314, "")
+	err := a.PutInlinePolicy(
+		ctx,
+		account314,
+		iam.EntityUser,
+		"bob",
+		long,
+		policyDoc314,
+		backendtest.EntityGrant(ctx, t, a, account314, iam.EntityUser, "bob"),
+	)
 	if resource.CodeOf(err) != resource.CodeInvalidArgument || resource.AsError(err).Field != "policyName" ||
 		!strings.Contains(err.Error(), "64") {
 		t.Fatalf("Put with a 65 character name: %v", err)
@@ -195,26 +269,57 @@ func TestEntityPolicyVWSIAMLimits(t *testing.T) {
 		t.Fatalf("%d writes for a name vws-iam refuses", n)
 	}
 	noVersion := `{"Statement":[{"Effect":"Allow","Action":"s3:GetObject","Resource":"*"}]}`
-	err = a.PutInlinePolicy(ctx, account314, iam.EntityUser, "bob", "nov", noVersion, "")
+	err = a.PutInlinePolicy(
+		ctx,
+		account314,
+		iam.EntityUser,
+		"bob",
+		"nov",
+		noVersion,
+		backendtest.EntityGrant(ctx, t, a, account314, iam.EntityUser, "bob"),
+	)
 	if resource.CodeOf(err) != resource.CodeInvalidArgument || resource.AsError(err).Field != "PolicyDocument" {
 		t.Fatalf("Put without Version: %v", err)
 	}
 	gone := d.seedPolicy("Gone", "/")
 	kept := d.seedPolicy("Kept", "/")
 	for _, p := range []string{gone, kept} {
-		if err := a.AttachPolicy(ctx, account314, iam.EntityGroup, "devs", p, ""); err != nil {
+		if err := a.AttachPolicy(
+			ctx, account314, iam.EntityGroup, "devs", p, backendtest.EntityGrant(ctx, t, a, account314, iam.EntityGroup, "devs"),
+		); err != nil {
 			t.Fatal(err)
 		}
 	}
 	d.dropPolicy("Gone")
-	ps, err := a.ListAttachedPolicies(ctx, account314, iam.EntityGroup, "devs", "")
+	ps, err := a.ListAttachedPolicies(
+		ctx, account314, iam.EntityGroup, "devs", backendtest.EntityGrant(ctx, t, a, account314, iam.EntityGroup, "devs"),
+	)
 	if err != nil || len(ps) != 1 || ps[0].ARN != kept || ps[0].Path != "/" || ps[0].Name != "Kept" {
 		t.Fatalf("attached %+v %v", ps, err)
 	}
 	for _, call := range []func() error{
-		func() error { return a.AttachPolicy(ctx, account314, iam.EntityRole, "r", kept, "") },
-		func() error { return a.PutInlinePolicy(ctx, account314, iam.EntityRole, "r", "p", policyDoc314, "") },
-		func() error { _, err := a.ListInlinePolicies(ctx, account314, iam.EntityRole, "r", ""); return err },
+		func() error {
+			return a.AttachPolicy(
+				ctx, account314, iam.EntityRole, "r", kept, backendtest.EntityGrant(ctx, t, a, account314, iam.EntityRole, "r"),
+			)
+		},
+		func() error {
+			return a.PutInlinePolicy(
+				ctx,
+				account314,
+				iam.EntityRole,
+				"r",
+				"p",
+				policyDoc314,
+				backendtest.EntityGrant(ctx, t, a, account314, iam.EntityRole, "r"),
+			)
+		},
+		func() error {
+			_, err := a.ListInlinePolicies(
+				ctx, account314, iam.EntityRole, "r", backendtest.EntityGrant(ctx, t, a, account314, iam.EntityRole, "r"),
+			)
+			return err
+		},
 	} {
 		if err := call(); resource.CodeOf(err) != resource.CodeUnimplemented {
 			t.Errorf("a role policy call: %v, want Unimplemented", err)
@@ -238,17 +343,47 @@ func TestEntityPolicyCallsAreTracedAndLoggedWithoutDocuments(t *testing.T) {
 	marker := "arn:vws:s3:::document-marker-314"
 	doc := strings.Replace(policyDoc314, `"*"`, `"`+marker+`"`, 1)
 	buf.Reset()
-	if err := a.PutInlinePolicy(ctx, account314, iam.EntityUser, "tracy", "s3", doc, ""); err != nil {
+	if err := a.PutInlinePolicy(
+		ctx,
+		account314,
+		iam.EntityUser,
+		"tracy",
+		"s3",
+		doc,
+		backendtest.EntityGrant(ctx, t, a, account314, iam.EntityUser, "tracy"),
+	); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := a.GetInlinePolicy(ctx, account314, iam.EntityUser, "tracy", "s3", ""); err != nil {
+	if _, err := a.GetInlinePolicy(
+		ctx,
+		account314,
+		iam.EntityUser,
+		"tracy",
+		"s3",
+		backendtest.EntityGrant(ctx, t, a, account314, iam.EntityUser, "tracy"),
+	); err != nil {
 		t.Fatal(err)
 	}
-	if err := a.AttachPolicy(ctx, account314, iam.EntityUser, "tracy", ops, ""); err != nil {
+	if err := a.AttachPolicy(
+		ctx,
+		account314,
+		iam.EntityUser,
+		"tracy",
+		ops,
+		backendtest.EntityGrant(ctx, t, a, account314, iam.EntityUser, "tracy"),
+	); err != nil {
 		t.Fatal(err)
 	}
 	bad := strings.Replace(doc, `"Allow"`, `"Maybe"`, 1)
-	if err := a.PutInlinePolicy(ctx, account314, iam.EntityUser, "tracy", "bad", bad, ""); err == nil {
+	if err := a.PutInlinePolicy(
+		ctx,
+		account314,
+		iam.EntityUser,
+		"tracy",
+		"bad",
+		bad,
+		backendtest.EntityGrant(ctx, t, a, account314, iam.EntityUser, "tracy"),
+	); err == nil {
 		t.Fatal("a malformed document was stored")
 	}
 	if strings.Contains(buf.String(), "document-marker-314") {
@@ -437,10 +572,12 @@ func TestListAttachedPoliciesRereadsTheEntityOverGRPC(t *testing.T) {
 			if kind == iam.EntityGroup {
 				name, arn, entities = "devs", "arn:vws:iam::123456789012:group/team/devs", d.groups
 			}
-			if err := a.AttachPolicy(ctx, account314, kind, name, ops, arn); err != nil {
+			if err := a.AttachPolicy(ctx, account314, kind, name, ops, backendtest.Grant(ctx, t, arn)); err != nil {
 				t.Fatal(err)
 			}
-			if ps, err := a.ListAttachedPolicies(ctx, account314, kind, name, arn); err != nil || len(ps) != 1 {
+			if ps, err := a.ListAttachedPolicies(
+				ctx, account314, kind, name, backendtest.Grant(ctx, t, arn),
+			); err != nil || len(ps) != 1 {
 				t.Fatalf("before the move: %v, %v", ps, err)
 			}
 			d.mu.Lock()
@@ -453,7 +590,7 @@ func TestListAttachedPoliciesRereadsTheEntityOverGRPC(t *testing.T) {
 				d.onGetPolicy = nil
 			}
 			d.mu.Unlock()
-			ps, err := a.ListAttachedPolicies(ctx, account314, kind, name, arn)
+			ps, err := a.ListAttachedPolicies(ctx, account314, kind, name, backendtest.Grant(ctx, t, arn))
 			if !iam.IsChanged(err) || len(ps) != 0 {
 				t.Fatalf("moved while its policies were read: %v, %v", ps, err)
 			}
@@ -484,7 +621,7 @@ func TestEntityPolicyCallsActOnTheAuthorizedARNOverGRPC(t *testing.T) {
 		{url.Values{"Action": {"ListAttachedUserPolicies"}, "UserName": {"erin"}}, "", "erin"},
 	} {
 		t.Run(tc.form.Get("Action"), func(t *testing.T) {
-			mover := &movingAdmin{group: tc.group, user: tc.user}
+			mover := &movingAdmin{tb: t, group: tc.group, user: tc.user}
 			h, _, d := dirQueryHarnessWith(t, func(a iam.Admin) iam.Admin {
 				mover.Admin = a
 				return mover
@@ -494,10 +631,25 @@ func TestEntityPolicyCallsActOnTheAuthorizedARNOverGRPC(t *testing.T) {
 			if _, err := mover.CreateUser(ctx, account314, "erin", "/ops/"); err != nil {
 				t.Fatal(err)
 			}
-			if err := mover.AttachPolicy(ctx, account314, iam.EntityUser, "erin", ops, ""); err != nil {
+			if err := mover.AttachPolicy(
+				ctx,
+				account314,
+				iam.EntityUser,
+				"erin",
+				ops,
+				backendtest.EntityGrant(ctx, t, mover.Admin, account314, iam.EntityUser, "erin"),
+			); err != nil {
 				t.Fatal(err)
 			}
-			if err := mover.PutInlinePolicy(ctx, account314, iam.EntityUser, "erin", "keep", policyDoc314, ""); err != nil {
+			if err := mover.PutInlinePolicy(
+				ctx,
+				account314,
+				iam.EntityUser,
+				"erin",
+				"keep",
+				policyDoc314,
+				backendtest.EntityGrant(ctx, t, mover.Admin, account314, iam.EntityUser, "erin"),
+			); err != nil {
 				t.Fatal(err)
 			}
 			if tc.form.Has("PolicyArn") {

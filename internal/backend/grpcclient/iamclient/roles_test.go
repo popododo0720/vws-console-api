@@ -13,6 +13,7 @@ import (
 
 	iamv1 "github.com/popododo0720/vws-proto/gen/go/vws/iam/v1"
 
+	"github.com/popododo0720/vws-console-api/internal/backend/backendtest"
 	"github.com/popododo0720/vws-console-api/internal/iam"
 	"github.com/popododo0720/vws-console-api/internal/resource"
 )
@@ -54,15 +55,16 @@ func TestUpdateRole(t *testing.T) {
 	c, s := harness(t)
 	admin := STSAdmin{Client: c}
 	s.getRoleRes = &iamv1.Role{
-		Name: "projects/123456789012/roles/ops",
-		Spec: &iamv1.RoleSpec{Path: "/"},
+		Name:   "projects/123456789012/roles/ops",
+		Spec:   &iamv1.RoleSpec{Path: "/"},
+		Status: &iamv1.RoleStatus{Arn: "arn:vws:iam::123456789012:role/ops"},
 	}
 	s.updateRoleRes = &longrunningpb.Operation{Done: true}
 	description := "new"
 	seconds := 3600
 	if err := admin.UpdateRole(t.Context(), accountID(t), "ops", iam.RoleUpdate{
 		Description: &description, MaxSessionDuration: &seconds,
-	}); err != nil {
+	}, backendtest.RoleGrant(t.Context(), t, admin, accountID(t), "ops")); err != nil {
 		t.Fatal(err)
 	}
 	if len(s.updateRole) != 1 {
@@ -85,7 +87,7 @@ func TestUpdateRole(t *testing.T) {
 	seconds = 43200
 	if err := admin.UpdateRole(t.Context(), accountID(t), "ops", iam.RoleUpdate{
 		MaxSessionDuration: &seconds,
-	}); err != nil {
+	}, backendtest.RoleGrant(t.Context(), t, admin, accountID(t), "ops")); err != nil {
 		t.Fatal(err)
 	}
 	if len(s.updateRole) != 1 {
@@ -103,7 +105,13 @@ func TestUpdateRole(t *testing.T) {
 
 	s.updateRole = nil
 	empty := ""
-	if err := admin.UpdateRole(t.Context(), accountID(t), "ops", iam.RoleUpdate{Description: &empty}); err != nil {
+	if err := admin.UpdateRole(
+		t.Context(),
+		accountID(t),
+		"ops",
+		iam.RoleUpdate{Description: &empty},
+		backendtest.RoleGrant(t.Context(), t, admin, accountID(t), "ops"),
+	); err != nil {
 		t.Fatal(err)
 	}
 	if len(s.updateRole) != 1 {
@@ -118,7 +126,9 @@ func TestUpdateRole(t *testing.T) {
 	}
 
 	s.updateRole = nil
-	if err := admin.UpdateRole(t.Context(), accountID(t), "ops", iam.RoleUpdate{}); err != nil {
+	if err := admin.UpdateRole(
+		t.Context(), accountID(t), "ops", iam.RoleUpdate{}, backendtest.RoleGrant(t.Context(), t, admin, accountID(t), "ops"),
+	); err != nil {
 		t.Fatal(err)
 	}
 	if len(s.updateRole) != 0 {
@@ -130,16 +140,25 @@ func TestUpdateRoleErrors(t *testing.T) {
 	c, s := harness(t)
 	admin := STSAdmin{Client: c}
 	s.getRoleErr = awsErr(codes.NotFound, "NOT_FOUND", "NoSuchEntity")
-	err := admin.UpdateRole(t.Context(), accountID(t), "none", iam.RoleUpdate{})
+	err := admin.UpdateRole(
+		t.Context(),
+		accountID(t),
+		"none",
+		iam.RoleUpdate{},
+		backendtest.RoleGrant(t.Context(), t, admin, accountID(t), "none"),
+	)
 	if resource.CodeOf(err) != resource.CodeNotFound {
 		t.Errorf("missing role: %v", err)
 	}
 	s.getRoleErr = nil
 	s.getRoleRes = &iamv1.Role{
-		Name: "projects/123456789012/roles/svc",
-		Spec: &iamv1.RoleSpec{Path: iam.ServiceLinkedRolePath + "compute.vws/"},
+		Name:   "projects/123456789012/roles/svc",
+		Spec:   &iamv1.RoleSpec{Path: iam.ServiceLinkedRolePath + "compute.vws/"},
+		Status: &iamv1.RoleStatus{Arn: "arn:vws:iam::123456789012:role" + iam.ServiceLinkedRolePath + "compute.vws/" + "svc"},
 	}
-	err = admin.UpdateRole(t.Context(), accountID(t), "svc", iam.RoleUpdate{})
+	err = admin.UpdateRole(
+		t.Context(), accountID(t), "svc", iam.RoleUpdate{}, backendtest.RoleGrant(t.Context(), t, admin, accountID(t), "svc"),
+	)
 	var re *resource.Error
 	if !errors.As(err, &re) || re.Code != resource.CodeConflict || re.Field != "UnmodifiableEntity" {
 		t.Errorf("service-linked role: %+v", err)
@@ -148,14 +167,28 @@ func TestUpdateRoleErrors(t *testing.T) {
 		t.Errorf("a service-linked role reached UpdateRole: %v", s.updateRole)
 	}
 
-	s.getRoleRes = &iamv1.Role{Spec: &iamv1.RoleSpec{Path: "/"}}
+	s.getRoleRes = &iamv1.Role{
+		Spec: &iamv1.RoleSpec{Path: "/"}, Status: &iamv1.RoleStatus{Arn: "arn:vws:iam::123456789012:role/ops"},
+	}
 	long := strings.Repeat("x", iam.MaxRoleDescription+1)
-	err = admin.UpdateRole(t.Context(), accountID(t), "ops", iam.RoleUpdate{Description: &long})
+	err = admin.UpdateRole(
+		t.Context(),
+		accountID(t),
+		"ops",
+		iam.RoleUpdate{Description: &long},
+		backendtest.RoleGrant(t.Context(), t, admin, accountID(t), "ops"),
+	)
 	if resource.CodeOf(err) != resource.CodeInvalidArgument {
 		t.Errorf("oversized description: %v", err)
 	}
 	short := 3599
-	err = admin.UpdateRole(t.Context(), accountID(t), "ops", iam.RoleUpdate{MaxSessionDuration: &short})
+	err = admin.UpdateRole(
+		t.Context(),
+		accountID(t),
+		"ops",
+		iam.RoleUpdate{MaxSessionDuration: &short},
+		backendtest.RoleGrant(t.Context(), t, admin, accountID(t), "ops"),
+	)
 	if resource.CodeOf(err) != resource.CodeInvalidArgument {
 		t.Errorf("short duration: %v", err)
 	}
@@ -165,7 +198,13 @@ func TestUpdateRoleErrors(t *testing.T) {
 
 	s.updateRoleErr = awsErr(codes.FailedPrecondition, "FAILED_PRECONDITION", "UnmodifiableEntity")
 	description := "new"
-	err = admin.UpdateRole(t.Context(), accountID(t), "ops", iam.RoleUpdate{Description: &description})
+	err = admin.UpdateRole(
+		t.Context(),
+		accountID(t),
+		"ops",
+		iam.RoleUpdate{Description: &description},
+		backendtest.RoleGrant(t.Context(), t, admin, accountID(t), "ops"),
+	)
 	if !errors.As(err, &re) || re.Code != resource.CodeConflict || re.Field != "UnmodifiableEntity" {
 		t.Errorf("vws-iam rejection: %+v", err)
 	}
@@ -176,8 +215,9 @@ func TestUpdateRoleDescription(t *testing.T) {
 	admin := STSAdmin{Client: c}
 	created := time.Date(2026, 10, 14, 7, 0, 0, 0, time.UTC)
 	s.getRoleRes = &iamv1.Role{
-		Name: "projects/123456789012/roles/ops",
-		Spec: &iamv1.RoleSpec{Path: "/", Description: "old"},
+		Name:   "projects/123456789012/roles/ops",
+		Spec:   &iamv1.RoleSpec{Path: "/", Description: "old"},
+		Status: &iamv1.RoleStatus{Arn: "arn:vws:iam::123456789012:role/ops"},
 	}
 	s.updateRoleRes = roleOperation(t, &iamv1.Role{
 		Name: "projects/123456789012/roles/ops",
@@ -188,7 +228,9 @@ func TestUpdateRoleDescription(t *testing.T) {
 		Status:     &iamv1.RoleStatus{Arn: "arn:vws:iam::123456789012:role/ops", UniqueId: "AROAOPS"},
 		CreateTime: timestamppb.New(created),
 	})
-	got, err := admin.UpdateRoleDescription(t.Context(), accountID(t), "ops", "new")
+	got, err := admin.UpdateRoleDescription(
+		t.Context(), accountID(t), "ops", "new", backendtest.RoleGrant(t.Context(), t, admin, accountID(t), "ops"),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -219,10 +261,13 @@ func TestUpdateRoleDescriptionRejectsServiceLinkedRole(t *testing.T) {
 	c, s := harness(t)
 	admin := STSAdmin{Client: c}
 	s.getRoleRes = &iamv1.Role{
-		Name: "projects/123456789012/roles/svc",
-		Spec: &iamv1.RoleSpec{Path: iam.ServiceLinkedRolePath + "compute.vws/"},
+		Name:   "projects/123456789012/roles/svc",
+		Spec:   &iamv1.RoleSpec{Path: iam.ServiceLinkedRolePath + "compute.vws/"},
+		Status: &iamv1.RoleStatus{Arn: "arn:vws:iam::123456789012:role" + iam.ServiceLinkedRolePath + "compute.vws/" + "svc"},
 	}
-	_, err := admin.UpdateRoleDescription(t.Context(), accountID(t), "svc", "new")
+	_, err := admin.UpdateRoleDescription(
+		t.Context(), accountID(t), "svc", "new", backendtest.RoleGrant(t.Context(), t, admin, accountID(t), "svc"),
+	)
 	var re *resource.Error
 	if !errors.As(err, &re) || re.Code != resource.CodeConflict || re.Field != "UnmodifiableEntity" {
 		t.Errorf("service-linked role: %+v", err)
@@ -235,27 +280,40 @@ func TestUpdateRoleDescriptionRejectsServiceLinkedRole(t *testing.T) {
 func TestUpdateRoleDescriptionErrors(t *testing.T) {
 	c, s := harness(t)
 	admin := STSAdmin{Client: c}
+	// The role read before the change; its ARN is the one each call is
+	// authorized on, so only the UpdateRole answer varies.
+	s.getRoleRes = &iamv1.Role{
+		Spec: &iamv1.RoleSpec{Path: "/"}, Status: &iamv1.RoleStatus{Arn: "arn:vws:iam::123456789012:role/ops"},
+	}
 	s.updateRoleErr = awsErr(codes.NotFound, "NOT_FOUND", "NoSuchEntity")
-	_, err := admin.UpdateRoleDescription(t.Context(), accountID(t), "none", "new")
+	_, err := admin.UpdateRoleDescription(
+		t.Context(), accountID(t), "none", "new", backendtest.RoleGrant(t.Context(), t, admin, accountID(t), "none"),
+	)
 	if resource.CodeOf(err) != resource.CodeNotFound {
 		t.Errorf("missing role: %v", err)
 	}
 	s.updateRoleErr = nil
 	s.updateRoleRes = &longrunningpb.Operation{Done: true}
-	_, err = admin.UpdateRoleDescription(t.Context(), accountID(t), "ops", "new")
+	_, err = admin.UpdateRoleDescription(
+		t.Context(), accountID(t), "ops", "new", backendtest.RoleGrant(t.Context(), t, admin, accountID(t), "ops"),
+	)
 	if resource.CodeOf(err) != resource.CodeInternal {
 		t.Errorf("missing role response: %v", err)
 	}
 	s.updateRoleRes = nil
 	s.updateRoleErr = awsErr(codes.FailedPrecondition, "FAILED_PRECONDITION", "UnmodifiableEntity")
-	_, err = admin.UpdateRoleDescription(t.Context(), accountID(t), "svc", "new")
+	_, err = admin.UpdateRoleDescription(
+		t.Context(), accountID(t), "svc", "new", backendtest.RoleGrant(t.Context(), t, admin, accountID(t), "svc"),
+	)
 	var re *resource.Error
 	if !errors.As(err, &re) || re.Code != resource.CodeConflict || re.Field != "UnmodifiableEntity" {
 		t.Errorf("service-linked role: %+v", err)
 	}
 	s.updateRoleErr = nil
 	long := strings.Repeat("x", iam.MaxRoleDescription+1)
-	_, err = admin.UpdateRoleDescription(t.Context(), accountID(t), "ops", long)
+	_, err = admin.UpdateRoleDescription(
+		t.Context(), accountID(t), "ops", long, backendtest.RoleGrant(t.Context(), t, admin, accountID(t), "ops"),
+	)
 	if resource.CodeOf(err) != resource.CodeInvalidArgument {
 		t.Errorf("oversized description: %v", err)
 	}

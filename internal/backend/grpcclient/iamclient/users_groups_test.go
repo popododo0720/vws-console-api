@@ -17,6 +17,7 @@ import (
 
 	iamv1 "github.com/popododo0720/vws-proto/gen/go/vws/iam/v1"
 
+	"github.com/popododo0720/vws-console-api/internal/backend/backendtest"
 	"github.com/popododo0720/vws-console-api/internal/iam"
 	"github.com/popododo0720/vws-console-api/internal/resource"
 )
@@ -45,7 +46,9 @@ func seeded(ctx context.Context, t *testing.T) (STSAdmin, *directory) {
 	if _, err := a.CreateGroup(ctx, account314, "devs", "/team/"); err != nil {
 		t.Fatal(err)
 	}
-	if err := a.AddUserToGroup(ctx, account314, "devs", "alice", ""); err != nil {
+	if err := a.AddUserToGroup(
+		ctx, account314, "devs", "alice", backendtest.GroupGrant(ctx, t, a, account314, "devs"),
+	); err != nil {
 		t.Fatal(err)
 	}
 	return a, d
@@ -72,7 +75,9 @@ func TestUserAndGroupRequestsOverGRPC(t *testing.T) {
 		strings.Join(ug.GetGroup().GetSpec().GetMembers(), ",") != "projects/123456789012/users/alice" {
 		t.Errorf("AddUserToGroup sent %v", ug)
 	}
-	if err := a.UpdateUser(ctx, account314, "bob", "/sre/", "", ""); err != nil {
+	if err := a.UpdateUser(
+		ctx, account314, "bob", "/sre/", "", backendtest.UserGrant(ctx, t, a, account314, "bob"),
+	); err != nil {
 		t.Fatal(err)
 	}
 	uu := d.sent("UpdateUser")[0].(*iamv1.UpdateUserRequest)
@@ -84,10 +89,14 @@ func TestUserAndGroupRequestsOverGRPC(t *testing.T) {
 		t.Error("request ids repeat across calls")
 	}
 	// Nothing to change sends nothing.
-	if err := a.UpdateUser(ctx, account314, "bob", "/sre/", "", ""); err != nil {
+	if err := a.UpdateUser(
+		ctx, account314, "bob", "/sre/", "", backendtest.UserGrant(ctx, t, a, account314, "bob"),
+	); err != nil {
 		t.Fatal(err)
 	}
-	if err := a.AddUserToGroup(ctx, account314, "devs", "alice", ""); err != nil {
+	if err := a.AddUserToGroup(
+		ctx, account314, "devs", "alice", backendtest.GroupGrant(ctx, t, a, account314, "devs"),
+	); err != nil {
 		t.Fatal(err)
 	}
 	if n, m := len(d.sent("UpdateUser")), len(d.sent("UpdateGroup")); n != 1 || m != 1 {
@@ -119,7 +128,7 @@ func TestUserAndGroupMutationsRetrySafely(t *testing.T) {
 		d.mu.Lock()
 		d.failAfter["DeleteUser"] = 1
 		d.mu.Unlock()
-		if err := a.DeleteUser(ctx, account314, "bob", ""); err != nil {
+		if err := a.DeleteUser(ctx, account314, "bob", backendtest.UserGrant(ctx, t, a, account314, "bob")); err != nil {
 			t.Fatalf("DeleteUser: %v", err)
 		}
 	})
@@ -128,7 +137,9 @@ func TestUserAndGroupMutationsRetrySafely(t *testing.T) {
 		d.mu.Lock()
 		d.failAfter["UpdateGroup"] = 1
 		d.mu.Unlock()
-		if err := a.AddUserToGroup(ctx, account314, "devs", "bob", ""); err != nil {
+		if err := a.AddUserToGroup(
+			ctx, account314, "devs", "bob", backendtest.GroupGrant(ctx, t, a, account314, "devs"),
+		); err != nil {
 			t.Fatalf("AddUserToGroup: %v", err)
 		}
 		_, us, err := a.GetGroup(ctx, account314, "devs")
@@ -172,13 +183,15 @@ func TestMembershipChangesRereadALostRace(t *testing.T) {
 	d.mu.Lock()
 	d.race = membershipAttempts - 1
 	d.mu.Unlock()
-	if err := a.AddUserToGroup(ctx, account314, "devs", "bob", ""); err != nil {
+	if err := a.AddUserToGroup(
+		ctx, account314, "devs", "bob", backendtest.GroupGrant(ctx, t, a, account314, "devs"),
+	); err != nil {
 		t.Fatalf("AddUserToGroup: %v", err)
 	}
 	d.mu.Lock()
 	d.race = membershipAttempts
 	d.mu.Unlock()
-	err := a.RemoveUserFromGroup(ctx, account314, "devs", "bob", "")
+	err := a.RemoveUserFromGroup(ctx, account314, "devs", "bob", backendtest.GroupGrant(ctx, t, a, account314, "devs"))
 	if resource.CodeOf(err) != resource.CodeUnavailable {
 		t.Fatalf("RemoveUserFromGroup: %v", err)
 	}
@@ -193,21 +206,27 @@ func TestMembershipChangesRereadALostRace(t *testing.T) {
 func TestRenameIsNotServedOverGRPC(t *testing.T) {
 	ctx := t.Context()
 	a, d := seeded(ctx, t)
-	err := a.UpdateUser(ctx, account314, "alice", "", "carol", "")
+	err := a.UpdateUser(ctx, account314, "alice", "", "carol", backendtest.UserGrant(ctx, t, a, account314, "alice"))
 	if resource.CodeOf(err) != resource.CodeUnimplemented || !strings.Contains(err.Error(), "cannot rename") {
 		t.Errorf("UpdateUser rename: %v", err)
 	}
-	if err := a.UpdateUser(ctx, account314, "ghost", "", "carol", ""); resource.CodeOf(err) != resource.CodeNotFound {
+	if err := a.UpdateUser(
+		ctx, account314, "ghost", "", "carol", backendtest.UserGrant(ctx, t, a, account314, "ghost"),
+	); resource.CodeOf(err) != resource.CodeNotFound {
 		t.Errorf("UpdateUser rename of a missing user: %v", err)
 	}
-	err = a.UpdateUser(ctx, account314, "alice", "", "root", "")
+	err = a.UpdateUser(ctx, account314, "alice", "", "root", backendtest.UserGrant(ctx, t, a, account314, "alice"))
 	if resource.CodeOf(err) != resource.CodeInvalidArgument {
 		t.Errorf("UpdateUser rename to root: %v", err)
 	}
-	if err := a.UpdateGroup(ctx, account314, "devs", "", "ops", ""); resource.CodeOf(err) != resource.CodeUnimplemented {
+	if err := a.UpdateGroup(
+		ctx, account314, "devs", "", "ops", backendtest.GroupGrant(ctx, t, a, account314, "devs"),
+	); resource.CodeOf(err) != resource.CodeUnimplemented {
 		t.Errorf("UpdateGroup rename: %v", err)
 	}
-	if err := a.UpdateGroup(ctx, account314, "ghost", "", "ops", ""); resource.CodeOf(err) != resource.CodeNotFound {
+	if err := a.UpdateGroup(
+		ctx, account314, "ghost", "", "ops", backendtest.GroupGrant(ctx, t, a, account314, "ghost"),
+	); resource.CodeOf(err) != resource.CodeNotFound {
 		t.Errorf("UpdateGroup rename of a missing group: %v", err)
 	}
 	if n := len(d.sent("UpdateUser")); n != 0 {

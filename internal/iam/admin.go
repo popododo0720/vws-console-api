@@ -193,7 +193,13 @@ type AssumedRole struct {
 }
 
 // Admin is the IAM management API behind the IAM and STS Query surface. Every
-// call is scoped to one account. Errors are *resource.Error: NotFound,
+// call is scoped to one account. Every call that acts on a named user, group
+// or role after authorization takes the AuthorizedARN the caller was
+// authorized on (#342): the zero value is Unbound (internal) before anything
+// is read, and an entity whose ARN is no longer the authorized one is a
+// ConcurrentModification (Changed) with no data and no write. GetUser,
+// GetGroup and GetRole take none: they are the lookups the surface
+// authorizes on, and the Create calls name an entity that does not exist yet. Errors are *resource.Error: NotFound,
 // AlreadyExists, Conflict (delete conflict, Field "UnmodifiableEntity" for a
 // service-linked role, or Field ConcurrentModification for an entity that
 // moved since authorization), InvalidArgument (Field "PolicyDocument" for a
@@ -203,48 +209,43 @@ type Admin interface {
 	CreateUser(ctx context.Context, a resource.AccountID, name, path string) (User, error)
 	GetUser(ctx context.Context, a resource.AccountID, name string) (User, error)
 	ListUsers(ctx context.Context, a resource.AccountID, pathPrefix string) ([]User, error)
-	// DeleteUser deletes a user. A non-empty expectARN must match the
-	// current ARN, or the delete is a ConcurrentModification (Changed).
-	DeleteUser(ctx context.Context, a resource.AccountID, name, expectARN string) error
-	// UpdateUser moves a user's path or name. A non-empty expectARN must
-	// match the current ARN, or the update is a ConcurrentModification.
-	UpdateUser(ctx context.Context, a resource.AccountID, name, newPath, newName, expectARN string) error
+	DeleteUser(ctx context.Context, a resource.AccountID, name string, want AuthorizedARN) error
+	// UpdateUser moves a user's path or name.
+	UpdateUser(ctx context.Context, a resource.AccountID, name, newPath, newName string, want AuthorizedARN) error
 
-	CreateLoginProfile(ctx context.Context, a resource.AccountID, user, password string) (LoginProfile, error)
-	GetLoginProfile(ctx context.Context, a resource.AccountID, user string) (LoginProfile, error)
-	UpdateLoginProfile(ctx context.Context, a resource.AccountID, user, password string) error
-	DeleteLoginProfile(ctx context.Context, a resource.AccountID, user string) error
+	CreateLoginProfile(
+		ctx context.Context, a resource.AccountID, user, password string, want AuthorizedARN,
+	) (LoginProfile, error)
+	GetLoginProfile(ctx context.Context, a resource.AccountID, user string, want AuthorizedARN) (LoginProfile, error)
+	UpdateLoginProfile(ctx context.Context, a resource.AccountID, user, password string, want AuthorizedARN) error
+	DeleteLoginProfile(ctx context.Context, a resource.AccountID, user string, want AuthorizedARN) error
 
-	// CreateAccessKey, ListAccessKeys and DeleteAccessKey take the user ARN
-	// the caller was authorized on. A non-empty one must match the user's
-	// current ARN on every read, or the call is a ConcurrentModification
-	// (Changed) and nothing is written. The secret is only ever in the
-	// CreateAccessKey result.
-	CreateAccessKey(ctx context.Context, a resource.AccountID, user, expectARN string) (NewAccessKey, error)
-	ListAccessKeys(ctx context.Context, a resource.AccountID, user, expectARN string) ([]AccessKeyMeta, error)
+	// The access key secret is only ever in the CreateAccessKey result.
+	CreateAccessKey(ctx context.Context, a resource.AccountID, user string, want AuthorizedARN) (NewAccessKey, error)
+	ListAccessKeys(ctx context.Context, a resource.AccountID, user string, want AuthorizedARN) ([]AccessKeyMeta, error)
 	GetAccessKeyLastUsed(ctx context.Context, a resource.AccountID, keyID string) (AccessKeyLastUsed, error)
-	DeleteAccessKey(ctx context.Context, a resource.AccountID, user, keyID, expectARN string) error
+	DeleteAccessKey(ctx context.Context, a resource.AccountID, user, keyID string, want AuthorizedARN) error
 
 	CreateGroup(ctx context.Context, a resource.AccountID, name, path string) (Group, error)
 	GetGroup(ctx context.Context, a resource.AccountID, name string) (Group, []User, error)
 	ListGroups(ctx context.Context, a resource.AccountID, pathPrefix string) ([]Group, error)
-	// UpdateGroup, DeleteGroup, AddUserToGroup and RemoveUserFromGroup take
-	// the group ARN the caller was authorized on. A non-empty one must match
-	// the group's current ARN on every read, or the call is a
-	// ConcurrentModification (Changed) and nothing is written.
-	UpdateGroup(ctx context.Context, a resource.AccountID, name, newPath, newName, expectARN string) error
-	DeleteGroup(ctx context.Context, a resource.AccountID, name, expectARN string) error
-	AddUserToGroup(ctx context.Context, a resource.AccountID, group, user, expectGroupARN string) error
-	RemoveUserFromGroup(ctx context.Context, a resource.AccountID, group, user, expectGroupARN string) error
-	ListGroupsForUser(ctx context.Context, a resource.AccountID, user string) ([]Group, error)
+	// UpdateGroup, DeleteGroup, AddUserToGroup and RemoveUserFromGroup are
+	// bound to the group's ARN; ListGroupsForUser to the user's.
+	UpdateGroup(ctx context.Context, a resource.AccountID, name, newPath, newName string, want AuthorizedARN) error
+	DeleteGroup(ctx context.Context, a resource.AccountID, name string, want AuthorizedARN) error
+	AddUserToGroup(ctx context.Context, a resource.AccountID, group, user string, want AuthorizedARN) error
+	RemoveUserFromGroup(ctx context.Context, a resource.AccountID, group, user string, want AuthorizedARN) error
+	ListGroupsForUser(ctx context.Context, a resource.AccountID, user string, want AuthorizedARN) ([]Group, error)
 
 	CreateRole(ctx context.Context, a resource.AccountID, in RoleInput) (Role, error)
 	GetRole(ctx context.Context, a resource.AccountID, name string) (Role, error)
-	UpdateRole(ctx context.Context, a resource.AccountID, name string, in RoleUpdate) error
-	UpdateRoleDescription(ctx context.Context, a resource.AccountID, name, description string) (Role, error)
+	UpdateRole(ctx context.Context, a resource.AccountID, name string, in RoleUpdate, want AuthorizedARN) error
+	UpdateRoleDescription(
+		ctx context.Context, a resource.AccountID, name, description string, want AuthorizedARN,
+	) (Role, error)
 	ListRoles(ctx context.Context, a resource.AccountID, pathPrefix string) ([]Role, error)
-	UpdateAssumeRolePolicy(ctx context.Context, a resource.AccountID, name, document string) error
-	DeleteRole(ctx context.Context, a resource.AccountID, name string) error
+	UpdateAssumeRolePolicy(ctx context.Context, a resource.AccountID, name, document string, want AuthorizedARN) error
+	DeleteRole(ctx context.Context, a resource.AccountID, name string, want AuthorizedARN) error
 
 	CreatePolicy(ctx context.Context, a resource.AccountID, name, path, document, description string) (ManagedPolicy, error)
 	GetPolicy(ctx context.Context, a resource.AccountID, arn string) (ManagedPolicy, error)
@@ -266,23 +267,27 @@ type Admin interface {
 	// is Conflict.
 	DeletePolicyVersion(ctx context.Context, a resource.AccountID, arn, versionID string) error
 	// The managed and inline policy calls of a user, group or role take the
-	// entity ARN the caller was authorized on. A non-empty one must match the
-	// entity's current ARN on every read, or the call is a
-	// ConcurrentModification (Changed) and nothing is written.
-	AttachPolicy(ctx context.Context, a resource.AccountID, kind Entity, name, arn, expectARN string) error
-	DetachPolicy(ctx context.Context, a resource.AccountID, kind Entity, name, arn, expectARN string) error
+	// AuthorizedARN the caller was authorized on. It must match the entity's
+	// current ARN on every read, or the call is a ConcurrentModification
+	// (Changed) and nothing is written.
+	AttachPolicy(ctx context.Context, a resource.AccountID, kind Entity, name, arn string, want AuthorizedARN) error
+	DetachPolicy(ctx context.Context, a resource.AccountID, kind Entity, name, arn string, want AuthorizedARN) error
 	ListAttachedPolicies(
-		ctx context.Context, a resource.AccountID, kind Entity, name, expectARN string,
+		ctx context.Context, a resource.AccountID, kind Entity, name string, want AuthorizedARN,
 	) ([]ManagedPolicy, error)
 
 	PutInlinePolicy(
-		ctx context.Context, a resource.AccountID, kind Entity, name, policy, document, expectARN string,
+		ctx context.Context, a resource.AccountID, kind Entity, name, policy, document string, want AuthorizedARN,
 	) error
 	GetInlinePolicy(
-		ctx context.Context, a resource.AccountID, kind Entity, name, policy, expectARN string,
+		ctx context.Context, a resource.AccountID, kind Entity, name, policy string, want AuthorizedARN,
 	) (string, error)
-	DeleteInlinePolicy(ctx context.Context, a resource.AccountID, kind Entity, name, policy, expectARN string) error
-	ListInlinePolicies(ctx context.Context, a resource.AccountID, kind Entity, name, expectARN string) ([]string, error)
+	DeleteInlinePolicy(
+		ctx context.Context, a resource.AccountID, kind Entity, name, policy string, want AuthorizedARN,
+	) error
+	ListInlinePolicies(
+		ctx context.Context, a resource.AccountID, kind Entity, name string, want AuthorizedARN,
+	) ([]string, error)
 
 	TagPolicy(ctx context.Context, a resource.AccountID, arn string, tags []Tag) error
 	UntagPolicy(ctx context.Context, a resource.AccountID, arn string, keys []string) error
@@ -295,11 +300,10 @@ type Admin interface {
 	) (VirtualMFADevicePage, error)
 
 	// ListMFADevices lists the devices enabled for one user. The user
-	// argument is the AWS UserName, not an ARN. A non-empty expectARN must be
-	// the user's ARN for the whole read, or the answer is a
-	// ConcurrentModification (Changed(UserChanged)) with no device.
+	// argument is the AWS UserName, not an ARN. want must be the user's ARN
+	// for the whole read.
 	ListMFADevices(
-		ctx context.Context, a resource.AccountID, user, marker string, maxItems int, expectARN string,
+		ctx context.Context, a resource.AccountID, user, marker string, maxItems int, want AuthorizedARN,
 	) (MFADevicePage, error)
 
 	// The MFA device argument is the device serial number, the ARN the AWS

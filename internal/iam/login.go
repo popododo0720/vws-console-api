@@ -32,8 +32,14 @@ func guardedVerify(ctx context.Context, g *guard, hash, pw string) (bool, error)
 	return ok, err
 }
 
-// CreateLoginProfile implements Admin: it gives user a console password.
-func (f *Fake) CreateLoginProfile(ctx context.Context, a resource.AccountID, user, password string) (LoginProfile, error) {
+// CreateLoginProfile implements Admin: it gives user a console password. want
+// must be the user's ARN.
+func (f *Fake) CreateLoginProfile(
+	ctx context.Context, a resource.AccountID, user, password string, want AuthorizedARN,
+) (LoginProfile, error) {
+	if err := want.Require(); err != nil {
+		return LoginProfile{}, err
+	}
 	if err := checkPassword(password); err != nil {
 		return LoginProfile{}, err
 	}
@@ -47,6 +53,9 @@ func (f *Fake) CreateLoginProfile(ctx context.Context, a resource.AccountID, use
 	if u == nil {
 		return LoginProfile{}, notFound("user", user)
 	}
+	if err := want.Bind(u.ARN, UserChanged); err != nil {
+		return LoginProfile{}, err
+	}
 	if u.login != nil {
 		return LoginProfile{}, exists("Login Profile for User", user)
 	}
@@ -54,11 +63,21 @@ func (f *Fake) CreateLoginProfile(ctx context.Context, a resource.AccountID, use
 	return LoginProfile{UserName: user, Created: u.login.created}, nil
 }
 
-// GetLoginProfile implements Admin.
-func (f *Fake) GetLoginProfile(_ context.Context, a resource.AccountID, user string) (LoginProfile, error) {
+// GetLoginProfile implements Admin. want must be the user's ARN.
+func (f *Fake) GetLoginProfile(
+	_ context.Context, a resource.AccountID, user string, want AuthorizedARN,
+) (LoginProfile, error) {
+	if err := want.Require(); err != nil {
+		return LoginProfile{}, err
+	}
 	f.mu.RLock()
 	defer f.mu.RUnlock()
 	u := f.accounts[a].user(user)
+	if u != nil {
+		if err := want.Bind(u.ARN, UserChanged); err != nil {
+			return LoginProfile{}, err
+		}
+	}
 	if u == nil || u.login == nil {
 		return LoginProfile{}, notFound("Login Profile for User", user)
 	}
@@ -66,8 +85,14 @@ func (f *Fake) GetLoginProfile(_ context.Context, a resource.AccountID, user str
 }
 
 // UpdateLoginProfile implements Admin: it sets a new password and clears any
-// lockout. Existing sessions stay valid until they expire or sign out.
-func (f *Fake) UpdateLoginProfile(ctx context.Context, a resource.AccountID, user, password string) error {
+// lockout. Existing sessions stay valid until they expire or sign out. want
+// must be the user's ARN.
+func (f *Fake) UpdateLoginProfile(
+	ctx context.Context, a resource.AccountID, user, password string, want AuthorizedARN,
+) error {
+	if err := want.Require(); err != nil {
+		return err
+	}
 	if err := checkPassword(password); err != nil {
 		return err
 	}
@@ -78,6 +103,11 @@ func (f *Fake) UpdateLoginProfile(ctx context.Context, a resource.AccountID, use
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	u := f.accounts[a].user(user)
+	if u != nil {
+		if err := want.Bind(u.ARN, UserChanged); err != nil {
+			return err
+		}
+	}
 	if u == nil || u.login == nil {
 		return notFound("Login Profile for User", user)
 	}
@@ -86,11 +116,19 @@ func (f *Fake) UpdateLoginProfile(ctx context.Context, a resource.AccountID, use
 	return nil
 }
 
-// DeleteLoginProfile implements Admin.
-func (f *Fake) DeleteLoginProfile(_ context.Context, a resource.AccountID, user string) error {
+// DeleteLoginProfile implements Admin. want must be the user's ARN.
+func (f *Fake) DeleteLoginProfile(_ context.Context, a resource.AccountID, user string, want AuthorizedARN) error {
+	if err := want.Require(); err != nil {
+		return err
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	u := f.accounts[a].user(user)
+	if u != nil {
+		if err := want.Bind(u.ARN, UserChanged); err != nil {
+			return err
+		}
+	}
 	if u == nil || u.login == nil {
 		return notFound("Login Profile for User", user)
 	}

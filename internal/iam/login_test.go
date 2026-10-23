@@ -19,7 +19,9 @@ func loginFake(t *testing.T) (*Fake, resource.AccountID) {
 	if _, err := f.CreateUser(t.Context(), a, "bob", "/"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.CreateLoginProfile(t.Context(), a, "bob", "correct horse 1"); err != nil {
+	if _, err := f.CreateLoginProfile(
+		t.Context(), a, "bob", "correct horse 1", testUserGrant(t.Context(), t, f, a, "bob"),
+	); err != nil {
 		t.Fatal(err)
 	}
 	return f, a
@@ -28,33 +30,41 @@ func loginFake(t *testing.T) (*Fake, resource.AccountID) {
 func TestLoginProfiles(t *testing.T) {
 	ctx := t.Context()
 	f, a := loginFake(t)
-	if _, err := f.CreateLoginProfile(ctx, a, "bob", "another pass 2"); resource.CodeOf(err) != resource.CodeAlreadyExists {
+	if _, err := f.CreateLoginProfile(
+		ctx, a, "bob", "another pass 2", testUserGrant(ctx, t, f, a, "bob"),
+	); resource.CodeOf(err) != resource.CodeAlreadyExists {
 		t.Errorf("second profile: %v", err)
 	}
 	if _, err := f.CreateUser(ctx, a, "eve", "/"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.CreateLoginProfile(ctx, a, "eve", "short"); resource.CodeOf(err) != resource.CodeInvalidArgument {
+	if _, err := f.CreateLoginProfile(
+		ctx, a, "eve", "short", testUserGrant(ctx, t, f, a, "eve"),
+	); resource.CodeOf(err) != resource.CodeInvalidArgument {
 		t.Errorf("weak password: %v", err)
 	}
-	if _, err := f.CreateLoginProfile(ctx, a, "nobody", "correct horse 1"); resource.CodeOf(err) != resource.CodeNotFound {
+	if _, err := f.CreateLoginProfile(
+		ctx, a, "nobody", "correct horse 1", testUserGrant(ctx, t, f, a, "nobody"),
+	); resource.CodeOf(err) != resource.CodeNotFound {
 		t.Errorf("missing user: %v", err)
 	}
-	p, err := f.GetLoginProfile(ctx, a, "bob")
+	p, err := f.GetLoginProfile(ctx, a, "bob", testUserGrant(ctx, t, f, a, "bob"))
 	if err != nil || p.UserName != "bob" || !p.Created.Equal(now) {
 		t.Fatalf("get profile %+v %v", p, err)
 	}
-	if err := f.DeleteUser(ctx, a, "bob", ""); resource.CodeOf(err) != resource.CodeConflict {
+	if err := f.DeleteUser(
+		ctx, a, "bob", testUserGrant(ctx, t, f, a, "bob"),
+	); resource.CodeOf(err) != resource.CodeConflict {
 		t.Errorf("delete user with a login profile: %v", err)
 	}
-	must(t, f.UpdateLoginProfile(ctx, a, "bob", "brand new pass 3"))
+	must(t, f.UpdateLoginProfile(ctx, a, "bob", "brand new pass 3", testUserGrant(ctx, t, f, a, "bob")))
 	if _, err := f.Login(ctx, LoginRequest{Account: a, UserName: "bob", Password: "correct horse 1"}); resource.CodeOf(err) != resource.CodeUnauthenticated {
 		t.Errorf("old password still works: %v", err)
 	}
 	if _, err := f.Login(ctx, LoginRequest{Account: a, UserName: "bob", Password: "brand new pass 3"}); err != nil {
 		t.Errorf("new password: %v", err)
 	}
-	must(t, f.DeleteLoginProfile(ctx, a, "bob"))
+	must(t, f.DeleteLoginProfile(ctx, a, "bob", testUserGrant(ctx, t, f, a, "bob")))
 	if _, err := f.Login(ctx, LoginRequest{Account: a, UserName: "bob", Password: "brand new pass 3"}); resource.CodeOf(err) != resource.CodeUnauthenticated {
 		t.Errorf("login without a profile: %v", err)
 	}
@@ -193,7 +203,9 @@ func TestHashingIsBounded(t *testing.T) {
 	if resource.CodeOf(err) != resource.CodeUnavailable || !IsBusy(err) {
 		t.Fatalf("full hashing slots: %v", err)
 	}
-	if _, err := f.CreateLoginProfile(ctx, a, "bob", "x long enough 1"); !IsBusy(err) && resource.CodeOf(err) != resource.CodeAlreadyExists {
+	if _, err := f.CreateLoginProfile(
+		ctx, a, "bob", "x long enough 1", testUserGrant(ctx, t, f, a, "bob"),
+	); !IsBusy(err) && resource.CodeOf(err) != resource.CodeAlreadyExists {
 		t.Fatalf("profile hashing while full: %v", err)
 	}
 	<-f.guard.slots
@@ -282,7 +294,7 @@ func TestLoginDuringRenameUsesTheNewARN(t *testing.T) {
 	s, err := loginWhileHashing(t, f, LoginRequest{
 		Account: a, UserName: "bob", Password: "correct horse 1", SourceIP: "192.0.2.1",
 	}, func() {
-		updateErr = f.UpdateUser(ctx, a, "bob", "/new/", "", "")
+		updateErr = f.UpdateUser(ctx, a, "bob", "/new/", "", testUserGrant(ctx, t, f, a, "bob"))
 	})
 	if updateErr != nil {
 		t.Fatal(updateErr)
