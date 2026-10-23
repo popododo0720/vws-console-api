@@ -19,7 +19,8 @@ import (
 
 // STSAdmin serves the IAM Query surface's STS calls over vws-iam. The user
 // and group calls are mapped to UserService and GroupService (see
-// users_groups.go), except a rename, which vws-iam cannot do. The other IAM
+// users_groups.go), except a rename, which vws-iam cannot do, and so are the
+// managed and inline policies of a user or group (see policies.go). The other IAM
 // management calls are not mapped to vws-iam's Role, Policy and AccessKey
 // services yet; each answers Unimplemented, which the surface returns as
 // InvalidAction. CreatePolicyVersion, GetPolicyVersion,
@@ -404,41 +405,6 @@ func (a STSAdmin) DeletePolicyVersion(
 		return authError(err)
 	}
 	return operationResult(op)
-}
-
-// AttachPolicy implements iam.Admin.
-func (STSAdmin) AttachPolicy(_ context.Context, _ resource.AccountID, _ iam.Entity, _, _ string) error {
-	return notServed("AttachPolicy")
-}
-
-// DetachPolicy implements iam.Admin.
-func (STSAdmin) DetachPolicy(_ context.Context, _ resource.AccountID, _ iam.Entity, _, _ string) error {
-	return notServed("DetachPolicy")
-}
-
-// ListAttachedPolicies implements iam.Admin.
-func (STSAdmin) ListAttachedPolicies(_ context.Context, _ resource.AccountID, _ iam.Entity, _ string) ([]iam.ManagedPolicy, error) {
-	return nil, notServed("ListAttachedPolicies")
-}
-
-// PutInlinePolicy implements iam.Admin.
-func (STSAdmin) PutInlinePolicy(_ context.Context, _ resource.AccountID, _ iam.Entity, name, _, _ string) error {
-	return notServed("PutInlinePolicy")
-}
-
-// GetInlinePolicy implements iam.Admin.
-func (STSAdmin) GetInlinePolicy(_ context.Context, _ resource.AccountID, _ iam.Entity, _, _ string) (string, error) {
-	return "", notServed("GetInlinePolicy")
-}
-
-// DeleteInlinePolicy implements iam.Admin.
-func (STSAdmin) DeleteInlinePolicy(_ context.Context, _ resource.AccountID, _ iam.Entity, _, _ string) error {
-	return notServed("DeleteInlinePolicy")
-}
-
-// ListInlinePolicies implements iam.Admin.
-func (STSAdmin) ListInlinePolicies(_ context.Context, _ resource.AccountID, _ iam.Entity, _ string) ([]string, error) {
-	return nil, notServed("ListInlinePolicies")
 }
 
 // CreateLoginProfile implements iam.Admin.

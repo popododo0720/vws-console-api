@@ -44,10 +44,10 @@ func TestUsersGroupsAndPolicies(t *testing.T) {
 	if _, err := f.CreateGroup(ctx, a, "readers", "/"); err != nil {
 		t.Fatal(err)
 	}
-	must(t, f.AttachPolicy(ctx, a, EntityGroup, "readers", p.ARN))
+	must(t, f.AttachPolicy(ctx, a, EntityGroup, "readers", p.ARN, ""))
 	must(t, f.AddUserToGroup(ctx, a, "readers", "bob", ""))
 	must(t, f.PutInlinePolicy(ctx, a, EntityUser, "bob", "deny-vols",
-		`{"Version":"2012-10-17","Statement":{"Effect":"Deny","Action":"ec2:DescribeVolumes","Resource":"*"}}`))
+		`{"Version":"2012-10-17","Statement":{"Effect":"Deny","Action":"ec2:DescribeVolumes","Resource":"*"}}`, ""))
 
 	bob := Principal{Account: a, ARN: u.ARN}
 	for _, tc := range []struct {
@@ -69,9 +69,9 @@ func TestUsersGroupsAndPolicies(t *testing.T) {
 		t.Errorf("delete user in a group with a policy: %v", err)
 	}
 	must(t, f.RemoveUserFromGroup(ctx, a, "readers", "bob", ""))
-	must(t, f.DeleteInlinePolicy(ctx, a, EntityUser, "bob", "deny-vols"))
+	must(t, f.DeleteInlinePolicy(ctx, a, EntityUser, "bob", "deny-vols", ""))
 	must(t, f.DeleteUser(ctx, a, "bob", ""))
-	must(t, f.DetachPolicy(ctx, a, EntityGroup, "readers", p.ARN))
+	must(t, f.DetachPolicy(ctx, a, EntityGroup, "readers", p.ARN, ""))
 	must(t, f.DeletePolicy(ctx, a, p.ARN))
 	must(t, f.DeleteGroup(ctx, a, "readers", ""))
 }
@@ -151,7 +151,8 @@ func TestAssumeRole(t *testing.T) {
 	if err != nil || r.ARN != "arn:vws:iam::123456789012:role/ops" || r.MaxSessionDuration != 3600 {
 		t.Fatalf("create role %+v %v", r, err)
 	}
-	must(t, f.PutInlinePolicy(ctx, a, EntityRole, "ops", "vpcs", `{"Statement":[{"Effect":"Allow","Action":"ec2:CreateVpc","Resource":"*"}]}`))
+	vpcs := `{"Statement":[{"Effect":"Allow","Action":"ec2:CreateVpc","Resource":"*"}]}`
+	must(t, f.PutInlinePolicy(ctx, a, EntityRole, "ops", "vpcs", vpcs, ""))
 
 	got, err := f.AssumeRole(ctx, Principal{Account: a, ARN: u.ARN}, r.ARN, "s1", 15*time.Minute)
 	if err != nil || !strings.HasPrefix(got.Key.AccessKey, "ASIA") || got.Key.SessionToken == "" || !got.Key.Expires.Equal(now.Add(15*time.Minute)) ||
@@ -200,8 +201,8 @@ func TestUpdateGroup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	must(t, f.AttachPolicy(ctx, a, EntityGroup, "dev", p.ARN))
-	must(t, f.PutInlinePolicy(ctx, a, EntityGroup, "dev", "inline", describeOnly))
+	must(t, f.AttachPolicy(ctx, a, EntityGroup, "dev", p.ARN, ""))
+	must(t, f.PutInlinePolicy(ctx, a, EntityGroup, "dev", "inline", describeOnly, ""))
 	must(t, f.AddUserToGroup(ctx, a, "dev", "bob", ""))
 	if _, err := f.CreateGroup(ctx, a, "taken", "/"); err != nil {
 		t.Fatal(err)
@@ -259,11 +260,11 @@ func TestUpdateGroup(t *testing.T) {
 	if err != nil || len(groups) != 1 || groups[0].Name != "platform" {
 		t.Errorf("groups for bob %v, want platform: %v", groups, err)
 	}
-	attached, err := f.ListAttachedPolicies(ctx, a, EntityGroup, "platform")
+	attached, err := f.ListAttachedPolicies(ctx, a, EntityGroup, "platform", "")
 	if err != nil || len(attached) != 1 || attached[0].ARN != p.ARN {
 		t.Errorf("attached policies after rename %v, want %s: %v", attached, p.ARN, err)
 	}
-	inline, err := f.ListInlinePolicies(ctx, a, EntityGroup, "platform")
+	inline, err := f.ListInlinePolicies(ctx, a, EntityGroup, "platform", "")
 	if err != nil || len(inline) != 1 || inline[0] != "inline" {
 		t.Errorf("inline policies after rename %v, want inline: %v", inline, err)
 	}
@@ -293,8 +294,8 @@ func TestUpdateUser(t *testing.T) {
 		t.Fatal(err)
 	}
 	must(t, f.AddUserToGroup(ctx, a, "dev", "bob", ""))
-	must(t, f.AttachPolicy(ctx, a, EntityUser, "bob", p.ARN))
-	must(t, f.PutInlinePolicy(ctx, a, EntityUser, "bob", "inline", describeOnly))
+	must(t, f.AttachPolicy(ctx, a, EntityUser, "bob", p.ARN, ""))
+	must(t, f.PutInlinePolicy(ctx, a, EntityUser, "bob", "inline", describeOnly, ""))
 
 	for _, tc := range []struct {
 		name             string
@@ -355,11 +356,11 @@ func TestUpdateUser(t *testing.T) {
 	if err != nil || len(groups) != 1 || groups[0].Name != "dev" {
 		t.Errorf("groups for platform %v: %v", groups, err)
 	}
-	attached, err := f.ListAttachedPolicies(ctx, a, EntityUser, "platform")
+	attached, err := f.ListAttachedPolicies(ctx, a, EntityUser, "platform", "")
 	if err != nil || len(attached) != 1 || attached[0].ARN != p.ARN {
 		t.Errorf("attached policies after rename %v: %v", attached, err)
 	}
-	inline, err := f.ListInlinePolicies(ctx, a, EntityUser, "platform")
+	inline, err := f.ListInlinePolicies(ctx, a, EntityUser, "platform", "")
 	if err != nil || len(inline) != 1 || inline[0] != "inline" {
 		t.Errorf("inline policies after rename %v: %v", inline, err)
 	}
@@ -377,7 +378,7 @@ func TestUpdateUserKeepsKeysAndSessions(t *testing.T) {
 	if _, err := f.CreateUser(ctx, a, "bob", "/old/"); err != nil {
 		t.Fatal(err)
 	}
-	must(t, f.PutInlinePolicy(ctx, a, EntityUser, "bob", "describe", describeOnly))
+	must(t, f.PutInlinePolicy(ctx, a, EntityUser, "bob", "describe", describeOnly, ""))
 	k, err := f.CreateAccessKey(ctx, a, "bob", "")
 	if err != nil {
 		t.Fatal(err)
@@ -678,7 +679,7 @@ func TestDefaultPolicyVersionChangesAuthorization(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	must(t, f.AttachPolicy(ctx, a, EntityUser, "bob", p.ARN))
+	must(t, f.AttachPolicy(ctx, a, EntityUser, "bob", p.ARN, ""))
 	deny := `{"Statement":[{"Effect":"Deny","Action":"s3:GetObject","Resource":"*"}]}`
 	v, err := f.CreatePolicyVersion(ctx, a, p.ARN, deny, true)
 	if err != nil || !v.IsDefaultVersion {

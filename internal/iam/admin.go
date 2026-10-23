@@ -265,14 +265,24 @@ type Admin interface {
 	// DeletePolicyVersion removes a non-default version. The default version
 	// is Conflict.
 	DeletePolicyVersion(ctx context.Context, a resource.AccountID, arn, versionID string) error
-	AttachPolicy(ctx context.Context, a resource.AccountID, kind Entity, name, arn string) error
-	DetachPolicy(ctx context.Context, a resource.AccountID, kind Entity, name, arn string) error
-	ListAttachedPolicies(ctx context.Context, a resource.AccountID, kind Entity, name string) ([]ManagedPolicy, error)
+	// The managed and inline policy calls of a user, group or role take the
+	// entity ARN the caller was authorized on. A non-empty one must match the
+	// entity's current ARN on every read, or the call is a
+	// ConcurrentModification (Changed) and nothing is written.
+	AttachPolicy(ctx context.Context, a resource.AccountID, kind Entity, name, arn, expectARN string) error
+	DetachPolicy(ctx context.Context, a resource.AccountID, kind Entity, name, arn, expectARN string) error
+	ListAttachedPolicies(
+		ctx context.Context, a resource.AccountID, kind Entity, name, expectARN string,
+	) ([]ManagedPolicy, error)
 
-	PutInlinePolicy(ctx context.Context, a resource.AccountID, kind Entity, name, policy, document string) error
-	GetInlinePolicy(ctx context.Context, a resource.AccountID, kind Entity, name, policy string) (string, error)
-	DeleteInlinePolicy(ctx context.Context, a resource.AccountID, kind Entity, name, policy string) error
-	ListInlinePolicies(ctx context.Context, a resource.AccountID, kind Entity, name string) ([]string, error)
+	PutInlinePolicy(
+		ctx context.Context, a resource.AccountID, kind Entity, name, policy, document, expectARN string,
+	) error
+	GetInlinePolicy(
+		ctx context.Context, a resource.AccountID, kind Entity, name, policy, expectARN string,
+	) (string, error)
+	DeleteInlinePolicy(ctx context.Context, a resource.AccountID, kind Entity, name, policy, expectARN string) error
+	ListInlinePolicies(ctx context.Context, a resource.AccountID, kind Entity, name, expectARN string) ([]string, error)
 
 	TagPolicy(ctx context.Context, a resource.AccountID, arn string, tags []Tag) error
 	UntagPolicy(ctx context.Context, a resource.AccountID, arn string, keys []string) error

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"maps"
 	"net"
 	"regexp"
 	"slices"
@@ -37,6 +38,7 @@ type directory struct {
 	iamv1.UnimplementedUserServiceServer
 	iamv1.UnimplementedGroupServiceServer
 	iamv1.UnimplementedAccessKeyServiceServer
+	iamv1.UnimplementedPolicyServiceServer
 
 	mu     sync.Mutex
 	seq    int
@@ -57,7 +59,13 @@ type directory struct {
 	// deleteRace is the number of DeleteUser and DeleteGroup calls that find
 	// the entity changed by another writer since it was read.
 	deleteRace int
-	calls      map[string][]proto.Message
+	// policyRace is the number of UpdateUser and UpdateGroup calls on the
+	// policy fields that find the etag moved by another writer;
+	// policyRacePath, when set, is the path that writer moved the entity to.
+	policyRace     int
+	policyRacePath string
+	policies       map[string]*dirPolicy // policy id
+	calls          map[string][]proto.Message
 	// keys are the access keys by id (#314 bundle 2), as vws-iam 04488bd
 	// internal/grpcapi/keys.go and internal/accesskey serve them.
 	keys map[string]*dirKey
@@ -66,6 +74,9 @@ type directory struct {
 	keyState iamv1.AccessKeyState
 	// createSecret, when set, replaces the secret CreateAccessKey returns.
 	createSecret *string
+	// onGetPolicy, when set, runs under d.mu in each GetPolicy, as another
+	// writer acting while a list reads the attached policies.
+	onGetPolicy func(d *directory)
 }
 
 type dirKey struct {
@@ -79,6 +90,8 @@ type dirEntity struct {
 	created        time.Time
 	version        int
 	members        []string // groups: user resource names
+	attached       []string // policy ids
+	inline         map[string]string
 }
 
 type dirOp struct {
@@ -93,6 +106,7 @@ func newDirectory() *directory {
 	return &directory{
 		users: map[string]*dirEntity{}, groups: map[string]*dirEntity{}, ops: map[string]dirOp{}, keys: map[string]*dirKey{},
 		maxPage: 1000, failBefore: map[string]int{}, failAfter: map[string]int{}, calls: map[string][]proto.Message{},
+		policies: map[string]*dirPolicy{},
 	}
 }
 
@@ -105,6 +119,7 @@ func dirHarness(t *testing.T) (*Client, *directory) {
 	iamv1.RegisterUserServiceServer(g, d)
 	iamv1.RegisterGroupServiceServer(g, d)
 	iamv1.RegisterAccessKeyServiceServer(g, d)
+	iamv1.RegisterPolicyServiceServer(g, d)
 	go func() { _ = g.Serve(lis) }()
 	t.Cleanup(g.Stop)
 	conn, err := grpc.NewClient("passthrough:///bufnet",
@@ -215,7 +230,9 @@ func (d *directory) userProto(e *dirEntity) *iamv1.User {
 		}
 	}
 	return &iamv1.User{
-		Name: e.name, Etag: strconv.Itoa(e.version), Spec: &iamv1.UserSpec{Path: dirPath(e.path)},
+		Name: e.name, Etag: strconv.Itoa(e.version), Spec: &iamv1.UserSpec{
+			Path: dirPath(e.path), AttachedPolicies: policyNames(project, e.attached), InlinePolicies: maps.Clone(e.inline),
+		},
 		Status:     &iamv1.UserStatus{Arn: entityARN(project, "user", e), UniqueId: e.id, Groups: groups},
 		CreateTime: timestamppb.New(e.created),
 	}
@@ -225,7 +242,10 @@ func (d *directory) groupProto(e *dirEntity) *iamv1.Group {
 	project, _, _ := split(e.name, "groups")
 	return &iamv1.Group{
 		Name: e.name, Etag: strconv.Itoa(e.version),
-		Spec:       &iamv1.GroupSpec{Path: dirPath(e.path), Members: slices.Clone(e.members)},
+		Spec: &iamv1.GroupSpec{
+			Path: dirPath(e.path), Members: slices.Clone(e.members),
+			AttachedPolicies: policyNames(project, e.attached), InlinePolicies: maps.Clone(e.inline),
+		},
 		Status:     &iamv1.GroupStatus{Arn: entityARN(project, "group", e), UniqueId: e.id},
 		CreateTime: timestamppb.New(e.created),
 	}
@@ -350,20 +370,33 @@ func (d *directory) UpdateUser(_ context.Context, req *iamv1.UpdateUserRequest) 
 	if op, found, err := d.replay("UpdateUser", req.GetRequestId(), req); found {
 		return op, err
 	}
-	if !slices.Equal(req.GetUpdateMask().GetPaths(), []string{"spec.path"}) {
-		return nil, status.Error(codes.InvalidArgument, "the directory serves spec.path only")
-	}
 	u := d.users[fold(req.GetUser().GetName())]
 	if u == nil {
 		return nil, awsErr(codes.NotFound, "NOT_FOUND", "NoSuchEntity")
 	}
+	d.racePolicies(u, req.GetUpdateMask().GetPaths())
 	if e := req.GetUser().GetEtag(); e != "" && e != strconv.Itoa(u.version) {
 		return nil, awsErr(codes.Aborted, "ETAG_MISMATCH", "ConcurrentModification")
 	}
-	if err := checkPathArg(req.GetUser().GetSpec().GetPath()); err != nil {
-		return nil, err
+	project, _, _ := split(u.name, "users")
+	spec := req.GetUser().GetSpec()
+	next := *u
+	for _, p := range req.GetUpdateMask().GetPaths() {
+		switch p {
+		case "spec.path":
+			if err := checkPathArg(spec.GetPath()); err != nil {
+				return nil, err
+			}
+			next.path = spec.GetPath()
+		case "spec.attached_policies", "spec.inline_policies":
+			if err := d.setPolicies(project, &next, p, spec.GetAttachedPolicies(), spec.GetInlinePolicies()); err != nil {
+				return nil, err
+			}
+		default:
+			return nil, status.Error(codes.InvalidArgument, "the directory serves spec.path and the policies only")
+		}
 	}
-	u.path = req.GetUser().GetSpec().GetPath()
+	*u = next
 	u.version++
 	return d.done("UpdateUser", req.GetRequestId(), req, d.userProto(u))
 }
@@ -388,7 +421,8 @@ func (d *directory) DeleteUser(_ context.Context, req *iamv1.DeleteUserRequest) 
 	if e := req.GetEtag(); e != "" && e != strconv.Itoa(u.version) {
 		return nil, awsErr(codes.Aborted, "ETAG_MISMATCH", "ConcurrentModification")
 	}
-	if len(d.userProto(u).GetStatus().GetGroups()) > 0 || d.keysOf(fold(u.name)) > 0 {
+	if len(d.userProto(u).GetStatus().GetGroups()) > 0 || d.keysOf(fold(u.name)) > 0 ||
+		len(u.attached) > 0 || len(u.inline) > 0 {
 		return nil, awsErr(codes.FailedPrecondition, "DELETE_CONFLICT", "DeleteConflict")
 	}
 	delete(d.users, fold(req.GetName()))
@@ -473,9 +507,18 @@ func (d *directory) UpdateGroup(_ context.Context, req *iamv1.UpdateGroupRequest
 	if e := req.GetGroup().GetEtag(); e != "" && e != strconv.Itoa(g.version) {
 		return nil, awsErr(codes.Aborted, "ETAG_MISMATCH", "ConcurrentModification")
 	}
+	d.racePolicies(g, req.GetUpdateMask().GetPaths())
+	if e := req.GetGroup().GetEtag(); e != "" && e != strconv.Itoa(g.version) {
+		return nil, awsErr(codes.Aborted, "ETAG_MISMATCH", "ConcurrentModification")
+	}
 	project, _, _ := split(g.name, "groups")
+	spec := req.GetGroup().GetSpec()
 	for _, p := range req.GetUpdateMask().GetPaths() {
 		switch p {
+		case "spec.attached_policies", "spec.inline_policies":
+			if err := d.setPolicies(project, g, p, spec.GetAttachedPolicies(), spec.GetInlinePolicies()); err != nil {
+				return nil, err
+			}
 		case "spec.path":
 			if err := checkPathArg(req.GetGroup().GetSpec().GetPath()); err != nil {
 				return nil, err
@@ -499,7 +542,7 @@ func (d *directory) UpdateGroup(_ context.Context, req *iamv1.UpdateGroupRequest
 			}
 			g.members = members
 		default:
-			return nil, status.Error(codes.InvalidArgument, "the directory serves spec.path and spec.members only")
+			return nil, status.Error(codes.InvalidArgument, "the directory serves spec.path, spec.members and the policies only")
 		}
 	}
 	g.version++
@@ -526,7 +569,7 @@ func (d *directory) DeleteGroup(_ context.Context, req *iamv1.DeleteGroupRequest
 	if e := req.GetEtag(); e != "" && e != strconv.Itoa(g.version) {
 		return nil, awsErr(codes.Aborted, "ETAG_MISMATCH", "ConcurrentModification")
 	}
-	if len(g.members) > 0 {
+	if len(g.members) > 0 || len(g.attached) > 0 || len(g.inline) > 0 {
 		return nil, awsErr(codes.FailedPrecondition, "DELETE_CONFLICT", "DeleteConflict")
 	}
 	delete(d.groups, fold(req.GetName()))

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -380,11 +381,13 @@ type policiesResult struct {
 type attachedResult struct {
 	AttachedPolicies []attachedXML `xml:"AttachedPolicies>member"`
 	IsTruncated      bool          `xml:"IsTruncated"`
+	Marker           string        `xml:"Marker,omitempty"`
 }
 
 type namesResult struct {
 	PolicyNames []string `xml:"PolicyNames>member"`
 	IsTruncated bool     `xml:"IsTruncated"`
+	Marker      string   `xml:"Marker,omitempty"`
 }
 
 func iamActions() map[string]spec {
@@ -1044,48 +1047,109 @@ func iamActions() map[string]spec {
 	} {
 		kind, e := kind, e
 		m["Attach"+e.word+"Policy"] = admin([]string{e.key, "PolicyArn"}, e.arn, func(h *handler, c *exchange) (any, error) {
-			if err := required(c, e.key, "PolicyArn"); err != nil {
+			if err := required(c, e.key); err != nil {
 				return nil, err
 			}
-			return nil, h.cfg.Admin.AttachPolicy(c.r.Context(), c.caller.Account, kind, c.form(e.key), c.form("PolicyArn"))
+			if err := policyArnParam(c); err != nil {
+				return nil, err
+			}
+			return nil, h.cfg.Admin.AttachPolicy(
+				c.r.Context(), c.caller.Account, kind, c.form(e.key), c.form("PolicyArn"), c.authorized)
 		})
 		m["Detach"+e.word+"Policy"] = admin([]string{e.key, "PolicyArn"}, e.arn, func(h *handler, c *exchange) (any, error) {
-			if err := required(c, e.key, "PolicyArn"); err != nil {
+			if err := required(c, e.key); err != nil {
 				return nil, err
 			}
-			return nil, h.cfg.Admin.DetachPolicy(c.r.Context(), c.caller.Account, kind, c.form(e.key), c.form("PolicyArn"))
+			if err := policyArnParam(c); err != nil {
+				return nil, err
+			}
+			return nil, h.cfg.Admin.DetachPolicy(
+				c.r.Context(), c.caller.Account, kind, c.form(e.key), c.form("PolicyArn"), c.authorized)
 		})
 		m["ListAttached"+e.word+"Policies"] = spec{params: []string{e.key}, list: true, needsAdmin: true, resource: e.arn, run: func(h *handler, c *exchange) (any, error) {
-			ps, err := h.cfg.Admin.ListAttachedPolicies(c.r.Context(), c.caller.Account, kind, c.form(e.key))
-			out := attachedResult{AttachedPolicies: []attachedXML{}}
-			for _, p := range ps {
-				out.AttachedPolicies = append(out.AttachedPolicies, attachedXML{PolicyName: p.Name, PolicyArn: p.ARN})
-			}
-			return out, err
-		}}
-		m["Put"+e.word+"Policy"] = admin([]string{e.key, "PolicyName", "PolicyDocument"}, e.arn, func(h *handler, c *exchange) (any, error) {
-			if err := required(c, e.key, "PolicyName", "PolicyDocument"); err != nil {
+			if err := required(c, e.key); err != nil {
 				return nil, err
 			}
-			return nil, h.cfg.Admin.PutInlinePolicy(c.r.Context(), c.caller.Account, kind, c.form(e.key), c.form("PolicyName"), c.form("PolicyDocument"))
+			marker, maxItems, err := pageParams(c)
+			if err != nil {
+				return nil, err
+			}
+			prefix, err := attachedPathPrefixParam(c)
+			if err != nil {
+				return nil, err
+			}
+			ps, err := h.cfg.Admin.ListAttachedPolicies(c.r.Context(), c.caller.Account, kind, c.form(e.key), c.authorized)
+			if err != nil {
+				return nil, err
+			}
+			ps = slices.DeleteFunc(ps, func(p iam.ManagedPolicy) bool { return !strings.HasPrefix(p.Path, prefix) })
+			page, truncated, next := pageByName(ps, func(p iam.ManagedPolicy) string { return p.Name }, marker, maxItems)
+			out := attachedResult{AttachedPolicies: []attachedXML{}, IsTruncated: truncated, Marker: next}
+			for _, p := range page {
+				out.AttachedPolicies = append(out.AttachedPolicies, attachedXML{PolicyName: p.Name, PolicyArn: p.ARN})
+			}
+			return out, nil
+		}}
+		m["Put"+e.word+"Policy"] = admin([]string{e.key, "PolicyName", "PolicyDocument"}, e.arn, func(h *handler, c *exchange) (any, error) {
+			if err := required(c, e.key); err != nil {
+				return nil, err
+			}
+			if err := inlinePolicyNameParam(c); err != nil {
+				return nil, err
+			}
+			if err := policyDocumentParam(c); err != nil {
+				return nil, err
+			}
+			return nil, h.cfg.Admin.PutInlinePolicy(c.r.Context(), c.caller.Account, kind, c.form(e.key),
+				c.form("PolicyName"), c.form("PolicyDocument"), c.authorized)
 		})
 		m["Get"+e.word+"Policy"] = admin([]string{e.key, "PolicyName"}, e.arn, func(h *handler, c *exchange) (any, error) {
-			doc, err := h.cfg.Admin.GetInlinePolicy(c.r.Context(), c.caller.Account, kind, c.form(e.key), c.form("PolicyName"))
+			if err := required(c, e.key); err != nil {
+				return nil, err
+			}
+			if err := inlinePolicyNameParam(c); err != nil {
+				return nil, err
+			}
+			doc, err := h.cfg.Admin.GetInlinePolicy(
+				c.r.Context(), c.caller.Account, kind, c.form(e.key), c.form("PolicyName"), c.authorized)
+			if err != nil {
+				return nil, err
+			}
 			out := struct {
 				Entity         string `xml:",innerxml"`
 				PolicyName     string `xml:"PolicyName"`
 				PolicyDocument string `xml:"PolicyDocument"`
 			}{PolicyName: c.form("PolicyName"), PolicyDocument: policyDoc(doc)}
 			out.Entity = "<" + e.key + ">" + xmlEscape(c.form(e.key)) + "</" + e.key + ">"
-			return out, err
+			return out, nil
 		})
 		m["Delete"+e.word+"Policy"] = admin([]string{e.key, "PolicyName"}, e.arn, func(h *handler, c *exchange) (any, error) {
-			return nil, h.cfg.Admin.DeleteInlinePolicy(c.r.Context(), c.caller.Account, kind, c.form(e.key), c.form("PolicyName"))
+			if err := required(c, e.key); err != nil {
+				return nil, err
+			}
+			if err := inlinePolicyNameParam(c); err != nil {
+				return nil, err
+			}
+			return nil, h.cfg.Admin.DeleteInlinePolicy(
+				c.r.Context(), c.caller.Account, kind, c.form(e.key), c.form("PolicyName"), c.authorized)
 		})
-		m["List"+e.word+"Policies"] = spec{params: []string{e.key}, list: true, needsAdmin: true, resource: e.arn, run: func(h *handler, c *exchange) (any, error) {
-			names, err := h.cfg.Admin.ListInlinePolicies(c.r.Context(), c.caller.Account, kind, c.form(e.key))
-			return namesResult{PolicyNames: names}, err
-		}}
+		// AWS List*Policies takes Marker and MaxItems but no PathPrefix.
+		listInline := []string{e.key, "Marker", "MaxItems"}
+		m["List"+e.word+"Policies"] = admin(listInline, e.arn, func(h *handler, c *exchange) (any, error) {
+			if err := required(c, e.key); err != nil {
+				return nil, err
+			}
+			marker, maxItems, err := pageParams(c)
+			if err != nil {
+				return nil, err
+			}
+			names, err := h.cfg.Admin.ListInlinePolicies(c.r.Context(), c.caller.Account, kind, c.form(e.key), c.authorized)
+			if err != nil {
+				return nil, err
+			}
+			page, truncated, next := pageByName(names, func(n string) string { return n }, marker, maxItems)
+			return namesResult{PolicyNames: page, IsTruncated: truncated, Marker: next}, nil
+		})
 	}
 	return m
 }

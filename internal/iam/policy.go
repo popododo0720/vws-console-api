@@ -67,6 +67,12 @@ func parsePolicy(doc string, trust bool) ([]policyStatement, error) {
 	if len(doc) > maxPolicyBytes {
 		return nil, &resource.Error{Code: resource.CodeResourceExhausted, Field: "PolicyDocument", Message: "Cannot exceed quota for PolicySize: 6144"}
 	}
+	return parseDoc(doc, trust)
+}
+
+// parseDoc is parsePolicy without the managed policy size limit, for inline
+// policies, whose size AWS counts per entity.
+func parseDoc(doc string, trust bool) ([]policyStatement, error) {
 	var p rawPolicy
 	dec := json.NewDecoder(strings.NewReader(doc))
 	dec.DisallowUnknownFields()
