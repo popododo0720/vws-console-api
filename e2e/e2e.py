@@ -737,6 +737,63 @@ def identity():
     step("IAM ListUserPolicies", lambda: check(iam.list_user_policies(UserName="e2e-bob")["PolicyNames"] == ["no-volumes"], "inline"))
     step("IAM GetUserPolicy returns the document", lambda: check(
         iam.get_user_policy(UserName="e2e-bob", PolicyName="no-volumes")["PolicyDocument"]["Statement"][0]["Effect"] == "Deny", "document"))
+    # #314 bundle 3: the managed and inline policies of a user and a group:
+    # no-op re-attach, PathPrefix, paging and the AWS error codes.
+    def attached(**kw):
+        return [p["PolicyArn"] for p in iam.list_attached_group_policies(
+            GroupName="e2e-readers", **kw)["AttachedPolicies"]]
+
+    step("IAM ListAttachedGroupPolicies lists the policy", lambda: check(attached() == [S["policy_arn"]], attached()))
+    step("IAM AttachGroupPolicy again is a no-op", lambda: iam.attach_group_policy(
+        GroupName="e2e-readers", PolicyArn=S["policy_arn"]))
+    step("IAM ListAttachedGroupPolicies still lists it once", lambda: check(attached() == [S["policy_arn"]], attached()))
+    step("IAM ListAttachedGroupPolicies PathPrefix filters", lambda: check(attached(PathPrefix="/nope/") == [], "prefix"))
+    step("IAM ListAttachedGroupPolicies PathPrefix without the final slash is ValidationError", lambda: aws_error(
+        "ValidationError", lambda: attached(PathPrefix="/nope")))
+    missing_arn = f"arn:vws:iam::{account}:policy/e2e-missing"
+    step("IAM AttachUserPolicy of a missing policy is NoSuchEntity", lambda: aws_error(
+        "NoSuchEntity", lambda: iam.attach_user_policy(UserName="e2e-bob", PolicyArn=missing_arn)))
+    step("IAM AttachUserPolicy with a malformed ARN is InvalidInput", lambda: aws_error(
+        "InvalidInput", lambda: iam.attach_user_policy(UserName="e2e-bob", PolicyArn=f"arn:vws:iam::{account}:user/e2e-bob")))
+    step("IAM DetachUserPolicy of a policy not attached is NoSuchEntity", lambda: aws_error(
+        "NoSuchEntity", lambda: iam.detach_user_policy(UserName="e2e-bob", PolicyArn=S["policy_arn"])))
+    step("IAM AttachUserPolicy", lambda: iam.attach_user_policy(UserName="e2e-bob", PolicyArn=S["policy_arn"]))
+    step("IAM ListAttachedUserPolicies", lambda: check(
+        [p["PolicyName"] for p in iam.list_attached_user_policies(UserName="e2e-bob")["AttachedPolicies"]] == ["e2e-describe"],
+        "attached"))
+    step("IAM DetachUserPolicy", lambda: iam.detach_user_policy(UserName="e2e-bob", PolicyArn=S["policy_arn"]))
+    step("IAM ListAttachedUserPolicies is empty", lambda: check(
+        iam.list_attached_user_policies(UserName="e2e-bob")["AttachedPolicies"] == [], "attached"))
+    step("IAM PutUserPolicy malformed is MalformedPolicyDocument", lambda: aws_error(
+        "MalformedPolicyDocument", lambda: iam.put_user_policy(
+            UserName="e2e-bob", PolicyName="bad", PolicyDocument=json.dumps({"Version": "2012-10-17", "Statement": []}))))
+    big = json.dumps({"Version": "2012-10-17", "Statement": [
+        {"Effect": "Allow", "Action": "s3:GetObject", "Resource": "arn:vws:s3:::" + "x" * 2048}]})
+    step("IAM PutUserPolicy over the 2,048 character user limit is LimitExceeded", lambda: aws_error(
+        "LimitExceeded", lambda: iam.put_user_policy(UserName="e2e-bob", PolicyName="big", PolicyDocument=big)))
+    step("IAM GetUserPolicy of a missing policy is NoSuchEntity", lambda: aws_error(
+        "NoSuchEntity", lambda: iam.get_user_policy(UserName="e2e-bob", PolicyName="e2e-missing")))
+    harmless = json.dumps({"Version": "2012-10-17", "Statement": [
+        {"Effect": "Allow", "Action": "s3:GetObject", "Resource": "arn:vws:s3:::e2e-none/*"}]})
+    for name in ("e2e-a", "e2e-b"):
+        step(f"IAM PutGroupPolicy {name}", lambda name=name: iam.put_group_policy(
+            GroupName="e2e-readers", PolicyName=name, PolicyDocument=harmless))
+    gpage = step("IAM ListGroupPolicies MaxItems 1 is truncated", lambda: iam.list_group_policies(
+        GroupName="e2e-readers", MaxItems=1))
+    step("IAM ListGroupPolicies first page", lambda: check(
+        gpage["IsTruncated"] and gpage["PolicyNames"] == ["e2e-a"] and gpage.get("Marker"), gpage))
+    step("IAM ListGroupPolicies next page", lambda: check(iam.list_group_policies(
+        GroupName="e2e-readers", Marker=gpage["Marker"])["PolicyNames"] == ["e2e-b"], "page 2") if gpage else None)
+    step("IAM GetGroupPolicy returns the document", lambda: check(
+        iam.get_group_policy(GroupName="e2e-readers", PolicyName="e2e-a")["PolicyDocument"]["Statement"][0]["Resource"]
+        == "arn:vws:s3:::e2e-none/*", "document"))
+    for name in ("e2e-a", "e2e-b"):
+        step(f"IAM DeleteGroupPolicy {name}", lambda name=name: iam.delete_group_policy(
+            GroupName="e2e-readers", PolicyName=name))
+    step("IAM DeleteGroupPolicy again is NoSuchEntity", lambda: aws_error(
+        "NoSuchEntity", lambda: iam.delete_group_policy(GroupName="e2e-readers", PolicyName="e2e-a")))
+    step("IAM ListGroupPolicies is empty", lambda: check(
+        iam.list_group_policies(GroupName="e2e-readers")["PolicyNames"] == [], "inline"))
     key = step("IAM CreateAccessKey", lambda: iam.create_access_key(UserName="e2e-bob")["AccessKey"])
     if not key:
         return
