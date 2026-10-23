@@ -1,0 +1,164 @@
+package iamclient
+
+import (
+	"context"
+	"net/http"
+	"net/url"
+	"testing"
+
+	iamv1 "github.com/popododo0720/vws-proto/gen/go/vws/iam/v1"
+
+	"github.com/popododo0720/vws-console-api/internal/iam"
+	"github.com/popododo0720/vws-console-api/internal/resource"
+)
+
+// movingAdmin moves one group or user to /denied/ right after the surface's
+// first lookup of it. A concurrent UpdateGroup or UpdateUser does the same
+// between the authorization and the change.
+type movingAdmin struct {
+	iam.Admin
+	group, user string
+	moved       bool
+}
+
+func (a *movingAdmin) GetGroup(
+	ctx context.Context, account resource.AccountID, name string,
+) (iam.Group, []iam.User, error) {
+	g, us, err := a.Admin.GetGroup(ctx, account, name)
+	if err == nil && !a.moved && name == a.group {
+		a.moved = true
+		if err := a.UpdateGroup(ctx, account, name, "/denied/", ""); err != nil {
+			return iam.Group{}, nil, err
+		}
+	}
+	return g, us, err
+}
+
+func (a *movingAdmin) GetUser(ctx context.Context, account resource.AccountID, name string) (iam.User, error) {
+	u, err := a.Admin.GetUser(ctx, account, name)
+	if err == nil && !a.moved && name == a.user {
+		a.moved = true
+		if err := a.UpdateUser(ctx, account, name, "/denied/", "", ""); err != nil {
+			return iam.User{}, err
+		}
+	}
+	return u, err
+}
+
+// memberWrites counts the UpdateGroup requests on spec.members.
+func memberWrites(d *directory) int {
+	n := 0
+	for _, m := range d.sent("UpdateGroup") {
+		for _, p := range m.(*iamv1.UpdateGroupRequest).GetUpdateMask().GetPaths() {
+			if p == "spec.members" {
+				n++
+			}
+		}
+	}
+	return n
+}
+
+// #325 r1: over gRPC a group or user change acts only on the ARN the caller
+// was authorized on. When the entity moves between the authorization and the
+// write, or between two membership attempts, the answer is 409
+// ConcurrentModification and nothing is written.
+func TestGroupAndUserChangesActOnTheAuthorizedARNOverGRPC(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		form        url.Values
+		group, user string // moved after the surface's lookup
+		racePath    string // moved by the writer that wins attempt 1
+		unchanged   func(t *testing.T, a iam.Admin, d *directory, writes int)
+	}{
+		{
+			name: "AddUserToGroup", group: "devs",
+			form:      url.Values{"Action": {"AddUserToGroup"}, "GroupName": {"devs"}, "UserName": {"bob"}},
+			unchanged: membersStay,
+		},
+		{
+			name: "AddUserToGroup moved on attempt 1", racePath: "/denied/",
+			form:      url.Values{"Action": {"AddUserToGroup"}, "GroupName": {"devs"}, "UserName": {"bob"}},
+			unchanged: membersStay,
+		},
+		{
+			name: "RemoveUserFromGroup", group: "devs",
+			form:      url.Values{"Action": {"RemoveUserFromGroup"}, "GroupName": {"devs"}, "UserName": {"alice"}},
+			unchanged: membersStay,
+		},
+		{
+			name: "RemoveUserFromGroup moved on attempt 1", racePath: "/denied/",
+			form:      url.Values{"Action": {"RemoveUserFromGroup"}, "GroupName": {"devs"}, "UserName": {"alice"}},
+			unchanged: membersStay,
+		},
+		{
+			name: "DeleteGroup", group: "empty",
+			form: url.Values{"Action": {"DeleteGroup"}, "GroupName": {"empty"}},
+			unchanged: func(t *testing.T, a iam.Admin, _ *directory, _ int) {
+				t.Helper()
+				if _, _, err := a.GetGroup(t.Context(), account314, "empty"); err != nil {
+					t.Errorf("the group was deleted: %v", err)
+				}
+			},
+		},
+		{
+			name: "UpdateGroup", group: "devs",
+			form: url.Values{"Action": {"UpdateGroup"}, "GroupName": {"devs"}, "NewPath": {"/x/"}},
+			unchanged: func(t *testing.T, a iam.Admin, _ *directory, _ int) {
+				t.Helper()
+				if g, _, err := a.GetGroup(t.Context(), account314, "devs"); err != nil || g.Path != "/denied/" {
+					t.Errorf("the group moved to %+v: %v", g, err)
+				}
+			},
+		},
+		{
+			name: "DeleteUser", user: "erin",
+			form: url.Values{"Action": {"DeleteUser"}, "UserName": {"erin"}},
+			unchanged: func(t *testing.T, a iam.Admin, _ *directory, _ int) {
+				t.Helper()
+				if _, err := a.GetUser(t.Context(), account314, "erin"); err != nil {
+					t.Errorf("the user was deleted: %v", err)
+				}
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mover := &movingAdmin{group: tc.group, user: tc.user}
+			h, _, d := dirQueryHarnessWith(t, func(a iam.Admin) iam.Admin {
+				mover.Admin = a
+				return mover
+			})
+			ctx := t.Context()
+			if _, err := mover.CreateGroup(ctx, account314, "empty", "/team/"); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := mover.CreateUser(ctx, account314, "erin", "/ops/"); err != nil {
+				t.Fatal(err)
+			}
+			d.mu.Lock()
+			if tc.racePath != "" {
+				d.race, d.racePath = 1, tc.racePath
+			}
+			d.mu.Unlock()
+			before := memberWrites(d)
+			if tc.racePath != "" {
+				before++ // attempt 1 is sent, and vws-iam refuses it on the etag
+			}
+			res := queryCall(t, h, tc.form)
+			tc.unchanged(t, mover.Admin, d, memberWrites(d)-before)
+			expect(t, res, http.StatusConflict, "<Code>ConcurrentModification</Code>")
+		})
+	}
+}
+
+// membersStay checks that devs still has only alice and that no member list
+// reached vws-iam beyond an attempt vws-iam refused on the etag.
+func membersStay(t *testing.T, a iam.Admin, _ *directory, writes int) {
+	t.Helper()
+	_, us, err := a.GetGroup(t.Context(), account314, "devs")
+	if err != nil || len(us) != 1 || us[0].Name != "alice" {
+		t.Errorf("members %+v: %v", us, err)
+	}
+	if writes > 0 {
+		t.Errorf("%d member writes reached vws-iam after the group moved", writes)
+	}
+}

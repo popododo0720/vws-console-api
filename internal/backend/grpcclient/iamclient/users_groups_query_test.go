@@ -20,8 +20,19 @@ import (
 // alice); vws-iam's AuthService (harness) authenticates and authorizes.
 func dirQueryHarness(t *testing.T) (http.Handler, *server, *directory) {
 	t.Helper()
+	return dirQueryHarnessWith(t, nil)
+}
+
+// dirQueryHarnessWith is dirQueryHarness with the Admin the surface calls
+// wrapped by wrap, when it is not nil.
+func dirQueryHarnessWith(t *testing.T, wrap func(iam.Admin) iam.Admin) (http.Handler, *server, *directory) {
+	t.Helper()
 	auth, s := harness(t)
-	admin, d := seeded(t.Context(), t)
+	seededAdmin, d := seeded(t.Context(), t)
+	var admin iam.Admin = seededAdmin
+	if wrap != nil {
+		admin = wrap(seededAdmin)
+	}
 	verifier := func(svc sigv4.Service) *sigv4.Verifier {
 		return sigv4.NewVerifier(sigv4.Verifier{
 			Service: svc, Region: resource.RegionName,
