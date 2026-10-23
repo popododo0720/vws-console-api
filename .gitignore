@@ -31,3 +31,7 @@ go.work.sum
 # Editor/IDE
 # .idea/
 # .vscode/
+
+# Python bytecode from the e2e runner
+__pycache__/
+*.pyc
