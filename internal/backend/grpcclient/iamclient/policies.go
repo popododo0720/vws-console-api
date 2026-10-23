@@ -266,7 +266,9 @@ func (a STSAdmin) DetachPolicy(
 
 // ListAttachedPolicies implements iam.Admin: the attached policies of the
 // user or group, each read with PolicyService.GetPolicy, sorted by name. A
-// policy vws-iam no longer has is left out.
+// policy vws-iam no longer has is left out. A non-empty expectARN must be
+// the entity's ARN when it is read before the policies and again after
+// them, as in ListAccessKeys.
 func (a STSAdmin) ListAttachedPolicies(
 	ctx context.Context, account resource.AccountID, kind iam.Entity, name, expectARN string,
 ) (out []iam.ManagedPolicy, err error) {
@@ -295,6 +297,9 @@ func (a STSAdmin) ListAttachedPolicies(
 			return nil, resource.Internal(errors.New("vws-iam returned a policy outside the caller's account"))
 		}
 		out = append(out, managedFromProto(p))
+	}
+	if _, err := a.readHolder(ctx, account, kind, name, expectARN); err != nil {
+		return nil, err
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out, nil
