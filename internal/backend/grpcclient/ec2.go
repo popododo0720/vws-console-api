@@ -669,6 +669,11 @@ func (c computeClient) writeDetach(
 			model, got.GetLabels(), resource.ActionDetachVolume, m.Fingerprint, storedDetachRecords(got.GetLabels()),
 		)
 	}
+	if drop && record != nil && resource.CodeOf(err) == resource.CodeInvalidArgument {
+		// The only invalid argument here is the label capacity check. A
+		// DetachVolume takes no tags: name what has no room (#327 review).
+		return zero, detachRoomErr()
+	}
 	if err != nil {
 		return zero, err
 	}

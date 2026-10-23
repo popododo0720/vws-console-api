@@ -412,6 +412,13 @@ func tagCapacityErr() error {
 	return resource.Invalid("TagSpecification", "tags exceed what the compute backend can store (64 labels of 63 bytes)")
 }
 
+// detachRoomErr is tagCapacityErr for a client-token DetachVolume, which
+// takes no tags: the instance has no room for the detach's replay record.
+func detachRoomErr() error {
+	return resource.Invalid("VolumeId",
+		"the instance has no room for this detach's replay record (64 compute labels of 63 bytes)")
+}
+
 // splitUTF8 cuts s into pieces of at most n bytes without splitting a rune.
 func splitUTF8(s string, n int) []string {
 	var out []string
