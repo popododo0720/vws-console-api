@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -540,5 +541,96 @@ func recoveryAfterInterveningWrite(
 	}
 	if _, ok := world.labelsOf(name)[recordA]; ok {
 		t.Fatal("A was kept after B's operation id was saved")
+	}
+}
+
+// A detach saves its operation id in a second label write. Held expired
+// records take labels without counting toward backend.MaxDetachReplays, so
+// a detach can fit compute's 64 labels on its first write and have no room
+// for its vws-dop- label. That detach is the tag capacity error before
+// compute is called, and changes nothing; a same-token retry is refused the
+// same way, never answered for a detach that happened (#319 review, #322).
+func TestDetachLeavesRoomForItsOperationID(t *testing.T) {
+	t.Run("the operation id would be label 65", func(t *testing.T) { detachOpIDBoundary(t, resource.MaxTags, false) })
+	t.Run("the operation id is label 64", func(t *testing.T) { detachOpIDBoundary(t, resource.MaxTags-1, true) })
+}
+
+// detachOpIDBoundary holds three expired records next to a pending one and a
+// normal one, adds tags one label each, and detaches one more volume.
+func detachOpIDBoundary(t *testing.T, tagCount int, fits bool) {
+	world, client, name, vols, inst := capacityWorld(t, 6)
+	start := time.Unix(1_700_000_000, 0).UTC()
+	var offset atomic.Int64
+	client.now = func() time.Time { return start.Add(time.Duration(offset.Load())) }
+	scope := backend.Scope{Account: mustAccount(t)}
+	ctx := context.Background()
+	for i := range 3 {
+		m := backend.Mutation{Scope: scope, Key: fmt.Sprintf("k-old-%d", i), Fingerprint: fmt.Sprintf("fp-old-%d", i)}
+		if _, err := client.DetachVolume(ctx, m, resource.DetachVolumeRequest{VolumeID: vols[i], InstanceID: inst}); err != nil {
+			t.Fatalf("detach %d: %v", i, err)
+		}
+	}
+	offset.Store(int64(backend.ClientTokenWindow - time.Minute))
+	world.mu.Lock()
+	world.failSameSpec = 1 // the pending detach's operation id write fails
+	world.mu.Unlock()
+	mP := backend.Mutation{Scope: scope, Key: "k-pending", Fingerprint: "fp-pending"}
+	if _, err := client.DetachVolume(ctx, mP, resource.DetachVolumeRequest{VolumeID: vols[3], InstanceID: inst}); resource.CodeOf(err) != resource.CodeUnavailable {
+		t.Fatalf("interrupted pending detach: %v", err)
+	}
+	offset.Store(int64(backend.ClientTokenWindow + backend.ClientTokenGrace + 2*time.Minute))
+	mX := backend.Mutation{Scope: scope, Key: "k-extra", Fingerprint: "fp-extra"}
+	if _, err := client.DetachVolume(ctx, mX, resource.DetachVolumeRequest{VolumeID: vols[4], InstanceID: inst}); err != nil {
+		t.Fatalf("extra detach: %v", err)
+	}
+	tags := map[string]string{}
+	for i := range tagCount {
+		tags[fmt.Sprintf("k%02d", i)] = "v"
+	}
+	if _, err := client.CreateTags(ctx, backend.Mutation{Scope: scope, Key: "k-tags", Fingerprint: "fp-tags"},
+		resource.CreateTagsRequest{IDs: []resource.InstanceID{inst}, Tags: tags}); err != nil {
+		t.Fatalf("%d tags next to the held records: %v", tagCount, err)
+	}
+	if n := len(world.labelsOf(name)); n != 13+tagCount {
+		t.Fatalf("%d labels after %d tags, want %d", n, tagCount, 13+tagCount)
+	}
+	spec := world.volumeNames(name)
+	mN := backend.Mutation{Scope: scope, Key: "k-new", Fingerprint: "fp-new"}
+	reqN := resource.DetachVolumeRequest{VolumeID: vols[5], InstanceID: inst}
+	first, err := client.DetachVolume(ctx, mN, reqN)
+	if !fits {
+		for attempt := range 2 {
+			if resource.CodeOf(err) != resource.CodeInvalidArgument {
+				t.Fatalf("attempt %d: %v, want the tag capacity error", attempt, err)
+			}
+			world.mu.Lock()
+			_, sent := world.byRequest[requestUUID(mN.Key, "detach")]
+			world.mu.Unlock()
+			if sent {
+				t.Fatalf("attempt %d: the refused detach reached compute", attempt)
+			}
+			if got := world.volumeNames(name); !slices.Equal(got, spec) {
+				t.Fatalf("attempt %d: the refused detach changed the spec: %v, want %v", attempt, got, spec)
+			}
+			if _, ok := world.labelsOf(name)[labelDetachPrefix+vols[5].String()]; ok {
+				t.Fatalf("attempt %d: the refused detach wrote a record", attempt)
+			}
+			_, err = client.DetachVolume(ctx, mN, reqN)
+		}
+		return
+	}
+	if err != nil {
+		t.Fatalf("detach whose operation id is label %d: %v", labelMax, err)
+	}
+	labels := world.labelsOf(name)
+	if len(labels) != labelMax {
+		t.Fatalf("%d labels, want %d", len(labels), labelMax)
+	}
+	if _, ok := labels[labelDetachOpPrefix+vols[5].String()]; !ok {
+		t.Fatal("the operation id was not saved")
+	}
+	again, err := client.DetachVolume(ctx, mN, reqN)
+	if err != nil || again.Operation.ID != first.Operation.ID {
+		t.Fatalf("same-token retry: op %s, %v; want op %s", again.Operation.ID, err, first.Operation.ID)
 	}
 }
