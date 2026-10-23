@@ -732,7 +732,8 @@ func recoveryOfARecordWrittenBefore303(
 // it does not count toward backend.MaxDetachReplays: if its retry never
 // comes, other detaches still get stamped records. A record without a stamp
 // was written before every stamped record, so once a stamped record has
-// expired so has it: the hold it caused ends and it is dropped (#322).
+// expired so has it: the hold it caused ends, and it is stamped like any
+// record written before #303 (#322).
 func pruneUnstampedDuringHold(t *testing.T) {
 	const grace = backend.ClientTokenGrace
 	now := time.Unix(1_700_000_000, 0).UTC()
@@ -750,7 +751,8 @@ func pruneUnstampedDuringHold(t *testing.T) {
 	}
 	expired := maps.Clone(held)
 	expired[labelDetachPrefix+"vol-a"] = req + " /dev/sdg " + stampOf(now.Add(-backend.ClientTokenWindow-grace-time.Second))
-	if got := pruneDetachRecords(expired, now); len(got) != 0 {
-		t.Fatalf("records once a stamped record expired: %v, want none", got)
+	want := map[string]string{labelDetachPrefix + "vol-legacy": req + " /dev/sdf " + stampOf(now)}
+	if got := pruneDetachRecords(expired, now); !maps.Equal(got, want) {
+		t.Fatalf("records once a stamped record expired:\n got %v\nwant %v", got, want)
 	}
 }

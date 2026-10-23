@@ -925,7 +925,8 @@ func parseDetachRecord(raw string) (requestHex, device string, at time.Time, sta
 // detach's retry resends its original update, which carried them, and must
 // match it byte for byte (#319 review). A record with no
 // stamp is stamped now, so its window starts at the first write that sees
-// it. A stamp ahead of now is clock skew and is kept. An operation id with
+// it; during a hold it is left as stored too, for the same reason (#322).
+// A stamp ahead of now is clock skew and is kept. An operation id with
 // no record, and a value no request can match, are dropped. The result
 // depends only on raw and now, so pruning twice changes nothing.
 func pruneDetachRecords(raw map[string]string, now time.Time) map[string]string {
@@ -940,9 +941,11 @@ func pruneDetachRecords(raw map[string]string, now time.Time) map[string]string 
 		if !ok {
 			continue
 		}
-		if !stamped {
+		switch {
+		case hold:
+		case !stamped:
 			value = detachRecordValue(requestHex, device, now)
-		} else if !hold && backend.ClientTokenExpired(at, now) {
+		case backend.ClientTokenExpired(at, now):
 			continue
 		}
 		out[key] = value
@@ -957,14 +960,23 @@ func pruneDetachRecords(raw map[string]string, now time.Time) map[string]string 
 // window at now with no saved operation id: a detach whose operation id
 // write failed, so its retry resends the original update by request id. It
 // ends when that id is saved or the record expires.
+//
+// A record written before #303 has no stamp, and a hold leaves it unstamped
+// (pruneDetachRecords), so its own expiry cannot end the hold it causes.
+// Every stamped record was stamped after #303 was deployed, so after that
+// record was written: once a stamped record has expired, so has it (#322).
 func detachRecoveryPending(raw map[string]string, now time.Time) bool {
+	aged := stampedRecordExpired(raw, now)
 	for key, value := range raw {
 		volID, ok := strings.CutPrefix(key, labelDetachPrefix)
 		if !ok {
 			continue
 		}
-		_, _, at, stamped, ok := parseDetachRecord(value)
+		requestHex, device, at, stamped, ok := parseDetachRecord(value)
 		if !ok || (stamped && backend.ClientTokenExpired(at, now)) {
+			continue
+		}
+		if !stamped && aged && writtenBefore303(requestHex, device, now) {
 			continue
 		}
 		if _, saved := raw[labelDetachOpPrefix+volID]; !saved {
@@ -972,6 +984,27 @@ func detachRecoveryPending(raw map[string]string, now time.Time) bool {
 		}
 	}
 	return false
+}
+
+// stampedRecordExpired reports whether raw holds a stamped detach record
+// that has expired at now.
+func stampedRecordExpired(raw map[string]string, now time.Time) bool {
+	for key, value := range raw {
+		if !strings.HasPrefix(key, labelDetachPrefix) {
+			continue
+		}
+		if _, _, at, stamped, ok := parseDetachRecord(value); ok && stamped && backend.ClientTokenExpired(at, now) {
+			return true
+		}
+	}
+	return false
+}
+
+// writtenBefore303 reports whether an unstamped record has room for a stamp,
+// so code since #303 would have stamped it. A record whose device name
+// leaves no room is unstamped whenever it was written.
+func writtenBefore303(requestHex, device string, now time.Time) bool {
+	return detachRecordValue(requestHex, device, now) != requestHex+" "+device
 }
 
 // Every user tag EC2 allows and every detach record within the window fit
@@ -983,15 +1016,20 @@ var _ [labelMax - resource.MaxTags - labelReserve - 2*backend.MaxDetachReplays]s
 // detachRecordsInWindow counts the records a retry may still need at now,
 // apart from one for skipVolID, which a new detach of that volume replaces.
 // An expired record kept for a pending recovery is not within the window,
-// so it does not count toward backend.MaxDetachReplays.
+// so it does not count toward backend.MaxDetachReplays. Nor does a record
+// left unstamped during a hold: its age is unknown, and counting it would
+// let records whose retry never comes refuse every new detach, so no
+// stamped record could ever end the hold (#322).
 func detachRecordsInWindow(raw map[string]string, now time.Time, skipVolID string) int {
+	hold := detachRecoveryPending(raw, now)
 	n := 0
 	for key, value := range pruneDetachRecords(raw, now) {
 		volID, ok := strings.CutPrefix(key, labelDetachPrefix)
 		if !ok || volID == skipVolID {
 			continue
 		}
-		if _, _, at, stamped, _ := parseDetachRecord(value); stamped && backend.ClientTokenExpired(at, now) {
+		_, _, at, stamped, _ := parseDetachRecord(value)
+		if (stamped && backend.ClientTokenExpired(at, now)) || (!stamped && hold) {
 			continue
 		}
 		n++
