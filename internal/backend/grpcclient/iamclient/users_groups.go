@@ -90,6 +90,14 @@ func newRequestID() string {
 func (a STSAdmin) observe(
 	ctx context.Context, action string, mutation bool, account resource.AccountID, user, group string,
 ) (context.Context, func(error)) {
+	return a.observeKey(ctx, action, mutation, account, user, group, nil)
+}
+
+// observeKey is observe for an access key call. The span and the log record
+// carry the key id *keyID holds when the call ends, never the secret.
+func (a STSAdmin) observeKey(
+	ctx context.Context, action string, mutation bool, account resource.AccountID, user, group string, keyID *string,
+) (context.Context, func(error)) {
 	start := time.Now()
 	attrs := []attribute.KeyValue{
 		attribute.String("rpc.system", "grpc"), attribute.String("rpc.service", "vws.iam.v1"),
@@ -110,6 +118,9 @@ func (a STSAdmin) observe(
 			span.SetStatus(otelcodes.Error, outcome)
 		}
 		span.SetAttributes(attribute.String("vws.iam.outcome", outcome))
+		if keyID != nil && *keyID != "" {
+			span.SetAttributes(attribute.String("vws.iam.access_key_id", *keyID))
+		}
 		span.End()
 		if !mutation {
 			return
@@ -119,6 +130,9 @@ func (a STSAdmin) observe(
 			slog.String("action", action), slog.String("account", account.String()),
 			slog.String("user_name", user), slog.String("group_name", group),
 			slog.String("outcome", outcome), slog.Duration("elapsed", time.Since(start)),
+		}
+		if keyID != nil && *keyID != "" {
+			logAttrs = append(logAttrs, slog.String("access_key_id", *keyID))
 		}
 		if c := resource.CodeOf(err); c == resource.CodeUnavailable || c == resource.CodeInternal {
 			level = slog.LevelWarn

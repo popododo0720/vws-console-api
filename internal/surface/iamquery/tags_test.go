@@ -170,7 +170,7 @@ func TestPolicyTagNeedsListPermission(t *testing.T) {
 		`{"Statement":[{"Effect":"Allow","Action":["iam:TagPolicy"],"Resource":"*"}]}`); err != nil {
 		t.Fatal(err)
 	}
-	k, err := f.CreateAccessKey(ctx, root.Account, "bob")
+	k, err := f.CreateAccessKey(ctx, root.Account, "bob", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -249,7 +249,7 @@ func TestPolicyTagWrongPathScopedUser(t *testing.T) {
 	if err := f.PutInlinePolicy(ctx, root.Account, iam.EntityUser, "bob", "team", allow); err != nil {
 		t.Fatal(err)
 	}
-	k, err := f.CreateAccessKey(ctx, root.Account, "bob")
+	k, err := f.CreateAccessKey(ctx, root.Account, "bob", "")
 	if err != nil {
 		t.Fatal(err)
 	}

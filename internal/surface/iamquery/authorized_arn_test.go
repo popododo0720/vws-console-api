@@ -156,7 +156,7 @@ func authorizedARNHarness(
 	if err := f.PutInlinePolicy(ctx, root.Account, iam.EntityUser, "bob", "ok", policy); err != nil {
 		t.Fatal(err)
 	}
-	key, err := f.CreateAccessKey(ctx, root.Account, "bob")
+	key, err := f.CreateAccessKey(ctx, root.Account, "bob", "")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -115,7 +115,7 @@ func TestGetMFADeviceNeedsPermission(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	k, err := f.CreateAccessKey(ctx, root.Account, "bob")
+	k, err := f.CreateAccessKey(ctx, root.Account, "bob", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,7 +164,7 @@ func TestGetMFADeviceNeedsPermission(t *testing.T) {
 		if err := f.PutInlinePolicy(ctx, root.Account, iam.EntityUser, "bob", "get", policy); err != nil {
 			t.Fatal(err)
 		}
-		k, err := f.CreateAccessKey(ctx, root.Account, "bob")
+		k, err := f.CreateAccessKey(ctx, root.Account, "bob", "")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -202,7 +202,7 @@ func TestGetMFADeviceValidatesBeforeAuthorization(t *testing.T) {
 	if _, err := f.CreateUser(ctx, root.Account, "bob", "/"); err != nil {
 		t.Fatal(err)
 	}
-	k, err := f.CreateAccessKey(ctx, root.Account, "bob")
+	k, err := f.CreateAccessKey(ctx, root.Account, "bob", "")
 	if err != nil {
 		t.Fatal(err)
 	}

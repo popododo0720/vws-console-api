@@ -21,14 +21,14 @@ import (
 func TestAccessKeyRequestsOverGRPC(t *testing.T) {
 	ctx := t.Context()
 	a, d := seeded(ctx, t)
-	k, err := a.CreateAccessKey(ctx, account314, "bob")
+	k, err := a.CreateAccessKey(ctx, account314, "bob", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := a.ListAccessKeys(ctx, account314, "bob"); err != nil {
+	if _, err := a.ListAccessKeys(ctx, account314, "bob", ""); err != nil {
 		t.Fatal(err)
 	}
-	if err := a.DeleteAccessKey(ctx, account314, "bob", k.AccessKeyID); err != nil {
+	if err := a.DeleteAccessKey(ctx, account314, "bob", k.AccessKeyID, ""); err != nil {
 		t.Fatal(err)
 	}
 	ck := d.sent("CreateAccessKey")
@@ -66,7 +66,7 @@ func TestCreateAccessKeyIsNotRetriedOverGRPC(t *testing.T) {
 			d.failBefore["CreateAccessKey"] = 1
 		}
 		d.mu.Unlock()
-		_, err := a.CreateAccessKey(ctx, account314, "bob")
+		_, err := a.CreateAccessKey(ctx, account314, "bob", "")
 		if resource.CodeOf(err) != resource.CodeUnavailable {
 			t.Errorf("after=%v: %v, want Unavailable", after, err)
 		}
@@ -75,14 +75,14 @@ func TestCreateAccessKeyIsNotRetriedOverGRPC(t *testing.T) {
 		}
 	}
 	a, d := seeded(ctx, t)
-	k, err := a.CreateAccessKey(ctx, account314, "bob")
+	k, err := a.CreateAccessKey(ctx, account314, "bob", "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	d.mu.Lock()
 	d.failAfter["DeleteAccessKey"] = 1
 	d.mu.Unlock()
-	if err := a.DeleteAccessKey(ctx, account314, "bob", k.AccessKeyID); err != nil {
+	if err := a.DeleteAccessKey(ctx, account314, "bob", k.AccessKeyID, ""); err != nil {
 		t.Fatalf("DeleteAccessKey with a lost response: %v", err)
 	}
 	dk := d.sent("DeleteAccessKey")
@@ -98,24 +98,24 @@ func TestCreateAccessKeyIsNotRetriedOverGRPC(t *testing.T) {
 func TestAccessKeyStatusAndShapeOverGRPC(t *testing.T) {
 	ctx := t.Context()
 	a, d := seeded(ctx, t)
-	k, err := a.CreateAccessKey(ctx, account314, "bob")
+	k, err := a.CreateAccessKey(ctx, account314, "bob", "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	d.mu.Lock()
 	d.keyState = iamv1.AccessKeyState_ACCESS_KEY_STATE_INACTIVE
 	d.mu.Unlock()
-	ks, err := a.ListAccessKeys(ctx, account314, "bob")
+	ks, err := a.ListAccessKeys(ctx, account314, "bob", "")
 	if err != nil || len(ks) != 1 || ks[0].Status != "Inactive" || ks[0].AccessKeyID != k.AccessKeyID {
 		t.Fatalf("inactive key listed as %+v: %v", ks, err)
 	}
 	d.mu.Lock()
 	d.keyState = iamv1.AccessKeyState(7)
 	d.mu.Unlock()
-	if _, err := a.ListAccessKeys(ctx, account314, "bob"); resource.CodeOf(err) != resource.CodeInternal {
+	if _, err := a.ListAccessKeys(ctx, account314, "bob", ""); resource.CodeOf(err) != resource.CodeInternal {
 		t.Fatalf("state 7: %v, want Internal", err)
 	}
-	if _, err := a.CreateAccessKey(ctx, account314, "alice"); resource.CodeOf(err) != resource.CodeInternal {
+	if _, err := a.CreateAccessKey(ctx, account314, "alice", ""); resource.CodeOf(err) != resource.CodeInternal {
 		t.Fatalf("create answered with state 7: %v, want Internal", err)
 	}
 	d.mu.Lock()
@@ -123,7 +123,7 @@ func TestAccessKeyStatusAndShapeOverGRPC(t *testing.T) {
 	short := "s3cr3t-too-short-for-vws-iam"
 	d.createSecret = &short
 	d.mu.Unlock()
-	_, err = a.CreateAccessKey(ctx, account314, "alice")
+	_, err = a.CreateAccessKey(ctx, account314, "alice", "")
 	if resource.CodeOf(err) != resource.CodeInternal || strings.Contains(err.Error(), short) {
 		t.Fatalf("short secret: %v, want Internal without the secret", err)
 	}
@@ -142,26 +142,26 @@ func TestAccessKeySecretIsNeverLoggedOrTraced(t *testing.T) {
 	if _, err := a.CreateUser(ctx, account314, "bob", "/eng/"); err != nil {
 		t.Fatal(err)
 	}
-	k, err := a.CreateAccessKey(ctx, account314, "bob")
+	k, err := a.CreateAccessKey(ctx, account314, "bob", "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(k.Secret) != 40 {
 		t.Fatalf("secret of %d characters", len(k.Secret))
 	}
-	if _, err := a.ListAccessKeys(ctx, account314, "bob"); err != nil {
+	if _, err := a.ListAccessKeys(ctx, account314, "bob", ""); err != nil {
 		t.Fatal(err)
 	}
 	d.mu.Lock()
 	d.failAfter["CreateAccessKey"] = 1
 	d.mu.Unlock()
-	_, lost := a.CreateAccessKey(ctx, account314, "bob")
+	_, lost := a.CreateAccessKey(ctx, account314, "bob", "")
 	d.mu.Lock()
 	leaked := "s3cr3t-0123456789-must-never-be-logged"
 	d.createSecret = &leaked
 	d.mu.Unlock()
-	_, short := a.CreateAccessKey(ctx, account314, "alice")
-	if err := a.DeleteAccessKey(ctx, account314, "bob", k.AccessKeyID); err != nil {
+	_, short := a.CreateAccessKey(ctx, account314, "alice", "")
+	if err := a.DeleteAccessKey(ctx, account314, "bob", k.AccessKeyID, ""); err != nil {
 		t.Fatal(err)
 	}
 	var seen strings.Builder
@@ -304,7 +304,7 @@ func TestAccessKeyCallsActOnTheAuthorizedARNOverGRPC(t *testing.T) {
 			if _, err := mover.CreateUser(t.Context(), account314, "erin", "/ops/"); err != nil {
 				t.Fatal(err)
 			}
-			k, err := mover.Admin.CreateAccessKey(t.Context(), account314, "erin")
+			k, err := mover.Admin.CreateAccessKey(t.Context(), account314, "erin", "")
 			if err != nil {
 				t.Fatal(err)
 			}

@@ -84,18 +84,18 @@ func TestAccessKeysAuthenticate(t *testing.T) {
 	if _, err := f.CreateUser(ctx, a, "bob", "/"); err != nil {
 		t.Fatal(err)
 	}
-	k, err := f.CreateAccessKey(ctx, a, "bob")
+	k, err := f.CreateAccessKey(ctx, a, "bob", "")
 	if err != nil || !strings.HasPrefix(k.AccessKeyID, "AKIA") || len(k.AccessKeyID) != 20 || len(k.Secret) != 40 || k.Status != "Active" {
 		t.Fatalf("create key %+v %v", k, err)
 	}
 	if c, err := verify(t, f, credOf(k.AccessKeyID, k.Secret, "")); err != nil || c.Principal != "arn:vws:iam::123456789012:user/bob" {
 		t.Fatalf("new key: %+v %v", c, err)
 	}
-	keys, err := f.ListAccessKeys(ctx, a, "bob")
+	keys, err := f.ListAccessKeys(ctx, a, "bob", "")
 	if err != nil || len(keys) != 1 || keys[0].AccessKeyID != k.AccessKeyID {
 		t.Fatalf("list keys %+v %v", keys, err)
 	}
-	must(t, f.DeleteAccessKey(ctx, a, "bob", k.AccessKeyID))
+	must(t, f.DeleteAccessKey(ctx, a, "bob", k.AccessKeyID, ""))
 	if _, err := verify(t, f, credOf(k.AccessKeyID, k.Secret, "")); resource.CodeOf(err) != resource.CodeUnauthenticated {
 		t.Fatalf("deleted key still works: %v", err)
 	}
@@ -109,11 +109,11 @@ func TestGetAccessKeyLastUsed(t *testing.T) {
 	if _, err := f.CreateUser(ctx, a, "bob", "/"); err != nil {
 		t.Fatal(err)
 	}
-	used, err := f.CreateAccessKey(ctx, a, "bob")
+	used, err := f.CreateAccessKey(ctx, a, "bob", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	fresh, err := f.CreateAccessKey(ctx, a, "bob")
+	fresh, err := f.CreateAccessKey(ctx, a, "bob", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -378,7 +378,7 @@ func TestUpdateUserKeepsKeysAndSessions(t *testing.T) {
 		t.Fatal(err)
 	}
 	must(t, f.PutInlinePolicy(ctx, a, EntityUser, "bob", "describe", describeOnly))
-	k, err := f.CreateAccessKey(ctx, a, "bob")
+	k, err := f.CreateAccessKey(ctx, a, "bob", "")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -215,10 +215,15 @@ type Admin interface {
 	UpdateLoginProfile(ctx context.Context, a resource.AccountID, user, password string) error
 	DeleteLoginProfile(ctx context.Context, a resource.AccountID, user string) error
 
-	CreateAccessKey(ctx context.Context, a resource.AccountID, user string) (NewAccessKey, error)
-	ListAccessKeys(ctx context.Context, a resource.AccountID, user string) ([]AccessKeyMeta, error)
+	// CreateAccessKey, ListAccessKeys and DeleteAccessKey take the user ARN
+	// the caller was authorized on. A non-empty one must match the user's
+	// current ARN on every read, or the call is a ConcurrentModification
+	// (Changed) and nothing is written. The secret is only ever in the
+	// CreateAccessKey result.
+	CreateAccessKey(ctx context.Context, a resource.AccountID, user, expectARN string) (NewAccessKey, error)
+	ListAccessKeys(ctx context.Context, a resource.AccountID, user, expectARN string) ([]AccessKeyMeta, error)
 	GetAccessKeyLastUsed(ctx context.Context, a resource.AccountID, keyID string) (AccessKeyLastUsed, error)
-	DeleteAccessKey(ctx context.Context, a resource.AccountID, user, keyID string) error
+	DeleteAccessKey(ctx context.Context, a resource.AccountID, user, keyID, expectARN string) error
 
 	CreateGroup(ctx context.Context, a resource.AccountID, name, path string) (Group, error)
 	GetGroup(ctx context.Context, a resource.AccountID, name string) (Group, []User, error)

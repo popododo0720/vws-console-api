@@ -78,3 +78,8 @@ func IsChanged(err error) bool {
 func GroupsPerUserExceeded() error { return quota(groupsPerUserMsg) }
 
 const groupsPerUserMsg = "Cannot exceed quota for GroupsPerUser: 10"
+
+// AccessKeysPerUserExceeded is the AWS LimitExceeded for a third access key.
+func AccessKeysPerUserExceeded() error { return quota(accessKeysPerUserMsg) }
+
+const accessKeysPerUserMsg = "Cannot exceed quota for AccessKeysPerUser: 2"

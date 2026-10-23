@@ -14,7 +14,7 @@ import (
 
 func keysOf(t *testing.T, f *iam.Fake, account resource.AccountID, user string) int {
 	t.Helper()
-	ks, err := f.ListAccessKeys(t.Context(), account, user)
+	ks, err := f.ListAccessKeys(t.Context(), account, user, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +75,7 @@ func TestAccessKeyCallsActOnTheAuthorizedARN(t *testing.T) {
 			}
 			t.Run(name, func(t *testing.T) {
 				h, f, account, bob := authorizedARNHarness(t, mover)
-				k, err := f.CreateAccessKey(t.Context(), account, "erin")
+				k, err := f.CreateAccessKey(t.Context(), account, "erin", "")
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -95,11 +95,11 @@ func TestAccessKeyCallsActOnTheAuthorizedARN(t *testing.T) {
 // takes no PathPrefix, and DeleteAccessKey checks the AccessKeyId pattern.
 func TestAccessKeyPagingAndValidation(t *testing.T) {
 	h, f, account, bob := authorizedARNHarness(t, nil)
-	k1, err := f.CreateAccessKey(t.Context(), account, "carol")
+	k1, err := f.CreateAccessKey(t.Context(), account, "carol", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	k2, err := f.CreateAccessKey(t.Context(), account, "carol")
+	k2, err := f.CreateAccessKey(t.Context(), account, "carol", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -147,6 +147,8 @@ func TestAccessKeyPagingAndValidation(t *testing.T) {
 	has(t, call(t, h, bob, sigv4.ServiceIAM, url.Values{
 		"Action": {"DeleteAccessKey"}, "UserName": {"carol"}, "AccessKeyId": {first},
 	}), http.StatusNotFound, "<Code>NoSuchEntity</Code>")
+	// bob may act only on the users his policy names, so a missing user is
+	// denied before it is looked up: nothing tells bob it does not exist.
 	has(t, call(t, h, bob, sigv4.ServiceIAM, url.Values{"Action": {"ListAccessKeys"}, "UserName": {"ghost"}}),
-		http.StatusNotFound, "<Code>NoSuchEntity</Code>")
+		http.StatusForbidden, "<Code>AccessDenied</Code>")
 }
