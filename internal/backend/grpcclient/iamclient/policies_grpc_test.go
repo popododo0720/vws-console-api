@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -338,6 +340,88 @@ func TestEntityPolicyActionsThroughTheQuerySurfaceOverGRPC(t *testing.T) {
 		rec := queryCall(t, h, st.form)
 		expect(t, rec, st.status, st.parts...)
 	}
+}
+
+// markerOf is the Marker of a truncated Query list response.
+func markerOf(t *testing.T, rec *httptest.ResponseRecorder) string {
+	t.Helper()
+	m := regexp.MustCompile(`<Marker>([^<]+)</Marker>`).FindStringSubmatch(rec.Body.String())
+	if m == nil {
+		t.Fatalf("no Marker: %s", rec.Body.String())
+	}
+	return m[1]
+}
+
+// #314 bundle 3: the user managed policy actions succeed over gRPC through
+// the Query surface with the AWS shapes and paging, and a detached policy is
+// gone from the list.
+func TestUserManagedPolicyActionsThroughTheQuerySurfaceOverGRPC(t *testing.T) {
+	h, _, d := dirQueryHarness(t)
+	readOnly := d.seedPolicy("ReadOnly", "/")
+	ops := d.seedPolicy("Ops", "/team/")
+	member := func(name, arn string) string {
+		return "<member><PolicyName>" + name + "</PolicyName><PolicyArn>" + arn + "</PolicyArn></member>"
+	}
+	attach := func(arn string) url.Values {
+		return url.Values{"Action": {"AttachUserPolicy"}, "UserName": {"alice"}, "PolicyArn": {arn}}
+	}
+	expect(t, queryCall(t, h, attach(readOnly)), http.StatusOK, "<AttachUserPolicyResponse")
+	expect(t, queryCall(t, h, attach(ops)), http.StatusOK, "<AttachUserPolicyResponse")
+	list := url.Values{"Action": {"ListAttachedUserPolicies"}, "UserName": {"alice"}}
+	expect(t, queryCall(t, h, list), http.StatusOK, "<ListAttachedUserPoliciesResponse",
+		"<AttachedPolicies>"+member("Ops", ops)+member("ReadOnly", readOnly)+"</AttachedPolicies>",
+		"<IsTruncated>false</IsTruncated>")
+	list.Set("MaxItems", "1")
+	res := queryCall(t, h, list)
+	expect(t, res, http.StatusOK, "<AttachedPolicies>"+member("Ops", ops)+"</AttachedPolicies>",
+		"<IsTruncated>true</IsTruncated>")
+	list.Set("Marker", markerOf(t, res))
+	res = queryCall(t, h, list)
+	expect(t, res, http.StatusOK, "<AttachedPolicies>"+member("ReadOnly", readOnly)+"</AttachedPolicies>",
+		"<IsTruncated>false</IsTruncated>")
+	if strings.Contains(res.Body.String(), "<Marker>") {
+		t.Errorf("the last page has a Marker: %s", res.Body.String())
+	}
+	detach := url.Values{"Action": {"DetachUserPolicy"}, "UserName": {"alice"}, "PolicyArn": {ops}}
+	expect(t, queryCall(t, h, detach), http.StatusOK, "<DetachUserPolicyResponse")
+	list.Del("MaxItems")
+	list.Del("Marker")
+	expect(t, queryCall(t, h, list), http.StatusOK,
+		"<AttachedPolicies>"+member("ReadOnly", readOnly)+"</AttachedPolicies>")
+	expect(t, queryCall(t, h, detach), http.StatusNotFound,
+		"<Code>NoSuchEntity</Code>", "Policy "+ops+" was not found.")
+}
+
+// #314 bundle 3: the group inline policy actions succeed over gRPC through
+// the Query surface with the AWS shapes, the URL-encoded document and
+// paging, and a deleted policy is NoSuchEntity.
+func TestGroupInlinePolicyActionsThroughTheQuerySurfaceOverGRPC(t *testing.T) {
+	h, _, _ := dirQueryHarness(t)
+	other := strings.Replace(policyDoc314, `"*"`, `"arn:vws:s3:::b/*"`, 1)
+	for name, doc := range map[string]string{"a": policyDoc314, "b": other} {
+		put := url.Values{
+			"Action": {"PutGroupPolicy"}, "GroupName": {"devs"}, "PolicyName": {name}, "PolicyDocument": {doc},
+		}
+		expect(t, queryCall(t, h, put), http.StatusOK, "<PutGroupPolicyResponse")
+	}
+	get := url.Values{"Action": {"GetGroupPolicy"}, "GroupName": {"devs"}, "PolicyName": {"b"}}
+	expect(t, queryCall(t, h, get), http.StatusOK, "<GetGroupPolicyResponse",
+		"<GroupName>devs</GroupName>", "<PolicyName>b</PolicyName>",
+		"<PolicyDocument>"+url.QueryEscape(other)+"</PolicyDocument>")
+	list := url.Values{"Action": {"ListGroupPolicies"}, "GroupName": {"devs"}, "MaxItems": {"1"}}
+	res := queryCall(t, h, list)
+	expect(t, res, http.StatusOK, "<ListGroupPoliciesResponse",
+		"<PolicyNames><member>a</member></PolicyNames>", "<IsTruncated>true</IsTruncated>")
+	list.Set("Marker", markerOf(t, res))
+	expect(t, queryCall(t, h, list), http.StatusOK,
+		"<PolicyNames><member>b</member></PolicyNames>", "<IsTruncated>false</IsTruncated>")
+	del := url.Values{"Action": {"DeleteGroupPolicy"}, "GroupName": {"devs"}, "PolicyName": {"b"}}
+	expect(t, queryCall(t, h, del), http.StatusOK, "<DeleteGroupPolicyResponse")
+	expect(t, queryCall(t, h, get), http.StatusNotFound,
+		"<Code>NoSuchEntity</Code>", "The group policy with name b cannot be found.")
+	expect(t, queryCall(t, h, url.Values{"Action": {"ListGroupPolicies"}, "GroupName": {"devs"}}), http.StatusOK,
+		"<PolicyNames><member>a</member></PolicyNames>", "<IsTruncated>false</IsTruncated>")
+	expect(t, queryCall(t, h, del), http.StatusNotFound, "<Code>NoSuchEntity</Code>")
 }
 
 // #314 bundle 3: over gRPC a policy call acts only on the ARN the caller was
