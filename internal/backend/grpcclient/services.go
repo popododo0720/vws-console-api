@@ -28,6 +28,7 @@ import (
 // volumes and subnets as well as instances, so the three backend views share it.
 type api struct {
 	instances  computev1.InstanceServiceClient
+	images     computev1.ImageServiceClient
 	volumes    storagev1.VolumeServiceClient
 	buckets    storagev1.BucketServiceClient
 	objects    storagev1.ObjectServiceClient
@@ -72,8 +73,8 @@ func (c computeClient) RunInstances(ctx context.Context, m backend.Mutation, req
 		}
 		keyPair = keyPairName(projectID, key.ID.String())
 	}
-	if !resource.CanLaunchImage(m.Account, req.ImageID) {
-		return resource.Accepted[resource.Instance]{}, resource.ImageNotFound(req.ImageID)
+	if err := c.requireImage(ctx, m.Account, req.ImageID); err != nil {
+		return resource.Accepted[resource.Instance]{}, err
 	}
 	items := make([]resource.Instance, 0, req.Count)
 	var op resource.Operation
@@ -150,6 +151,28 @@ func (c computeClient) RunInstances(ctx context.Context, m backend.Mutation, req
 	op.Action = resource.ActionRunInstances
 	op.Targets = instanceRefs(items)
 	return resource.Accepted[resource.Instance]{Operation: op, Items: items}, nil
+}
+
+// requireImage checks that the caller can launch id in this region. The
+// catalog image launches without a read. Any other id is read from compute
+// under the caller's regional name; compute resolves it against the image's
+// stored project and region, so another project's or region's image is not
+// found. The console does not infer the region from the name it sent.
+func (c computeClient) requireImage(ctx context.Context, account resource.AccountID, id resource.ImageID) error {
+	if resource.CanLaunchImage(account, id) {
+		return nil
+	}
+	_, err := c.images.GetImage(ctx, &computev1.GetImageRequest{
+		Name: imageName(project(account), id.String()),
+	})
+	if err == nil {
+		return nil
+	}
+	err = fromRPC(err)
+	if resource.CodeOf(err) == resource.CodeNotFound {
+		return resource.ImageNotFound(id)
+	}
+	return err
 }
 
 // bootVolume is the disk RunInstances creates from the machine image.

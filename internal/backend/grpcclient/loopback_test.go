@@ -69,6 +69,7 @@ func dialLoopbackClock(t *testing.T, world *fake.World, now time.Time, clock fun
 	)
 	loop := newLoopWorld(world.Set(), now)
 	computev1.RegisterInstanceServiceServer(computeSrv, &instanceSrv{w: loop})
+	computev1.RegisterImageServiceServer(computeSrv, imageSrv{})
 	computev1.RegisterKeyPairServiceServer(computeSrv, &keySrv{w: loop})
 	networkv1.RegisterAddressServiceServer(computeSrv, &addressSrv{w: loop})
 	networkv1.RegisterVpcServiceServer(computeSrv, &vpcSrv{w: loop})
@@ -107,6 +108,7 @@ func dialLoopbackClock(t *testing.T, world *fake.World, now time.Time, clock fun
 	t.Cleanup(func() { _ = storageConn.Close() })
 	shared := &api{
 		instances:  computev1.NewInstanceServiceClient(computeConn),
+		images:     computev1.NewImageServiceClient(computeConn),
 		volumes:    storagev1.NewVolumeServiceClient(storageConn),
 		buckets:    storagev1.NewBucketServiceClient(storageConn),
 		objects:    storagev1.NewObjectServiceClient(storageConn),
@@ -478,6 +480,17 @@ func (w *loopWorld) lookup(ctx context.Context, name string) (resource.Operation
 	}
 	w.clearSnaps(op)
 	return op, nil
+}
+
+// imageSrv is compute's image store. The loop world holds no images, so every
+// read is not found and a launch of any non-catalog image is refused before a
+// volume or instance exists.
+type imageSrv struct {
+	computev1.UnimplementedImageServiceServer
+}
+
+func (imageSrv) GetImage(context.Context, *computev1.GetImageRequest) (*computev1.Image, error) {
+	return nil, toStatus(resource.NotFound(resource.KindImage, ""))
 }
 
 type instanceSrv struct {
