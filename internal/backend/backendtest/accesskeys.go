@@ -142,7 +142,8 @@ func iamAccessKeyRows() []iamRow {
 			wantOK(t, "CreateAccessKey", err)
 			_, err = a.ListAccessKeys(ctx, iamOther(), "bob", "")
 			wantErr(t, "ListAccessKeys", err, resource.CodeNotFound, "")
-			wantErr(t, "DeleteAccessKey", a.DeleteAccessKey(ctx, iamOther(), "bob", k.AccessKeyID, ""), resource.CodeNotFound, "")
+			wantErr(t, "DeleteAccessKey", a.DeleteAccessKey(ctx, iamOther(), "bob", k.AccessKeyID, ""),
+				resource.CodeNotFound, "")
 			_, err = a.GetAccessKeyLastUsed(ctx, iamOther(), k.AccessKeyID)
 			wantErr(t, "GetAccessKeyLastUsed", err, resource.CodeNotFound, "")
 			wantKeys(ctx, t, a, "bob", k.AccessKeyID)

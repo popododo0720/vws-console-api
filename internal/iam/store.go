@@ -454,7 +454,9 @@ func (f *Fake) CreateAccessKey(_ context.Context, a resource.AccountID, user, ex
 
 // ListAccessKeys implements Admin, sorted by key id. A non-empty expectARN
 // must be the user's current ARN.
-func (f *Fake) ListAccessKeys(_ context.Context, a resource.AccountID, user, expectARN string) ([]AccessKeyMeta, error) {
+func (f *Fake) ListAccessKeys(
+	_ context.Context, a resource.AccountID, user, expectARN string,
+) ([]AccessKeyMeta, error) {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
 	u := f.account(a).users[user]

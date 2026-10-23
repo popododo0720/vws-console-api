@@ -481,33 +481,38 @@ func iamActions() map[string]spec {
 				AccessKey accessKeyXML `xml:"AccessKey"`
 			}{accessKeyXML{UserName: k.UserName, AccessKeyID: k.AccessKeyID, Status: k.Status, SecretAccessKey: k.Secret, CreateDate: stamp(k.Created)}}, err
 		}),
-		"ListAccessKeys": {params: []string{"UserName", "Marker", "MaxItems"}, needsAdmin: true, resource: userARN, run: func(h *handler, c *exchange) (any, error) {
-			n, err := requireUser(c)
-			if err != nil {
-				return nil, err
-			}
-			marker, maxItems, err := pageParams(c)
-			if err != nil {
-				return nil, err
-			}
-			// The backend reads only the user at the authorized ARN, so a
-			// user moved since the authorization lists nothing.
-			ks, err := h.cfg.Admin.ListAccessKeys(c.r.Context(), c.caller.Account, n, c.authorized)
-			if err != nil {
-				return nil, err
-			}
-			page, truncated, next := pageByName(ks, func(k iam.AccessKeyMeta) string { return k.AccessKeyID }, marker, maxItems)
-			out := struct {
-				Keys        []keyMetaXML `xml:"AccessKeyMetadata>member"`
-				UserName    string       `xml:"UserName"`
-				IsTruncated bool         `xml:"IsTruncated"`
-				Marker      string       `xml:"Marker,omitempty"`
-			}{Keys: []keyMetaXML{}, UserName: n, IsTruncated: truncated, Marker: next}
-			for _, k := range page {
-				out.Keys = append(out.Keys, keyMetaXML{UserName: k.UserName, AccessKeyID: k.AccessKeyID, Status: k.Status, CreateDate: stamp(k.Created)})
-			}
-			return out, nil
-		}},
+		"ListAccessKeys": {
+			params: []string{"UserName", "Marker", "MaxItems"}, needsAdmin: true, resource: userARN,
+			run: func(h *handler, c *exchange) (any, error) {
+				n, err := requireUser(c)
+				if err != nil {
+					return nil, err
+				}
+				marker, maxItems, err := pageParams(c)
+				if err != nil {
+					return nil, err
+				}
+				// The backend reads only the user at the authorized ARN, so a
+				// user moved since the authorization lists nothing.
+				ks, err := h.cfg.Admin.ListAccessKeys(c.r.Context(), c.caller.Account, n, c.authorized)
+				if err != nil {
+					return nil, err
+				}
+				page, truncated, next := pageByName(ks, func(k iam.AccessKeyMeta) string { return k.AccessKeyID }, marker, maxItems)
+				out := struct {
+					Keys        []keyMetaXML `xml:"AccessKeyMetadata>member"`
+					UserName    string       `xml:"UserName"`
+					IsTruncated bool         `xml:"IsTruncated"`
+					Marker      string       `xml:"Marker,omitempty"`
+				}{Keys: []keyMetaXML{}, UserName: n, IsTruncated: truncated, Marker: next}
+				for _, k := range page {
+					out.Keys = append(out.Keys, keyMetaXML{
+						UserName: k.UserName, AccessKeyID: k.AccessKeyID, Status: k.Status, CreateDate: stamp(k.Created),
+					})
+				}
+				return out, nil
+			},
+		},
 		"GetAccessKeyLastUsed": {
 			params: []string{"AccessKeyId"}, needsAdmin: true,
 			resource: accessKeyLastUsedARN,

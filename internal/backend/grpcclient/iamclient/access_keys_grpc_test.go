@@ -175,7 +175,7 @@ func TestAccessKeySecretIsNeverLoggedOrTraced(t *testing.T) {
 	for _, s := range rec.Ended()[before:] {
 		seen.WriteString(s.Name() + s.Status().Description)
 		for _, kv := range s.Attributes() {
-			seen.WriteString(string(kv.Key) + "=" + kv.Value.Emit())
+			seen.WriteString(string(kv.Key) + "=" + kv.Value.String())
 			if kv.Key == "vws.iam.action" {
 				actions = append(actions, kv.Value.AsString())
 			}
@@ -183,7 +183,7 @@ func TestAccessKeySecretIsNeverLoggedOrTraced(t *testing.T) {
 		for _, ev := range s.Events() {
 			seen.WriteString(ev.Name)
 			for _, kv := range ev.Attributes {
-				seen.WriteString(kv.Value.Emit())
+				seen.WriteString(kv.Value.String())
 			}
 		}
 	}
@@ -304,7 +304,7 @@ func TestAccessKeyCallsActOnTheAuthorizedARNOverGRPC(t *testing.T) {
 			if _, err := mover.CreateUser(t.Context(), account314, "erin", "/ops/"); err != nil {
 				t.Fatal(err)
 			}
-			k, err := mover.Admin.CreateAccessKey(t.Context(), account314, "erin", "")
+			k, err := mover.CreateAccessKey(t.Context(), account314, "erin", "")
 			if err != nil {
 				t.Fatal(err)
 			}

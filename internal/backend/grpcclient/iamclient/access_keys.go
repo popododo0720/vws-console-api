@@ -189,7 +189,8 @@ func keyMeta(account resource.AccountID, u iam.User, k *iamv1.AccessKey) (iam.Ac
 			errors.New("vws-iam returned access key " + id + " in state " + k.GetSpec().GetState().String()))
 	}
 	if k.GetCreateTime() == nil {
-		return iam.AccessKeyMeta{}, resource.Internal(errors.New("vws-iam returned access key " + id + " with no create time"))
+		return iam.AccessKeyMeta{}, resource.Internal(
+			errors.New("vws-iam returned access key " + id + " with no create time"))
 	}
 	return iam.AccessKeyMeta{UserName: u.Name, AccessKeyID: id, Status: state, Created: k.GetCreateTime().AsTime()}, nil
 }
