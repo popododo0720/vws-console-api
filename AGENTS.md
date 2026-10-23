@@ -25,7 +25,7 @@ that claims this project is someone else's cloud.
 | `internal/surface/s3rest` | Path-style object codec. |
 | `internal/surface/interop` | Tests that drive more than one surface against one world. |
 | `internal/server` | One listener per surface, request IDs, shutdown. |
-| `third_party/vws-proto` | Vendored `github.com/popododo0720/vws-proto` (see the vws-proto pull request for the current commit; today `feat/iam-mfa-tags` c59a88d, which also carries `feat/iam-policy-tags` 8fa2ce8; re-pin after those pull requests merge). Imported through a `replace` directive. |
+| `third_party/vws-proto` | Vendored `github.com/popododo0720/vws-proto` at tag `v0.5.0` (3fbc83c): `buf.gen.yaml`, `buf.yaml`, `go.mod`, `go.sum`, `vws/` and `gen/` copied from the tag, and `go.mod` requires `v0.5.0`. Imported through a `replace` directive. |
 
 ## Rules
 
