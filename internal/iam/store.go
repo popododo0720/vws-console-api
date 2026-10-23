@@ -67,7 +67,7 @@ type userRec struct {
 	User
 	holder
 	groups map[string]bool
-	keys   map[string]bool
+	keys   map[string]time.Time // access key id to create time
 	login  *loginRec
 }
 
@@ -291,7 +291,7 @@ func (f *Fake) CreateUser(_ context.Context, a resource.AccountID, name, path st
 		return User{}, exists("User", name)
 	}
 	u := User{Name: name, Path: path, ID: randID("AIDA", 17), ARN: iamARN(a, "user", path, name), Created: f.now()}
-	st.users[name] = &userRec{User: u, holder: newHolder(), groups: map[string]bool{}, keys: map[string]bool{}}
+	st.users[name] = &userRec{User: u, holder: newHolder(), groups: map[string]bool{}, keys: map[string]time.Time{}}
 	return u, nil
 }
 
@@ -431,34 +431,44 @@ func (f *Fake) UpdateUser(_ context.Context, a resource.AccountID, name, newPath
 
 // --- access keys ---
 
-// CreateAccessKey implements Admin. The secret is returned only here.
-func (f *Fake) CreateAccessKey(_ context.Context, a resource.AccountID, user string) (NewAccessKey, error) {
+// CreateAccessKey implements Admin. The secret is returned only here. A
+// non-empty expectARN must be the user's current ARN.
+func (f *Fake) CreateAccessKey(_ context.Context, a resource.AccountID, user, expectARN string) (NewAccessKey, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	u := f.account(a).users[user]
 	if u == nil {
 		return NewAccessKey{}, notFound("user", user)
 	}
+	if stale(u.ARN, expectARN) {
+		return NewAccessKey{}, Changed(UserChanged)
+	}
 	if len(u.keys) >= maxAccessKeysPerUser {
-		return NewAccessKey{}, quota("Cannot exceed quota for AccessKeysPerUser: 2")
+		return NewAccessKey{}, AccessKeysPerUserExceeded()
 	}
 	k := NewAccessKey{AccessKeyMeta: AccessKeyMeta{UserName: user, AccessKeyID: randID("AKIA", 16), Status: "Active", Created: f.now()}, Secret: randSecret(30)}
-	u.keys[k.AccessKeyID] = true
+	u.keys[k.AccessKeyID] = k.Created
 	f.keys[k.AccessKeyID] = Key{AccessKey: k.AccessKeyID, Secret: k.Secret, Principal: Principal{Account: a, ARN: u.ARN}}
 	return k, nil
 }
 
-// ListAccessKeys implements Admin.
-func (f *Fake) ListAccessKeys(_ context.Context, a resource.AccountID, user string) ([]AccessKeyMeta, error) {
+// ListAccessKeys implements Admin, sorted by key id. A non-empty expectARN
+// must be the user's current ARN.
+func (f *Fake) ListAccessKeys(
+	_ context.Context, a resource.AccountID, user, expectARN string,
+) ([]AccessKeyMeta, error) {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
 	u := f.account(a).users[user]
 	if u == nil {
 		return nil, notFound("user", user)
 	}
+	if stale(u.ARN, expectARN) {
+		return nil, Changed(UserChanged)
+	}
 	out := []AccessKeyMeta{}
-	for id := range u.keys {
-		out = append(out, AccessKeyMeta{UserName: user, AccessKeyID: id, Status: "Active", Created: u.Created})
+	for id, created := range u.keys {
+		out = append(out, AccessKeyMeta{UserName: user, AccessKeyID: id, Status: "Active", Created: created})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].AccessKeyID < out[j].AccessKeyID })
 	return out, nil
@@ -471,7 +481,7 @@ func (f *Fake) GetAccessKeyLastUsed(_ context.Context, a resource.AccountID, key
 	defer f.mu.RUnlock()
 	if st := f.accounts[a]; st != nil {
 		for name, u := range st.users {
-			if !u.keys[keyID] {
+			if _, ok := u.keys[keyID]; !ok {
 				continue
 			}
 			out := AccessKeyLastUsed{UserName: name, UserARN: u.ARN}
@@ -484,15 +494,19 @@ func (f *Fake) GetAccessKeyLastUsed(_ context.Context, a resource.AccountID, key
 	return AccessKeyLastUsed{}, AccessKeyNotFound(keyID)
 }
 
-// DeleteAccessKey implements Admin. The key stops authenticating at once.
-func (f *Fake) DeleteAccessKey(_ context.Context, a resource.AccountID, user, keyID string) error {
+// DeleteAccessKey implements Admin. The key stops authenticating at once. A
+// non-empty expectARN must be the user's current ARN.
+func (f *Fake) DeleteAccessKey(_ context.Context, a resource.AccountID, user, keyID, expectARN string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	u := f.account(a).users[user]
 	if u == nil {
 		return notFound("user", user)
 	}
-	if !u.keys[keyID] {
+	if stale(u.ARN, expectARN) {
+		return Changed(UserChanged)
+	}
+	if _, ok := u.keys[keyID]; !ok {
 		return notFound("Access Key", keyID)
 	}
 	delete(u.keys, keyID)

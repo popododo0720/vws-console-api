@@ -89,10 +89,17 @@ of `UNAVAILABLE` (up to 3 times) cannot apply a change twice; a vws-iam that
 stays down is `503`. A change acts only on the user or group at the ARN the
 request was authorized on: one that moved in between is `409
 ConcurrentModification`, and nothing is written (on both backends). Renaming a user or group (`NewUserName`,
-`NewGroupName`) is `InvalidAction`, because vws-iam cannot rename. `GetRole`,
+`NewGroupName`) is `InvalidAction`, because vws-iam cannot rename.
+`CreateAccessKey`, `ListAccessKeys` and `DeleteAccessKey` go to
+`AccessKeyService`, for the user at the authorized ARN only. The secret
+access key is in the `CreateAccessKey` response and nowhere else: console-api
+never logs, traces or keeps it. `CreateAccessKey` is never retried, because
+vws-iam does not replay it and a retry would create a second key; a third key
+for a user is `LimitExceeded`. `DeleteAccessKey` carries a `request_id` and
+is retried. `GetRole`,
 `UpdateRole` and `UpdateRoleDescription` go to `RoleService`. IAM
 management actions that are not mapped to vws-iam yet (among them the user
-and group policy, access key and login profile actions) answer
+and group policy, `UpdateAccessKey` and login profile actions) answer
 `InvalidAction` in this mode.
 
 ```sh

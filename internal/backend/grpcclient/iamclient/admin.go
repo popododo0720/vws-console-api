@@ -27,22 +27,14 @@ import (
 // and MFA device tag calls, ListVirtualMFADevices, ListMFADevices, GetRole,
 // UpdateRole, UpdateRoleDescription and GetAccessKeyLastUsed are mapped.
 // GetMFADevice answers NoSuchEntity without a call (see GetMFADevice).
+// CreateAccessKey, ListAccessKeys and DeleteAccessKey are mapped to
+// AccessKeyService (see access_keys.go); UpdateAccessKey is not yet.
 type STSAdmin struct{ *Client }
 
 var _ iam.Admin = STSAdmin{}
 
 func notServed(op string) error {
 	return resource.Unimplemented(op + " is not served over vws-iam gRPC yet")
-}
-
-// CreateAccessKey implements iam.Admin.
-func (STSAdmin) CreateAccessKey(_ context.Context, _ resource.AccountID, _ string) (iam.NewAccessKey, error) {
-	return iam.NewAccessKey{}, notServed("CreateAccessKey")
-}
-
-// ListAccessKeys implements iam.Admin.
-func (STSAdmin) ListAccessKeys(_ context.Context, _ resource.AccountID, _ string) ([]iam.AccessKeyMeta, error) {
-	return nil, notServed("ListAccessKeys")
 }
 
 // GetAccessKeyLastUsed implements iam.Admin over
@@ -108,11 +100,6 @@ func lastUsedOf(key *iamv1.AccessKey, user *iamv1.User) (iam.AccessKeyLastUsed, 
 		out.LastUsed = t.AsTime()
 	}
 	return out, nil
-}
-
-// DeleteAccessKey implements iam.Admin.
-func (STSAdmin) DeleteAccessKey(_ context.Context, _ resource.AccountID, _, _ string) error {
-	return notServed("DeleteAccessKey")
 }
 
 // CreateRole implements iam.Admin.

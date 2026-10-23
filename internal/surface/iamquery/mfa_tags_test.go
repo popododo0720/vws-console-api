@@ -179,7 +179,7 @@ func TestMFADeviceTagNeedsListPermission(t *testing.T) {
 		`{"Statement":[{"Effect":"Allow","Action":["iam:TagMFADevice"],"Resource":"*"}]}`); err != nil {
 		t.Fatal(err)
 	}
-	k, err := f.CreateAccessKey(ctx, root.Account, "bob")
+	k, err := f.CreateAccessKey(ctx, root.Account, "bob", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -258,7 +258,7 @@ func TestMFADeviceTagSerialVariantsStayInScope(t *testing.T) {
 	if err := f.PutInlinePolicy(ctx, root.Account, iam.EntityUser, "bob", "deny", deny); err != nil {
 		t.Fatal(err)
 	}
-	k, err := f.CreateAccessKey(ctx, root.Account, "bob")
+	k, err := f.CreateAccessKey(ctx, root.Account, "bob", "")
 	if err != nil {
 		t.Fatal(err)
 	}

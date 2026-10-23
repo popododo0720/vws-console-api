@@ -729,6 +729,32 @@ def identity():
         return
     step("IAM ListAccessKeys", lambda: check(
         [k["AccessKeyId"] for k in iam.list_access_keys(UserName="e2e-bob")["AccessKeyMetadata"]] == [key["AccessKeyId"]], "keys"))
+    # #314 bundle 2: the AWS key shape, the 2 keys per user quota, paging
+    # and the NoSuchEntity and ValidationError answers.
+    step("IAM CreateAccessKey is Active with a 40 character secret", lambda: check(
+        key["Status"] == "Active" and len(key["SecretAccessKey"]) == 40 and key["UserName"] == "e2e-bob", key["Status"]))
+    key2 = step("IAM CreateAccessKey a second key", lambda: iam.create_access_key(UserName="e2e-bob")["AccessKey"])
+    step("IAM CreateAccessKey a third key is LimitExceeded", lambda: aws_error(
+        "LimitExceeded", lambda: iam.create_access_key(UserName="e2e-bob")))
+    if key2:
+        ids = sorted([key["AccessKeyId"], key2["AccessKeyId"]])
+        page = step("IAM ListAccessKeys MaxItems 1 is truncated", lambda: iam.list_access_keys(UserName="e2e-bob", MaxItems=1))
+        step("IAM ListAccessKeys first page", lambda: check(
+            page["IsTruncated"] and page.get("Marker") and
+            [k["AccessKeyId"] for k in page["AccessKeyMetadata"]] == ids[:1], page))
+        step("IAM ListAccessKeys next page", lambda: check(
+            [k["AccessKeyId"] for k in iam.list_access_keys(
+                UserName="e2e-bob", MaxItems=1, Marker=page["Marker"])["AccessKeyMetadata"]] == ids[1:], "page 2") if page else None)
+        step("IAM DeleteAccessKey the second key", lambda: iam.delete_access_key(
+            UserName="e2e-bob", AccessKeyId=key2["AccessKeyId"]))
+        step("IAM DeleteAccessKey again is NoSuchEntity", lambda: aws_error(
+            "NoSuchEntity", lambda: iam.delete_access_key(UserName="e2e-bob", AccessKeyId=key2["AccessKeyId"])))
+    step("IAM ListAccessKeys for a missing user is NoSuchEntity", lambda: aws_error(
+        "NoSuchEntity", lambda: iam.list_access_keys(UserName="nobody")))
+    step("IAM DeleteAccessKey with a malformed id is ValidationError", lambda: aws_error(
+        "ValidationError", lambda: iam.delete_access_key(UserName="e2e-bob", AccessKeyId="not-a-key-id-00000")))
+    step("IAM ListAccessKeys holds the first key only", lambda: check(
+        [k["AccessKeyId"] for k in iam.list_access_keys(UserName="e2e-bob")["AccessKeyMetadata"]] == [key["AccessKeyId"]], "keys"))
     bob_ec2 = client("ec2", key["AccessKeyId"], key["SecretAccessKey"], url=EC2_URL)
     bob_iam = client("iam", key["AccessKeyId"], key["SecretAccessKey"])
     bob_sts = client("sts", key["AccessKeyId"], key["SecretAccessKey"])

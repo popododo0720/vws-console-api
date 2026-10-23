@@ -139,7 +139,7 @@ func TestListVirtualMFADevicesAuthorizes(t *testing.T) {
 	if _, err := f.CreateUser(ctx, root.Account, "bob", "/"); err != nil {
 		t.Fatal(err)
 	}
-	key, err := f.CreateAccessKey(ctx, root.Account, "bob")
+	key, err := f.CreateAccessKey(ctx, root.Account, "bob", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -298,7 +298,7 @@ func TestListMFADevicesAuthorizes(t *testing.T) {
 	if err := f.AssignMfaDevice(root.Account, serial, "bob", now); err != nil {
 		t.Fatal(err)
 	}
-	key, err := f.CreateAccessKey(ctx, root.Account, "bob")
+	key, err := f.CreateAccessKey(ctx, root.Account, "bob", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -328,7 +328,7 @@ func TestListMFADevicesDefaultsToCaller(t *testing.T) {
 	if err := f.AssignMfaDevice(root.Account, serial, "bob", now); err != nil {
 		t.Fatal(err)
 	}
-	key, err := f.CreateAccessKey(ctx, root.Account, "bob")
+	key, err := f.CreateAccessKey(ctx, root.Account, "bob", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -363,7 +363,7 @@ func TestListMFADevicesIsScopedToTheUser(t *testing.T) {
 	if err := f.AssignMfaDevice(root.Account, bobPhone, "bob", now); err != nil {
 		t.Fatal(err)
 	}
-	key, err := f.CreateAccessKey(ctx, root.Account, "alice")
+	key, err := f.CreateAccessKey(ctx, root.Account, "alice", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -420,7 +420,7 @@ func TestListMFADevicesValidatesBeforeAuthorization(t *testing.T) {
 	if _, err := f.CreateUser(ctx, root.Account, "bob", "/"); err != nil {
 		t.Fatal(err)
 	}
-	key, err := f.CreateAccessKey(ctx, root.Account, "bob")
+	key, err := f.CreateAccessKey(ctx, root.Account, "bob", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -458,7 +458,7 @@ func TestListMFADevicesUnavailableLookupAuthorizesNothing(t *testing.T) {
 	if err := f.PutInlinePolicy(ctx, root.Account, iam.EntityUser, "bob", "list", policy); err != nil {
 		t.Fatal(err)
 	}
-	key, err := f.CreateAccessKey(ctx, root.Account, "bob")
+	key, err := f.CreateAccessKey(ctx, root.Account, "bob", "")
 	if err != nil {
 		t.Fatal(err)
 	}

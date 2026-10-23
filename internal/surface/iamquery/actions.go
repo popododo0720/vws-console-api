@@ -24,6 +24,20 @@ var policyARNRE = regexp.MustCompile(`^arn:[^:]+:iam::[0-9]{12}:policy/.+$`)
 // accessKeyIDRE is the AWS AccessKeyId shape.
 var accessKeyIDRE = regexp.MustCompile(`^\w{16,128}$`)
 
+// accessKeyIDParam reads the required AccessKeyId in the AWS shape.
+func accessKeyIDParam(c *exchange) (string, error) {
+	if err := required(c, "AccessKeyId"); err != nil {
+		return "", err
+	}
+	id := c.form("AccessKeyId")
+	if !accessKeyIDRE.MatchString(id) {
+		return "", resource.Invalid("accessKeyId",
+			"1 validation error detected: Value '"+id+"' at 'accessKeyId' failed to satisfy constraint: "+
+				`Member must satisfy regular expression pattern: [\w]+`)
+	}
+	return id, nil
+}
+
 // spec is one action: the form keys it reads, the ARN it is authorized on
 // (nil means "*"), and what it does.
 type spec struct {
@@ -245,11 +259,9 @@ func readAccessKeyLastUsed(h *handler, c *exchange) (iam.AccessKeyLastUsed, erro
 		c.lastUsedErr = err
 		return iam.AccessKeyLastUsed{}, err
 	}
-	if id := c.form("AccessKeyId"); !accessKeyIDRE.MatchString(id) {
-		c.lastUsedErr = resource.Invalid("accessKeyId",
-			"1 validation error detected: Value '"+id+"' at 'accessKeyId' failed to satisfy constraint: "+
-				`Member must satisfy regular expression pattern: [\w]+`)
-		return iam.AccessKeyLastUsed{}, c.lastUsedErr
+	if _, err := accessKeyIDParam(c); err != nil {
+		c.lastUsedErr = err
+		return iam.AccessKeyLastUsed{}, err
 	}
 	c.lastUsed, c.lastUsedErr = h.cfg.Admin.GetAccessKeyLastUsed(
 		c.r.Context(), c.caller.Account, c.form("AccessKeyId"))
@@ -462,27 +474,45 @@ func iamActions() map[string]spec {
 			if err != nil {
 				return nil, err
 			}
-			k, err := h.cfg.Admin.CreateAccessKey(c.r.Context(), c.caller.Account, n)
+			// The backend creates the key only for the user at the authorized
+			// ARN. The secret is in this response only.
+			k, err := h.cfg.Admin.CreateAccessKey(c.r.Context(), c.caller.Account, n, c.authorized)
 			return struct {
 				AccessKey accessKeyXML `xml:"AccessKey"`
 			}{accessKeyXML{UserName: k.UserName, AccessKeyID: k.AccessKeyID, Status: k.Status, SecretAccessKey: k.Secret, CreateDate: stamp(k.Created)}}, err
 		}),
-		"ListAccessKeys": {params: []string{"UserName"}, list: true, needsAdmin: true, resource: userARN, run: func(h *handler, c *exchange) (any, error) {
-			n, err := requireUser(c)
-			if err != nil {
-				return nil, err
-			}
-			ks, err := h.cfg.Admin.ListAccessKeys(c.r.Context(), c.caller.Account, n)
-			out := struct {
-				Keys        []keyMetaXML `xml:"AccessKeyMetadata>member"`
-				UserName    string       `xml:"UserName"`
-				IsTruncated bool         `xml:"IsTruncated"`
-			}{Keys: []keyMetaXML{}, UserName: n}
-			for _, k := range ks {
-				out.Keys = append(out.Keys, keyMetaXML{UserName: k.UserName, AccessKeyID: k.AccessKeyID, Status: k.Status, CreateDate: stamp(k.Created)})
-			}
-			return out, err
-		}},
+		"ListAccessKeys": {
+			params: []string{"UserName", "Marker", "MaxItems"}, needsAdmin: true, resource: userARN,
+			run: func(h *handler, c *exchange) (any, error) {
+				n, err := requireUser(c)
+				if err != nil {
+					return nil, err
+				}
+				marker, maxItems, err := pageParams(c)
+				if err != nil {
+					return nil, err
+				}
+				// The backend reads only the user at the authorized ARN, so a
+				// user moved since the authorization lists nothing.
+				ks, err := h.cfg.Admin.ListAccessKeys(c.r.Context(), c.caller.Account, n, c.authorized)
+				if err != nil {
+					return nil, err
+				}
+				page, truncated, next := pageByName(ks, func(k iam.AccessKeyMeta) string { return k.AccessKeyID }, marker, maxItems)
+				out := struct {
+					Keys        []keyMetaXML `xml:"AccessKeyMetadata>member"`
+					UserName    string       `xml:"UserName"`
+					IsTruncated bool         `xml:"IsTruncated"`
+					Marker      string       `xml:"Marker,omitempty"`
+				}{Keys: []keyMetaXML{}, UserName: n, IsTruncated: truncated, Marker: next}
+				for _, k := range page {
+					out.Keys = append(out.Keys, keyMetaXML{
+						UserName: k.UserName, AccessKeyID: k.AccessKeyID, Status: k.Status, CreateDate: stamp(k.Created),
+					})
+				}
+				return out, nil
+			},
+		},
 		"GetAccessKeyLastUsed": {
 			params: []string{"AccessKeyId"}, needsAdmin: true,
 			resource: accessKeyLastUsedARN,
@@ -499,10 +529,12 @@ func iamActions() map[string]spec {
 			if err != nil {
 				return nil, err
 			}
-			if err := required(c, "AccessKeyId"); err != nil {
+			id, err := accessKeyIDParam(c)
+			if err != nil {
 				return nil, err
 			}
-			return nil, h.cfg.Admin.DeleteAccessKey(c.r.Context(), c.caller.Account, n, c.form("AccessKeyId"))
+			// The backend deletes only a key of the user at the authorized ARN.
+			return nil, h.cfg.Admin.DeleteAccessKey(c.r.Context(), c.caller.Account, n, id, c.authorized)
 		}),
 
 		"CreateGroup": admin([]string{"GroupName", "Path"}, groupARN, func(h *handler, c *exchange) (any, error) {

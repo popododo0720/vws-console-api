@@ -130,7 +130,7 @@ func TestCallerActionsAuthorizeOnTheCallerWithoutALookup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	k, err := f.CreateAccessKey(ctx, root.Account, "bob")
+	k, err := f.CreateAccessKey(ctx, root.Account, "bob", "")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -199,7 +199,7 @@ func TestUpdateGroupAuthorizesTheNewARN(t *testing.T) {
 	if _, err := f.CreateUser(ctx, root.Account, "bob", "/"); err != nil {
 		t.Fatal(err)
 	}
-	key, err := f.CreateAccessKey(ctx, root.Account, "bob")
+	key, err := f.CreateAccessKey(ctx, root.Account, "bob", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -311,7 +311,7 @@ func TestUpdateUserAuthorizesTheNewARN(t *testing.T) {
 	if _, err := f.CreateUser(ctx, root.Account, "bob", "/"); err != nil {
 		t.Fatal(err)
 	}
-	key, err := f.CreateAccessKey(ctx, root.Account, "bob")
+	key, err := f.CreateAccessKey(ctx, root.Account, "bob", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -479,7 +479,7 @@ func TestCreatePolicyVersionAuthorizes(t *testing.T) {
 	if _, err := f.CreateUser(ctx, root.Account, "bob", "/"); err != nil {
 		t.Fatal(err)
 	}
-	key, err := f.CreateAccessKey(ctx, root.Account, "bob")
+	key, err := f.CreateAccessKey(ctx, root.Account, "bob", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -547,7 +547,7 @@ func TestSetDefaultPolicyVersionAuthorizes(t *testing.T) {
 	if _, err := f.CreateUser(ctx, root.Account, "bob", "/"); err != nil {
 		t.Fatal(err)
 	}
-	key, err := f.CreateAccessKey(ctx, root.Account, "bob")
+	key, err := f.CreateAccessKey(ctx, root.Account, "bob", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -697,7 +697,7 @@ func TestListPolicyVersionsAuthorizes(t *testing.T) {
 	if _, err := f.CreateUser(ctx, root.Account, "bob", "/"); err != nil {
 		t.Fatal(err)
 	}
-	key, err := f.CreateAccessKey(ctx, root.Account, "bob")
+	key, err := f.CreateAccessKey(ctx, root.Account, "bob", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -721,11 +721,11 @@ func TestGetAccessKeyLastUsed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	used, err := f.CreateAccessKey(ctx, root.Account, "bob")
+	used, err := f.CreateAccessKey(ctx, root.Account, "bob", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	fresh, err := f.CreateAccessKey(ctx, root.Account, "bob")
+	fresh, err := f.CreateAccessKey(ctx, root.Account, "bob", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -766,11 +766,11 @@ func TestGetAccessKeyLastUsed(t *testing.T) {
 	if _, err := f.CreateUser(ctx, root.Account, "carol", "/"); err != nil {
 		t.Fatal(err)
 	}
-	aliceKey, err := f.CreateAccessKey(ctx, root.Account, "alice")
+	aliceKey, err := f.CreateAccessKey(ctx, root.Account, "alice", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	carolKey, err := f.CreateAccessKey(ctx, root.Account, "carol")
+	carolKey, err := f.CreateAccessKey(ctx, root.Account, "carol", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -809,7 +809,7 @@ func TestLimitedUserAndSTS(t *testing.T) {
 	if err := f.PutInlinePolicy(ctx, root.Account, iam.EntityUser, "bob", "p", `{"Statement":[{"Effect":"Allow","Action":["iam:GetUser","sts:GetCallerIdentity","sts:AssumeRole"],"Resource":"*"}]}`); err != nil {
 		t.Fatal(err)
 	}
-	k, err := f.CreateAccessKey(ctx, root.Account, "bob")
+	k, err := f.CreateAccessKey(ctx, root.Account, "bob", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -851,7 +851,7 @@ func TestGetCallerIdentitySkipsAuthorizeButNotAuthentication(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	k, err := f.CreateAccessKey(t.Context(), root.Account, "nobody")
+	k, err := f.CreateAccessKey(t.Context(), root.Account, "nobody", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1088,7 +1088,7 @@ func TestUpdateRoleFailsClosedWhenTheRoleLookupFails(t *testing.T) {
 	if err := f.PutInlinePolicy(ctx, root.Account, iam.EntityUser, "bob", "update", policy); err != nil {
 		t.Fatal(err)
 	}
-	key, err := f.CreateAccessKey(ctx, root.Account, "bob")
+	key, err := f.CreateAccessKey(ctx, root.Account, "bob", "")
 	if err != nil {
 		t.Fatal(err)
 	}
