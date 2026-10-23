@@ -54,9 +54,10 @@ type exchange struct {
 	// resourceErr is set when the action's ARN cannot be computed. The
 	// request fails closed instead of authorizing on a guessed ARN.
 	resourceErr error
-	// authorized is the resource ARN the action was authorized on. A change
-	// passes it down, so an entity that moved since is not changed.
-	authorized string
+	// authorized is the resource ARN the action was authorized on. Every
+	// Admin call on a named user, group or role takes it, so an entity that
+	// moved since is not read or changed (#342). Only iam.Authorize sets it.
+	authorized iam.AuthorizedARN
 	// lastUsed caches the key read, so the ARN check and the response use
 	// one snapshot.
 	lastUsed     iam.AccessKeyLastUsed
@@ -122,11 +123,12 @@ func (h *handler) serve(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if !spec.public {
-		if err := iam.Check(r.Context(), h.cfg.Authorizer, c.caller, string(c.service)+":"+c.action, arn); err != nil {
+		authorized, err := iam.Authorize(r.Context(), h.cfg.Authorizer, c.caller, string(c.service)+":"+c.action, arn)
+		if err != nil {
 			c.fail(err)
 			return
 		}
-		c.authorized = arn
+		c.authorized = authorized
 	}
 	result, err := spec.run(h, c)
 	if err != nil {

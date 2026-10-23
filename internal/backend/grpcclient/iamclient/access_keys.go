@@ -28,18 +28,20 @@ const secretLen = 40
 // The secret is in the result only: it never reaches a span, a log record
 // or an error, and nothing keeps it. vws-iam does not replay the call, so it
 // is sent once: a retry after a lost response would create a second key.
-// A non-empty expectARN must be the user's ARN when the user is read before
-// the call.
+// want must be the user's ARN when the user is read before the call.
 func (a STSAdmin) CreateAccessKey(
-	ctx context.Context, account resource.AccountID, user, expectARN string,
+	ctx context.Context, account resource.AccountID, user string, want iam.AuthorizedARN,
 ) (out iam.NewAccessKey, err error) {
 	var keyID string
 	ctx, end := a.observeKey(ctx, "CreateAccessKey", true, account, user, "", &keyID)
 	defer func() { end(err) }()
+	if err := want.Require(); err != nil {
+		return iam.NewAccessKey{}, err
+	}
 	if !entityName(user) {
 		return iam.NewAccessKey{}, entityNotFound("user", user)
 	}
-	u, err := a.keyUser(ctx, account, user, expectARN)
+	u, err := a.keyUser(ctx, account, user, want)
 	if err != nil {
 		return iam.NewAccessKey{}, err
 	}
@@ -62,17 +64,20 @@ func (a STSAdmin) CreateAccessKey(
 }
 
 // ListAccessKeys implements iam.Admin over AccessKeyService.ListAccessKeys,
-// every page, sorted by key id. A non-empty expectARN must be the user's ARN
-// when the user is read before the pages and again after them.
+// every page, sorted by key id. want must be the user's ARN when the user is
+// read before the pages and again after them.
 func (a STSAdmin) ListAccessKeys(
-	ctx context.Context, account resource.AccountID, user, expectARN string,
+	ctx context.Context, account resource.AccountID, user string, want iam.AuthorizedARN,
 ) (out []iam.AccessKeyMeta, err error) {
 	ctx, end := a.observe(ctx, "ListAccessKeys", false, account, user, "")
 	defer func() { end(err) }()
+	if err := want.Require(); err != nil {
+		return nil, err
+	}
 	if !entityName(user) {
 		return nil, entityNotFound("user", user)
 	}
-	u, err := a.keyUser(ctx, account, user, expectARN)
+	u, err := a.keyUser(ctx, account, user, want)
 	if err != nil {
 		return nil, err
 	}
@@ -97,7 +102,7 @@ func (a STSAdmin) ListAccessKeys(
 			break
 		}
 	}
-	if _, err := a.keyUser(ctx, account, user, expectARN); err != nil {
+	if _, err := a.keyUser(ctx, account, user, want); err != nil {
 		return nil, err
 	}
 	slices.SortFunc(out, func(x, y iam.AccessKeyMeta) int { return strings.Compare(x.AccessKeyID, y.AccessKeyID) })
@@ -107,17 +112,19 @@ func (a STSAdmin) ListAccessKeys(
 // DeleteAccessKey implements iam.Admin over AccessKeyService.DeleteAccessKey,
 // replayed by request_id, so it is retried. It sends no etag: vws-iam bumps
 // a key's version on every use, so an etag read here could already be
-// stale. A non-empty expectARN must be the user's ARN when the user is read
-// before the call.
+// stale. want must be the user's ARN when the user is read before the call.
 func (a STSAdmin) DeleteAccessKey(
-	ctx context.Context, account resource.AccountID, user, keyID, expectARN string,
+	ctx context.Context, account resource.AccountID, user, keyID string, want iam.AuthorizedARN,
 ) (err error) {
 	ctx, end := a.observeKey(ctx, "DeleteAccessKey", true, account, user, "", &keyID)
 	defer func() { end(err) }()
+	if err := want.Require(); err != nil {
+		return err
+	}
 	if !entityName(user) {
 		return entityNotFound("user", user)
 	}
-	if _, err := a.keyUser(ctx, account, user, expectARN); err != nil {
+	if _, err := a.keyUser(ctx, account, user, want); err != nil {
 		return err
 	}
 	if !vwsKeyID.MatchString(keyID) {
@@ -132,15 +139,17 @@ func (a STSAdmin) DeleteAccessKey(
 	return opError(op, "Access Key", keyID)
 }
 
-// keyUser reads the user an access key call acts on and checks that a
-// non-empty expectARN is its ARN.
-func (a STSAdmin) keyUser(ctx context.Context, account resource.AccountID, user, expectARN string) (iam.User, error) {
+// keyUser reads the user an access key call acts on and checks that want is
+// its ARN.
+func (a STSAdmin) keyUser(
+	ctx context.Context, account resource.AccountID, user string, want iam.AuthorizedARN,
+) (iam.User, error) {
 	u, err := a.GetUser(ctx, account, user)
 	if err != nil {
 		return iam.User{}, err
 	}
-	if stale(u.ARN, expectARN) {
-		return iam.User{}, iam.Changed(iam.UserChanged)
+	if err := want.Bind(u.ARN, iam.UserChanged); err != nil {
+		return iam.User{}, err
 	}
 	return u, nil
 }

@@ -187,10 +187,6 @@ func opError(op *longrunningpb.Operation, what, name string) error {
 	return nil
 }
 
-// stale reports whether a non-empty expectARN differs from arn: the entity
-// moved since the caller was authorized on expectARN.
-func stale(arn, expectARN string) bool { return expectARN != "" && arn != expectARN }
-
 // entityName reports whether name can be a vws-iam user or group: one
 // resource name segment. Anything else addresses another resource and is
 // answered as missing without a call.
@@ -382,15 +378,18 @@ func prefixOrRoot(p string) string {
 }
 
 // UpdateUser implements iam.Admin over UserService.UpdateUser with a mask on
-// spec.path and the etag of the user it read. A non-empty expectARN must be
-// the user's ARN, so a change since the caller was authorized is a
-// ConcurrentModification. vws-iam cannot rename a user: a new name answers
-// Unimplemented after the checks above.
+// spec.path and the etag of the user it read. want must be the user's ARN,
+// so a change since the caller was authorized is a ConcurrentModification.
+// vws-iam cannot rename a user: a new name answers Unimplemented after the
+// checks above.
 func (a STSAdmin) UpdateUser(
-	ctx context.Context, account resource.AccountID, name, newPath, newName, expectARN string,
+	ctx context.Context, account resource.AccountID, name, newPath, newName string, want iam.AuthorizedARN,
 ) (err error) {
 	ctx, end := a.observe(ctx, "UpdateUser", true, account, name, "")
 	defer func() { end(err) }()
+	if err := want.Require(); err != nil {
+		return err
+	}
 	if newPath != "" {
 		if newPath, err = iam.NormalizePath("newPath", newPath); err != nil {
 			return err
@@ -409,8 +408,8 @@ func (a STSAdmin) UpdateUser(
 	if err != nil {
 		return err
 	}
-	if stale(u.ARN, expectARN) {
-		return iam.Changed(iam.UserChanged)
+	if err := want.Bind(u.ARN, iam.UserChanged); err != nil {
+		return err
 	}
 	if rename {
 		return resource.Unimplemented(
@@ -430,14 +429,19 @@ func (a STSAdmin) UpdateUser(
 }
 
 // DeleteUser implements iam.Admin over UserService.DeleteUser. It reads the
-// user first: a non-empty expectARN must be its ARN, and the delete carries
+// user first: want must be its ARN, and the delete carries
 // that read's etag, so a user that moved or changed since the caller was
 // authorized is a ConcurrentModification and stays. vws-iam refuses while
 // the user has access keys, an MFA device, a login profile, a group or a
 // policy, which is the AWS DeleteConflict.
-func (a STSAdmin) DeleteUser(ctx context.Context, account resource.AccountID, name, expectARN string) (err error) {
+func (a STSAdmin) DeleteUser(
+	ctx context.Context, account resource.AccountID, name string, want iam.AuthorizedARN,
+) (err error) {
 	ctx, end := a.observe(ctx, "DeleteUser", true, account, name, "")
 	defer func() { end(err) }()
+	if err := want.Require(); err != nil {
+		return err
+	}
 	if !entityName(name) {
 		return entityNotFound("user", name)
 	}
@@ -445,8 +449,8 @@ func (a STSAdmin) DeleteUser(ctx context.Context, account resource.AccountID, na
 	if err != nil {
 		return err
 	}
-	if stale(u.ARN, expectARN) {
-		return iam.Changed(iam.UserChanged)
+	if err := want.Bind(u.ARN, iam.UserChanged); err != nil {
+		return err
 	}
 	op, err := retry(ctx, a.backoff, a.users.DeleteUser, &iamv1.DeleteUserRequest{
 		Name: raw.GetName(), Etag: raw.GetEtag(), RequestId: newRequestID(),
@@ -463,19 +467,26 @@ func (a STSAdmin) DeleteUser(ctx context.Context, account resource.AccountID, na
 }
 
 // ListGroupsForUser implements iam.Admin from the user's status.groups, each
-// read over GroupService.GetGroup. A group deleted since is left out.
+// read over GroupService.GetGroup. A group deleted since is left out. want
+// must be the user's ARN at the read the groups come from.
 func (a STSAdmin) ListGroupsForUser(
-	ctx context.Context, account resource.AccountID, user string,
+	ctx context.Context, account resource.AccountID, user string, want iam.AuthorizedARN,
 ) (out []iam.Group, err error) {
 	ctx, end := a.observe(ctx, "ListGroupsForUser", false, account, user, "")
 	defer func() { end(err) }()
+	if err := want.Require(); err != nil {
+		return nil, err
+	}
 	if !entityName(user) {
 		return nil, entityNotFound("user", user)
 	}
 	ctx, cancel := context.WithTimeout(ctx, OperationTimeout)
 	defer cancel()
-	raw, _, err := a.rawUser(ctx, account, user)
+	raw, u, err := a.rawUser(ctx, account, user)
 	if err != nil {
+		return nil, err
+	}
+	if err := want.Bind(u.ARN, iam.UserChanged); err != nil {
 		return nil, err
 	}
 	out = []iam.Group{}
@@ -605,14 +616,17 @@ func (a STSAdmin) ListGroups(
 }
 
 // UpdateGroup implements iam.Admin over GroupService.UpdateGroup with a mask
-// on spec.path and the etag of the group it read. A non-empty expectARN must
-// be the group's ARN, as in UpdateUser. A new name answers Unimplemented
+// on spec.path and the etag of the group it read. want must be the group's
+// ARN, as in UpdateUser. A new name answers Unimplemented
 // once the group is known to exist: vws-iam cannot rename.
 func (a STSAdmin) UpdateGroup(
-	ctx context.Context, account resource.AccountID, name, newPath, newName, expectARN string,
+	ctx context.Context, account resource.AccountID, name, newPath, newName string, want iam.AuthorizedARN,
 ) (err error) {
 	ctx, end := a.observe(ctx, "UpdateGroup", true, account, "", name)
 	defer func() { end(err) }()
+	if err := want.Require(); err != nil {
+		return err
+	}
 	if newPath != "" {
 		if newPath, err = iam.NormalizePath("newPath", newPath); err != nil {
 			return err
@@ -631,8 +645,8 @@ func (a STSAdmin) UpdateGroup(
 	if err != nil {
 		return err
 	}
-	if stale(g.ARN, expectARN) {
-		return iam.Changed(iam.GroupChanged)
+	if err := want.Bind(g.ARN, iam.GroupChanged); err != nil {
+		return err
 	}
 	if rename {
 		return resource.Unimplemented(
@@ -659,12 +673,17 @@ func (a STSAdmin) UpdateGroup(
 }
 
 // DeleteGroup implements iam.Admin over GroupService.DeleteGroup, reading
-// the group first and binding the delete to expectARN and that read's etag,
+// the group first and binding the delete to want and that read's etag,
 // as DeleteUser does. vws-iam refuses while the group has members or
 // policies (DeleteConflict).
-func (a STSAdmin) DeleteGroup(ctx context.Context, account resource.AccountID, name, expectARN string) (err error) {
+func (a STSAdmin) DeleteGroup(
+	ctx context.Context, account resource.AccountID, name string, want iam.AuthorizedARN,
+) (err error) {
 	ctx, end := a.observe(ctx, "DeleteGroup", true, account, "", name)
 	defer func() { end(err) }()
+	if err := want.Require(); err != nil {
+		return err
+	}
 	if !entityName(name) {
 		return entityNotFound("group", name)
 	}
@@ -672,8 +691,8 @@ func (a STSAdmin) DeleteGroup(ctx context.Context, account resource.AccountID, n
 	if err != nil {
 		return err
 	}
-	if stale(g.ARN, expectARN) {
-		return iam.Changed(iam.GroupChanged)
+	if err := want.Bind(g.ARN, iam.GroupChanged); err != nil {
+		return err
 	}
 	op, err := retry(ctx, a.backoff, a.groups.DeleteGroup, &iamv1.DeleteGroupRequest{
 		Name: raw.GetName(), Etag: raw.GetEtag(), RequestId: newRequestID(),
@@ -698,10 +717,10 @@ func memberIndex(members []string, user string) int {
 // AddUserToGroup implements iam.Admin: GroupService.UpdateGroup on
 // spec.members under the etag of the group it read. Adding a member is a
 // no-op, and a user already in MaxGroupsPerUser groups is LimitExceeded.
-// A non-empty expectGroupARN binds the change to the group the caller was
-// authorized on (changeMembers).
+// want binds the change to the group the caller was authorized on
+// (changeMembers).
 func (a STSAdmin) AddUserToGroup(
-	ctx context.Context, account resource.AccountID, group, user, expectGroupARN string,
+	ctx context.Context, account resource.AccountID, group, user string, want iam.AuthorizedARN,
 ) (err error) {
 	ctx, end := a.observe(ctx, "AddUserToGroup", true, account, user, group)
 	defer func() { end(err) }()
@@ -714,13 +733,13 @@ func (a STSAdmin) AddUserToGroup(
 		}
 		return append(slices.Clone(members), u.GetName()), nil
 	}
-	return a.changeMembers(ctx, account, group, user, expectGroupARN, change)
+	return a.changeMembers(ctx, account, group, user, want, change)
 }
 
 // RemoveUserFromGroup implements iam.Admin as AddUserToGroup does. A user
 // that is not a member is NoSuchEntity, as in AWS.
 func (a STSAdmin) RemoveUserFromGroup(
-	ctx context.Context, account resource.AccountID, group, user, expectGroupARN string,
+	ctx context.Context, account resource.AccountID, group, user string, want iam.AuthorizedARN,
 ) (err error) {
 	ctx, end := a.observe(ctx, "RemoveUserFromGroup", true, account, user, group)
 	defer func() { end(err) }()
@@ -731,7 +750,7 @@ func (a STSAdmin) RemoveUserFromGroup(
 		}
 		return slices.Delete(slices.Clone(members), i, i+1), nil
 	}
-	return a.changeMembers(ctx, account, group, user, expectGroupARN, change)
+	return a.changeMembers(ctx, account, group, user, want, change)
 }
 
 // changeMembers reads the group and the user, asks change for the new member
@@ -739,12 +758,16 @@ func (a STSAdmin) RemoveUserFromGroup(
 // another writer moved the etag, or a user or group vanished in between, it
 // reads again, up to membershipAttempts times; then it answers a retryable
 // ServiceUnavailable. Every read, the first included, must find the group at
-// a non-empty expectGroupARN: a group moved since the caller was authorized
-// is a ConcurrentModification, and nothing is written.
+// want: a group moved since the caller was authorized is a
+// ConcurrentModification, and nothing is written. The zero want is refused
+// before any read.
 func (a STSAdmin) changeMembers(
-	ctx context.Context, account resource.AccountID, group, user, expectGroupARN string,
+	ctx context.Context, account resource.AccountID, group, user string, want iam.AuthorizedARN,
 	change func(members []string, u *iamv1.User) ([]string, error),
 ) error {
+	if err := want.Require(); err != nil {
+		return err
+	}
 	if !entityName(group) {
 		return entityNotFound("group", group)
 	}
@@ -759,8 +782,8 @@ func (a STSAdmin) changeMembers(
 		if err != nil {
 			return err
 		}
-		if stale(current.ARN, expectGroupARN) {
-			return iam.Changed(iam.GroupChanged)
+		if err := want.Bind(current.ARN, iam.GroupChanged); err != nil {
+			return err
 		}
 		u, _, err := a.rawUser(ctx, account, user)
 		if err != nil {

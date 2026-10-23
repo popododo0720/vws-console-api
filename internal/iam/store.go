@@ -133,10 +133,6 @@ func changed(msg string) error {
 	return &resource.Error{Code: resource.CodeConflict, Field: ConcurrentModification, Message: msg}
 }
 
-// stale reports whether a non-empty expectARN differs from arn: the entity
-// moved since the caller was authorized on expectARN.
-func stale(arn, expectARN string) bool { return expectARN != "" && arn != expectARN }
-
 func quota(msg string) error {
 	return &resource.Error{Code: resource.CodeResourceExhausted, Message: msg}
 }
@@ -330,9 +326,11 @@ func prefixOr(p string) string {
 
 // DeleteUser implements Admin. Like AWS it refuses while the user still has
 // access keys, policies, group memberships, a login profile or an assigned MFA
-// device. A non-empty expectARN must be the user's ARN, or the delete is a
-// ConcurrentModification and nothing changes.
-func (f *Fake) DeleteUser(_ context.Context, a resource.AccountID, name, expectARN string) error {
+// device. want must be the user's ARN, or nothing changes.
+func (f *Fake) DeleteUser(_ context.Context, a resource.AccountID, name string, want AuthorizedARN) error {
+	if err := want.Require(); err != nil {
+		return err
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	st := f.account(a)
@@ -340,8 +338,8 @@ func (f *Fake) DeleteUser(_ context.Context, a resource.AccountID, name, expectA
 	if u == nil {
 		return notFound("user", name)
 	}
-	if stale(u.ARN, expectARN) {
-		return changed(UserChanged)
+	if err := want.Bind(u.ARN, UserChanged); err != nil {
+		return err
 	}
 	if len(u.keys) > 0 || len(u.attached) > 0 || len(u.inline) > 0 || len(u.groups) > 0 || u.login != nil ||
 		st.mfaAssigned(name) {
@@ -353,10 +351,15 @@ func (f *Fake) DeleteUser(_ context.Context, a resource.AccountID, name, expectA
 
 // UpdateUser implements Admin. A rename moves the user and its group
 // memberships; the id stays the same. Live access keys and console sessions
-// keep working under the new ARN. A non-empty expectARN must match the
-// current ARN, so a change between the caller's authorization and this call
-// is a conflict rather than a move of another user or path.
-func (f *Fake) UpdateUser(_ context.Context, a resource.AccountID, name, newPath, newName, expectARN string) error {
+// keep working under the new ARN. want must match the current ARN, so a
+// change between the caller's authorization and this call is a conflict
+// rather than a move of another user or path.
+func (f *Fake) UpdateUser(
+	_ context.Context, a resource.AccountID, name, newPath, newName string, want AuthorizedARN,
+) error {
+	if err := want.Require(); err != nil {
+		return err
+	}
 	if err := checkName(entityName, "userName", name); err != nil {
 		return err
 	}
@@ -380,8 +383,8 @@ func (f *Fake) UpdateUser(_ context.Context, a resource.AccountID, name, newPath
 	if u == nil {
 		return notFound("user", name)
 	}
-	if stale(u.ARN, expectARN) {
-		return changed(UserChanged)
+	if err := want.Bind(u.ARN, UserChanged); err != nil {
+		return err
 	}
 	target := name
 	if newName != "" {
@@ -432,17 +435,22 @@ func (f *Fake) UpdateUser(_ context.Context, a resource.AccountID, name, newPath
 
 // --- access keys ---
 
-// CreateAccessKey implements Admin. The secret is returned only here. A
-// non-empty expectARN must be the user's current ARN.
-func (f *Fake) CreateAccessKey(_ context.Context, a resource.AccountID, user, expectARN string) (NewAccessKey, error) {
+// CreateAccessKey implements Admin. The secret is returned only here. want
+// must be the user's current ARN.
+func (f *Fake) CreateAccessKey(
+	_ context.Context, a resource.AccountID, user string, want AuthorizedARN,
+) (NewAccessKey, error) {
+	if err := want.Require(); err != nil {
+		return NewAccessKey{}, err
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	u := f.account(a).users[user]
 	if u == nil {
 		return NewAccessKey{}, notFound("user", user)
 	}
-	if stale(u.ARN, expectARN) {
-		return NewAccessKey{}, Changed(UserChanged)
+	if err := want.Bind(u.ARN, UserChanged); err != nil {
+		return NewAccessKey{}, err
 	}
 	if len(u.keys) >= maxAccessKeysPerUser {
 		return NewAccessKey{}, AccessKeysPerUserExceeded()
@@ -453,19 +461,22 @@ func (f *Fake) CreateAccessKey(_ context.Context, a resource.AccountID, user, ex
 	return k, nil
 }
 
-// ListAccessKeys implements Admin, sorted by key id. A non-empty expectARN
-// must be the user's current ARN.
+// ListAccessKeys implements Admin, sorted by key id. want must be the user's
+// current ARN.
 func (f *Fake) ListAccessKeys(
-	_ context.Context, a resource.AccountID, user, expectARN string,
+	_ context.Context, a resource.AccountID, user string, want AuthorizedARN,
 ) ([]AccessKeyMeta, error) {
+	if err := want.Require(); err != nil {
+		return nil, err
+	}
 	f.mu.RLock()
 	defer f.mu.RUnlock()
 	u := f.account(a).users[user]
 	if u == nil {
 		return nil, notFound("user", user)
 	}
-	if stale(u.ARN, expectARN) {
-		return nil, Changed(UserChanged)
+	if err := want.Bind(u.ARN, UserChanged); err != nil {
+		return nil, err
 	}
 	out := []AccessKeyMeta{}
 	for id, created := range u.keys {
@@ -495,17 +506,20 @@ func (f *Fake) GetAccessKeyLastUsed(_ context.Context, a resource.AccountID, key
 	return AccessKeyLastUsed{}, AccessKeyNotFound(keyID)
 }
 
-// DeleteAccessKey implements Admin. The key stops authenticating at once. A
-// non-empty expectARN must be the user's current ARN.
-func (f *Fake) DeleteAccessKey(_ context.Context, a resource.AccountID, user, keyID, expectARN string) error {
+// DeleteAccessKey implements Admin. The key stops authenticating at once.
+// want must be the user's current ARN.
+func (f *Fake) DeleteAccessKey(_ context.Context, a resource.AccountID, user, keyID string, want AuthorizedARN) error {
+	if err := want.Require(); err != nil {
+		return err
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	u := f.account(a).users[user]
 	if u == nil {
 		return notFound("user", user)
 	}
-	if stale(u.ARN, expectARN) {
-		return Changed(UserChanged)
+	if err := want.Bind(u.ARN, UserChanged); err != nil {
+		return err
 	}
 	if _, ok := u.keys[keyID]; !ok {
 		return notFound("Access Key", keyID)
@@ -570,9 +584,13 @@ func (f *Fake) ListGroups(_ context.Context, a resource.AccountID, prefix string
 }
 
 // UpdateGroup implements Admin. A rename moves the group and its memberships;
-// the id stays the same. A non-empty expectARN must be the group's ARN, as in
-// UpdateUser.
-func (f *Fake) UpdateGroup(_ context.Context, a resource.AccountID, name, newPath, newName, expectARN string) error {
+// the id stays the same. want must be the group's ARN, as in UpdateUser.
+func (f *Fake) UpdateGroup(
+	_ context.Context, a resource.AccountID, name, newPath, newName string, want AuthorizedARN,
+) error {
+	if err := want.Require(); err != nil {
+		return err
+	}
 	if err := checkName(groupName, "groupName", name); err != nil {
 		return err
 	}
@@ -596,8 +614,8 @@ func (f *Fake) UpdateGroup(_ context.Context, a resource.AccountID, name, newPat
 	if g == nil {
 		return notFound("group", name)
 	}
-	if stale(g.ARN, expectARN) {
-		return changed(GroupChanged)
+	if err := want.Bind(g.ARN, GroupChanged); err != nil {
+		return err
 	}
 	target := name
 	if newName != "" {
@@ -621,9 +639,12 @@ func (f *Fake) UpdateGroup(_ context.Context, a resource.AccountID, name, newPat
 	return nil
 }
 
-// DeleteGroup implements Admin. A non-empty expectARN must be the group's
-// ARN, as in DeleteUser.
-func (f *Fake) DeleteGroup(_ context.Context, a resource.AccountID, name, expectARN string) error {
+// DeleteGroup implements Admin. want must be the group's ARN, as in
+// DeleteUser.
+func (f *Fake) DeleteGroup(_ context.Context, a resource.AccountID, name string, want AuthorizedARN) error {
+	if err := want.Require(); err != nil {
+		return err
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	st := f.account(a)
@@ -631,8 +652,8 @@ func (f *Fake) DeleteGroup(_ context.Context, a resource.AccountID, name, expect
 	if g == nil {
 		return notFound("group", name)
 	}
-	if stale(g.ARN, expectARN) {
-		return changed(GroupChanged)
+	if err := want.Bind(g.ARN, GroupChanged); err != nil {
+		return err
 	}
 	if len(g.members) > 0 || len(g.attached) > 0 || len(g.inline) > 0 {
 		return conflict(GroupDeleteConflict)
@@ -641,10 +662,12 @@ func (f *Fake) DeleteGroup(_ context.Context, a resource.AccountID, name, expect
 	return nil
 }
 
-// AddUserToGroup implements Admin. A non-empty expectGroupARN must be the
-// group's ARN, or nothing is written: the group moved since the caller was
-// authorized on it.
-func (f *Fake) AddUserToGroup(_ context.Context, a resource.AccountID, group, user, expectGroupARN string) error {
+// AddUserToGroup implements Admin. want must be the group's ARN, or nothing
+// is written: the group moved since the caller was authorized on it.
+func (f *Fake) AddUserToGroup(_ context.Context, a resource.AccountID, group, user string, want AuthorizedARN) error {
+	if err := want.Require(); err != nil {
+		return err
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	st := f.account(a)
@@ -652,8 +675,8 @@ func (f *Fake) AddUserToGroup(_ context.Context, a resource.AccountID, group, us
 	if g == nil {
 		return notFound("group", group)
 	}
-	if stale(g.ARN, expectGroupARN) {
-		return changed(GroupChanged)
+	if err := want.Bind(g.ARN, GroupChanged); err != nil {
+		return err
 	}
 	if u == nil {
 		return notFound("user", user)
@@ -665,9 +688,13 @@ func (f *Fake) AddUserToGroup(_ context.Context, a resource.AccountID, group, us
 	return nil
 }
 
-// RemoveUserFromGroup implements Admin, with expectGroupARN as in
-// AddUserToGroup.
-func (f *Fake) RemoveUserFromGroup(_ context.Context, a resource.AccountID, group, user, expectGroupARN string) error {
+// RemoveUserFromGroup implements Admin, with want as in AddUserToGroup.
+func (f *Fake) RemoveUserFromGroup(
+	_ context.Context, a resource.AccountID, group, user string, want AuthorizedARN,
+) error {
+	if err := want.Require(); err != nil {
+		return err
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	st := f.account(a)
@@ -675,8 +702,8 @@ func (f *Fake) RemoveUserFromGroup(_ context.Context, a resource.AccountID, grou
 	if g == nil {
 		return notFound("group", group)
 	}
-	if stale(g.ARN, expectGroupARN) {
-		return changed(GroupChanged)
+	if err := want.Bind(g.ARN, GroupChanged); err != nil {
+		return err
 	}
 	if u == nil || !g.members[user] {
 		return notFound("user", user)
@@ -686,14 +713,22 @@ func (f *Fake) RemoveUserFromGroup(_ context.Context, a resource.AccountID, grou
 	return nil
 }
 
-// ListGroupsForUser implements Admin.
-func (f *Fake) ListGroupsForUser(_ context.Context, a resource.AccountID, user string) ([]Group, error) {
+// ListGroupsForUser implements Admin. want must be the user's ARN.
+func (f *Fake) ListGroupsForUser(
+	_ context.Context, a resource.AccountID, user string, want AuthorizedARN,
+) ([]Group, error) {
+	if err := want.Require(); err != nil {
+		return nil, err
+	}
 	f.mu.RLock()
 	defer f.mu.RUnlock()
 	st := f.account(a)
 	u := st.users[user]
 	if u == nil {
 		return nil, notFound("user", user)
+	}
+	if err := want.Bind(u.ARN, UserChanged); err != nil {
+		return nil, err
 	}
 	out := []Group{}
 	for g := range u.groups {
@@ -750,8 +785,13 @@ func (f *Fake) GetRole(_ context.Context, a resource.AccountID, name string) (Ro
 	return r.Role, nil
 }
 
-// UpdateRole implements Admin.
-func (f *Fake) UpdateRole(_ context.Context, a resource.AccountID, name string, in RoleUpdate) error {
+// UpdateRole implements Admin. want must be the role's ARN.
+func (f *Fake) UpdateRole(
+	_ context.Context, a resource.AccountID, name string, in RoleUpdate, want AuthorizedARN,
+) error {
+	if err := want.Require(); err != nil {
+		return err
+	}
 	if in.Description != nil {
 		if err := ValidateRoleDescription(*in.Description); err != nil {
 			return err
@@ -768,6 +808,9 @@ func (f *Fake) UpdateRole(_ context.Context, a resource.AccountID, name string, 
 	if r == nil {
 		return notFound("role", name)
 	}
+	if err := want.Bind(r.ARN, RoleChanged); err != nil {
+		return err
+	}
 	if IsServiceLinkedRole(r.Path) {
 		return UnmodifiableRole(name)
 	}
@@ -780,8 +823,13 @@ func (f *Fake) UpdateRole(_ context.Context, a resource.AccountID, name string, 
 	return nil
 }
 
-// UpdateRoleDescription implements Admin.
-func (f *Fake) UpdateRoleDescription(_ context.Context, a resource.AccountID, name, description string) (Role, error) {
+// UpdateRoleDescription implements Admin. want must be the role's ARN.
+func (f *Fake) UpdateRoleDescription(
+	_ context.Context, a resource.AccountID, name, description string, want AuthorizedARN,
+) (Role, error) {
+	if err := want.Require(); err != nil {
+		return Role{}, err
+	}
 	if err := ValidateRoleDescription(description); err != nil {
 		return Role{}, err
 	}
@@ -790,6 +838,9 @@ func (f *Fake) UpdateRoleDescription(_ context.Context, a resource.AccountID, na
 	r := f.account(a).roles[name]
 	if r == nil {
 		return Role{}, notFound("role", name)
+	}
+	if err := want.Bind(r.ARN, RoleChanged); err != nil {
+		return Role{}, err
 	}
 	if IsServiceLinkedRole(r.Path) {
 		return Role{}, UnmodifiableRole(name)
@@ -812,8 +863,13 @@ func (f *Fake) ListRoles(_ context.Context, a resource.AccountID, prefix string)
 	return out, nil
 }
 
-// UpdateAssumeRolePolicy implements Admin.
-func (f *Fake) UpdateAssumeRolePolicy(_ context.Context, a resource.AccountID, name, document string) error {
+// UpdateAssumeRolePolicy implements Admin. want must be the role's ARN.
+func (f *Fake) UpdateAssumeRolePolicy(
+	_ context.Context, a resource.AccountID, name, document string, want AuthorizedARN,
+) error {
+	if err := want.Require(); err != nil {
+		return err
+	}
 	trust, err := parsePolicy(document, true)
 	if err != nil {
 		return err
@@ -824,19 +880,28 @@ func (f *Fake) UpdateAssumeRolePolicy(_ context.Context, a resource.AccountID, n
 	if r == nil {
 		return notFound("role", name)
 	}
+	if err := want.Bind(r.ARN, RoleChanged); err != nil {
+		return err
+	}
 	r.TrustPolicy = document
 	r.trust = trust
 	return nil
 }
 
-// DeleteRole implements Admin.
-func (f *Fake) DeleteRole(_ context.Context, a resource.AccountID, name string) error {
+// DeleteRole implements Admin. want must be the role's ARN.
+func (f *Fake) DeleteRole(_ context.Context, a resource.AccountID, name string, want AuthorizedARN) error {
+	if err := want.Require(); err != nil {
+		return err
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	st := f.account(a)
 	r := st.roles[name]
 	if r == nil {
 		return notFound("role", name)
+	}
+	if err := want.Bind(r.ARN, RoleChanged); err != nil {
+		return err
 	}
 	if len(r.attached) > 0 || len(r.inline) > 0 {
 		return conflict("Cannot delete entity, must detach all policies first.")
@@ -1206,12 +1271,15 @@ func (f *Fake) ListVirtualMFADevices(
 }
 
 // ListMFADevices implements Admin. Only devices enabled for the named user are
-// listed; a missing user is NotFound. A non-empty expectARN must be the
-// user's ARN; the check and the read share one lock, so a user that moved
-// since the caller was authorized lists nothing.
+// listed; a missing user is NotFound. want must be the user's ARN; the check
+// and the read share one lock, so a user that moved since the caller was
+// authorized lists nothing.
 func (f *Fake) ListMFADevices(
-	_ context.Context, a resource.AccountID, user, marker string, maxItems int, expectARN string,
+	_ context.Context, a resource.AccountID, user, marker string, maxItems int, want AuthorizedARN,
 ) (MFADevicePage, error) {
+	if err := want.Require(); err != nil {
+		return MFADevicePage{}, err
+	}
 	f.mu.RLock()
 	defer f.mu.RUnlock()
 	st := f.account(a)
@@ -1219,8 +1287,8 @@ func (f *Fake) ListMFADevices(
 	if u == nil {
 		return MFADevicePage{}, notFound("user", user)
 	}
-	if stale(u.ARN, expectARN) {
-		return MFADevicePage{}, changed(UserChanged)
+	if err := want.Bind(u.ARN, UserChanged); err != nil {
+		return MFADevicePage{}, err
 	}
 	devices := make([]MFADevice, 0, len(st.mfa))
 	for serial, d := range st.mfa {
@@ -1363,34 +1431,46 @@ func (st *store) holderOf(kind Entity, name string) (*holder, error) {
 	return nil, notFound(kind.String(), name)
 }
 
-// holderAt is holderOf for a call authorized on expectARN: a non-empty one
-// must still be the entity's ARN, or the call is a ConcurrentModification.
-func (st *store) holderAt(kind Entity, name, expectARN string) (*holder, error) {
+// boundHolder is holderOf for a call bound to want (#342): the entity's
+// current ARN must be the authorized one, or the call is Changed with no
+// data and no write.
+func (st *store) boundHolder(kind Entity, name string, want AuthorizedARN) (*holder, error) {
+	if err := want.Require(); err != nil {
+		return nil, err
+	}
+	var arn, msg string
+	switch kind {
+	case EntityUser:
+		if u := st.users[name]; u != nil {
+			arn, msg = u.ARN, UserChanged
+		}
+	case EntityGroup:
+		if g := st.groups[name]; g != nil {
+			arn, msg = g.ARN, GroupChanged
+		}
+	case EntityRole:
+		if r := st.roles[name]; r != nil {
+			arn, msg = r.ARN, RoleChanged
+		}
+	}
 	h, err := st.holderOf(kind, name)
 	if err != nil {
 		return nil, err
 	}
-	arn := ""
-	switch kind {
-	case EntityUser:
-		arn = st.users[name].ARN
-	case EntityGroup:
-		arn = st.groups[name].ARN
-	case EntityRole:
-		arn = st.roles[name].ARN
-	}
-	if stale(arn, expectARN) {
-		return nil, ChangedFor(kind)
+	if err := want.Bind(arn, msg); err != nil {
+		return nil, err
 	}
 	return h, nil
 }
 
 // AttachPolicy implements Admin.
-func (f *Fake) AttachPolicy(_ context.Context, a resource.AccountID, kind Entity, name, arn, expectARN string) error {
+func (f *Fake) AttachPolicy(
+	_ context.Context, a resource.AccountID, kind Entity, name, arn string, want AuthorizedARN,
+) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	st := f.account(a)
-	h, err := st.holderAt(kind, name, expectARN)
+	h, err := st.boundHolder(kind, name, want)
 	if err != nil {
 		return err
 	}
@@ -1410,11 +1490,13 @@ func (f *Fake) AttachPolicy(_ context.Context, a resource.AccountID, kind Entity
 }
 
 // DetachPolicy implements Admin.
-func (f *Fake) DetachPolicy(_ context.Context, a resource.AccountID, kind Entity, name, arn, expectARN string) error {
+func (f *Fake) DetachPolicy(
+	_ context.Context, a resource.AccountID, kind Entity, name, arn string, want AuthorizedARN,
+) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	st := f.account(a)
-	h, err := st.holderAt(kind, name, expectARN)
+	h, err := st.boundHolder(kind, name, want)
 	if err != nil {
 		return err
 	}
@@ -1432,12 +1514,12 @@ func (f *Fake) DetachPolicy(_ context.Context, a resource.AccountID, kind Entity
 
 // ListAttachedPolicies implements Admin.
 func (f *Fake) ListAttachedPolicies(
-	_ context.Context, a resource.AccountID, kind Entity, name, expectARN string,
+	_ context.Context, a resource.AccountID, kind Entity, name string, want AuthorizedARN,
 ) ([]ManagedPolicy, error) {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
 	st := f.account(a)
-	h, err := st.holderAt(kind, name, expectARN)
+	h, err := st.boundHolder(kind, name, want)
 	if err != nil {
 		return nil, err
 	}
@@ -1453,8 +1535,11 @@ func (f *Fake) ListAttachedPolicies(
 
 // PutInlinePolicy implements Admin. It replaces a policy of the same name.
 func (f *Fake) PutInlinePolicy(
-	_ context.Context, a resource.AccountID, kind Entity, name, policy, document, expectARN string,
+	_ context.Context, a resource.AccountID, kind Entity, name, policy, document string, want AuthorizedARN,
 ) error {
+	if err := want.Require(); err != nil {
+		return err
+	}
 	if err := CheckInlinePolicyName(policy); err != nil {
 		return err
 	}
@@ -1464,7 +1549,7 @@ func (f *Fake) PutInlinePolicy(
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	h, err := f.account(a).holderAt(kind, name, expectARN)
+	h, err := f.account(a).boundHolder(kind, name, want)
 	if err != nil {
 		return err
 	}
@@ -1479,11 +1564,11 @@ func (f *Fake) PutInlinePolicy(
 
 // GetInlinePolicy implements Admin.
 func (f *Fake) GetInlinePolicy(
-	_ context.Context, a resource.AccountID, kind Entity, name, policy, expectARN string,
+	_ context.Context, a resource.AccountID, kind Entity, name, policy string, want AuthorizedARN,
 ) (string, error) {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
-	h, err := f.account(a).holderAt(kind, name, expectARN)
+	h, err := f.account(a).boundHolder(kind, name, want)
 	if err != nil {
 		return "", err
 	}
@@ -1496,11 +1581,11 @@ func (f *Fake) GetInlinePolicy(
 
 // DeleteInlinePolicy implements Admin.
 func (f *Fake) DeleteInlinePolicy(
-	_ context.Context, a resource.AccountID, kind Entity, name, policy, expectARN string,
+	_ context.Context, a resource.AccountID, kind Entity, name, policy string, want AuthorizedARN,
 ) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	h, err := f.account(a).holderAt(kind, name, expectARN)
+	h, err := f.account(a).boundHolder(kind, name, want)
 	if err != nil {
 		return err
 	}
@@ -1514,11 +1599,11 @@ func (f *Fake) DeleteInlinePolicy(
 
 // ListInlinePolicies implements Admin.
 func (f *Fake) ListInlinePolicies(
-	_ context.Context, a resource.AccountID, kind Entity, name, expectARN string,
+	_ context.Context, a resource.AccountID, kind Entity, name string, want AuthorizedARN,
 ) ([]string, error) {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
-	h, err := f.account(a).holderAt(kind, name, expectARN)
+	h, err := f.account(a).boundHolder(kind, name, want)
 	if err != nil {
 		return nil, err
 	}

@@ -38,6 +38,15 @@ func notServed(op string) error {
 	return resource.Unimplemented(op + " is not served over vws-iam gRPC yet")
 }
 
+// unboundOrNotServed is a bound call that is not served yet: the zero want
+// is still Unbound, as on every bound call.
+func unboundOrNotServed(want iam.AuthorizedARN, op string) error {
+	if err := want.Require(); err != nil {
+		return err
+	}
+	return notServed(op)
+}
+
 // GetAccessKeyLastUsed implements iam.Admin over
 // AccessKeyService.GetAccessKey. vws-iam addresses a key by its owning user,
 // so the call reads the key under each user of the account until one holds
@@ -132,11 +141,34 @@ func roleName(account resource.AccountID, name string) string {
 	return "projects/" + account.String() + "/roles/" + name
 }
 
+// roleAt reads the role a change acts on and checks that want is its ARN: a
+// role deleted and created again on another path since the caller was
+// authorized is Changed(RoleChanged). A role with no ARN is internal.
+func (a STSAdmin) roleAt(
+	ctx context.Context, account resource.AccountID, name string, want iam.AuthorizedARN,
+) (*iamv1.Role, error) {
+	role, err := a.role(ctx, account, name)
+	if err != nil {
+		return nil, err
+	}
+	arn := role.GetStatus().GetArn()
+	if arn == "" {
+		return nil, resource.Internal(errors.New("vws-iam GetRole returned a role with no ARN"))
+	}
+	if err := want.Bind(arn, iam.RoleChanged); err != nil {
+		return nil, err
+	}
+	return role, nil
+}
+
 // UpdateRole implements iam.Admin over RoleService.UpdateRole with a mask on
-// the fields the caller set.
+// the fields the caller set. want must be the role's ARN when it is read.
 func (a STSAdmin) UpdateRole(
-	ctx context.Context, account resource.AccountID, name string, in iam.RoleUpdate,
+	ctx context.Context, account resource.AccountID, name string, in iam.RoleUpdate, want iam.AuthorizedARN,
 ) error {
+	if err := want.Require(); err != nil {
+		return err
+	}
 	if in.Description != nil {
 		if err := iam.ValidateRoleDescription(*in.Description); err != nil {
 			return err
@@ -147,7 +179,7 @@ func (a STSAdmin) UpdateRole(
 			return err
 		}
 	}
-	existing, err := a.role(ctx, account, name)
+	existing, err := a.roleAt(ctx, account, name, want)
 	if err != nil {
 		return err
 	}
@@ -179,14 +211,17 @@ func (a STSAdmin) UpdateRole(
 }
 
 // UpdateRoleDescription implements iam.Admin over RoleService.UpdateRole with
-// a mask on spec.description.
+// a mask on spec.description. want must be the role's ARN when it is read.
 func (a STSAdmin) UpdateRoleDescription(
-	ctx context.Context, account resource.AccountID, name, description string,
+	ctx context.Context, account resource.AccountID, name, description string, want iam.AuthorizedARN,
 ) (iam.Role, error) {
+	if err := want.Require(); err != nil {
+		return iam.Role{}, err
+	}
 	if err := iam.ValidateRoleDescription(description); err != nil {
 		return iam.Role{}, err
 	}
-	existing, err := a.role(ctx, account, name)
+	existing, err := a.roleAt(ctx, account, name, want)
 	if err != nil {
 		return iam.Role{}, err
 	}
@@ -240,14 +275,17 @@ func (STSAdmin) ListRoles(_ context.Context, _ resource.AccountID, _ string) ([]
 	return nil, notServed("ListRoles")
 }
 
-// UpdateAssumeRolePolicy implements iam.Admin.
-func (STSAdmin) UpdateAssumeRolePolicy(_ context.Context, _ resource.AccountID, _, _ string) error {
-	return notServed("UpdateAssumeRolePolicy")
+// UpdateAssumeRolePolicy implements iam.Admin. The zero want is refused
+// first, as on every bound call.
+func (STSAdmin) UpdateAssumeRolePolicy(
+	_ context.Context, _ resource.AccountID, _, _ string, want iam.AuthorizedARN,
+) error {
+	return unboundOrNotServed(want, "UpdateAssumeRolePolicy")
 }
 
 // DeleteRole implements iam.Admin.
-func (STSAdmin) DeleteRole(_ context.Context, _ resource.AccountID, _ string) error {
-	return notServed("DeleteRole")
+func (STSAdmin) DeleteRole(_ context.Context, _ resource.AccountID, _ string, want iam.AuthorizedARN) error {
+	return unboundOrNotServed(want, "DeleteRole")
 }
 
 // CreatePolicy implements iam.Admin.
@@ -408,23 +446,27 @@ func (a STSAdmin) DeletePolicyVersion(
 }
 
 // CreateLoginProfile implements iam.Admin.
-func (STSAdmin) CreateLoginProfile(_ context.Context, _ resource.AccountID, _, _ string) (iam.LoginProfile, error) {
-	return iam.LoginProfile{}, notServed("CreateLoginProfile")
+func (STSAdmin) CreateLoginProfile(
+	_ context.Context, _ resource.AccountID, _, _ string, want iam.AuthorizedARN,
+) (iam.LoginProfile, error) {
+	return iam.LoginProfile{}, unboundOrNotServed(want, "CreateLoginProfile")
 }
 
 // GetLoginProfile implements iam.Admin.
-func (STSAdmin) GetLoginProfile(_ context.Context, _ resource.AccountID, _ string) (iam.LoginProfile, error) {
-	return iam.LoginProfile{}, notServed("GetLoginProfile")
+func (STSAdmin) GetLoginProfile(
+	_ context.Context, _ resource.AccountID, _ string, want iam.AuthorizedARN,
+) (iam.LoginProfile, error) {
+	return iam.LoginProfile{}, unboundOrNotServed(want, "GetLoginProfile")
 }
 
 // UpdateLoginProfile implements iam.Admin.
-func (STSAdmin) UpdateLoginProfile(_ context.Context, _ resource.AccountID, _, _ string) error {
-	return notServed("UpdateLoginProfile")
+func (STSAdmin) UpdateLoginProfile(_ context.Context, _ resource.AccountID, _, _ string, want iam.AuthorizedARN) error {
+	return unboundOrNotServed(want, "UpdateLoginProfile")
 }
 
 // DeleteLoginProfile implements iam.Admin.
-func (STSAdmin) DeleteLoginProfile(_ context.Context, _ resource.AccountID, _ string) error {
-	return notServed("DeleteLoginProfile")
+func (STSAdmin) DeleteLoginProfile(_ context.Context, _ resource.AccountID, _ string, want iam.AuthorizedARN) error {
+	return unboundOrNotServed(want, "DeleteLoginProfile")
 }
 
 // policyResource turns arn:vws:iam::{project}:policy{path}{name} into
@@ -643,15 +685,18 @@ func (a STSAdmin) ListVirtualMFADevices(
 // ListMFADevices implements iam.Admin over MfaDeviceService.ListMfaDevices.
 // vws-iam pages every device of the account before the user filter, so this
 // reads every page and then filters and pages to keep AWS's MaxItems and
-// Marker semantics. A non-empty expectARN must be the user's ARN when the
+// Marker semantics. want must be the user's ARN when the
 // user is read before the device pages and again after them, so a user that
 // moved since the caller was authorized, or while the pages were read, is a
 // ConcurrentModification with no device.
 func (a STSAdmin) ListMFADevices(
-	ctx context.Context, account resource.AccountID, user, marker string, maxItems int, expectARN string,
+	ctx context.Context, account resource.AccountID, user, marker string, maxItems int, want iam.AuthorizedARN,
 ) (iam.MFADevicePage, error) {
+	if err := want.Require(); err != nil {
+		return iam.MFADevicePage{}, err
+	}
 	resourceName := "projects/" + account.String() + "/users/" + user
-	if err := a.userAt(ctx, account, user, expectARN); err != nil {
+	if err := a.userAt(ctx, account, user, want); err != nil {
 		return iam.MFADevicePage{}, err
 	}
 	var devices []iam.MFADevice
@@ -696,23 +741,20 @@ func (a STSAdmin) ListMFADevices(
 			break
 		}
 	}
-	if err := a.userAt(ctx, account, user, expectARN); err != nil {
+	if err := a.userAt(ctx, account, user, want); err != nil {
 		return iam.MFADevicePage{}, err
 	}
 	return iam.PageMFADevices(devices, marker, maxItems), nil
 }
 
-// userAt reads the user and checks that a non-empty expectARN is its ARN: a
-// user that moved since the caller was authorized is Changed(UserChanged).
-func (a STSAdmin) userAt(ctx context.Context, account resource.AccountID, user, expectARN string) error {
+// userAt reads the user and checks that want is its ARN: a user that moved
+// since the caller was authorized is Changed(UserChanged).
+func (a STSAdmin) userAt(ctx context.Context, account resource.AccountID, user string, want iam.AuthorizedARN) error {
 	u, err := a.GetUser(ctx, account, user)
 	if err != nil {
 		return err
 	}
-	if stale(u.ARN, expectARN) {
-		return iam.Changed(iam.UserChanged)
-	}
-	return nil
+	return want.Bind(u.ARN, iam.UserChanged)
 }
 
 // virtualMFADevice maps one vws-iam device to an AWS row. A device with a user

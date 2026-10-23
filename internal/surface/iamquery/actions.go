@@ -172,8 +172,8 @@ func authorizeMovedGroup(h *handler, c *exchange) error {
 		}
 		return err
 	}
-	if c.authorized != "" && g.ARN != c.authorized {
-		return iam.Changed(iam.GroupChanged)
+	if err := c.authorized.Bind(g.ARN, iam.GroupChanged); err != nil {
+		return err
 	}
 	path, name := g.Path, g.Name
 	if newPath != "" {
@@ -190,20 +190,21 @@ func authorizeMovedGroup(h *handler, c *exchange) error {
 }
 
 // authorizeMovedUser checks iam:UpdateUser on the user's current and target
-// ARN, as AWS requires. It returns the snapshot both checks used, so
-// UpdateUser can refuse a concurrent change. A missing user is NoSuchEntity,
-// never an empty snapshot.
-func authorizeMovedUser(h *handler, c *exchange) (iam.User, error) {
+// ARN, as AWS requires. It returns the binding of the snapshot both checks
+// used, so UpdateUser can refuse a concurrent change. A missing user is
+// NoSuchEntity, never an empty snapshot.
+func authorizeMovedUser(h *handler, c *exchange) (iam.AuthorizedARN, error) {
 	u, err := h.cfg.Admin.GetUser(c.r.Context(), c.caller.Account, c.form("UserName"))
 	if err != nil {
-		return iam.User{}, err
+		return iam.AuthorizedARN{}, err
 	}
-	if err := iam.Check(c.r.Context(), h.cfg.Authorizer, c.caller, "iam:"+c.action, u.ARN); err != nil {
-		return iam.User{}, err
+	want, err := iam.Authorize(c.r.Context(), h.cfg.Authorizer, c.caller, "iam:"+c.action, u.ARN)
+	if err != nil {
+		return iam.AuthorizedARN{}, err
 	}
 	newPath, newName := c.form("NewPath"), c.form("NewUserName")
 	if newPath == "" && newName == "" {
-		return u, nil
+		return want, nil
 	}
 	path, name := u.Path, u.Name
 	if newPath != "" {
@@ -214,9 +215,12 @@ func authorizeMovedUser(h *handler, c *exchange) (iam.User, error) {
 	}
 	target := arnOf(c, "user", path, name)
 	if target == u.ARN {
-		return u, nil
+		return want, nil
 	}
-	return u, iam.Check(c.r.Context(), h.cfg.Authorizer, c.caller, "iam:"+c.action, target)
+	if err := iam.Check(c.r.Context(), h.cfg.Authorizer, c.caller, "iam:"+c.action, target); err != nil {
+		return iam.AuthorizedARN{}, err
+	}
+	return want, nil
 }
 
 func roleARN(h *handler, c *exchange) string {
@@ -408,10 +412,18 @@ func iamActions() map[string]spec {
 					User userXML `xml:"User"`
 				}{userXML{UserID: c.caller.Account.String(), Arn: c.caller.Principal}}, nil
 			}
+			// The lookup is read again for the response; a user that moved
+			// since it was authorized is not shown.
 			u, err := h.cfg.Admin.GetUser(c.r.Context(), c.caller.Account, name)
+			if err != nil {
+				return nil, err
+			}
+			if err := c.authorized.Bind(u.ARN, iam.UserChanged); err != nil {
+				return nil, err
+			}
 			return struct {
 				User userXML `xml:"User"`
-			}{toUser(u)}, err
+			}{toUser(u)}, nil
 		}),
 		"ListUsers": lister(nil, func(h *handler, c *exchange) (any, error) {
 			return pagedUsers(c, func(prefix string) ([]iam.User, error) {
@@ -427,13 +439,13 @@ func iamActions() map[string]spec {
 				if err := rejectEmpty(c, "NewPath", "NewUserName"); err != nil {
 					return nil, err
 				}
-				u, err := authorizeMovedUser(h, c)
+				want, err := authorizeMovedUser(h, c)
 				if err != nil {
 					return nil, err
 				}
 				return nil, h.cfg.Admin.UpdateUser(
 					c.r.Context(), c.caller.Account, c.form("UserName"),
-					c.form("NewPath"), c.form("NewUserName"), u.ARN)
+					c.form("NewPath"), c.form("NewUserName"), want)
 			},
 		),
 		"DeleteUser": admin([]string{"UserName"}, userARN, func(h *handler, c *exchange) (any, error) {
@@ -446,7 +458,8 @@ func iamActions() map[string]spec {
 			if err := loginProfileInput(c); err != nil {
 				return nil, err
 			}
-			p, err := h.cfg.Admin.CreateLoginProfile(c.r.Context(), c.caller.Account, c.form("UserName"), c.form("Password"))
+			p, err := h.cfg.Admin.CreateLoginProfile(
+				c.r.Context(), c.caller.Account, c.form("UserName"), c.form("Password"), c.authorized)
 			return struct {
 				LoginProfile loginProfileXML `xml:"LoginProfile"`
 			}{toLoginProfile(p)}, err
@@ -455,7 +468,7 @@ func iamActions() map[string]spec {
 			if err := required(c, "UserName"); err != nil {
 				return nil, err
 			}
-			p, err := h.cfg.Admin.GetLoginProfile(c.r.Context(), c.caller.Account, c.form("UserName"))
+			p, err := h.cfg.Admin.GetLoginProfile(c.r.Context(), c.caller.Account, c.form("UserName"), c.authorized)
 			return struct {
 				LoginProfile loginProfileXML `xml:"LoginProfile"`
 			}{toLoginProfile(p)}, err
@@ -464,13 +477,14 @@ func iamActions() map[string]spec {
 			if err := loginProfileInput(c); err != nil {
 				return nil, err
 			}
-			return nil, h.cfg.Admin.UpdateLoginProfile(c.r.Context(), c.caller.Account, c.form("UserName"), c.form("Password"))
+			return nil, h.cfg.Admin.UpdateLoginProfile(
+				c.r.Context(), c.caller.Account, c.form("UserName"), c.form("Password"), c.authorized)
 		}),
 		"DeleteLoginProfile": admin([]string{"UserName"}, userARN, func(h *handler, c *exchange) (any, error) {
 			if err := required(c, "UserName"); err != nil {
 				return nil, err
 			}
-			return nil, h.cfg.Admin.DeleteLoginProfile(c.r.Context(), c.caller.Account, c.form("UserName"))
+			return nil, h.cfg.Admin.DeleteLoginProfile(c.r.Context(), c.caller.Account, c.form("UserName"), c.authorized)
 		}),
 		"CreateAccessKey": admin([]string{"UserName"}, userARN, func(h *handler, c *exchange) (any, error) {
 			n, err := requireUser(c)
@@ -557,8 +571,12 @@ func iamActions() map[string]spec {
 			if err != nil {
 				return nil, err
 			}
+			// A group that moved since it was authorized is not shown.
 			g, us, err := h.cfg.Admin.GetGroup(c.r.Context(), c.caller.Account, c.form("GroupName"))
 			if err != nil {
+				return nil, err
+			}
+			if err := c.authorized.Bind(g.ARN, iam.GroupChanged); err != nil {
 				return nil, err
 			}
 			page, truncated, next := pageByName(us, userNameOf, marker, maxItems)
@@ -631,7 +649,7 @@ func iamActions() map[string]spec {
 			if _, _, err := pageParams(c); err != nil {
 				return nil, err
 			}
-			gs, err := h.cfg.Admin.ListGroupsForUser(c.r.Context(), c.caller.Account, c.form("UserName"))
+			gs, err := h.cfg.Admin.ListGroupsForUser(c.r.Context(), c.caller.Account, c.form("UserName"), c.authorized)
 			if err != nil {
 				return nil, err
 			}
@@ -659,10 +677,18 @@ func iamActions() map[string]spec {
 			}{toRole(r)}, err
 		}),
 		"GetRole": admin([]string{"RoleName"}, roleARN, func(h *handler, c *exchange) (any, error) {
+			// A role replaced on another path since it was authorized is
+			// not shown.
 			r, err := h.cfg.Admin.GetRole(c.r.Context(), c.caller.Account, c.form("RoleName"))
+			if err != nil {
+				return nil, err
+			}
+			if err := c.authorized.Bind(r.ARN, iam.RoleChanged); err != nil {
+				return nil, err
+			}
 			return struct {
 				Role roleXML `xml:"Role"`
-			}{toRole(r)}, err
+			}{toRole(r)}, nil
 		}),
 		"UpdateRole": admin(
 			[]string{"RoleName", "Description", "MaxSessionDuration"}, roleARN,
@@ -683,7 +709,7 @@ func iamActions() map[string]spec {
 					in.MaxSessionDuration = &seconds
 				}
 				if err := h.cfg.Admin.UpdateRole(
-					c.r.Context(), c.caller.Account, c.form("RoleName"), in); err != nil {
+					c.r.Context(), c.caller.Account, c.form("RoleName"), in, c.authorized); err != nil {
 					return nil, err
 				}
 				// AWS keeps the empty UpdateRoleResult wrapper, and SDKs
@@ -698,7 +724,7 @@ func iamActions() map[string]spec {
 					return nil, err
 				}
 				r, err := h.cfg.Admin.UpdateRoleDescription(
-					c.r.Context(), c.caller.Account, c.form("RoleName"), c.form("Description"))
+					c.r.Context(), c.caller.Account, c.form("RoleName"), c.form("Description"), c.authorized)
 				return struct {
 					Role roleXML `xml:"Role"`
 				}{toRole(r)}, err
@@ -719,11 +745,11 @@ func iamActions() map[string]spec {
 					return nil, err
 				}
 				return nil, h.cfg.Admin.UpdateAssumeRolePolicy(
-					c.r.Context(), c.caller.Account, c.form("RoleName"), c.form("PolicyDocument"))
+					c.r.Context(), c.caller.Account, c.form("RoleName"), c.form("PolicyDocument"), c.authorized)
 			},
 		),
 		"DeleteRole": admin([]string{"RoleName"}, roleARN, func(h *handler, c *exchange) (any, error) {
-			return nil, h.cfg.Admin.DeleteRole(c.r.Context(), c.caller.Account, c.form("RoleName"))
+			return nil, h.cfg.Admin.DeleteRole(c.r.Context(), c.caller.Account, c.form("RoleName"), c.authorized)
 		}),
 
 		"CreatePolicy": admin([]string{"PolicyName", "Path", "PolicyDocument", "Description"}, policyARN, func(h *handler, c *exchange) (any, error) {
