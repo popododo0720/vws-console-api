@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	commonv1 "github.com/popododo0720/vws-proto/gen/go/vws/common/v1"
 	computev1 "github.com/popododo0720/vws-proto/gen/go/vws/compute/v1"
@@ -45,6 +46,7 @@ func stampOf(at time.Time) string { return strconv.FormatInt(at.Unix(), 36) }
 func TestPruneDetachRecords(t *testing.T) {
 	t.Run("sub-second boundary", pruneSubSecondBoundary)
 	t.Run("held while a recovery is pending", pruneHeldForRecovery)
+	t.Run("a record written before #303 during a hold", pruneUnstampedDuringHold)
 	now := time.Unix(1_700_000_000, 0).UTC()
 	const grace = backend.ClientTokenGrace
 	req := strings.Repeat("ab", 16)
@@ -379,6 +381,12 @@ func TestDetachRecoveryResendsTheOriginalStamp(t *testing.T) {
 	t.Run("a record that expired meanwhile", recoveryKeepsExpiredRecords)
 	t.Run("an intervening tag write", func(t *testing.T) { recoveryAfterInterveningWrite(t, interveningTags) })
 	t.Run("an intervening stop", func(t *testing.T) { recoveryAfterInterveningWrite(t, interveningStop) })
+	t.Run("a record written before #303, an intervening tag write", func(t *testing.T) {
+		recoveryOfARecordWrittenBefore303(t, interveningTags)
+	})
+	t.Run("a record written before #303, an intervening stop", func(t *testing.T) {
+		recoveryOfARecordWrittenBefore303(t, interveningStop)
+	})
 	world, client, name, vols, inst := capacityWorld(t, 1)
 	start := time.Unix(1_700_000_000, 0).UTC()
 	var offset atomic.Int64
@@ -632,5 +640,117 @@ func detachOpIDBoundary(t *testing.T, tagCount int, fits bool) {
 	again, err := client.DetachVolume(ctx, mN, reqN)
 	if err != nil || again.Operation.ID != first.Operation.ID {
 		t.Fatalf("same-token retry: op %s, %v; want op %s", again.Operation.ID, err, first.Operation.ID)
+	}
+}
+
+// A record written before #303 has no stamp. If its operation id write
+// failed, its retry resends that write by request id, unstamped. Another
+// label write before the retry must leave the record exactly as stored, or
+// the resend carries a stamp the original did not and compute answers a
+// fingerprint mismatch. Once the operation id is saved, the next write
+// stamps it (#319 review, #322).
+func recoveryOfARecordWrittenBefore303(
+	t *testing.T, write func(context.Context, computeClient, backend.Scope, resource.InstanceID) error,
+) {
+	world, client, name, vols, inst := capacityWorld(t, 1)
+	start := time.Unix(1_700_000_000, 0).UTC()
+	var offset atomic.Int64
+	client.now = func() time.Time { return start.Add(time.Duration(offset.Load())) }
+	scope := backend.Scope{Account: mustAccount(t)}
+	ctx := context.Background()
+	if err := tagEnvProd(ctx, client, scope, inst, "k-tag-1"); err != nil {
+		t.Fatalf("first tag write: %v", err)
+	}
+	m := backend.Mutation{Scope: scope, Key: "k-legacy", Fingerprint: "fp-legacy"}
+	req := resource.DetachVolumeRequest{VolumeID: vols[0], InstanceID: inst}
+	world.mu.Lock()
+	world.failSameSpec = 1 // the write that saves the operation id fails
+	world.mu.Unlock()
+	if _, err := client.DetachVolume(ctx, m, req); resource.CodeOf(err) != resource.CodeUnavailable {
+		t.Fatalf("interrupted detach: %v", err)
+	}
+	// Make that detach the one code before #303 sent: the same update with
+	// an unstamped record, as compute stored it under its request id.
+	recordKey := labelDetachPrefix + vols[0].String()
+	requestID := requestUUID(m.Key, "detach")
+	world.mu.Lock()
+	stored := world.inst[0]
+	labels := maps.Clone(stored.GetLabels())
+	requestHex, device, _, stamped, ok := parseDetachRecord(labels[recordKey])
+	if !ok || !stamped {
+		world.mu.Unlock()
+		t.Fatalf("record %q, want a stamped record to rewrite", labels[recordKey])
+	}
+	legacy := requestHex + " " + device
+	labels[recordKey] = legacy
+	fp, err := detachReqFingerprint(&computev1.UpdateInstanceRequest{
+		RequestId:  requestID,
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.volumes", "labels"}},
+		Instance: &computev1.Instance{
+			Name: stored.GetName(), Labels: labels,
+			Spec: &computev1.InstanceSpec{Volumes: stored.GetSpec().GetVolumes()},
+		},
+	})
+	if err != nil {
+		world.mu.Unlock()
+		t.Fatal(err)
+	}
+	stored.Labels = labels
+	world.byRequest[requestID].fp = fp
+	op, err := operationFrom(world.byRequest[requestID].op, resource.ServiceCompute)
+	world.mu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	offset.Store(int64(time.Hour))
+	if err := write(ctx, client, scope, inst); err != nil {
+		t.Fatalf("intervening write: %v", err)
+	}
+	if got := world.labelsOf(name)[recordKey]; got != legacy {
+		t.Errorf("the intervening write changed the pending record: %q, want %q as stored", got, legacy)
+	}
+	again, err := client.DetachVolume(ctx, m, req)
+	if err != nil {
+		t.Fatalf("recovery after the intervening write: %v", err)
+	}
+	if again.Operation.ID != op.ID {
+		t.Fatalf("recovery gave op %s, want %s", again.Operation.ID, op.ID)
+	}
+	if _, ok := world.labelsOf(name)[labelDetachOpPrefix+vols[0].String()]; !ok {
+		t.Fatal("the recovery did not save its operation id")
+	}
+	if err := tagEnvProd(ctx, client, scope, inst, "k-tag-3"); err != nil {
+		t.Fatalf("tag write after the recovery: %v", err)
+	}
+	if got, want := world.labelsOf(name)[recordKey], legacy+" "+stampOf(start.Add(time.Hour)); got != want {
+		t.Fatalf("record after the recovery: %q, want it stamped by the next write: %q", got, want)
+	}
+}
+
+// During a hold a record written before #303 is left exactly as stored, and
+// it does not count toward backend.MaxDetachReplays: if its retry never
+// comes, other detaches still get stamped records. A record without a stamp
+// was written before every stamped record, so once a stamped record has
+// expired so has it: the hold it caused ends and it is dropped (#322).
+func pruneUnstampedDuringHold(t *testing.T) {
+	const grace = backend.ClientTokenGrace
+	now := time.Unix(1_700_000_000, 0).UTC()
+	req := strings.Repeat("ab", 16)
+	held := map[string]string{
+		labelDetachPrefix + "vol-legacy": req + " /dev/sdf",
+		labelDetachPrefix + "vol-a":      req + " /dev/sdg " + stampOf(now.Add(-time.Hour)),
+		labelDetachOpPrefix + "vol-a":    "0000000000000001 0123456789abcdef",
+	}
+	if got := pruneDetachRecords(held, now); !maps.Equal(got, held) {
+		t.Fatalf("records during the hold:\n got %v\nwant %v", got, held)
+	}
+	if n := detachRecordsInWindow(held, now, ""); n != 1 {
+		t.Fatalf("%d records within the window, want 1: an unstamped record is not counted during a hold", n)
+	}
+	expired := maps.Clone(held)
+	expired[labelDetachPrefix+"vol-a"] = req + " /dev/sdg " + stampOf(now.Add(-backend.ClientTokenWindow-grace-time.Second))
+	if got := pruneDetachRecords(expired, now); len(got) != 0 {
+		t.Fatalf("records once a stamped record expired: %v, want none", got)
 	}
 }
