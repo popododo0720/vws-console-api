@@ -1,0 +1,217 @@
+// This is the generator for the fixtures in this directory. It is not part of
+// the build. The command and the reason for ceaf591 are in README.md.
+package grpcclient
+
+import (
+	"context"
+	"encoding"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/popododo0720/vws-console-api/internal/backend"
+	"github.com/popododo0720/vws-console-api/internal/cloud"
+	"github.com/popododo0720/vws-console-api/internal/resource"
+)
+
+const upgradeSource = "ceaf591"
+
+type upgradeIdempotency struct {
+	Source      string                       `json:"source"`
+	Account     string                       `json:"account"`
+	Subject     string                       `json:"subject"`
+	Action      string                       `json:"action"`
+	ClientToken string                       `json:"clientToken"`
+	Request     resource.DetachVolumeRequest `json:"request"`
+	Key         string                       `json:"key"`
+	Fingerprint string                       `json:"fingerprint"`
+}
+
+type upgradeLabels struct {
+	Source string            `json:"source"`
+	Now    time.Time         `json:"now"`
+	Labels map[string]string `json:"labels"`
+}
+
+type upgradeMidFlight struct {
+	upgradeLabels
+	VolumeID string `json:"volumeId"`
+}
+
+type upgradeReplay struct {
+	VolumeID string `json:"volumeId"`
+	OpID     string `json:"opId"`
+}
+
+type upgradeBudget struct {
+	upgradeLabels
+	Replay upgradeReplay `json:"replay"`
+}
+
+type upgradeHeld struct {
+	upgradeLabels
+	HeldVolumeID    string `json:"heldVolumeId"`
+	HeldKey         string `json:"heldKey"`
+	HeldFingerprint string `json:"heldFingerprint"`
+	HeldOpID        string `json:"heldOpId"`
+	PendingVolumeID string `json:"pendingVolumeId"`
+	PendingOp       string `json:"pendingOp"`
+}
+
+type upgradeCompute struct {
+	backend.Compute
+	seen backend.Mutation
+}
+
+func (u *upgradeCompute) DetachVolume(
+	_ context.Context, m backend.Mutation, _ resource.DetachVolumeRequest,
+) (resource.Accepted[resource.VolumeAttachment], error) {
+	u.seen = m
+	return resource.Accepted[resource.VolumeAttachment]{}, errors.New("stop")
+}
+
+func upgradeMutation(
+	t *testing.T, account resource.AccountID, token resource.ClientToken, req resource.DetachVolumeRequest,
+) backend.Mutation {
+	t.Helper()
+	spy := &upgradeCompute{}
+	svc := cloud.New(cloud.Config{Backends: backend.Set{Compute: spy}})
+	if _, err := svc.DetachVolume(
+		context.Background(), resource.Caller{Account: account, Subject: "dev"}, token, req,
+	); err == nil {
+		t.Fatal("the stub accepted the detach")
+	}
+	if spy.seen.Key == "" {
+		t.Fatal("the kernel built no mutation")
+	}
+	return spy.seen
+}
+
+func upgradeParse[T any, PT interface {
+	*T
+	encoding.TextUnmarshaler
+}](t *testing.T, s string) T {
+	t.Helper()
+	v, err := resource.Parse[T, PT](s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return v
+}
+
+func TestGenerateUpgradeFixtures(t *testing.T) {
+	dir := os.Getenv("VWS_UPGRADE_FIXTURES")
+	if dir == "" {
+		t.Skip("VWS_UPGRADE_FIXTURES is not set")
+	}
+	account, err := resource.Parse[resource.AccountID]("123456789012")
+	if err != nil {
+		t.Fatal(err)
+	}
+	inst := upgradeParse[resource.InstanceID](t, "i-0123456789abcdef0")
+	now := time.Date(2026, 10, 23, 6, 0, 0, 0, time.UTC)
+	vol0 := upgradeParse[resource.VolumeID](t, "vol-0123456789abcdef0")
+	model := resource.Instance{
+		ID:            inst,
+		OwnerID:       account,
+		ImageID:       upgradeParse[resource.ImageID](t, "ami-0123456789abcdef0"),
+		ReservationID: upgradeParse[resource.ReservationID](t, "r-0123456789abcdef0"),
+		LaunchTime:    now.Add(-time.Hour),
+	}
+
+	write := func(name string, v any) {
+		t.Helper()
+		raw, err := json.MarshalIndent(v, "", "  ")
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw = append(raw, '\n')
+		if err := os.WriteFile(filepath.Join(dir, name), raw, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	req := resource.DetachVolumeRequest{VolumeID: vol0, InstanceID: inst, Device: "/dev/sdf"}
+	token := upgradeParse[resource.ClientToken](t, "detach-upgrade-1")
+	m := upgradeMutation(t, account, token, req)
+	write("idempotency.json", upgradeIdempotency{
+		Source: upgradeSource, Account: account.String(), Subject: "dev",
+		Action: resource.ActionDetachVolume.String(), ClientToken: token.String(),
+		Request: req, Key: m.Key, Fingerprint: m.Fingerprint,
+	})
+
+	midRecord := detachRecordValue(detachRequestHex(m.Key), req.Device, now.Add(-10*time.Minute))
+	midLabels, err := instanceUpdateLabels(model, map[string]string{},
+		resource.ActionDetachVolume, m.Fingerprint,
+		map[string]string{labelDetachPrefix + vol0.String(): midRecord}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	write("detach-mid-flight.json", upgradeMidFlight{
+		upgradeLabels: upgradeLabels{Source: upgradeSource, Now: now, Labels: midLabels},
+		VolumeID:      vol0.String(),
+	})
+
+	devices := []string{"/dev/sdf", "/dev/sdg", "/dev/sdh", "/dev/sdi"}
+	records := map[string]string{labelLaunch: "detach-upgrade-launch"}
+	for i := range backend.MaxDetachReplays {
+		vol := upgradeParse[resource.VolumeID](t, fmt.Sprintf("vol-0123456789abcdef%d", i))
+		req := resource.DetachVolumeRequest{VolumeID: vol, InstanceID: inst, Device: devices[i]}
+		mut := m
+		if i > 0 {
+			mut = upgradeMutation(t, account, upgradeParse[resource.ClientToken](t, fmt.Sprintf("detach-upgrade-%d", i+2)), req)
+		}
+		requestHex := detachRequestHex(mut.Key)
+		op := fmt.Sprintf("%020x", i+1)
+		records[labelDetachPrefix+vol.String()] = detachRecordValue(requestHex, devices[i], now.Add(-time.Duration(i+1)*time.Hour))
+		records[labelDetachOpPrefix+vol.String()] = op + " " + detachFPToken(requestHex, mut.Fingerprint)
+	}
+	budgetModel := model
+	budgetModel.Tags = map[string]string{}
+	for i := range resource.MaxTags {
+		budgetModel.Tags[fmt.Sprintf("k%02d", i)] = "v"
+	}
+	budgetLabels, err := instanceUpdateLabels(budgetModel, records,
+		resource.ActionDetachVolume, m.Fingerprint, records, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	write("op-labels-budget.json", upgradeBudget{
+		upgradeLabels: upgradeLabels{Source: upgradeSource, Now: now, Labels: budgetLabels},
+		Replay:        upgradeReplay{VolumeID: vol0.String(), OpID: fmt.Sprintf("%020x", 1)},
+	})
+
+	heldVol := upgradeParse[resource.VolumeID](t, "vol-0123456789abcdef0")
+	pendingVol := upgradeParse[resource.VolumeID](t, "vol-0123456789abcdef1")
+	heldReq := resource.DetachVolumeRequest{VolumeID: heldVol, InstanceID: inst, Device: "/dev/sdf"}
+	heldMut := upgradeMutation(t, account, upgradeParse[resource.ClientToken](t, "detach-upgrade-held"), heldReq)
+	pendingReq := resource.DetachVolumeRequest{VolumeID: pendingVol, InstanceID: inst, Device: "/dev/sdg"}
+	pendingMut := upgradeMutation(t, account, upgradeParse[resource.ClientToken](t, "detach-upgrade-pending"), pendingReq)
+	heldRequest := detachRequestHex(heldMut.Key)
+	expired := now.Add(-backend.ClientTokenWindow - backend.ClientTokenGrace - time.Second)
+	heldOp := fmt.Sprintf("%020x", 9)
+	heldRaw := map[string]string{
+		labelDetachPrefix + heldVol.String():    detachRecordValue(heldRequest, heldReq.Device, expired),
+		labelDetachOpPrefix + heldVol.String():  heldOp + " " + detachFPToken(heldRequest, heldMut.Fingerprint),
+		labelDetachPrefix + pendingVol.String(): detachRecordValue(detachRequestHex(pendingMut.Key), pendingReq.Device, now.Add(-time.Hour)),
+	}
+	heldModel := model
+	heldModel.Tags = map[string]string{"env": "prod"}
+	heldLabels, err := instanceUpdateLabels(heldModel, heldRaw, resource.ActionCreateTags, "fp-tags", nil, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	write("held-record.json", upgradeHeld{
+		upgradeLabels:   upgradeLabels{Source: upgradeSource, Now: now, Labels: heldLabels},
+		HeldVolumeID:    heldVol.String(),
+		HeldKey:         heldMut.Key,
+		HeldFingerprint: heldMut.Fingerprint,
+		HeldOpID:        heldOp,
+		PendingVolumeID: pendingVol.String(),
+		PendingOp:       fmt.Sprintf("%020x %s", 10, detachFPToken(detachRequestHex(pendingMut.Key), pendingMut.Fingerprint)),
+	})
+}
