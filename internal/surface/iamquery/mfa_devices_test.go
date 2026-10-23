@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/popododo0720/vws-console-api/internal/iam"
+	"github.com/popododo0720/vws-console-api/internal/resource"
 	"github.com/popododo0720/vws-console-api/internal/sigv4"
 )
 
@@ -211,7 +212,8 @@ func TestListMFADevices(t *testing.T) {
 	if body.Result.IsTruncated || body.Result.Marker != "" {
 		t.Errorf("paging fields %+v", body.Result)
 	}
-	if want := "iam:ListMFADevices *"; len(rec.seen) == 0 || rec.seen[len(rec.seen)-1] != want {
+	if want := "iam:ListMFADevices arn:vws:iam::123456789012:user/alice"; len(rec.seen) == 0 ||
+		rec.seen[len(rec.seen)-1] != want {
 		t.Errorf("authorized %v, want last %q", rec.seen, want)
 	}
 
@@ -310,7 +312,8 @@ func TestListMFADevicesAuthorizes(t *testing.T) {
 	}
 	has(t, call(t, h, bob, sigv4.ServiceIAM, url.Values{"Action": {"ListMFADevices"}}),
 		http.StatusOK, `<ListMFADevicesResponse>`, `<UserName>bob</UserName>`)
-	if want := "iam:ListMFADevices *"; len(rec.seen) == 0 || rec.seen[len(rec.seen)-1] != want {
+	if want := "iam:ListMFADevices arn:vws:iam::123456789012:user/bob"; len(rec.seen) == 0 ||
+		rec.seen[len(rec.seen)-1] != want {
 		t.Errorf("authorized %v, want last %q", rec.seen, want)
 	}
 }
@@ -336,4 +339,135 @@ func TestListMFADevicesDefaultsToCaller(t *testing.T) {
 	}
 	has(t, call(t, h, bob, sigv4.ServiceIAM, url.Values{"Action": {"ListMFADevices"}}),
 		http.StatusOK, `<UserName>bob</UserName>`, `<SerialNumber>`+serial+`</SerialNumber>`)
+}
+
+// AWS authorizes ListMFADevices on the user whose devices are listed (the
+// named user, else the caller), so a policy scoped to user/${aws:username}
+// lets a user list only their own devices.
+func TestListMFADevicesIsScopedToTheUser(t *testing.T) {
+	h, f, rec, root := harness(t)
+	ctx := t.Context()
+	alice, err := f.CreateUser(ctx, root.Account, "alice", "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bobUser, err := f.CreateUser(ctx, root.Account, "bob", "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	alicePhone := f.AddMfaDevice(root.Account, "alice-phone")
+	if err := f.AssignMfaDevice(root.Account, alicePhone, "alice", now); err != nil {
+		t.Fatal(err)
+	}
+	bobPhone := f.AddMfaDevice(root.Account, "bob-phone")
+	if err := f.AssignMfaDevice(root.Account, bobPhone, "bob", now); err != nil {
+		t.Fatal(err)
+	}
+	key, err := f.CreateAccessKey(ctx, root.Account, "alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	caller := sigv4.Credential{AccessKey: key.AccessKeyID, Secret: key.Secret}
+	self := url.Values{"Action": {"ListMFADevices"}}
+	named := url.Values{"Action": {"ListMFADevices"}, "UserName": {"alice"}}
+	forBob := url.Values{"Action": {"ListMFADevices"}, "UserName": {"bob"}}
+	put := func(policy string) {
+		t.Helper()
+		if err := f.PutInlinePolicy(ctx, root.Account, iam.EntityUser, "alice", "list", policy); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	t.Run("an Allow on the caller's own ARN lists the caller's devices", func(t *testing.T) {
+		put(`{"Statement":[{"Effect":"Allow","Action":"iam:ListMFADevices","Resource":"` + alice.ARN + `"}]}`)
+		has(t, call(t, h, caller, sigv4.ServiceIAM, self), http.StatusOK,
+			`<UserName>alice</UserName>`, `<SerialNumber>`+alicePhone+`</SerialNumber>`)
+		if want := "iam:ListMFADevices " + alice.ARN; len(rec.seen) == 0 || rec.seen[len(rec.seen)-1] != want {
+			t.Errorf("authorized %v, want last %q", rec.seen, want)
+		}
+		has(t, call(t, h, caller, sigv4.ServiceIAM, named), http.StatusOK,
+			`<SerialNumber>`+alicePhone+`</SerialNumber>`)
+		res := call(t, h, caller, sigv4.ServiceIAM, forBob)
+		has(t, res, http.StatusForbidden, `<Code>AccessDenied</Code>`)
+		if strings.Contains(res.Body.String(), bobPhone) {
+			t.Errorf("a denied call leaked another user's device: %s", res.Body.String())
+		}
+	})
+
+	t.Run("a policy for a different user does not grant", func(t *testing.T) {
+		put(`{"Statement":[{"Effect":"Allow","Action":"iam:ListMFADevices","Resource":"` + bobUser.ARN + `"}]}`)
+		has(t, call(t, h, caller, sigv4.ServiceIAM, self), http.StatusForbidden, `<Code>AccessDenied</Code>`)
+		has(t, call(t, h, caller, sigv4.ServiceIAM, named), http.StatusForbidden, `<Code>AccessDenied</Code>`)
+		has(t, call(t, h, caller, sigv4.ServiceIAM, forBob), http.StatusOK,
+			`<SerialNumber>`+bobPhone+`</SerialNumber>`)
+	})
+
+	t.Run("a Deny on the user's ARN refuses", func(t *testing.T) {
+		put(`{"Statement":[{"Effect":"Allow","Action":"iam:ListMFADevices","Resource":"*"},` +
+			`{"Effect":"Deny","Action":"iam:ListMFADevices","Resource":"` + alice.ARN + `"}]}`)
+		has(t, call(t, h, caller, sigv4.ServiceIAM, self), http.StatusForbidden, `<Code>AccessDenied</Code>`)
+		has(t, call(t, h, caller, sigv4.ServiceIAM, named), http.StatusForbidden, `<Code>AccessDenied</Code>`)
+		has(t, call(t, h, caller, sigv4.ServiceIAM, forBob), http.StatusOK,
+			`<SerialNumber>`+bobPhone+`</SerialNumber>`)
+	})
+}
+
+// AWS validates UserName before it authorizes, so a malformed name is a 400
+// even for a caller without iam:ListMFADevices, and nothing is authorized.
+func TestListMFADevicesValidatesBeforeAuthorization(t *testing.T) {
+	h, f, rec, root := harness(t)
+	ctx := t.Context()
+	if _, err := f.CreateUser(ctx, root.Account, "bob", "/"); err != nil {
+		t.Fatal(err)
+	}
+	key, err := f.CreateAccessKey(ctx, root.Account, "bob")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bob := sigv4.Credential{AccessKey: key.AccessKeyID, Secret: key.Secret}
+	for _, name := range []string{"bad#name", strings.Repeat("a", 129), ""} {
+		rec.seen = nil
+		has(t, call(t, h, bob, sigv4.ServiceIAM, url.Values{
+			"Action": {"ListMFADevices"}, "UserName": {name},
+		}), http.StatusBadRequest, `<Code>ValidationError</Code>`)
+		if len(rec.seen) != 0 {
+			t.Errorf("UserName %q authorized %v before validation", name, rec.seen)
+		}
+	}
+}
+
+// A user lookup that fails for a reason other than NoSuchEntity must not be
+// authorized on a guessed ARN: alice is /restricted/alice, which bob may not
+// list, so a check on user/alice would let bob through.
+func TestListMFADevicesUnavailableLookupAuthorizesNothing(t *testing.T) {
+	lookupErr := &resource.Error{Code: resource.CodeUnavailable, Message: "vws-iam is unavailable"}
+	h, f, rec, root := harnessWith(t, func(a iam.Admin) iam.Admin {
+		return userLookupError{Admin: a, err: lookupErr}
+	})
+	ctx := t.Context()
+	if _, err := f.CreateUser(ctx, root.Account, "alice", "/restricted/"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.CreateUser(ctx, root.Account, "bob", "/"); err != nil {
+		t.Fatal(err)
+	}
+	users := "arn:vws:iam::" + root.Account.String() + ":user/"
+	policy := `{"Statement":[` +
+		`{"Effect":"Allow","Action":"iam:ListMFADevices","Resource":"` + users + `alice"},` +
+		`{"Effect":"Deny","Action":"iam:ListMFADevices","Resource":"` + users + `restricted/*"}]}`
+	if err := f.PutInlinePolicy(ctx, root.Account, iam.EntityUser, "bob", "list", policy); err != nil {
+		t.Fatal(err)
+	}
+	key, err := f.CreateAccessKey(ctx, root.Account, "bob")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bob := sigv4.Credential{AccessKey: key.AccessKeyID, Secret: key.Secret}
+	rec.seen = nil
+	has(t, call(t, h, bob, sigv4.ServiceIAM, url.Values{
+		"Action": {"ListMFADevices"}, "UserName": {"alice"},
+	}), http.StatusServiceUnavailable, `<Code>ServiceUnavailable</Code>`)
+	if len(rec.seen) != 0 {
+		t.Errorf("authorized on a guessed ARN: %v", rec.seen)
+	}
 }
