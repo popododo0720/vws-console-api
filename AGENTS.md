@@ -1,195 +1,127 @@
 # AGENTS.md
 
-This repository is the web-only backend of VWS, a private cloud with an
-AWS-shaped control plane. One stateless process serves three surfaces: the
-console JSON API, an EC2 Query entry point, and an S3 REST entry point.
-Compute, storage, and network state lives in internal services reached over
-gRPC. This process keeps no copy of it.
-
-Protocol compatibility is behavioral. Do not add logos, image assets, or text
-that claims this project is someone else's cloud.
+The web-only backend of VWS, a private cloud with an AWS-shaped control
+plane. One stateless process serves the console JSON API, an EC2 Query entry
+point and an S3 REST entry point. Compute, storage and network state lives in
+internal services reached over gRPC; this process keeps no copy. Protocol
+compatibility is behavioral: no logos, image assets or text that claims this
+project is someone else's cloud.
 
 ## Where things live
 
 | Path | Owns |
 | --- | --- |
 | `internal/resource` | The one resource model: kinds, IDs, states, operations, errors, requests. Standard library only. |
-| `internal/cloud` | The kernel. Normalization, idempotency keys, tenancy checks. One backend call per method. |
+| `internal/cloud` | The kernel: normalization, idempotency keys, tenancy checks. One backend call per method. |
 | `internal/backend` | The client contract (`Compute`, `Storage`, `Network`) in model types. |
 | `internal/backend/fake` | In-memory backends that honor the contract. |
-| `internal/backend/backendtest` | The contract as tests. Every backend implementation runs it. |
+| `internal/backend/backendtest` | The contract as tests. Every backend runs it. |
 | `internal/backend/grpcclient` | The contract over gRPC. The only package that sees protobuf. |
 | `internal/sigv4` | Signature verification, plus `Sign` for tests. |
-| `internal/surface/console` | JSON codec. The body is the model. |
-| `internal/surface/ec2query` | EC2 Query codec. |
-| `internal/surface/s3rest` | Path-style object codec. |
-| `internal/surface/interop` | Tests that drive more than one surface against one world. |
+| `internal/surface/*` | `console` (JSON), `ec2query`, `s3rest` codecs; `interop` drives several surfaces against one world. |
 | `internal/server` | One listener per surface, request IDs, shutdown. |
 
 ## Rules
 
-Each rule names what enforces it. A rule with nothing behind it will be
-copied around and then broken. If you add a rule, add its check in the same
-change.
+Each rule names what enforces it. A rule with nothing behind it gets copied
+and then broken, so a new rule comes with its check in the same change. The
+full statement of every rule and all of its checks are in `docs/rules.md`;
+change both files together.
 
 | Rule | Enforced by |
 | --- | --- |
-| Surfaces call `internal/cloud`, never `internal/backend`. | `TestArchitectureRules`; depguard `surfaces-use-the-kernel` |
-| `internal/resource` imports only the standard library. | `TestArchitectureRules`; depguard `model-is-a-leaf` |
-| The kernel never sees HTTP, signatures, or a surface. | `TestArchitectureRules`; depguard `kernel-knows-no-wire` |
-| Protobuf and gRPC types stay inside `internal/backend/grpcclient`. | `TestArchitectureRules`; depguard `grpc-stays-in-grpcclient` |
-| Untrusted strings become IDs only through `resource.Parse` or JSON decoding. | The compiler: ID types are structs with unexported fields |
-| Surfaces and the kernel do not mint IDs or operation IDs. | `internal/hygiene` rejects `resource.Mint` and `resource.NewOperationID` outside `internal/backend` |
+| Surfaces call `internal/cloud`, never `internal/backend`. | depguard `surfaces-use-the-kernel` |
+| `internal/resource` imports only the standard library. | depguard `model-is-a-leaf` |
+| The kernel never sees HTTP, signatures or a surface. | depguard `kernel-knows-no-wire` |
+| Protobuf and gRPC types stay in `internal/backend/grpcclient`. | depguard `grpc-stays-in-grpcclient` |
+| Untrusted strings become IDs only through `resource.Parse` or JSON decoding. | The compiler (unexported ID fields) |
+| Only `internal/backend` mints IDs and operation IDs. | `internal/hygiene` |
 | Every switch over a model enum handles every value. | `exhaustive` |
-| No package-level mutable state. The process is stateless. | `gochecknoglobals` |
-| A long-running mutation takes a client token and returns `resource.Accepted`. It does not wait for the work to finish. | Kernel signatures; `cloud.mutate` is the only mutation path |
-| A mutation publishes the resource, the operation, and the idempotency record together. A rejected call leaves the previous state, and a repeated minted id is an internal error. | `backendtest` partial stop; `TestRepeatedEntropyDoesNotOverwrite` |
-| `RunInstances` requires a subnet the caller owns. | `backendtest` creates the subnet, then launches into it |
-| An unknown page token is an invalid argument. A state filter does not turn an existing id into not-found. | `backendtest` |
-| An object list with a delimiter returns common prefixes instead of the keys under them. The continuation token is a position in that rollup, so deleting the named key still resumes. `start-after` drops raw keys before the rollup, so a cursor inside a group keeps the group when a later key remains. | `TestObjectListGroupsByDelimiter`, `TestObjectListContinues`; `backendtest` |
-| The idempotency key is the account, the action, and the client token. The fingerprint is `idempotencyVersion` plus the normalized JSON, including empty tag values. A derivation change mismatches a retry instead of minting a second resource. | Golden test and `TestEmptyTagChangesFingerprint` in `internal/cloud` |
-| A backend result that names another account is rejected, including a polled operation and an object listing. A public image is the one exception, and `guardImage` admits it on a page. The operation id returned must be the id that was requested. A caller with no account never reaches a backend. | `guardAccepted`, `guardOwner`, `guardOperation`, `guardImage`, and `requireCaller` in `internal/cloud`, covered by `TestForeignAccountIsInternal`, `TestForeignOperationIsInternal`, `TestForeignObjectListingIsInternal`, `TestDescribeImagesAdmitsAPublicImage`, `TestDescribeImagesRejectsAForeignPrivateImage`, and `TestZeroAccountIsUnauthenticated` |
-| Each listener bounds header, body, write, and idle time. The process stops on interrupt and SIGTERM. A gRPC call without a deadline gets one. | `TestListenerBounds`, `TestStopOnSIGTERM`, `TestCallGetsADeadline` |
-| Fakes and the gRPC client behave the same. Operation failure fields survive the gRPC mapping. An object at `MaxObjectBytes` fits in one gRPC message. A larger body is `PayloadTooLarge`, which is not the retryable quota code. | `backendtest.Run` on both; `TestObjectCapMatchesStorageProto`; `TestOperationFailureRoundTrip`; `TestBareResourceExhaustedStaysRetryable` |
-| `-ops-addr` serves `/healthz`, `/readyz`, and `/metrics` on its own listener. `/readyz` is 503 once shutdown starts. Every metric series starts with `vws_`. | `TestOpsEndpoints`, `TestMetricsCountRequestsWithTheVWSPrefix`, `TestFakeProcessSmoke` |
-| Credentials come from `VWS_CONSOLE_TOKEN`, `VWS_ACCESS_KEY`, `VWS_SECRET_KEY` or their `_FILE` paths; the `-console-token`, `-access-key`, `-secret` flags are deprecated (they show in the process arguments), win when given, and log a warning naming the flag, never the value. `X` and `X_FILE` together, or an empty or unreadable file, is an error. `-backend=grpc` refuses to start while any credential is at its public development default. | `TestGRPCRefusesDefaultCredentials`, `TestGRPCAcceptsCredentialsFromEnvAndFile`, `TestCredentialFlagWinsAndWarnsWithoutTheValue`, `TestCredentialFilePrecedesEnvOnlyWhenAloneElseError`, `TestCredentialFileErrors` |
-| Every IAM and STS Query action except `sts:GetCallerIdentity` (which, as in AWS, needs only a valid signature) is authorized as `iam:<Action>` or `sts:<Action>` on the entity's real ARN (`*` for lists) before it runs. A user action without `UserName` is about the caller and is authorized on the caller's authenticated ARN, path included, with no lookup. A named user or group that does not exist is authorized on the requested name, as AWS evaluates it; any other lookup failure, such as vws-iam being unavailable, authorizes nothing and answers that IAM error, or `503 ServiceUnavailable` without the backend's message when it is not one, since a guessed path-less ARN would skip a `Deny` on the real path. With `-iam=grpc` the lookups are vws-iam `UserService.GetUser` and `GroupService.GetGroup` (no member reads). Tagging a policy also needs `iam:ListPolicyTags`, and tagging a virtual MFA device also needs `iam:ListMFADeviceTags`, as in AWS. Unknown parameters, including `PermissionsBoundary` and `Tags` on an action that does not take them, are rejected. A key or session deleted or expired stops authenticating at once. `AssumeRole` needs both the caller's `sts:AssumeRole` permission and the role's trust policy. Allow statements with a `Condition` never apply in the fake; Deny statements with one always do. | `TestIAMResponseAndErrorShapes`, `TestLimitedUserAndSTS`, `TestUpdateRoleFailsClosedWhenTheRoleLookupFails`, `TestEntityActionsFailClosedWhenTheLookupFails`, `TestCallerActionsAuthorizeOnTheCallerWithoutALookup`, `TestLookupOutageAnswersServiceUnavailable`, `TestEntityActionsAuthorizeOnTheRealARNOverGRPC`, `TestGetUserAndGetGroupOverGRPC`, `TestGetCallerIdentityNamesTheUserByItsUniqueIDOverGRPC`, `TestAssumeRole`, `TestAccessKeysAuthenticate`, `TestGetCallerIdentitySkipsAuthorizeButNotAuthentication`, e2e `identity()` |
-| Every console route is authenticated (bearer root token or `vws_session` cookie) and authorized as an IAM action by `routeAction`; a route without an entry is denied, and `TestEveryRouteIsAuthorized` fails. A cookie session must send `X-CSRF-Token` (derived from the session token) on every non-GET/HEAD request. Sign-in failures are one uniform `401`; passwords are stored only as argon2id hashes and never logged or echoed. | `TestSessionIsAuthorizedPerRequest`, `TestLoginFailuresAreGeneric`, `TestLoginSetsHardenedCookies`, `TestEveryRouteIsAuthorized`, `TestLoginLockout`, e2e `console_login()` |
-| With `-iam=grpc`, only `internal/backend/grpcclient/iamclient` speaks vws.iam.v1. The principal vws-iam names in `Authenticate` (unique id, resource, session name, MFA) travels on `resource.Caller.Ref` to `Authorize` unchanged; anything but `DECISION_ALLOW` denies; STS `AssumeRole` names the caller only in the request's `authentication` oneof (its SigV4 request or console session token), never in gRPC metadata or the deprecated `caller` field. Console sessions from vws-iam keep the same uniform `401` as the fake and fail closed on any other error. `Caller.Ref.Proof` is a credential and is never logged, and no access-key secret is ever sent to vws-iam. | `TestVerifierToAuthorizeKeepsThePrincipal`, `TestAuthorizeMapsPrincipalResourcesContextAndDecision`, `TestAssumeRoleSendsTheCallersAuthentication`, `TestAuthenticateMapsEveryFieldAndThePrincipal`, `TestSessionsContract`, `TestLoginErrorsMatchTheFake`, `TestSecretsNeverLeaveConsoleAPI`, `TestSessionCallerKeepsThePrincipalRef` |
+| No package-level mutable state. | `gochecknoglobals` |
+| A long-running mutation takes a client token and returns `resource.Accepted` through `cloud.mutate`. | The compiler (kernel signatures) |
+| A mutation publishes resource, operation and idempotency record together. | `TestRepeatedEntropyDoesNotOverwrite` |
+| The idempotency key is account, action and client token. | `TestIdempotencyGolden` |
+| A backend result naming another account is internal. | `TestForeignAccountIsInternal` |
+| Listeners bound every timeout; SIGTERM stops; gRPC calls get a deadline. | `TestListenerBounds`, `TestCallGetsADeadline` |
+| Fakes and the gRPC client behave the same. | `backendtest.Run` |
+| Ops endpoints and `vws_` metrics. | `TestOpsEndpoints` |
+| Credentials come from env or files; grpc refuses defaults; values never logged. | `TestGRPCRefusesDefaultCredentials` |
+| IAM and STS actions are authorized on the real ARN first; a failed lookup authorizes nothing. | `TestEntityActionsFailClosedWhenTheLookupFails` |
+| Every console route is authenticated and authorized. | `TestEveryRouteIsAuthorized` |
+| Only `iamclient` speaks vws.iam.v1; no secret reaches vws-iam. | `TestSecretsNeverLeaveConsoleAPI` |
+| Named-entity `iam.Admin` methods take an `iam.AuthorizedARN`, built only by `iam.Authorize`. | `TestOnlyTheAuthorizerBuildsAnAuthorizedARN` |
+| IAM tag, MFA, access key and policy actions follow AWS and act only on the authorized entity. | `TestAccessKeyCallsActOnTheAuthorizedARN`, `TestEntityPolicyCallsActOnTheAuthorizedARN` |
+| Access key secrets and policy documents are never logged or traced. | `TestAccessKeySecretIsNeverLoggedOrTraced` |
 | Every `resource.Action` has a console route. | `TestEveryActionHasARoute` |
-| A query parameter or object subresource the codec does not apply is rejected. A bucket GET is ListObjects (no `list-type` or `list-type=1`, paged by `marker`) or ListObjectsV2 (`list-type=2`, paged by `continuation-token`); mixing their paging keys is `InvalidArgument` and any other list query key is `NotImplemented`. `RunInstances` requires `ClientToken`. The other EC2 query mutations accept a missing token. `CreateSubnet` derives one from the normalized request so a retry is the same subnet. The rest call `fillToken` before `mutate`. The console object read returns the bytes. | `TestUnsupportedFilterIsRejected`, `TestUnreadQueryFieldsAreRejected`, `TestClientTokenIsRequired`, `TestStopOmitsClientToken`, `TestStopRunningInstanceWithoutClientToken`, `TestCreateSubnetOmitsClientToken`, `TestIndexPastTheCapIsRejected`, `TestSubresourceDoesNotOverwrite`, `TestListObjectsV2`, `TestListObjectsV1`, `TestListBucketsContinues`, `TestS3ObjectRoundTrip` |
-| The policy and virtual MFA device tag actions store tags with the resource, not in envelope labels. A tag member without `Value` is `ValidationError`; a tag key or value that breaks the AWS length or pattern constraint is `ValidationError` at `tags.N.member.key`/`tags.N.member.value`, while a key beginning with `aws:` is `InvalidInput`; a missing resource is `NoSuchEntity`, and a virtual MFA device is looked up by its exact `SerialNumber` (partition, region, account, path and name); the 51st tag is `LimitExceeded`; the list actions sort by key and page; a parameter the action does not take, such as `PathPrefix`, is rejected. | `TestPolicyTagActions`, `TestPolicyTagErrors`, `TestMFADeviceTagActions`, `TestMFADeviceTagErrors`, `TestMFADeviceTagWrongSerialIsNotFound`, `TestFakeMFADeviceTagWrongSerialIsNotFound`, `TestMFADeviceTagSerialVariantsStayInScope`, `TestMFADeviceTagNeedsListPermission`, `TestListMFADeviceTagsParameterErrors` |
-| `GetMFADevice` accepts only FIDO security key serial numbers (`u2f/`), as in AWS. No backend holds FIDO keys yet (popododo0720/vws-iam#133), so after `iam:GetMFADevice` on the user's real ARN (the named user, else the caller) every `SerialNumber`, an enabled virtual `mfa/` device included, is `NoSuchEntity`. A missing or malformed `SerialNumber` is `400 ValidationError` before anything is authorized. Virtual devices are read through `ListVirtualMFADevices`, `ListMFADevices`, and the MFA device tag actions. | `TestGetMFADevice`, `TestGetMFADeviceNeedsPermission`, `TestGetMFADeviceValidatesBeforeAuthorization`, `TestFakeGetMFADevice`, `TestGetMFADeviceOverGRPC`, `TestGetMFADeviceThroughTheQuerySurfaceOverGRPC` |
-| `ListMFADevices` is authorized as `iam:ListMFADevices` on the listed user's real ARN. With `UserName` that is the named user, as in AWS. Without `UserName` it is the caller's authenticated ARN, which differs from AWS: AWS's resource for this action is optional and a call without `UserName` is authorized on `*`, so here a user-scoped `Allow` (such as `user/${aws:username}`) admits a call AWS would deny, and a user-scoped `Deny` refuses one AWS would allow. A malformed `UserName` is `400 ValidationError` before anything is authorized, and a user lookup that fails with anything but `NoSuchEntity` authorizes nothing. The devices are listed only for the user at the authorized ARN (on both backends; over gRPC the user is read before and after the device pages): a user that moved in between, such as by a concurrent `UpdateUser` `NewPath`, is `409 ConcurrentModification` with no device. | `TestListMFADevicesIsScopedToTheUser`, `TestListMFADevicesValidatesBeforeAuthorization`, `TestListMFADevicesUnavailableLookupAuthorizesNothing`, `TestListMFADevicesAuthorizes`, `TestListMFADevicesActsOnTheAuthorizedARN`, `TestListMFADevicesActsOnTheAuthorizedARNOverGRPC`, `TestFakeListMFADevicesExpectsTheARN`, `TestListMFADevicesExpectsTheARNOverGRPC` |
-| `CreateAccessKey`, `ListAccessKeys` and `DeleteAccessKey` act only on the user at the ARN they were authorized on, on both backends (over gRPC the user is read before the call, and for a list again after the pages): a user that moved in between is `409 ConcurrentModification` with no key created, listed or deleted. A user holds at most 2 keys; a third is `409 LimitExceeded` `Cannot exceed quota for AccessKeysPerUser: 2`. A missing user or key is `404 NoSuchEntity`, and a malformed `AccessKeyId` is `400 ValidationError`. `ListAccessKeys` pages by key id with `Marker` and `MaxItems` and takes no `PathPrefix`; vws-iam states map to `Active` and `Inactive`, and any other state is an internal error. The secret access key is only in the `CreateAccessKey` response: it is never logged, traced, put in an error or kept by console-api (the fake keeps it, since it authenticates). Over gRPC `CreateAccessKey` is sent once and never retried, because vws-iam does not replay it and a retry would create a second key; `DeleteAccessKey` is retried and replayed by `request_id`, with no etag, since vws-iam changes a key's version each time it is used. `UpdateAccessKey` is not served over gRPC yet. | `TestFakeAccessKeyContract`, `TestGRPCAccessKeyContract`, `TestAccessKeyCallsActOnTheAuthorizedARN`, `TestAccessKeyCallsActOnTheAuthorizedARNOverGRPC`, `TestAccessKeyPagingAndValidation`, `TestAccessKeyActionsThroughTheQuerySurfaceOverGRPC`, `TestAccessKeyRequestsOverGRPC`, `TestCreateAccessKeyIsNotRetriedOverGRPC`, `TestAccessKeyStatusAndShapeOverGRPC`, `TestAccessKeySecretIsNeverLoggedOrTraced`, e2e `identity()` |
-| `AttachUserPolicy`, `DetachUserPolicy`, `ListAttachedUserPolicies`, `PutUserPolicy`, `GetUserPolicy`, `DeleteUserPolicy`, `ListUserPolicies` and the seven `Group` actions act only on the user or group at the ARN they were authorized on, on both backends: one that moved in between is `409 ConcurrentModification` and nothing is attached, detached, put, deleted, listed or read (over gRPC `ListAttached*Policies` reads the user or group again after reading its policies). Over gRPC they are the `spec.attached_policies` and `spec.inline_policies` fields of vws-iam's User and Group: a change writes one field under the etag it read with a fresh `request_id` (a retry of `UNAVAILABLE` resends the same one), reads again up to 3 times when another writer won, then answers `503`; a re-attach or an identical `Put` writes nothing. A missing user, group or inline policy is `404 NoSuchEntity` (`The user policy with name N cannot be found.`); a missing, other-account or wrong-path policy ARN is `NoSuchEntity` `Policy ARN does not exist or is not attachable.`, and detaching one that is not attached is `Policy ARN was not found.`; an 11th managed policy is `409 LimitExceeded` `Cannot exceed quota for PoliciesPerUser: 10` (`PoliciesPerGroup`); inline documents beyond 2,048 (user), 5,120 (group) or 10,240 (role) characters without white space are `LimitExceeded`; a bad document is `400 MalformedPolicyDocument`; a bad `PolicyName`, `PolicyDocument` length or character set, `MaxItems` or `PathPrefix` is `ValidationError`, and a `PolicyArn` that is not a policy ARN is `InvalidInput`. `GetUserPolicy` and `GetGroupPolicy` URL-encode the document. `ListAttached*Policies` filters by policy path and pages by name; `List*Policies` pages and takes no `PathPrefix`. Over gRPC an inline name of 65 to 128 characters is `ValidationError` (vws-iam stores at most 64), a document vws-iam refuses (such as one without `Version`) is `MalformedPolicyDocument`, an attached policy vws-iam no longer has is left out of the list, and the role policy actions are `InvalidAction`. Spans and change logs carry the policy name or ARN, never the document. | `TestFakeEntityPolicyContract`, `TestGRPCEntityPolicyContract`, `TestEntityPolicyCallsActOnTheAuthorizedARN`, `TestEntityPolicyCallsActOnTheAuthorizedARNOverGRPC`, `TestListAttachedPoliciesRereadsTheEntityOverGRPC`, `TestEntityPolicyListsPage`, `TestEntityPolicyErrorsAndShapes`, `TestEntityPolicyRequestsOverGRPC`, `TestEntityPolicyChangesRetrySafely`, `TestEntityPolicyVWSIAMLimits`, `TestEntityPolicyCallsAreTracedAndLoggedWithoutDocuments`, `TestEntityPolicyActionsThroughTheQuerySurfaceOverGRPC`, `TestUserManagedPolicyActionsThroughTheQuerySurfaceOverGRPC`, `TestGroupInlinePolicyActionsThroughTheQuerySurfaceOverGRPC`, e2e `identity()` |
-| Every `iam.Admin` method that reads or writes a named user, group or role takes an `iam.AuthorizedARN`, never an ARN string or a bare name. Only `iam.Authorize` builds one, after an allowed decision; its field is unexported. A zero value is `Internal` before anything is read, and an entity whose ARN is no longer the authorized one is `409 ConcurrentModification` with no data returned and nothing written. The lookup the surface authorizes on is `iam.Resolver`, which answers only an `iam.Ref` (ARN and unique ID), never the entity's data (#358). | The compiler: `iam.AuthorizedARN` is a struct with an unexported field; `internal/hygiene` `TestOnlyTheAuthorizerBuildsAnAuthorizedARN` rejects a composite literal or conversion outside `internal/iam/authorized.go`; `TestAuthorizedARN`, `TestAdminEntityReadsAreBound`, `TestFakeAuthorizedARNContract`, `TestGRPCAuthorizedARNContract`, `TestFakeResolverContract`, `TestGRPCResolverContract`, `TestEveryBoundActionActsOnTheAuthorizedARN` |
-| An operation name is `op-` plus 16 to 40 lowercase hex digits, or a lowercase UUID. Storage and compute mint 20 digits. A 32-digit value is the UUID form on the wire. A 500 logs the cause and leaves it off the wire body. | `TestOperationLocalServiceNames`, `TestCreateVolumeRetryKeepsTheVolumeID`, `TestInternalErrorIsLogged` |
-| An object update mask is `spec` and `labels`, or empty. A spec-only mask is rejected, including on overwrite. | `TestObjectMaskMatches`; `backendtest` object overwrite |
-| A PutObject request id includes the payload hash. The same body retries the original write. A different body is a new request, so an overwrite is not an idempotency conflict. | `TestPutRequestIDTracksContents`; `backendtest` object overwrite |
-| `If-None-Match: *` on PutObject is write-once: an existing key, even with the same bytes, is `AlreadyExists` of `KindObject`, which S3 answers 412 `PreconditionFailed`. Over gRPC it is a `GetObject` check, then `CreateObject`. Any other `If-None-Match` value is `NotImplemented`. | `backendtest` conditional put; `TestPutIfNoneMatchIsWriteOnce` |
-| S3 `CreateBucket` on a bucket the caller already owns is `resource.BucketAlreadyOwned`: 409 `BucketAlreadyOwnedByYou`, S3's answer outside us-east-1. VWS's only region, `vws-1`, is not us-east-1, so the legacy 200 does not apply (`ownedCreateSucceeds`). A name another account holds is 409 `BucketAlreadyExists`. Over gRPC, `CreateBucket` reads the bucket first. `CreateBucket` and `DeleteBucket` send a fresh request id on each call, because vws-storage replays any request id it has seen for 24 hours (#315). | `backendtest.BucketCreate`; `TestBucketRequestIDsAreFreshPerCall`, `TestDeleteBucketAfterRecreateDeletesAgain`, `TestCreateBucketInFlightForAnotherRequestIsOwned`, `TestCreateBucketTwiceIsBucketAlreadyOwnedByYou`, `TestTakenBucketNameIsBucketAlreadyExists`, `TestOwnedCreateRegionRule` |
-| PutObject polls the storage operation until it is done, then reads the object. A not-yet-visible object is not a 404. | `TestPutObjectWaitsForTheOperation` |
-| `DescribeKeyPairs`, `DeleteKeyPair`, `DescribeSecurityGroups`, `DeleteSecurityGroup`, `DeleteSubnet`, `DescribeAddresses`, `AllocateAddress`, `ReleaseAddress`, `AssociateAddress`, `DisassociateAddress`, `DescribeSnapshots`, `CreateSnapshot`, and `DeleteSnapshot` are served on the console and the query surface. A missing selector is a parameter error. Deleting a subnet that still has an instance is `DependencyViolation`. A group name that matches more than one group is invalid. Polling a delete reports that action. A subnet created again after it is deleted is a new id. An id delete retried after it succeeds returns the same operation. Query describe returns the group's rules. An association is `spec.association` on the address (UpdateAddress) and its id is `eipassoc-` with the allocation digits. | `TestCatalogActionsAreImplemented`, `TestAssociateAndDisassociateAddress`, `TestAssociationIDNamesItsAddress`, `TestConsoleAndQueryShareAnAddress`, `TestCreateSubnetOmitsClientToken`, `TestDescribeSecurityGroupReturnsRules`, `TestDeleteUnderVpcKeepsItsAction`, `exerciseEC2` |
-| `AllocateAddress` ensures the account default VPC (`172.31.0.0/16`) when the project has none. The address proto has no VPC field. An address binds to the oldest VPC: create time, then name. | `TestAllocateAddressEnsuresDefaultVPC`, `TestEnsureVPCIgnoresListOrder` |
-| Describe calls accept the query names boto3 sends. `DescribeSnapshots` keeps `Owner` and `OwnerId` (`OwnerIds=['self']`) and `RestorableBy`. `DescribeImages` keeps `Owner` and `ExecutableBy`. `dryRun` is rejected. `maxResults` and `nextToken` page the same way as `MaxResults` and `NextToken`. An owner other than `self` or the caller is an empty page. A filter this codec does not apply is rejected. | `TestDescribeStandardParameters` |
-| `CreateVolume` with `SnapshotId` restores through `VolumeSpec.snapshot`. A left-out size is the snapshot size, and a smaller one is invalid. A restored volume is a `DescribeVolumes` row with its `snapshotId`; only an image-sourced volume is a boot volume. | `backendtest` restore; `TestCreateVolumeFromSnapshot` |
-| A boot volume is not a `DescribeVolumes` row. `AuthorizeSecurityGroupIngress` writes the whole rule list. Polling `StartInstances` reports that action, from the `vws-action` label. | `exerciseEC2` |
-| `RunInstances` creates the boot volume from `VolumeSpec.image`. `InstanceSpec` does not reference an image. | `TestBootVolumeSourcesTheImage` |
-| `AttachVolume` answers `attaching`, as EC2 does. The volume is `in-use` from the accept, its attachment `attaching` until storage names the instance, then `attached`. Over gRPC the instance spec is the attachment: a volume storage reports with no instance that a live instance spec names is `in-use` and `attaching`. `DescribeVolumes` lists instances only when some volume reads as available, skips a record with a bad name, rejects a record owned by another account as internal, and fails with a retryable `Unavailable` when compute cannot be read or does not answer in time (#214). | `backendtest.AttachLifecycle`; `TestDescribeVolumesReadsPendingAttachFromSpec`, `TestAttachVolumeAnswersAttaching`, `TestVolumeAttachmentStatus` |
-| `RunInstances` launches the catalog image `KnownImages` names for the caller without reading compute. Any other id is read from compute under the caller's regional name; compute resolves it against the image's stored project and region, so a missing image and one from another project or region are the same `NotFound` of `KindImage`, message `The image id '[ami-xxxxxxxx]' does not exist`, which EC2 answers as 400 `InvalidAMIID.NotFound`. The console does not infer the region from the name it sent. The check is before `CreateVolume` and `CreateInstance`. | `backendtest` RunInstances; `TestRunInstancesRequiresImageInCallerRegion`, `TestInvalidAMIIDNotFoundShape` |
-| `DescribeImages` lists the catalog image and every image vws-compute lists for the caller's project and region, and the catalog wins a duplicate id. A compute image's owner is the project in its copy source, confirmed by a read under that project: a source the project does not own is the caller's own private copy, and a seed image with no copy source reads as the caller's own and private. `Owner` or `OwnerId` naming the caller keeps the caller's rows, a filter naming only another account is an empty page, and a single missing id is the AWS `InvalidAMIID.NotFound` sentence. EC2 Query sets `imageOwnerId` and `isPublic`, and the console JSON sets `ownerId` and `public`. | `TestDescribeImagesReadsCompute`, `TestDescribeImagesPrivateCopyFromAnotherProject`, `TestDescribeImagesPublicImageFromAnotherProject`, `TestDescribeImagesCatalogWinsADuplicate`, `TestDescribeImagesAdmitsAPublicImage`, `TestDescribeImagesRejectsAForeignPrivateImage`, `TestDescribeImagesOwnerSelfExcludesPublicImages`, `TestDescribeImagesListsPublicButNotForeignPrivate`, `TestDescribeImagesSingleUnknownIDIsNotFound`, `TestDescribeImagesMapsOwnerAndPublic`, `TestListImagesReportsOwnerAndPublic`, `TestImageStateOf` |
-| A compute reconciliation ERROR is a terminated instance (code 48) with state reason `Server.InternalError`. A storage reconciliation ERROR is volume state `error`, including when the volume names an instance. One such record does not fail `DescribeInstances` or `DescribeVolumes`. `TerminateInstances` on that instance is accepted, calls delete, and a repeat returns the same terminated states. An unspecified or unknown reconciliation state is listed the same way, so one record cannot fail a listing (#191, #197). | `TestErrorRecordDoesNotFailDescribe`, `TestTerminateErrorInstanceIsIdempotent`, `TestStateReasonOnDescribeInstancesXML`, `TestUnreadableReconcileIsAFailedRecord`, `TestOrphanBootVolumeFromRefusedLaunchIsListed` |
-| A backend record whose name is not a valid resource id is skipped and logged in a listing, so it does not fail `DescribeInstances` or `DescribeVolumes`. A stored volume whose type this build cannot name is skipped and logged the same way (see the volume type rule). An explicit id read still returns the internal error. | `TestInvalidResourceNameIsSkippedInList`, `TestVolumeWithUnknownTypeIsSkippedInList` |
-| `CreateKeyPair` draws the private key from `crypto/rand`, so no request input rebuilds it. The key is returned once and never stored or logged; the idempotency record keeps none. EC2 CreateKeyPair takes no client token, so a create under a used token is judged by the name: `InvalidKeyPair.Duplicate` while the name lives, with no private key (#220); a new key pair with a new private key once the name is free, including after a delete (#268). Over gRPC a generated create's request id is derived from the token and the new public key, so compute's record of an earlier create never answers it. An import is judged by the name too, except that the same request under the same token replays while the key pair it made lives; after a delete it imports again. Over gRPC an import's request id carries a random nonce kept in the `vws-import` label, reused only while that key pair lives (#279). A generated create and an import under one token keep separate records, so a create never takes the record an import replays from (#281). If compute answers a retry that reused a key pair's nonce after that key pair was deleted, the import runs again under a new nonce; only a name collision is `InvalidKeyPair.Duplicate`, and other compute conflicts keep their own code (#284). Identical imports under one token that race are one import: a loser of the race resends under the winner's nonce, so compute replays the winner's request when token and body match and refuses it otherwise; after three resubmits the import is retryable `Unavailable` (#287). A lost compute concurrency race on a key pair create (`ETAG_MISMATCH`, `GENERATION_CONFLICT`, Aborted) is retryable `Unavailable`; a refusal for the current state (`DEPENDENCY_*`, FailedPrecondition) is `IncorrectState`, never an instance error (#291). | `TestCreatedKeyIsNotDerivedFromTheRequest`, `TestCreateKeyPairReplayDoesNotReturnTheKey`, `TestCreateKeyPairRetryIsDuplicate`, `TestCreateAfterDeleteUnderTheSameTokenIsANewKey`, `TestImportRetryOfAKeyPairWithoutANonceStillReplays`; `TestImportRetryRacingADeleteImportsAgain`, `TestImportConflictsMapByCause`, `TestImportConflictOnALiveNameIsDuplicate`, `TestImportThatKeepsLosingRacesIsRetryable`, `TestKeyPairCreateConflictsMapByReason`, `TestEC2ErrorByKind`; `backendtest` `KeyImportConcurrent` (both backends), `exerciseKeyTokenReuse`, `KeyImport` and `KeyTokenMix` (both backends) |
-| A key pair name is unique per account even when creates race. Over gRPC the key pair id is derived from the account and the name, so compute's atomic create refuses a second create of a live name; the client reports `InvalidKeyPair.Duplicate`. A create always targets that id. A key pair made before it keeps its token-derived id and stays listed, described and deletable; while it lives, a create of its name is `InvalidKeyPair.Duplicate` and never targets the old id, so its delete cannot let two creates win (#273, #278). | `TestConcurrentCreatesOfOneNameMakeOneKeyPair`, `TestCreateRefusesTheNameOfAKeyPairWithATokenID`, `TestLegacyDeleteBetweenLookupAndCreateKeepsOneKeyPair`, `TestImportRetryUnderTheTokenStillReplays` |
-| Volume and snapshot create and delete operations are read from the storage service. A subnet in `DELETING` stays a subnet state. | `TestContractOverGRPC` uses a separate storage listener; `TestSubnetDeletingRoundTrip` |
-| A missing resource read by name is `NotFound` of the kind its name's collection names, so EC2 answers `InvalidVolume.NotFound`, `InvalidSnapshot.NotFound`, `InvalidInstanceID.NotFound`, and the like, not `InvalidParameterValue`. | `TestMissingResourceKeepsItsKind`; e2e `not_found` |
-| A `DetachVolume` retry with the token and parameters of an accepted detach returns that detach and changes nothing, even after a tag change, a stop or start, a move to another instance, or a reattach. The same token with other parameters is `IdempotentParameterMismatch` (EC2 client-token rules; EC2 `DetachVolume` itself takes no `ClientToken`). Over gRPC the replay record is two labels on the instance (`vws-detach-<vol>`, `vws-dop-<vol>`). A later detach of the volume moves an older request's pair to `vws-detach-<vol>-<16 hex>` and `vws-dop-<vol>-<16 hex>`, so that request's retry still finds it (#353). Every instance label write keeps them, because compute replaces the whole label map. A saved operation id is bound to its request, so it never replays another detach (#213). If the instance changed after the detach's write and its operation id was never saved, compute cannot replay that write, so the retry saves and returns an operation of the instance as it is (#352). | `backendtest.DetachReplay`; `TestInterruptedOpSaveDoesNotReplayTheOldDetach`, `TestTagWriteKeepsARecordWrittenMeanwhile`, `TestDetachOpTokenRules`, `TestRetryAfterLaterDetachOfTheVolume`, `TestRecoveryAfterTagChange`, `TestRetryAfterReattachWithUnsavedOp` |
-| A `DetachVolume` client token is remembered for `backend.ClientTokenWindow`, 24 hours, the vws-compute `request_id` window; it is the one definition, and #305 states what a retry after it answers. A record is stamped with its accept time rounded up to the second and kept until `backend.ClientTokenExpired`: more than the window and `backend.ClientTokenGrace` (1 minute) past the stamp, so it outlives the request id compute replays. Over gRPC every instance label write prunes the expired records and the operation ids with no record, and stamps a record written before #303, so no record a retry within the window can need is removed; a recovery resend by request id prunes nothing and carries the records as the original write stored them. While a record within the window has no saved operation id (its operation id write failed, so its retry resends by request id), every label write keeps the expired records too and leaves a record written before #303 unstamped, so that resend still matches the original; they go, or are stamped, once the id is saved or that record expires. A record written before #303 has no stamp to expire by, so it stops holding once a stamped record on the instance has expired, since every stamped record was stamped after it was written (#322). A kept expired record, and a record left unstamped by a hold, does not count toward the budget, and a write it would push past compute's 64 labels is the tag capacity error and changes nothing (#319 review). A client-token detach also needs a label for its operation id, reserved from the detach's first write until the id is saved: every new instance label write counts one label for each record within the window with no saved operation id, and one that passes compute's 64 labels with them is the tag capacity error and changes nothing, so no write in between can take that label (#327 review). A detach with no room is refused before compute is called, as InvalidParameterValue on `VolumeId` naming the detach record, and a same-token retry is refused the same way (#322). Saving the id fills its own reserved label, and a recovery resend replays a write that already passed, so neither is checked. An instance remembers at most `backend.MaxDetachReplays` (4) client-token detaches within the window; one more is `RequestLimitExceeded` (503) and changes nothing. A detach without a client token gets a minted one (`Mutation.MintedToken`), keeps no record and is not limited. Resources take up to `resource.MaxTags` (50) user tags, as in EC2, and the build fails if 50 tags of one label each and the records stop fitting compute's 64 labels (#303). A tag that is not a valid label is packed into 63-byte JSON chunks, so 50 tags with long keys or values can need more labels and get the tag capacity error (pre-existing). | `backendtest.DetachWindow`; `TestPruneDetachRecords`, `TestDetachRecordsLeaveRoomForFiftyTags`, `TestDetachRecoveryResendsTheOriginalStamp`, `TestHeldDetachRecordsKeepTheLabelGuard`, `TestDetachLeavesRoomForItsOperationID`, `TestATagWriteCannotTakeAPendingOperationIDsRoom`, `TestDetachVolumeMarksAMintedToken`, `TestTagLimitIsTheAWSLimit` |
-| The `DetachVolume` recovery path in `ec2.go` stays in step with the TLA+ model `docs/formal/detach.tla` (#343): TLC passes the real design, and every seeded bug fails the property it guards. The model was built with pstack `create-formal-verification-skill` 0.15.30 (#351). | CI workflow `tla` (job `detach`, `scripts/tla-detach.sh`) |
-| `DisassociateAddress` on an unknown address or one with no association is `resource.AssociationNotFound`, which EC2 answers 400 `InvalidAssociationID.NotFound`. Over gRPC it is a `GetAddress` that finds neither `spec.association` nor `status.instance`. | `exerciseEC2`; `TestAssociateAndDisassociateAddress`; e2e `not_found` |
-| An unknown ingress protocol is invalid. It is not stored as tcp. | `TestIngressProtocolIsCanonical` |
-| Each of the seven EBS volume types maps to the storage `VolumeType` of the same name and back. A stored deprecated `SSD` reads as gp2. A type outside the seven is refused before any call and is never read back as a guess. A stored volume whose type is `UNSPECIFIED` or a number this build does not know is an internal error on an explicit id read, but a `DescribeVolumes` listing logs its record name and type and skips it, so one such record does not fail the listing for every other volume. `DeleteVolume` needs no type and still deletes it; `AttachVolume`, `DetachVolume`, `ModifyVolume` and `CreateSnapshot` refuse it as internal (#335 review). EC2 answers a volume type VWS does not accept with `UnknownVolumeType`, including vws-storage's INVALID_SPEC "volume type X is unsupported" (a type it has no storage for); its other INVALID_SPEC refusals (IOPS, throughput, size) stay `InvalidParameterValue` (#335 r2). | `TestCreateVolumeUnsupportedTypeIsUnknownVolumeType`, `TestStorageVolumeRefusalOverGRPCHasTheEC2Code`, `TestVolumeTypeSurvivesStorage`, `TestLegacySSDReadsAsGP2`, `TestVolumeTypeRefusesUnknown`, `TestVolumeRecordWithUnknownTypeIsRefused`, `TestVolumeWithUnknownTypeIsSkippedInList`, `backendtest.Run` (`exerciseVolumeTypes`) on both |
-| The signature is checked after the access key is known and before the body is trusted. A missing payload hash is the hash of the body. `UNSIGNED-PAYLOAD` is rejected. A query longer than 128 parameters is rejected before it is sorted. | `TestQueryWithoutPayloadHeader`, `TestUnsignedPayloadAndUnreadBody`, `TestTooManyQueryParams` |
-| On S3 each SigV4 failure is its own S3 error, with nothing about which check refused it beyond the code (#245): `SignatureDoesNotMatch` 403 (with the access key, string to sign and canonical request computed from the request and the signature as sent, never the expected one), `RequestTimeTooSkewed` 403, `AuthorizationHeaderMalformed` 400 for an unusable header or a scope for another date, region or service, `InvalidAccessKeyId` 403, `InvalidToken` 400, `ExpiredToken` 400, `BadDigest` 400 for a body that is not the signed payload, and `AccessDenied` 403 `Access Denied` for an unsigned request or one console-api refuses. `sigv4` marks each failure as a `RejectionError` cause and keeps the code and message EC2 and IAM map, so their answers do not change; its error text names only the failure. | `TestSigV4FailuresUseS3ErrorCodes`, `TestS3AnswersVwsIAMRefusalsWithS3Codes`, `TestVerifyNamesEachFailure`, `TestSignatureMismatchDetail` |
-| A resource created on one surface is the same resource, with the same id and state names, on the others. | `internal/surface/interop` |
+| An unapplied query parameter, filter or subresource is rejected. | `TestUnreadQueryFieldsAreRejected` |
+| Operation names and 500s follow `docs/rules.md`. | `TestOperationLocalServiceNames`, `TestInternalErrorIsLogged` |
+| S3 object writes: mask, request id, `If-None-Match`, waiting for the operation. | `TestPutIfNoneMatchIsWriteOnce`, `TestPutObjectWaitsForTheOperation` |
+| S3 bucket creates answer as S3 outside us-east-1. | `backendtest.BucketCreate` |
+| EC2 catalog actions are served on both surfaces. | `TestCatalogActionsAreImplemented` |
+| EC2 describe calls take boto3's parameter names. | `TestDescribeStandardParameters` |
+| EC2 instance, image, volume and address behavior. | `exerciseEC2`, `backendtest.AttachLifecycle` |
+| One bad backend record never fails a listing. | `TestErrorRecordDoesNotFailDescribe`, `TestInvalidResourceNameIsSkippedInList` |
+| Key pair keys come from `crypto/rand`, are never stored, and names stay unique. | `TestCreatedKeyIsNotDerivedFromTheRequest`, `TestConcurrentCreatesOfOneNameMakeOneKeyPair` |
+| A missing resource is `NotFound` of its own kind. | `TestMissingResourceKeepsItsKind` |
+| A `DetachVolume` retry returns the first detach, within the label budget. | `backendtest.DetachReplay`, `backendtest.DetachWindow` |
+| The detach recovery path matches `docs/formal/detach.tla` (pstack `create-formal-verification-skill` 0.15.30). | CI workflow `tla` (job `detach`) |
+| Volume types map one to one; an unknown type is refused. | `TestVolumeTypeRefusesUnknown` |
+| SigV4 runs before the body is trusted; each S3 failure has its own code. | `TestUnsignedPayloadAndUnreadBody`, `TestSigV4FailuresUseS3ErrorCodes` |
+| A resource is the same on every surface. | `internal/surface/interop` |
 | Console JSON field names are camelCase. | `tagliatelle` |
-| The resource API is the `github.com/popododo0720/vws-proto` module at a release tag (`vX.Y.Z`, no pseudo-version) from the module proxy. This repo does not generate it, does not copy it, and does not keep a local proto tree. | `internal/hygiene` (`TestRepositoryRules`, `TestProtoModuleRules`) rejects a vws-proto `replace`, an untagged require, `third_party/vws-proto`, `*.pb.go` and `proto/` |
-| Google Go style and formatting. | golangci-lint in CI job `lint` |
+| vws-proto comes from a release tag; no local proto tree. | `TestProtoModuleRules` |
+| Google Go style. | CI job `lint` |
 | Tests pass under the race detector. | CI job `test` |
-| `//nolint` names one linter and gives a reason. | `nolintlint` |
-| No swallowed errors. A blank error, an unchecked type assertion, `if err != nil { return nil }`, and an unwrapped foreign error fail lint. Tests are exempt from errcheck and wrapcheck. | `errcheck` (check-blank, check-type-assertions), `nilerr`, `nilnil`, `wrapcheck`, `errorlint`, `errname`, `contextcheck`, `sloglint` |
-| Every `resource.Code` has a status and wire code on each surface. | `TestEveryCodeHasAnEC2Error`, `TestEC2ErrorByKind`, `TestEveryCodeHasAnS3Error`, `TestEveryCodeHasAnIAMError`, `TestEveryCodeHasAConsoleStatus` |
-| Console JSON `NotFound` is HTTP 404. EC2 Query `*.NotFound` is HTTP 400. S3 `NoSuchBucket` and `NoSuchKey` are HTTP 404. IAM `NoSuchEntity` is HTTP 404. | `TestMissingResourceStatusIsPerSurface`, `TestImageNotFoundIsHTTP404` |
-| A handler panic is a bare 500. The panic value goes to the log only. A failed response write is logged as a warning. | `TestPanicIsABare500`, `TestWriteFailureIsLogged` |
-| A repeated query parameter, `Authorization` header, or `Authorization` field is an invalid argument. Bucket names, key length, and body size are checked before the backend. | `TestMalformedQueryIsRejected`, `TestAmbiguousAuthorizationIsRejected`, `TestMalformedNamesAndBodies` |
-| No image assets. | CI job `hygiene`; `internal/hygiene` |
-| No branding lines and no vendor API host names. | `internal/hygiene` |
-| No deployment manifests (Dockerfile, compose, Helm, k8s). CI lints and tests. The only release step is `.github/workflows/publish.yml`: on a push to main, ko builds the image and pushes `ghcr.io/<owner>/vws/console-api:sha-<7-char commit>` with `org.opencontainers.image.revision` (popododo0720/vws-deploy#280). | CI job `hygiene`; `internal/hygiene`; `publish.yml` |
-| Never push to `main`. | `.githooks/pre-push` after `git config core.hooksPath .githooks` |
-| Work on a branch. Each commit is one logical change and passes tests by itself. | Review. Before review: `git rebase -x 'go test ./...' origin/main` |
-| Structural changes use pstack: architect, then interrogate, then correct. | Review: the pull request names the sketch and the interrogate verdict |
-| The repo is English only (see "English only"). Hangul is allowed only in files `.github/english-allowlist` lists with a reason (today: Unicode tag test data). | `scripts/check-english.sh` (CI job `english`) |
+| `//nolint` names one linter and a reason. | `nolintlint` |
+| No swallowed errors. | `errcheck`, `wrapcheck`, `errorlint` |
+| Every `resource.Code` has a status and wire code on each surface. | `TestEveryCodeHasAnEC2Error` |
+| `NotFound` has each surface's HTTP status. | `TestMissingResourceStatusIsPerSurface` |
+| A handler panic is a bare 500. | `TestPanicIsABare500` |
+| Ambiguous requests and bad names or sizes are refused before the backend. | `TestMalformedNamesAndBodies` |
+| No image assets, branding or vendor API hosts. | `internal/hygiene` |
+| No deployment manifests; `publish.yml` is the only release step. | CI job `hygiene` |
+| Never push to `main`. | `.githooks/pre-push` |
+| Each commit is one logical change that passes tests. | Judgment: `git rebase -x 'go test ./...' origin/main` |
+| Structural changes use pstack. | Judgment: the PR names the sketch and verdict |
+| The repo is English only. | CI job `english` |
 
-## e2e
+## Working here
 
-`e2e/e2e.py` drives the EC2 Query and S3 entry points with boto3.
-`VWS_E2E_BACKEND` is `fake` or `grpc`. `VWS_E2E_CAPS` lists what the backend
-can do (`vm`, `eip`). A step that needs a missing capability prints
-`skipped(reason)` and does not count as a pass. The run ends with a banner
-that lists every skip and `status=PASS|FAIL|INCOMPLETE`. `VWS_E2E_STRICT=1`
-makes a skip exit 3. CI sets it, so the fake run cannot lose a step silently.
-
-```sh
-pip install -r e2e/requirements.txt
-e2e/run.sh                          # fake backend, started by the script
-VWS_E2E_BACKEND=grpc python3 e2e/e2e.py   # services already running
-e2e/local.sh                        # grpc stack kept up for manual runs (needs VWS_E2E_BIN, VWS_E2E_IMAGES)
-```
-
-## pstack
-
-Use these three skills, in this order, when the change adds a package, a type
-other packages use, a surface, or a backend method.
-
-1. **architect**. Sketch the caller's usage first, then the types and
-   signatures. Do not start from a wire format and grow a second vocabulary.
-2. **interrogate**. Put the sketch or the diff in front of more than one
-   reviewer before treating it as done. Act on findings that break
-   correctness, tenancy, or the single resource model.
-3. **correct**. When a review catches a mistake a later agent would copy,
-   make that mistake fail a compile, a lint, or a test. Update the rule
-   table in the same change. Do not leave the rule as prose alone.
-
-## Dev style
-
-Work in poteto-mode style.
-
-- Write short declarative sentences in code comments, commits, and PRs.
-- Keep code simple and the diff minimal. Delete before adding.
-- Prove a change against real artifacts. Run it and paste the output.
-- One issue is one branch and one PR. Commits are atomic.
-- Verify T0 only: unit tests, fakes, and envtest. T1 and T2 are run by the verification bot.
-- Never force-push. Never merge your own PR. The reviewer merges.
-
-## Agents
-
-Do not use Cursor cloud agents on this repository. Use Grok dev bots only.
-
-## Workflow
-
-1. Branch from `main`. Do not commit on `main`.
-2. Follow pstack for a structural change.
-3. Keep commits atomic. One commit does not mix a refactor with a behavior change.
-4. Before pushing, run `golangci-lint run` and `go test -race ./...`.
-5. Push the branch and open a pull request.
-
-## Adding a long-running action
-
-1. Add the `Action` constant in `internal/resource`, plus its request type
-   (`Action` and `Normalize`) and any lifecycle row. `exhaustive` flags a
-   switch that misses it. `Actions()` is derived from the constants.
-2. Add the method on the backend interface. The fake and the gRPC client stop
-   compiling until they implement it.
-3. Add the case to `backendtest`.
-4. Add a one-line kernel method that calls `mutate`.
-5. Add the console route in `handler.mutation`. `TestEveryActionHasARoute` fails until the route is real.
-6. Add the query action in `ec2query` when the query protocol has that action.
-7. Add an interop test when a second surface can perform the same mutation.
-
-## Commands
+- Work in poteto-mode style: short declarative sentences, a minimal diff,
+  proof from real artifacts. Use Grok dev bots only, never Cursor cloud
+  agents.
+- One issue is one branch from `main` and one PR. Commits are atomic and do
+  not mix a refactor with a behavior change. Never force-push; never merge
+  your own PR.
+- Scripts and bots may push branches and open PRs. Merges happen only
+  through the orchestrator's auto-merge (every CI check on the head green,
+  verify-gate PASS, the `vws-verify` App check run PASS, no conflicts,
+  squash with `--match-head-commit` set to the verified head, not labeled
+  `blocked`) or by the lead.
+- Bots contact the lead only for decisions, escalations after 3 failures,
+  or user approvals; all status lives on GitHub.
+- Verify T0 only (unit tests, fakes, envtest); the verification bot runs T1
+  and T2.
+- pstack, for a new package, shared type, surface or backend method:
+  **architect** (caller's usage, then types), **interrogate** (more than one
+  reviewer), **correct** (a copied mistake becomes a failing check).
+- A new long-running action follows the steps in `docs/rules.md`.
+- English only: `scripts/check-english.sh` (CI job `english`) checks files,
+  the PR body and commits. Only `.github/english-allowlist` entries
+  (`<glob> <reason>`) may hold Hangul.
 
 ```sh
 go test -race ./...
 golangci-lint run
 git config core.hooksPath .githooks
 go run ./cmd/vws-console-api -backend=fake
+e2e/run.sh                                # boto3 e2e, fake backend
+VWS_E2E_BACKEND=grpc python3 e2e/e2e.py   # services already running
 ```
 
-## English only
-
-Write everything in this repo in English: README, code comments, docs, AGENTS.md, QUALITY.md, PR and issue templates, commit messages, PR and issue bodies, review comments and `Verified-by` sections. The `english` job in CI runs `scripts/check-english.sh`: `files` fails on a tracked file with Hangul unless `.github/english-allowlist` lists it as `<glob> <reason>` (only test data and user-facing UI strings belong there), and `text` and `commits` reject Hangul in the PR body and the PR's commit messages with no exception.
+`e2e/e2e.py` prints `skipped(reason)` for a step `VWS_E2E_CAPS` lacks and
+ends with `status=PASS|FAIL|INCOMPLETE`; `VWS_E2E_STRICT=1` (set in CI) makes
+a skip exit 3.
 
 ## /correct loop
 
