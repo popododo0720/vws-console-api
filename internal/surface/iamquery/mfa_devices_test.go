@@ -482,8 +482,8 @@ func TestListMFADevicesValidatesBeforeAuthorization(t *testing.T) {
 // list, so a check on user/alice would let bob through.
 func TestListMFADevicesUnavailableLookupAuthorizesNothing(t *testing.T) {
 	lookupErr := &resource.Error{Code: resource.CodeUnavailable, Message: "vws-iam is unavailable"}
-	h, f, rec, root := harnessWith(t, func(a iam.Admin) iam.Admin {
-		return userLookupError{Admin: a, err: lookupErr}
+	h, f, rec, root := harnessWith(t, func(a iam.Directory) iam.Directory {
+		return userLookupError{Directory: a, err: lookupErr}
 	})
 	ctx := t.Context()
 	if _, err := f.CreateUser(ctx, root.Account, "alice", "/restricted/"); err != nil {
@@ -549,7 +549,12 @@ func TestListMFADevicesActsOnTheAuthorizedARN(t *testing.T) {
 		if body := res.Body.String(); strings.Contains(body, serial) || strings.Contains(body, "<MFADevices>") {
 			t.Errorf("a moved user's devices were answered: %s", body)
 		}
-		if u, err := f.GetUser(t.Context(), account, "erin"); err != nil || u.Path != "/denied/" {
+		if u, err := f.GetUser(
+			t.Context(),
+			account,
+			"erin",
+			backendtest.UserGrant(t.Context(), t, f, account, "erin"),
+		); err != nil || u.Path != "/denied/" {
 			t.Fatalf("erin did not move: %+v, %v", u, err)
 		}
 	})

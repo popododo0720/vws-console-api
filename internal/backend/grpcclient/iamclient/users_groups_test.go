@@ -142,7 +142,7 @@ func TestUserAndGroupMutationsRetrySafely(t *testing.T) {
 		); err != nil {
 			t.Fatalf("AddUserToGroup: %v", err)
 		}
-		_, us, err := a.GetGroup(ctx, account314, "devs")
+		_, us, err := a.GetGroup(ctx, account314, "devs", backendtest.GroupGrant(ctx, t, a, account314, "devs"))
 		if err != nil || len(us) != 2 {
 			t.Fatalf("members %+v %v", us, err)
 		}
@@ -195,7 +195,7 @@ func TestMembershipChangesRereadALostRace(t *testing.T) {
 	if resource.CodeOf(err) != resource.CodeUnavailable {
 		t.Fatalf("RemoveUserFromGroup: %v", err)
 	}
-	_, us, err := a.GetGroup(ctx, account314, "devs")
+	_, us, err := a.GetGroup(ctx, account314, "devs", backendtest.GroupGrant(ctx, t, a, account314, "devs"))
 	if err != nil || len(us) != 2 {
 		t.Fatalf("members %+v %v", us, err)
 	}
@@ -261,7 +261,7 @@ func TestListsReadEveryPageAndKeepTheStoredName(t *testing.T) {
 	if r.GetPageSize() != listPageSize || r.GetParent() != "projects/123456789012" {
 		t.Errorf("ListUsers sent %v", r)
 	}
-	u, err := a.GetUser(ctx, account314, "ALICE")
+	u, err := a.GetUser(ctx, account314, "ALICE", backendtest.UserGrant(ctx, t, a, account314, "ALICE"))
 	if err != nil || u.Name != "alice" || u.ARN != "arn:vws:iam::123456789012:user/ops/alice" {
 		t.Errorf("GetUser ALICE: %+v %v", u, err)
 	}
@@ -335,4 +335,4 @@ func TestUserAndGroupCallsAreTracedAndLogged(t *testing.T) {
 	}
 }
 
-var _ iam.Admin = STSAdmin{}
+var _ iam.Directory = STSAdmin{}

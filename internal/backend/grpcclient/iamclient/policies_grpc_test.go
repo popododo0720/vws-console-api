@@ -622,8 +622,8 @@ func TestEntityPolicyCallsActOnTheAuthorizedARNOverGRPC(t *testing.T) {
 	} {
 		t.Run(tc.form.Get("Action"), func(t *testing.T) {
 			mover := &movingAdmin{tb: t, group: tc.group, user: tc.user}
-			h, _, d := dirQueryHarnessWith(t, func(a iam.Admin) iam.Admin {
-				mover.Admin = a
+			h, _, d := dirQueryHarnessWith(t, func(a iam.Directory) iam.Directory {
+				mover.Directory = a
 				return mover
 			})
 			ctx := t.Context()
@@ -637,7 +637,7 @@ func TestEntityPolicyCallsActOnTheAuthorizedARNOverGRPC(t *testing.T) {
 				iam.EntityUser,
 				"erin",
 				ops,
-				backendtest.EntityGrant(ctx, t, mover.Admin, account314, iam.EntityUser, "erin"),
+				backendtest.EntityGrant(ctx, t, mover.Directory, account314, iam.EntityUser, "erin"),
 			); err != nil {
 				t.Fatal(err)
 			}
@@ -648,7 +648,7 @@ func TestEntityPolicyCallsActOnTheAuthorizedARNOverGRPC(t *testing.T) {
 				"erin",
 				"keep",
 				policyDoc314,
-				backendtest.EntityGrant(ctx, t, mover.Admin, account314, iam.EntityUser, "erin"),
+				backendtest.EntityGrant(ctx, t, mover.Directory, account314, iam.EntityUser, "erin"),
 			); err != nil {
 				t.Fatal(err)
 			}

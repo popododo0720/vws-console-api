@@ -164,8 +164,8 @@ func TestGetMFADeviceNeedsPermission(t *testing.T) {
 		// /restricted/alice, so a check on a guessed path-less ARN would let
 		// bob through to the 404.
 		lookupErr := &resource.Error{Code: resource.CodeUnavailable, Message: "vws-iam is unavailable"}
-		h, f, rec, root := harnessWith(t, func(a iam.Admin) iam.Admin {
-			return userLookupError{Admin: a, err: lookupErr}
+		h, f, rec, root := harnessWith(t, func(a iam.Directory) iam.Directory {
+			return userLookupError{Directory: a, err: lookupErr}
 		})
 		ctx := t.Context()
 		if _, err := f.CreateUser(ctx, root.Account, "alice", "/restricted/"); err != nil {

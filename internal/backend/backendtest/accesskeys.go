@@ -11,7 +11,7 @@ import (
 	"github.com/popododo0720/vws-console-api/internal/resource"
 )
 
-// IAMAccessKeys runs the #314 bundle 2 contract of the iam.Admin access key
+// IAMAccessKeys runs the #314 bundle 2 contract of the iam.Directory access key
 // calls, which the in-memory fake and the vws-iam client must answer alike.
 // Each row starts from the IAMUsersAndGroups seed: alice (/ops/), bob (/eng/)
 // and devs (/team/, member alice), none of them with a key.
@@ -38,7 +38,7 @@ func keyIDs(ks []iam.AccessKeyMeta) []string {
 	return out
 }
 
-func wantKeys(ctx context.Context, t *testing.T, a iam.Admin, user string, want ...string) []iam.AccessKeyMeta {
+func wantKeys(ctx context.Context, t *testing.T, a iam.Directory, user string, want ...string) []iam.AccessKeyMeta {
 	t.Helper()
 	ks, err := a.ListAccessKeys(ctx, iamAccount(), user, UserGrant(ctx, t, a, iamAccount(), user))
 	wantOK(t, "ListAccessKeys "+user, err)
@@ -55,7 +55,9 @@ func wantKeys(ctx context.Context, t *testing.T, a iam.Admin, user string, want 
 // iamAccessKeyRows are the #314 bundle 2 rows.
 func iamAccessKeyRows() []iamRow {
 	return []iamRow{
-		{"CreateAccessKey returns an active key and its secret once", func(ctx context.Context, t *testing.T, a iam.Admin) {
+		{"CreateAccessKey returns an active key and its secret once", func(
+			ctx context.Context, t *testing.T, a iam.Directory,
+		) {
 			before := time.Now().Add(-time.Minute)
 			k, err := a.CreateAccessKey(ctx, iamAccount(), "bob", UserGrant(ctx, t, a, iamAccount(), "bob"))
 			wantOK(t, "CreateAccessKey", err)
@@ -70,7 +72,7 @@ func iamAccessKeyRows() []iamRow {
 			}
 			wantKeys(ctx, t, a, "alice")
 		}},
-		{"a third key is LimitExceeded and the two stay", func(ctx context.Context, t *testing.T, a iam.Admin) {
+		{"a third key is LimitExceeded and the two stay", func(ctx context.Context, t *testing.T, a iam.Directory) {
 			k1, err := a.CreateAccessKey(ctx, iamAccount(), "bob", UserGrant(ctx, t, a, iamAccount(), "bob"))
 			wantOK(t, "CreateAccessKey 1", err)
 			k2, err := a.CreateAccessKey(ctx, iamAccount(), "bob", UserGrant(ctx, t, a, iamAccount(), "bob"))
@@ -85,7 +87,7 @@ func iamAccessKeyRows() []iamRow {
 			_, err = a.CreateAccessKey(ctx, iamAccount(), "alice", UserGrant(ctx, t, a, iamAccount(), "alice"))
 			wantOK(t, "the quota is per user", err)
 		}},
-		{"a missing user is NoSuchEntity", func(ctx context.Context, t *testing.T, a iam.Admin) {
+		{"a missing user is NoSuchEntity", func(ctx context.Context, t *testing.T, a iam.Directory) {
 			_, err := a.CreateAccessKey(ctx, iamAccount(), "ghost", UserGrant(ctx, t, a, iamAccount(), "ghost"))
 			wantErr(t, "CreateAccessKey", err, resource.CodeNotFound, "The user with name ghost cannot be found.")
 			_, err = a.ListAccessKeys(ctx, iamAccount(), "ghost", UserGrant(ctx, t, a, iamAccount(), "ghost"))
@@ -96,7 +98,7 @@ func iamAccessKeyRows() []iamRow {
 			wantErr(t, "DeleteAccessKey", err, resource.CodeNotFound, "The user with name ghost cannot be found.")
 		}},
 		{"DeleteAccessKey deletes; a missing or another user's key is NoSuchEntity", func(
-			ctx context.Context, t *testing.T, a iam.Admin,
+			ctx context.Context, t *testing.T, a iam.Directory,
 		) {
 			bobs, err := a.CreateAccessKey(ctx, iamAccount(), "bob", UserGrant(ctx, t, a, iamAccount(), "bob"))
 			wantOK(t, "CreateAccessKey bob", err)
@@ -121,7 +123,7 @@ func iamAccessKeyRows() []iamRow {
 			wantKeys(ctx, t, a, "alice", alices.AccessKeyID)
 		}},
 		{"GetAccessKeyLastUsed names the owner of a new key, never used", func(
-			ctx context.Context, t *testing.T, a iam.Admin,
+			ctx context.Context, t *testing.T, a iam.Directory,
 		) {
 			k, err := a.CreateAccessKey(ctx, iamAccount(), "bob", UserGrant(ctx, t, a, iamAccount(), "bob"))
 			wantOK(t, "CreateAccessKey", err)
@@ -140,7 +142,7 @@ func iamAccessKeyRows() []iamRow {
 			wantErr(t, "GetAccessKeyLastUsed after the delete", err, resource.CodeNotFound,
 				"The access key with id "+k.AccessKeyID+" cannot be found.")
 		}},
-		{"DeleteUser with an access key is DeleteConflict", func(ctx context.Context, t *testing.T, a iam.Admin) {
+		{"DeleteUser with an access key is DeleteConflict", func(ctx context.Context, t *testing.T, a iam.Directory) {
 			k, err := a.CreateAccessKey(ctx, iamAccount(), "bob", UserGrant(ctx, t, a, iamAccount(), "bob"))
 			wantOK(t, "CreateAccessKey", err)
 			wantErr(
@@ -161,7 +163,7 @@ func iamAccessKeyRows() []iamRow {
 				a.DeleteUser(ctx, iamAccount(), "bob", UserGrant(ctx, t, a, iamAccount(), "bob")),
 			)
 		}},
-		{"another account sees none of the keys", func(ctx context.Context, t *testing.T, a iam.Admin) {
+		{"another account sees none of the keys", func(ctx context.Context, t *testing.T, a iam.Directory) {
 			k, err := a.CreateAccessKey(ctx, iamAccount(), "bob", UserGrant(ctx, t, a, iamAccount(), "bob"))
 			wantOK(t, "CreateAccessKey", err)
 			_, err = a.ListAccessKeys(ctx, iamOther(), "bob", UserGrant(ctx, t, a, iamOther(), "bob"))
@@ -175,7 +177,7 @@ func iamAccessKeyRows() []iamRow {
 			wantKeys(ctx, t, a, "bob", k.AccessKeyID)
 		}},
 		{"access key calls bound to a stale ARN are ConcurrentModification and change nothing", func(
-			ctx context.Context, t *testing.T, a iam.Admin,
+			ctx context.Context, t *testing.T, a iam.Directory,
 		) {
 			// #325 r1: the surface passes the user ARN it authorized; a user
 			// that has moved since must get no key, list none and lose none.

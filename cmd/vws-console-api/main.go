@@ -118,7 +118,7 @@ func run(ctx context.Context, args []string) (err error) {
 		}
 	}
 	var auth iam.Client = root
-	var admin iam.Admin
+	var admin iam.Directory
 	switch *iamMode {
 	case "static":
 	case "fake":

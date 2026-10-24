@@ -27,24 +27,20 @@ func (r *recorder) Authorize(ctx context.Context, req iam.Request) (iam.Decision
 	return r.Client.Authorize(ctx, req)
 }
 
-// vanishedUserAdmin serves the user for the action's first ARN check and
-// reports it missing for the snapshot read, like a delete between the two.
+// vanishedUserAdmin resolves the user for the action's ARN checks and
+// reports it missing for the bound snapshot read, like a delete between the
+// two.
 type vanishedUserAdmin struct {
-	iam.Admin
-	calls int
+	iam.Directory
 }
 
-func (a *vanishedUserAdmin) GetUser(ctx context.Context, account resource.AccountID, name string) (iam.User, error) {
-	a.calls++
-	if a.calls > 1 {
-		return iam.User{}, &resource.Error{Code: resource.CodeNotFound, Message: "The user cannot be found."}
-	}
-	return a.Admin.GetUser(ctx, account, name)
+func (a *vanishedUserAdmin) GetUser(context.Context, resource.AccountID, string, iam.AuthorizedARN) (iam.User, error) {
+	return iam.User{}, &resource.Error{Code: resource.CodeNotFound, Message: "The user cannot be found."}
 }
 
 // noARNAdmin finds a key but gives its owner no ARN, which the surface must
 // reject instead of authorizing on "*".
-type noARNAdmin struct{ iam.Admin }
+type noARNAdmin struct{ iam.Directory }
 
 func (a noARNAdmin) GetAccessKeyLastUsed(
 	_ context.Context, _ resource.AccountID, _ string,
@@ -58,7 +54,10 @@ func harness(t *testing.T) (http.Handler, *iam.Fake, *recorder, sigv4.Credential
 
 // harnessWith lets a test replace the Admin the surface calls while the same
 // fake stays the authorizer.
-func harnessWith(t *testing.T, wrap func(iam.Admin) iam.Admin) (http.Handler, *iam.Fake, *recorder, sigv4.Credential) {
+func harnessWith(
+	t *testing.T,
+	wrap func(iam.Directory) iam.Directory,
+) (http.Handler, *iam.Fake, *recorder, sigv4.Credential) {
 	t.Helper()
 	account, err := resource.Parse[resource.AccountID]("123456789012")
 	if err != nil {
@@ -70,7 +69,7 @@ func harnessWith(t *testing.T, wrap func(iam.Admin) iam.Admin) (http.Handler, *i
 	verifier := func(s sigv4.Service) *sigv4.Verifier {
 		return sigv4.NewVerifier(sigv4.Verifier{Service: s, Region: resource.RegionName, Now: func() time.Time { return now }, Auth: iam.Authenticator(rec)})
 	}
-	var admin iam.Admin = f
+	var admin iam.Directory = f
 	if wrap != nil {
 		admin = wrap(f)
 	}
@@ -156,7 +155,7 @@ func TestUpdateGroup(t *testing.T) {
 	if strings.Contains(res.Body.String(), "UpdateGroupResult") {
 		t.Errorf("empty result has an UpdateGroupResult: %s", res.Body.String())
 	}
-	group, _, err := f.GetGroup(ctx, root.Account, "ops")
+	group, _, err := f.GetGroup(ctx, root.Account, "ops", backendtest.GroupGrant(ctx, t, f, root.Account, "ops"))
 	if err != nil || group.Path != "/new/" {
 		t.Fatalf("stored group %+v, want path /new/: %v", group, err)
 	}
@@ -225,7 +224,12 @@ func TestUpdateGroupAuthorizesTheNewARN(t *testing.T) {
 		"Action": {"UpdateGroup"}, "GroupName": {"scoped"}, "NewPath": {"/new/"},
 	})
 	has(t, res, http.StatusForbidden, `<Code>AccessDenied</Code>`)
-	if group, _, err := f.GetGroup(ctx, root.Account, "scoped"); err != nil || group.Path != "/old/" {
+	if group, _, err := f.GetGroup(
+		ctx,
+		root.Account,
+		"scoped",
+		backendtest.GroupGrant(ctx, t, f, root.Account, "scoped"),
+	); err != nil || group.Path != "/old/" {
 		t.Fatalf("denied update changed the group to %+v: %v", group, err)
 	}
 	both := allow(`["` + old + `","` + moved + `"]`)
@@ -244,7 +248,12 @@ func TestUpdateGroupAuthorizesTheNewARN(t *testing.T) {
 		"Action": {"UpdateGroup"}, "GroupName": {"scoped"}, "NewPath": {"/new/"},
 	})
 	has(t, res, http.StatusOK, `<UpdateGroupResponse>`, `<ResponseMetadata><RequestId>`)
-	if group, _, err := f.GetGroup(ctx, root.Account, "scoped"); err != nil || group.Path != "/new/" {
+	if group, _, err := f.GetGroup(
+		ctx,
+		root.Account,
+		"scoped",
+		backendtest.GroupGrant(ctx, t, f, root.Account, "scoped"),
+	); err != nil || group.Path != "/new/" {
 		t.Fatalf("allowed update left the group at %+v: %v", group, err)
 	}
 	wantOld := "iam:UpdateGroup " + old
@@ -270,7 +279,7 @@ func TestUpdateUser(t *testing.T) {
 	if strings.Contains(res.Body.String(), "UpdateUserResult") {
 		t.Errorf("empty result has an UpdateUserResult: %s", res.Body.String())
 	}
-	u, err := f.GetUser(ctx, root.Account, "robert")
+	u, err := f.GetUser(ctx, root.Account, "robert", backendtest.UserGrant(ctx, t, f, root.Account, "robert"))
 	if err != nil || u.Path != "/new/" || u.ARN != "arn:vws:iam::123456789012:user/new/robert" {
 		t.Fatalf("stored user %+v: %v", u, err)
 	}
@@ -303,8 +312,8 @@ func TestUpdateUser(t *testing.T) {
 // must not reach UpdateUser with an empty expected ARN, because a user
 // recreated under the same name would then move without authorization.
 func TestUpdateUserMissingSnapshotIsNoSuchEntity(t *testing.T) {
-	h, f, _, root := harnessWith(t, func(admin iam.Admin) iam.Admin {
-		return &vanishedUserAdmin{Admin: admin}
+	h, f, _, root := harnessWith(t, func(admin iam.Directory) iam.Directory {
+		return &vanishedUserAdmin{Directory: admin}
 	})
 	ctx := t.Context()
 	if _, err := f.CreateUser(ctx, root.Account, "bob", "/old/"); err != nil {
@@ -314,7 +323,12 @@ func TestUpdateUserMissingSnapshotIsNoSuchEntity(t *testing.T) {
 		"Action": {"UpdateUser"}, "UserName": {"bob"}, "NewPath": {"/new/"},
 	})
 	has(t, res, http.StatusNotFound, `<Code>NoSuchEntity</Code>`)
-	if u, err := f.GetUser(ctx, root.Account, "bob"); err != nil || u.Path != "/old/" {
+	if u, err := f.GetUser(
+		ctx,
+		root.Account,
+		"bob",
+		backendtest.UserGrant(ctx, t, f, root.Account, "bob"),
+	); err != nil || u.Path != "/old/" {
 		t.Errorf("a missing snapshot moved the user to %+v: %v", u, err)
 	}
 }
@@ -353,7 +367,12 @@ func TestUpdateUserAuthorizesTheNewARN(t *testing.T) {
 		"Action": {"UpdateUser"}, "UserName": {"scoped"}, "NewPath": {"/new/"},
 	})
 	has(t, res, http.StatusForbidden, `<Code>AccessDenied</Code>`)
-	if u, err := f.GetUser(ctx, root.Account, "scoped"); err != nil || u.Path != "/old/" {
+	if u, err := f.GetUser(
+		ctx,
+		root.Account,
+		"scoped",
+		backendtest.UserGrant(ctx, t, f, root.Account, "scoped"),
+	); err != nil || u.Path != "/old/" {
 		t.Fatalf("denied update changed the user to %+v: %v", u, err)
 	}
 	both := allow(`["` + old + `","` + moved + `"]`)
@@ -372,7 +391,12 @@ func TestUpdateUserAuthorizesTheNewARN(t *testing.T) {
 		"Action": {"UpdateUser"}, "UserName": {"scoped"}, "NewPath": {"/new/"},
 	})
 	has(t, res, http.StatusOK, `<UpdateUserResponse>`, `<ResponseMetadata><RequestId>`)
-	if u, err := f.GetUser(ctx, root.Account, "scoped"); err != nil || u.Path != "/new/" {
+	if u, err := f.GetUser(
+		ctx,
+		root.Account,
+		"scoped",
+		backendtest.UserGrant(ctx, t, f, root.Account, "scoped"),
+	); err != nil || u.Path != "/new/" {
 		t.Fatalf("allowed update left the user at %+v: %v", u, err)
 	}
 	wantOld := "iam:UpdateUser " + old
@@ -397,7 +421,7 @@ func TestUpdateAssumeRolePolicy(t *testing.T) {
 		"Action": {"UpdateAssumeRolePolicy"}, "RoleName": {"ops"}, "PolicyDocument": {newTrust},
 	})
 	has(t, res, http.StatusOK, `<UpdateAssumeRolePolicyResponse>`, `<ResponseMetadata><RequestId>`)
-	role, err := f.GetRole(ctx, root.Account, "ops")
+	role, err := f.GetRole(ctx, root.Account, "ops", backendtest.RoleGrant(ctx, t, f, root.Account, "ops"))
 	if err != nil || role.TrustPolicy != newTrust {
 		t.Fatalf("stored trust policy %s, want %s: %v", role.TrustPolicy, newTrust, err)
 	}
@@ -662,7 +686,7 @@ func TestDeletePolicyVersion(t *testing.T) {
 // versionDeleter succeeds without the fake, which stores only the default
 // version, so the success response needs a backend that can delete one.
 type versionDeleter struct {
-	iam.Admin
+	iam.Directory
 	deleted []string
 }
 
@@ -673,8 +697,8 @@ func (d *versionDeleter) DeletePolicyVersion(_ context.Context, _ resource.Accou
 
 func TestDeletePolicyVersionSuccess(t *testing.T) {
 	admin := &versionDeleter{}
-	h, _, _, root := harnessWith(t, func(base iam.Admin) iam.Admin {
-		admin.Admin = base
+	h, _, _, root := harnessWith(t, func(base iam.Directory) iam.Directory {
+		admin.Directory = base
 		return admin
 	})
 	const arn = "arn:vws:iam::123456789012:policy/eng/d"
@@ -851,7 +875,7 @@ func TestGetAccessKeyLastUsed(t *testing.T) {
 }
 
 func TestGetAccessKeyLastUsedFailsClosedWithoutOwnerARN(t *testing.T) {
-	h, _, _, root := harnessWith(t, func(a iam.Admin) iam.Admin { return noARNAdmin{a} })
+	h, _, _, root := harnessWith(t, func(a iam.Directory) iam.Directory { return noARNAdmin{a} })
 	has(t, call(t, h, root, sigv4.ServiceIAM, url.Values{
 		"Action": {"GetAccessKeyLastUsed"}, "AccessKeyId": {"AKIAABCDEFGHIJKLMNOP"},
 	}), http.StatusInternalServerError, `<Code>ServiceFailure</Code>`)
@@ -956,7 +980,7 @@ func TestUpdateRoleDescription(t *testing.T) {
 		`<UpdateRoleDescriptionResponse><UpdateRoleDescriptionResult><Role>`,
 		`<RoleName>ops</RoleName>`, `<Description>new</Description>`,
 		`<ResponseMetadata><RequestId>`)
-	role, err := f.GetRole(ctx, root.Account, "ops")
+	role, err := f.GetRole(ctx, root.Account, "ops", backendtest.RoleGrant(ctx, t, f, root.Account, "ops"))
 	if err != nil || role.Description != "new" {
 		t.Fatalf("stored description %q, want new: %v", role.Description, err)
 	}
@@ -1005,7 +1029,12 @@ func TestUpdateRoleDescription(t *testing.T) {
 		"Action": {"UpdateRoleDescription"}, "RoleName": {"ops"}, "Description": {wide},
 	})
 	has(t, res, http.StatusOK, "<Description>"+wide+"</Description>")
-	if stored, err := f.GetRole(ctx, root.Account, "ops"); err != nil || stored.Description != wide {
+	if stored, err := f.GetRole(
+		ctx,
+		root.Account,
+		"ops",
+		backendtest.RoleGrant(ctx, t, f, root.Account, "ops"),
+	); err != nil || stored.Description != wide {
 		t.Fatalf("1000-character description stored as %q: %v", stored.Description, err)
 	}
 
@@ -1042,7 +1071,7 @@ func TestUpdateRole(t *testing.T) {
 		"Action": {"UpdateRole"}, "RoleName": {"ops"}, "Description": {"new"},
 	})
 	has(t, res, http.StatusOK, `<UpdateRoleResult>`)
-	role, err := f.GetRole(ctx, root.Account, "ops")
+	role, err := f.GetRole(ctx, root.Account, "ops", backendtest.RoleGrant(ctx, t, f, root.Account, "ops"))
 	if err != nil || role.Description != "new" || role.MaxSessionDuration != 7200 {
 		t.Fatalf("stored role %+v, want new description and 7200: %v", role, err)
 	}
@@ -1051,7 +1080,7 @@ func TestUpdateRole(t *testing.T) {
 		"Action": {"UpdateRole"}, "RoleName": {"ops"}, "MaxSessionDuration": {"43200"},
 	})
 	has(t, res, http.StatusOK, `<UpdateRoleResponse>`)
-	role, err = f.GetRole(ctx, root.Account, "ops")
+	role, err = f.GetRole(ctx, root.Account, "ops", backendtest.RoleGrant(ctx, t, f, root.Account, "ops"))
 	if err != nil || role.Description != "new" || role.MaxSessionDuration != 43200 {
 		t.Fatalf("stored role %+v, want new description and 43200: %v", role, err)
 	}
@@ -1060,7 +1089,7 @@ func TestUpdateRole(t *testing.T) {
 		"Action": {"UpdateRole"}, "RoleName": {"ops"}, "Description": {""},
 	})
 	has(t, res, http.StatusOK, `<UpdateRoleResponse>`)
-	role, err = f.GetRole(ctx, root.Account, "ops")
+	role, err = f.GetRole(ctx, root.Account, "ops", backendtest.RoleGrant(ctx, t, f, root.Account, "ops"))
 	if err != nil || role.Description != "" || role.MaxSessionDuration != 43200 {
 		t.Fatalf("stored role %+v, want empty description and 43200: %v", role, err)
 	}
@@ -1069,7 +1098,12 @@ func TestUpdateRole(t *testing.T) {
 		"Action": {"UpdateRole"}, "RoleName": {"ops"},
 	})
 	has(t, res, http.StatusOK, `<UpdateRoleResponse>`)
-	if role, _ = f.GetRole(ctx, root.Account, "ops"); role.Description != "" || role.MaxSessionDuration != 43200 {
+	if role, _ = f.GetRole(
+		ctx,
+		root.Account,
+		"ops",
+		backendtest.RoleGrant(ctx, t, f, root.Account, "ops"),
+	); role.Description != "" || role.MaxSessionDuration != 43200 {
 		t.Errorf("a no-op update changed the role: %+v", role)
 	}
 
@@ -1112,7 +1146,12 @@ func TestUpdateRole(t *testing.T) {
 		"Action": {"UpdateRole"}, "RoleName": {"ops"}, "Description": {long},
 	})
 	has(t, res, http.StatusBadRequest, `<Code>ValidationError</Code>`)
-	if role, _ = f.GetRole(ctx, root.Account, "ops"); role.Description != "" || role.MaxSessionDuration != 43200 {
+	if role, _ = f.GetRole(
+		ctx,
+		root.Account,
+		"ops",
+		backendtest.RoleGrant(ctx, t, f, root.Account, "ops"),
+	); role.Description != "" || role.MaxSessionDuration != 43200 {
 		t.Errorf("a rejected update changed the role: %+v", role)
 	}
 
@@ -1128,18 +1167,18 @@ func TestUpdateRole(t *testing.T) {
 }
 
 type roleLookupError struct {
-	iam.Admin
+	iam.Directory
 	err error
 }
 
-func (r roleLookupError) GetRole(context.Context, resource.AccountID, string) (iam.Role, error) {
-	return iam.Role{}, r.err
+func (r roleLookupError) ResolveRole(context.Context, resource.AccountID, string) (iam.Ref, error) {
+	return iam.Ref{}, r.err
 }
 
 func TestUpdateRoleFailsClosedWhenTheRoleLookupFails(t *testing.T) {
 	lookupErr := &resource.Error{Code: resource.CodeUnavailable, Message: "vws-iam is unavailable"}
-	h, f, rec, root := harnessAdmin(t, func(a iam.Admin) iam.Admin {
-		return roleLookupError{Admin: a, err: lookupErr}
+	h, f, rec, root := harnessAdmin(t, func(a iam.Directory) iam.Directory {
+		return roleLookupError{Directory: a, err: lookupErr}
 	})
 	ctx := t.Context()
 	trust := `{"Statement":[{"Effect":"Allow","Action":"sts:AssumeRole","Principal":{"AWS":"*"}}]}`
@@ -1176,13 +1215,21 @@ func TestUpdateRoleFailsClosedWhenTheRoleLookupFails(t *testing.T) {
 	if len(rec.seen) != 0 {
 		t.Errorf("authorized on a guessed ARN: %v", rec.seen)
 	}
-	if role, _ := f.GetRole(ctx, root.Account, "ops"); role.Description != "old" {
+	if role, _ := f.GetRole(
+		ctx,
+		root.Account,
+		"ops",
+		backendtest.RoleGrant(ctx, t, f, root.Account, "ops"),
+	); role.Description != "old" {
 		t.Errorf("a failed lookup still updated the role: %+v", role)
 	}
 }
 
 // harnessAdmin is harnessWith under the name the UpdateRole tests use.
-func harnessAdmin(t *testing.T, wrap func(iam.Admin) iam.Admin) (http.Handler, *iam.Fake, *recorder, sigv4.Credential) {
+func harnessAdmin(
+	t *testing.T,
+	wrap func(iam.Directory) iam.Directory,
+) (http.Handler, *iam.Fake, *recorder, sigv4.Credential) {
 	t.Helper()
 	return harnessWith(t, wrap)
 }

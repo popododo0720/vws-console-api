@@ -18,35 +18,29 @@ import (
 // first lookup of it. A concurrent UpdateGroup or UpdateUser does the same
 // between the authorization and the change.
 type movingAdmin struct {
-	iam.Admin
+	iam.Directory
 	tb          testing.TB
 	group, user string
 	moved       bool
 }
 
-func (a *movingAdmin) GetGroup(
-	ctx context.Context, account resource.AccountID, name string,
-) (iam.Group, []iam.User, error) {
-	g, us, err := a.Admin.GetGroup(ctx, account, name)
+func (a *movingAdmin) ResolveGroup(ctx context.Context, account resource.AccountID, name string) (iam.Ref, error) {
+	g, err := a.Directory.ResolveGroup(ctx, account, name)
 	if err == nil && !a.moved && name == a.group {
 		a.moved = true
-		if err := a.UpdateGroup(
-			ctx, account, name, "/denied/", "", backendtest.GroupGrant(ctx, a.tb, a, account, name),
-		); err != nil {
-			return iam.Group{}, nil, err
+		if err := a.UpdateGroup(ctx, account, name, "/denied/", "", backendtest.Grant(ctx, a.tb, g.ARN)); err != nil {
+			return iam.Ref{}, err
 		}
 	}
-	return g, us, err
+	return g, err
 }
 
-func (a *movingAdmin) GetUser(ctx context.Context, account resource.AccountID, name string) (iam.User, error) {
-	u, err := a.Admin.GetUser(ctx, account, name)
+func (a *movingAdmin) ResolveUser(ctx context.Context, account resource.AccountID, name string) (iam.Ref, error) {
+	u, err := a.Directory.ResolveUser(ctx, account, name)
 	if err == nil && !a.moved && name == a.user {
 		a.moved = true
-		if err := a.UpdateUser(
-			ctx, account, name, "/denied/", "", backendtest.UserGrant(ctx, a.tb, a, account, name),
-		); err != nil {
-			return iam.User{}, err
+		if err := a.UpdateUser(ctx, account, name, "/denied/", "", backendtest.Grant(ctx, a.tb, u.ARN)); err != nil {
+			return iam.Ref{}, err
 		}
 	}
 	return u, err
@@ -83,7 +77,12 @@ func TestGroupAndUserChangesActOnTheAuthorizedARN(t *testing.T) {
 			url.Values{"Action": {"DeleteGroup"}, "GroupName": {"empty"}},
 			"empty", "", func(t *testing.T, s state) {
 				t.Helper()
-				if _, _, err := s.f.GetGroup(t.Context(), s.account, "empty"); err != nil {
+				if _, _, err := s.f.GetGroup(
+					t.Context(),
+					s.account,
+					"empty",
+					backendtest.GroupGrant(t.Context(), t, s.f, s.account, "empty"),
+				); err != nil {
 					t.Errorf("the group was deleted: %v", err)
 				}
 			},
@@ -93,7 +92,12 @@ func TestGroupAndUserChangesActOnTheAuthorizedARN(t *testing.T) {
 			url.Values{"Action": {"UpdateGroup"}, "GroupName": {"mover"}, "NewPath": {"/ok/x/"}},
 			"mover", "", func(t *testing.T, s state) {
 				t.Helper()
-				if g, _, err := s.f.GetGroup(t.Context(), s.account, "mover"); err != nil || g.Path != "/denied/" {
+				if g, _, err := s.f.GetGroup(
+					t.Context(),
+					s.account,
+					"mover",
+					backendtest.GroupGrant(t.Context(), t, s.f, s.account, "mover"),
+				); err != nil || g.Path != "/denied/" {
 					t.Errorf("the group moved to %+v: %v", g, err)
 				}
 			},
@@ -103,7 +107,12 @@ func TestGroupAndUserChangesActOnTheAuthorizedARN(t *testing.T) {
 			url.Values{"Action": {"DeleteUser"}, "UserName": {"erin"}},
 			"", "erin", func(t *testing.T, s state) {
 				t.Helper()
-				if _, err := s.f.GetUser(t.Context(), s.account, "erin"); err != nil {
+				if _, err := s.f.GetUser(
+					t.Context(),
+					s.account,
+					"erin",
+					backendtest.UserGrant(t.Context(), t, s.f, s.account, "erin"),
+				); err != nil {
 					t.Errorf("the user was deleted: %v", err)
 				}
 			},
@@ -130,11 +139,11 @@ func authorizedARNHarness(
 	t *testing.T, mover *movingAdmin,
 ) (http.Handler, *iam.Fake, resource.AccountID, sigv4.Credential) {
 	t.Helper()
-	h, f, _, root := harnessWith(t, func(a iam.Admin) iam.Admin {
+	h, f, _, root := harnessWith(t, func(a iam.Directory) iam.Directory {
 		if mover == nil {
 			return a
 		}
-		mover.Admin = a
+		mover.Directory = a
 		return mover
 	})
 	ctx := t.Context()
@@ -181,7 +190,7 @@ func authorizedARNHarness(
 
 func members(t *testing.T, f *iam.Fake, account resource.AccountID, group string, want ...string) {
 	t.Helper()
-	_, us, err := f.GetGroup(t.Context(), account, group)
+	_, us, err := f.GetGroup(t.Context(), account, group, backendtest.GroupGrant(t.Context(), t, f, account, group))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -35,19 +35,55 @@ func TestGetRole(t *testing.T) {
 		Spec:   &iamv1.RoleSpec{Path: "/team/", AssumeRolePolicy: `{"Statement":[]}`, Description: "old"},
 		Status: &iamv1.RoleStatus{Arn: "arn:vws:iam::123456789012:role/team/ops", UniqueId: "AROAOPS"},
 	}
-	got, err := admin.GetRole(t.Context(), accountID(t), "ops")
+	opsARN := "arn:vws:iam::123456789012:role/team/ops"
+	got, err := admin.GetRole(t.Context(), accountID(t), "ops", backendtest.Grant(t.Context(), t, opsARN))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(s.getRole) != 1 || s.getRole[0].GetName() != "projects/123456789012/roles/ops" {
 		t.Fatalf("GetRole calls %v", s.getRole)
 	}
-	if got.Path != "/team/" || got.ARN != "arn:vws:iam::123456789012:role/team/ops" || got.Description != "old" {
+	if got.Path != "/team/" || got.ARN != opsARN || got.Description != "old" {
 		t.Errorf("role %+v", got)
 	}
 	s.getRoleErr = awsErr(codes.NotFound, "NOT_FOUND", "NoSuchEntity")
-	if _, err := admin.GetRole(t.Context(), accountID(t), "none"); resource.CodeOf(err) != resource.CodeNotFound {
+	if _, err := admin.GetRole(
+		t.Context(),
+		accountID(t),
+		"none",
+		backendtest.RoleGrant(t.Context(), t, admin, accountID(t), "none"),
+	); resource.CodeOf(err) != resource.CodeNotFound {
 		t.Errorf("missing role: %v", err)
+	}
+}
+
+// #358: GetRole answers only the role at the authorized ARN: a role now on
+// another path is ConcurrentModification with no data, and the zero
+// AuthorizedARN sends nothing.
+func TestGetRoleActsOnTheAuthorizedARN(t *testing.T) {
+	c, s := harness(t)
+	admin := STSAdmin{Client: c}
+	s.getRoleRes = &iamv1.Role{
+		Name:   "projects/123456789012/roles/ops",
+		Spec:   &iamv1.RoleSpec{Path: "/denied/", AssumeRolePolicy: `{"Statement":[]}`},
+		Status: &iamv1.RoleStatus{Arn: "arn:vws:iam::123456789012:role/denied/ops", UniqueId: "AROAOPS"},
+	}
+	got, err := admin.GetRole(t.Context(), accountID(t), "ops",
+		backendtest.Grant(t.Context(), t, "arn:vws:iam::123456789012:role/team/ops"))
+	if !iam.IsChanged(err) || got != (iam.Role{}) {
+		t.Fatalf("GetRole of a moved role = %+v, %v; want ConcurrentModification and no role", got, err)
+	}
+	sent := len(s.getRole)
+	if _, err := admin.GetRole(
+		t.Context(),
+		accountID(t),
+		"ops",
+		iam.AuthorizedARN{},
+	); resource.CodeOf(err) != resource.CodeInternal {
+		t.Fatalf("GetRole with the zero AuthorizedARN: %v", err)
+	}
+	if len(s.getRole) != sent {
+		t.Fatalf("GetRole with the zero AuthorizedARN sent %d requests", len(s.getRole)-sent)
 	}
 }
 

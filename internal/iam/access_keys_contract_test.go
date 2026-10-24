@@ -9,5 +9,5 @@ import (
 
 // #314 bundle 2: the fake answers the access key contract.
 func TestFakeAccessKeyContract(t *testing.T) {
-	backendtest.IAMAccessKeys(t, func(*testing.T) iam.Admin { return iam.NewFake() })
+	backendtest.IAMAccessKeys(t, func(*testing.T) iam.Directory { return iam.NewFake() })
 }

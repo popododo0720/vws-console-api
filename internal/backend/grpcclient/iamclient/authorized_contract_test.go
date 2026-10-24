@@ -13,7 +13,7 @@ import (
 // roles and their policies) is checked for the zero AuthorizedARN, which it
 // refuses before it sends anything.
 func TestGRPCAuthorizedARNContract(t *testing.T) {
-	backendtest.IAMAuthorizedARN(t, func(t *testing.T) (iam.Admin, backendtest.PolicySeeder) {
+	backendtest.IAMAuthorizedARN(t, func(t *testing.T) (iam.Directory, backendtest.PolicySeeder) {
 		c, d := dirHarness(t)
 		seed := func(t *testing.T, name, path string) string {
 			t.Helper()
@@ -37,4 +37,14 @@ func (a countingAdmin) Calls() int {
 		n += len(reqs)
 	}
 	return n
+}
+
+// #358: STSAdmin resolves a named user or group as the fake does, with one
+// GroupService.GetGroup and no member read for a group. Roles are not
+// created over vws-iam, so the role row runs on the fake only.
+func TestGRPCResolverContract(t *testing.T) {
+	backendtest.IAMResolver(t, func(t *testing.T) iam.Directory {
+		c, d := dirHarness(t)
+		return countingAdmin{STSAdmin{Client: c}, d}
+	}, 0)
 }

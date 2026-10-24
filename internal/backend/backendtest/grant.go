@@ -32,17 +32,17 @@ func Grant(ctx context.Context, t testing.TB, arn string) iam.AuthorizedARN {
 // UserLookup is the pre-authorization read the IAM Query surface makes to
 // compute the ARN it authorizes for a user.
 type UserLookup interface {
-	GetUser(ctx context.Context, account resource.AccountID, name string) (iam.User, error)
+	ResolveUser(ctx context.Context, account resource.AccountID, name string) (iam.Ref, error)
 }
 
 // GroupLookup is UserLookup for a group.
 type GroupLookup interface {
-	GetGroup(ctx context.Context, account resource.AccountID, name string) (iam.Group, []iam.User, error)
+	ResolveGroup(ctx context.Context, account resource.AccountID, name string) (iam.Ref, error)
 }
 
 // RoleLookup is UserLookup for a role.
 type RoleLookup interface {
-	GetRole(ctx context.Context, account resource.AccountID, name string) (iam.Role, error)
+	ResolveRole(ctx context.Context, account resource.AccountID, name string) (iam.Ref, error)
 }
 
 // EntityARN is the path-less ARN the surface authorizes for a missing entity.
@@ -56,7 +56,7 @@ func UserGrant(
 	ctx context.Context, t testing.TB, a UserLookup, account resource.AccountID, user string,
 ) iam.AuthorizedARN {
 	t.Helper()
-	u, err := a.GetUser(ctx, account, user)
+	u, err := a.ResolveUser(ctx, account, user)
 	if err != nil {
 		return Grant(ctx, t, EntityARN(account, "user", user))
 	}
@@ -68,7 +68,7 @@ func GroupGrant(
 	ctx context.Context, t testing.TB, a GroupLookup, account resource.AccountID, group string,
 ) iam.AuthorizedARN {
 	t.Helper()
-	g, _, err := a.GetGroup(ctx, account, group)
+	g, err := a.ResolveGroup(ctx, account, group)
 	if err != nil {
 		return Grant(ctx, t, EntityARN(account, "group", group))
 	}
@@ -80,7 +80,7 @@ func RoleGrant(
 	ctx context.Context, t testing.TB, a RoleLookup, account resource.AccountID, role string,
 ) iam.AuthorizedARN {
 	t.Helper()
-	r, err := a.GetRole(ctx, account, role)
+	r, err := a.ResolveRole(ctx, account, role)
 	if err != nil || r.ARN == "" {
 		return Grant(ctx, t, EntityARN(account, "role", role))
 	}

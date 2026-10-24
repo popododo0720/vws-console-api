@@ -16,24 +16,24 @@ import (
 	"github.com/popododo0720/vws-console-api/internal/sigv4"
 )
 
-// userLookupError answers every GetUser with err, as when vws-iam is down.
+// userLookupError answers every ResolveUser with err, as when vws-iam is down.
 type userLookupError struct {
-	iam.Admin
+	iam.Directory
 	err error
 }
 
-func (u userLookupError) GetUser(context.Context, resource.AccountID, string) (iam.User, error) {
-	return iam.User{}, u.err
+func (u userLookupError) ResolveUser(context.Context, resource.AccountID, string) (iam.Ref, error) {
+	return iam.Ref{}, u.err
 }
 
-// groupLookupError answers every GetGroup with err.
+// groupLookupError answers every ResolveGroup with err.
 type groupLookupError struct {
-	iam.Admin
+	iam.Directory
 	err error
 }
 
-func (g groupLookupError) GetGroup(context.Context, resource.AccountID, string) (iam.Group, []iam.User, error) {
-	return iam.Group{}, nil, g.err
+func (g groupLookupError) ResolveGroup(context.Context, resource.AccountID, string) (iam.Ref, error) {
+	return iam.Ref{}, g.err
 }
 
 // actionsOn lists the IAM actions whose spec authorizes through one of res.
@@ -63,7 +63,7 @@ func TestEntityActionsFailClosedWhenTheLookupFails(t *testing.T) {
 		name   string
 		res    []func(*handler, *exchange) string
 		key    string
-		wrap   func(iam.Admin) iam.Admin
+		wrap   func(iam.Directory) iam.Directory
 		skip   []string
 		expect []string
 	}{
@@ -71,7 +71,7 @@ func TestEntityActionsFailClosedWhenTheLookupFails(t *testing.T) {
 			name: "user",
 			// GetMFADevice checks its serial first, then authorizes on the user.
 			res: []func(*handler, *exchange) string{userARN, getMFADeviceARN}, key: "UserName",
-			wrap: func(a iam.Admin) iam.Admin { return userLookupError{Admin: a, err: lookupErr} },
+			wrap: func(a iam.Directory) iam.Directory { return userLookupError{Directory: a, err: lookupErr} },
 			// CreateUser authorizes on the ARN it is about to create.
 			skip: []string{"CreateUser"},
 			expect: []string{
@@ -83,7 +83,7 @@ func TestEntityActionsFailClosedWhenTheLookupFails(t *testing.T) {
 		},
 		{
 			name: "group", res: []func(*handler, *exchange) string{groupARN}, key: "GroupName",
-			wrap: func(a iam.Admin) iam.Admin { return groupLookupError{Admin: a, err: lookupErr} },
+			wrap: func(a iam.Directory) iam.Directory { return groupLookupError{Directory: a, err: lookupErr} },
 			skip: []string{"CreateGroup"},
 			expect: []string{
 				"AddUserToGroup", "AttachGroupPolicy", "CreateGroup", "DeleteGroup", "DeleteGroupPolicy",
@@ -125,7 +125,9 @@ func TestEntityActionsFailClosedWhenTheLookupFails(t *testing.T) {
 // caller's own call into an error before authorization (PR #311 review).
 func TestCallerActionsAuthorizeOnTheCallerWithoutALookup(t *testing.T) {
 	lookupErr := &resource.Error{Code: resource.CodeUnimplemented, Message: "GetUser is not served"}
-	h, f, rec, root := harnessWith(t, func(a iam.Admin) iam.Admin { return userLookupError{Admin: a, err: lookupErr} })
+	h, f, rec, root := harnessWith(t, func(a iam.Directory) iam.Directory {
+		return userLookupError{Directory: a, err: lookupErr}
+	})
 	ctx := t.Context()
 	bob, err := f.CreateUser(ctx, root.Account, "bob", "/eng/")
 	if err != nil {
@@ -166,19 +168,19 @@ func TestLookupOutageAnswersServiceUnavailable(t *testing.T) {
 		key  string
 		res  []func(*handler, *exchange) string
 		skip string
-		wrap func(iam.Admin) iam.Admin
+		wrap func(iam.Directory) iam.Directory
 	}{
 		{
 			"UserName",
 			[]func(*handler, *exchange) string{userARN, getMFADeviceARN},
 			"CreateUser",
-			func(a iam.Admin) iam.Admin { return userLookupError{Admin: a, err: outage} },
+			func(a iam.Directory) iam.Directory { return userLookupError{Directory: a, err: outage} },
 		},
 		{
 			"GroupName",
 			[]func(*handler, *exchange) string{groupARN},
 			"CreateGroup",
-			func(a iam.Admin) iam.Admin { return groupLookupError{Admin: a, err: outage} },
+			func(a iam.Directory) iam.Directory { return groupLookupError{Directory: a, err: outage} },
 		},
 	} {
 		h, _, rec, root := harnessWith(t, tc.wrap)

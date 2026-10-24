@@ -11,7 +11,7 @@ import (
 
 // #314 bundle 3: the fake answers the user and group policy contract.
 func TestFakeEntityPolicyContract(t *testing.T) {
-	backendtest.IAMEntityPolicies(t, func(*testing.T) (iam.Admin, backendtest.PolicySeeder) {
+	backendtest.IAMEntityPolicies(t, func(*testing.T) (iam.Directory, backendtest.PolicySeeder) {
 		f := iam.NewFake()
 		account, err := resource.Parse[resource.AccountID]("123456789012")
 		if err != nil {

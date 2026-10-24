@@ -29,34 +29,46 @@ func testEntityARN(account resource.AccountID, kind, name string) string {
 	return "arn:vws:iam::" + account.String() + ":" + kind + "/" + name
 }
 
-func testUserGrant(ctx context.Context, t testing.TB, a Admin, account resource.AccountID, user string) AuthorizedARN {
+func testUserGrant(
+	ctx context.Context,
+	t testing.TB,
+	a Resolver,
+	account resource.AccountID,
+	user string,
+) AuthorizedARN {
 	t.Helper()
-	if u, err := a.GetUser(ctx, account, user); err == nil {
+	if u, err := a.ResolveUser(ctx, account, user); err == nil {
 		return testGrant(ctx, t, u.ARN)
 	}
 	return testGrant(ctx, t, testEntityARN(account, "user", user))
 }
 
 func testGroupGrant(
-	ctx context.Context, t testing.TB, a Admin, account resource.AccountID, group string,
+	ctx context.Context, t testing.TB, a Resolver, account resource.AccountID, group string,
 ) AuthorizedARN {
 	t.Helper()
-	if g, _, err := a.GetGroup(ctx, account, group); err == nil {
+	if g, err := a.ResolveGroup(ctx, account, group); err == nil {
 		return testGrant(ctx, t, g.ARN)
 	}
 	return testGrant(ctx, t, testEntityARN(account, "group", group))
 }
 
-func testRoleGrant(ctx context.Context, t testing.TB, a Admin, account resource.AccountID, role string) AuthorizedARN {
+func testRoleGrant(
+	ctx context.Context,
+	t testing.TB,
+	a Resolver,
+	account resource.AccountID,
+	role string,
+) AuthorizedARN {
 	t.Helper()
-	if r, err := a.GetRole(ctx, account, role); err == nil {
+	if r, err := a.ResolveRole(ctx, account, role); err == nil {
 		return testGrant(ctx, t, r.ARN)
 	}
 	return testGrant(ctx, t, testEntityARN(account, "role", role))
 }
 
 func testEntityGrant(
-	ctx context.Context, t testing.TB, a Admin, account resource.AccountID, kind Entity, name string,
+	ctx context.Context, t testing.TB, a Resolver, account resource.AccountID, kind Entity, name string,
 ) AuthorizedARN {
 	t.Helper()
 	switch kind {

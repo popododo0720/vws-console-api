@@ -192,14 +192,44 @@ type AssumedRole struct {
 	ARN           string // arn:vws:sts::<account>:assumed-role/<role>/<session>
 }
 
+// Ref is the identity of one IAM user, group or role: its ARN, path
+// included, and its unique ID.
+type Ref struct{ ARN, ID string }
+
+// Resolver reads the identity of a named user, group or role before any
+// authorization decision. AWS authorizes an IAM request on the resource's
+// ARN, and that ARN includes the entity's path, which the request does not
+// carry (the resource types table of
+// https://docs.aws.amazon.com/service-authorization/latest/reference/list_awsidentityandaccessmanagementiam.html),
+// so the surface reads it by name first. A Resolver answers that identity
+// only, never the entity's data: every read of a named entity's data is an
+// Admin call bound to the AuthorizedARN the caller was then authorized on
+// (#342, #358). GetCallerIdentity also resolves the caller's own unique ID,
+// which AWS answers with no permission at all
+// (https://docs.aws.amazon.com/STS/latest/APIReference/API_GetCallerIdentity.html).
+// A missing entity is NotFound with the AWS NoSuchEntity message.
+type Resolver interface {
+	ResolveUser(ctx context.Context, a resource.AccountID, name string) (Ref, error)
+	ResolveGroup(ctx context.Context, a resource.AccountID, name string) (Ref, error)
+	ResolveRole(ctx context.Context, a resource.AccountID, name string) (Ref, error)
+}
+
+// Directory is the IAM backend the Query surface wires: the bound Admin
+// calls and the Resolver lookups it authorizes on.
+type Directory interface {
+	Admin
+	Resolver
+}
+
 // Admin is the IAM management API behind the IAM and STS Query surface. Every
 // call is scoped to one account. Every call that acts on a named user, group
 // or role after authorization takes the AuthorizedARN the caller was
 // authorized on (#342): the zero value is Unbound (internal) before anything
 // is read, and an entity whose ARN is no longer the authorized one is a
-// ConcurrentModification (Changed) with no data and no write. GetUser,
-// GetGroup and GetRole take none: they are the lookups the surface
-// authorizes on, and the Create calls name an entity that does not exist yet. Errors are *resource.Error: NotFound,
+// ConcurrentModification (Changed) with no data and no write. The Create
+// calls take none: they name an entity that does not exist yet. The lookup
+// the surface authorizes on is Resolver, not Admin (#358). Errors are
+// *resource.Error: NotFound,
 // AlreadyExists, Conflict (delete conflict, Field "UnmodifiableEntity" for a
 // service-linked role, or Field ConcurrentModification for an entity that
 // moved since authorization), InvalidArgument (Field "PolicyDocument" for a
@@ -207,7 +237,7 @@ type AssumedRole struct {
 // trust).
 type Admin interface {
 	CreateUser(ctx context.Context, a resource.AccountID, name, path string) (User, error)
-	GetUser(ctx context.Context, a resource.AccountID, name string) (User, error)
+	GetUser(ctx context.Context, a resource.AccountID, name string, want AuthorizedARN) (User, error)
 	ListUsers(ctx context.Context, a resource.AccountID, pathPrefix string) ([]User, error)
 	DeleteUser(ctx context.Context, a resource.AccountID, name string, want AuthorizedARN) error
 	// UpdateUser moves a user's path or name.
@@ -227,7 +257,7 @@ type Admin interface {
 	DeleteAccessKey(ctx context.Context, a resource.AccountID, user, keyID string, want AuthorizedARN) error
 
 	CreateGroup(ctx context.Context, a resource.AccountID, name, path string) (Group, error)
-	GetGroup(ctx context.Context, a resource.AccountID, name string) (Group, []User, error)
+	GetGroup(ctx context.Context, a resource.AccountID, name string, want AuthorizedARN) (Group, []User, error)
 	ListGroups(ctx context.Context, a resource.AccountID, pathPrefix string) ([]Group, error)
 	// UpdateGroup, DeleteGroup, AddUserToGroup and RemoveUserFromGroup are
 	// bound to the group's ARN; ListGroupsForUser to the user's.
@@ -238,7 +268,7 @@ type Admin interface {
 	ListGroupsForUser(ctx context.Context, a resource.AccountID, user string, want AuthorizedARN) ([]Group, error)
 
 	CreateRole(ctx context.Context, a resource.AccountID, in RoleInput) (Role, error)
-	GetRole(ctx context.Context, a resource.AccountID, name string) (Role, error)
+	GetRole(ctx context.Context, a resource.AccountID, name string, want AuthorizedARN) (Role, error)
 	UpdateRole(ctx context.Context, a resource.AccountID, name string, in RoleUpdate, want AuthorizedARN) error
 	UpdateRoleDescription(
 		ctx context.Context, a resource.AccountID, name, description string, want AuthorizedARN,
