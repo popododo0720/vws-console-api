@@ -86,6 +86,7 @@ seed-hold-expires FixPendingExpires PROPERTIES HoldEnds
 seed-etag-reread FixEtagReread PROPERTIES CallsFinish
 seed-archive FixArchive INVARIANTS ReplaySurvivesLaterDetach
 seed-resend FixResendRecover INVARIANTS ResendMatchesOriginal
+seed-persist-slot FixPersistOwnSlot INVARIANTS RetryKeepsItsParams
 SEEDS
   # Known findings in the current code (docs/formal/README.md): none. A property
   # that fails on the real design is listed here until its fix lands.
