@@ -406,6 +406,9 @@ type detachReplay struct {
 	opLocal     string
 	fingerprint string
 	instanceID  resource.InstanceID
+	// pendingBound: no id is saved yet, and fingerprint is the binding the
+	// first write left in the reserved label (detachOpPending).
+	pendingBound bool
 }
 
 func (c computeClient) detachOnce(
@@ -715,6 +718,10 @@ func (c computeClient) writeDetach(
 		// so it goes (instanceUpdateLabels drops it on a new record). This
 		// request's own id is written by persistDetachOp.
 		delete(labels, labelDetachOpPrefix+vol.ID.String())
+		// Until persistDetachOp saves the id, its reserved label binds the
+		// record to this request's fingerprint, so a recovery can tell a
+		// same-token retry with other parameters (#362 review).
+		labels[labelDetachOpPrefix+vol.ID.String()] = detachOpPending + " " + detachFPToken(detachRequestHex(m.Key), m.Fingerprint)
 	}
 	updated, callErr := c.instances.UpdateInstance(ctx, &computev1.UpdateInstanceRequest{
 		RequestId:  requestUUID(m.Key, "detach"),
@@ -745,6 +752,11 @@ func (c computeClient) writeDetach(
 		case opOtherParams:
 			return zero, resource.IdempotencyMismatch()
 		case opUnknown:
+		}
+		if !rec.pendingBound {
+			// A record with no fingerprint binding (written before #362)
+			// cannot tell other parameters apart: refused as before.
+			return zero, resource.IdempotencyMismatch()
 		}
 		// This request's record proves its update was applied, and the
 		// client never got that operation id. The instance changed since,
@@ -1070,12 +1082,20 @@ func pruneDetachRecords(raw map[string]string, now time.Time) map[string]string 
 // Every stamped record was stamped after #303 was deployed, so after that
 // record was written: once a stamped record has expired, so has it (#322).
 func detachRecoveryPending(raw map[string]string, now time.Time) bool {
-	return pendingDetachOps(raw, now) > 0
+	return unsavedDetachOps(raw, now, true) > 0
 }
 
 // pendingDetachOps counts the records of raw that detachRecoveryPending
 // holds for: each still needs a label for its operation id.
 func pendingDetachOps(raw map[string]string, now time.Time) int {
+	return unsavedDetachOps(raw, now, false)
+}
+
+// unsavedDetachOps counts the records within the window whose operation id
+// is not saved. A pending binding (detachOpPending) already holds its label,
+// so it counts only with withPending: it still means the id is not saved,
+// for the hold, but needs no label reserved.
+func unsavedDetachOps(raw map[string]string, now time.Time, withPending bool) int {
 	aged := stampedRecordExpired(raw, now)
 	n := 0
 	for key, value := range raw {
@@ -1090,7 +1110,8 @@ func pendingDetachOps(raw map[string]string, now time.Time) int {
 		if !stamped && aged && writtenBefore303(requestHex, device, now) {
 			continue
 		}
-		if _, saved := raw[labelDetachOpPrefix+volID]; !saved {
+		op, present := raw[labelDetachOpPrefix+volID]
+		if !present || (withPending && strings.HasPrefix(op, detachOpPending+" ")) {
 			n++
 		}
 	}
@@ -1183,6 +1204,8 @@ const (
 // opMatch compares the saved operation token with this request's fingerprint.
 func (r detachReplay) opMatch(fingerprint string) opMatch {
 	switch {
+	case r.pendingBound && r.fingerprint != detachFPToken(r.requestHex, fingerprint):
+		return opOtherParams
 	case r.opLocal == "":
 		return opUnknown
 	case r.fingerprint == detachFPToken(r.requestHex, fingerprint):
@@ -1252,7 +1275,10 @@ func detachReplayFrom(labels map[string]string, volID string) (detachReplay, boo
 		return detachReplay{}, false
 	}
 	rec := detachReplay{requestHex: requestHex, device: device}
-	if opLocal, fp, cut := strings.Cut(labels[labelDetachOpPrefix+volID], " "); cut && opLocal != "" {
+	if opLocal, fp, cut := strings.Cut(labels[labelDetachOpPrefix+volID], " "); cut && opLocal == detachOpPending {
+		rec.fingerprint = fp
+		rec.pendingBound = fp != ""
+	} else if cut && opLocal != "" {
 		rec.opLocal = opLocal
 		rec.fingerprint = fp
 	}
