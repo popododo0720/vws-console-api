@@ -35,7 +35,8 @@ func TestRecoveryRefusesOtherParameters(t *testing.T) {
 	}
 	other := m
 	other.Fingerprint = "fp-other"
-	if _, err := client.DetachVolume(ctx, other, req); resource.CodeOf(err) != resource.CodeOf(resource.IdempotencyMismatch()) {
+	mismatch := resource.CodeOf(resource.IdempotencyMismatch())
+	if _, err := client.DetachVolume(ctx, other, req); resource.CodeOf(err) != mismatch {
 		t.Fatalf("other parameters: err %v, want IdempotencyMismatch", err)
 	}
 	got, err := client.DetachVolume(ctx, m, req)
@@ -46,7 +47,7 @@ func TestRecoveryRefusesOtherParameters(t *testing.T) {
 	if err != nil || again.Operation.ID != got.Operation.ID {
 		t.Fatalf("retry op %v err %v, want the recovery's %s", again.Operation.ID, err, got.Operation.ID)
 	}
-	if _, err := client.DetachVolume(ctx, other, req); resource.CodeOf(err) != resource.CodeOf(resource.IdempotencyMismatch()) {
+	if _, err := client.DetachVolume(ctx, other, req); resource.CodeOf(err) != mismatch {
 		t.Fatalf("other parameters after the recovery: err %v, want IdempotencyMismatch", err)
 	}
 }
