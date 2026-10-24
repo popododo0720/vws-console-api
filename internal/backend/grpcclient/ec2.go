@@ -721,7 +721,8 @@ func (c computeClient) writeDetach(
 		// Until persistDetachOp saves the id, its reserved label binds the
 		// record to this request's fingerprint, so a recovery can tell a
 		// same-token retry with other parameters (#362 review).
-		labels[labelDetachOpPrefix+vol.ID.String()] = detachOpPending + " " + detachFPToken(detachRequestHex(m.Key), m.Fingerprint)
+		binding := detachFPToken(detachRequestHex(m.Key), m.Fingerprint)
+		labels[labelDetachOpPrefix+vol.ID.String()] = detachOpPending + " " + binding
 	}
 	updated, callErr := c.instances.UpdateInstance(ctx, &computev1.UpdateInstanceRequest{
 		RequestId:  requestUUID(m.Key, "detach"),
