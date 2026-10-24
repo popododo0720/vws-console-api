@@ -482,6 +482,14 @@ ResendMatchesOriginal == \A c \in Callers : result[c] # "mismatch"
 ReplaySurvivesLaterDetach ==
     \A c \in Callers : tokOf[c] \in accepted => result[c] # "notinuse"
 
+\* A same-token retry of an accepted detach is never answered
+\* IdempotentParameterMismatch: the op id next to this request's record is
+\* its own, never one another request saved there. ec2.go persistDetachOp
+\* saves the id in the slot detachReplayFor finds (#353); detachOnce answers
+\* opOtherParams only for a record whose op id has other parameters.
+RetryKeepsItsParams ==
+    \A c \in Callers : tokOf[c] \in accepted => result[c] # "params"
+
 \* Liveness: no DetachVolume call is stuck; every pending recovery ends.
 CallsFinish == <>(\A c \in Callers : pc[c] \notin Live)
 HoldEnds == <>[](Pending(inst) = 0)
