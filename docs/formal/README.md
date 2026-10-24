@@ -9,7 +9,7 @@ restarts at any step, and the client-token window passing.
 Run it with `scripts/tla-detach.sh` (needs Java 11+; about 5 minutes on 8
 cores). CI runs it in `.github/workflows/tla.yml`.
 
-Last confirmed against the code at commit `8485d5a`. When a file in
+Last confirmed against the code at commit `2fbef54`. When a file in
 "Coverage" changes after that commit, read the change against the model
 before trusting a pass, and move this commit forward only once the model
 describes the new code.
