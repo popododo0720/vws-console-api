@@ -85,22 +85,24 @@ accepted detach answers an error with no op id saved.
 
 ## Findings in the current code
 
-One property fails on the real design. `scripts/tla-detach.sh` expects it
-to fail, so a fix shows up as a failing CI step: then move the property into
-`detach.cfg` and drop it from the script's finding list.
-`ReplaySurvivesLaterDetach` was the second finding (#353); it now holds,
-since a new record moves another request's record to an archive slot.
+None. `scripts/tla-detach.sh` keeps a finding list for properties that fail
+on the real design; a fix shows up as a failing CI step, and the property
+then moves into `detach.cfg`. Both earlier findings now hold:
 
-1. `ResendMatchesOriginal`: a retry of a detach whose op id was not saved
-   rebuilds the `UpdateInstance` from the instance as it is now. If
-   anything changed in between, compute answers a fingerprint mismatch, and
-   the accepted detach answers `IdempotencyMismatch` to its own retry. A
-   changed tag is confirmed against the repo's compute fake; by the code, a
-   detach of another volume or another record's op id save does the same,
-   since the resend carries the current `spec.volumes` and records. TLC:
-   detach of v1 is accepted, its op id not yet saved; `CreateTags` adds a
-   tag; a retry with the same token resends with the new tag; compute
-   refuses it.
+1. `ReplaySurvivesLaterDetach` (#353): a new record moves another request's
+   record to an archive slot.
+2. `ResendMatchesOriginal` (#352): a retry of a detach whose op id was not
+   saved rebuilds the `UpdateInstance` from the instance as it is now; if
+   anything changed in between (a tag, another detach, another record's op
+   id save), compute answers a fingerprint mismatch. With
+   `FixResendRecover`, on `IDEMPOTENCY_CONFLICT` `writeDetach` rereads the
+   instance and, next to this request's record (also in its archive slot),
+   saves an op of the instance as it is. The seed `seed-resend`
+   (`FixResendRecover=FALSE`) brings the violation back. The code also binds
+   the record to the request's fingerprint from the first write (a
+   placeholder `vws-dop-` value), so a same-token retry with other
+   parameters is refused before it can recover; the model has one parameter
+   set per token and does not cover that half (`TestRecoveryRefusesOtherParameters`).
 
 ## Coverage
 

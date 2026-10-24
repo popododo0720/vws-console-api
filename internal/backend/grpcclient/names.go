@@ -47,6 +47,9 @@ const labelPrefix = "vws-"
 const (
 	labelDetachPrefix   = "vws-detach-"
 	labelDetachOpPrefix = "vws-dop-"
+	// detachOpPending in a vws-dop- value marks a detach whose operation id
+	// is not saved yet: "- <fingerprint token>" (#362 review).
+	detachOpPending = "-"
 )
 
 // project is the resource-API project for an account. A bare account id is

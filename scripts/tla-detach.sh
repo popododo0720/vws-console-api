@@ -85,13 +85,10 @@ seed-window WithinWindow INVARIANTS DetachOnce
 seed-hold-expires FixPendingExpires PROPERTIES HoldEnds
 seed-etag-reread FixEtagReread PROPERTIES CallsFinish
 seed-archive FixArchive INVARIANTS ReplaySurvivesLaterDetach
+seed-resend FixResendRecover INVARIANTS ResendMatchesOriginal
 SEEDS
-  # Known findings in the current code (docs/formal/README.md). When one
-  # passes, the code was fixed: move it into detach.cfg and delete it here.
-  prop=ResendMatchesOriginal
-  got=$(tlc "finding-${prop}" "$(variant "finding-${prop}" NONE INVARIANTS "$prop")")
-  echo "finding ${prop}: ${got}, want ${prop}"
-  [[ $got == "$prop" ]] || fail=1
+  # Known findings in the current code (docs/formal/README.md): none. A property
+  # that fails on the real design is listed here until its fix lands.
 fi
 
 echo "logs: ${out}"

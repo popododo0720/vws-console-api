@@ -614,8 +614,10 @@ func heldRecordsNextToTags(t *testing.T, tagCount int) (
 		resource.CreateTagsRequest{IDs: []resource.InstanceID{inst}, Tags: tags}); err != nil {
 		t.Fatalf("%d tags next to the held records: %v", tagCount, err)
 	}
-	if n := len(world.labelsOf(name)); n != 13+tagCount {
-		t.Fatalf("%d labels after %d tags, want %d", n, tagCount, 13+tagCount)
+	// 14: the pending detach's reserved label holds its fingerprint binding
+	// (detachOpPending, #362 review), so it is a real label, not a reservation.
+	if n := len(world.labelsOf(name)); n != 14+tagCount {
+		t.Fatalf("%d labels after %d tags, want %d", n, tagCount, 14+tagCount)
 	}
 	return world, client, name, vols, inst, scope
 }
@@ -654,7 +656,7 @@ func detachOpIDBoundary(t *testing.T, tagCount int, fits bool) {
 		t.Fatalf("detach with room for its operation id: %v", err)
 	}
 	labels := world.labelsOf(name)
-	if want := 13 + tagCount + 2; len(labels) != want {
+	if want := 14 + tagCount + 2; len(labels) != want { // 14: see heldRecordsNextToTags
 		t.Fatalf("%d labels, want %d", len(labels), want)
 	}
 	if _, ok := labels[labelDetachOpPrefix+vols[5].String()]; !ok {
@@ -732,7 +734,7 @@ func tagWriteDuringOpIDSave(t *testing.T, tagCount int, fits bool) {
 	if _, ok := labels[extra]; ok {
 		t.Fatal("the refused tag write was stored")
 	}
-	if want := 13 + tagCount + 2; len(labels) != want {
+	if want := 14 + tagCount + 2; len(labels) != want { // 14: see heldRecordsNextToTags
 		t.Fatalf("%d labels, want %d", len(labels), want)
 	}
 	again, err := client.DetachVolume(ctx, mN, reqN)
