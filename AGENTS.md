@@ -93,6 +93,11 @@ change both files together.
 - One issue is one branch from `main` and one PR. Commits are atomic and do
   not mix a refactor with a behavior change. Never force-push; never merge
   your own PR.
+- Scripts and bots may push branches and open PRs. Merges happen only
+  through the orchestrator's auto-merge (CI green, verify-gate PASS, no
+  conflicts, squash) or by the lead.
+- Bots contact the lead only for decisions, escalations after 3 failures,
+  or user approvals; all status lives on GitHub.
 - Verify T0 only (unit tests, fakes, envtest); the verification bot runs T1
   and T2.
 - pstack, for a new package, shared type, surface or backend method:
