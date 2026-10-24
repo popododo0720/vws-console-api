@@ -117,14 +117,34 @@ func (STSAdmin) CreateRole(_ context.Context, _ resource.AccountID, _ iam.RoleIn
 	return iam.Role{}, notServed("CreateRole")
 }
 
-// GetRole implements iam.Admin over RoleService.GetRole. The surface reads
-// the role first so a path-scoped role is authorized on its real ARN.
-func (a STSAdmin) GetRole(ctx context.Context, account resource.AccountID, name string) (iam.Role, error) {
+// GetRole implements iam.Admin over RoleService.GetRole. want must be the
+// role's ARN; the zero value sends nothing.
+func (a STSAdmin) GetRole(
+	ctx context.Context, account resource.AccountID, name string, want iam.AuthorizedARN,
+) (iam.Role, error) {
+	if err := want.Require(); err != nil {
+		return iam.Role{}, err
+	}
 	role, err := a.role(ctx, account, name)
 	if err != nil {
 		return iam.Role{}, err
 	}
-	return roleFromProto(role, name), nil
+	out := roleFromProto(role, name)
+	if err := want.Bind(out.ARN, iam.RoleChanged); err != nil {
+		return iam.Role{}, err
+	}
+	return out, nil
+}
+
+// ResolveRole implements iam.Resolver over RoleService.GetRole: the surface
+// authorizes a path-scoped role on its real ARN.
+func (a STSAdmin) ResolveRole(ctx context.Context, account resource.AccountID, name string) (iam.Ref, error) {
+	role, err := a.role(ctx, account, name)
+	if err != nil {
+		return iam.Ref{}, err
+	}
+	r := roleFromProto(role, name)
+	return iam.Ref{ARN: r.ARN, ID: r.ID}, nil
 }
 
 // role fetches one role from vws-iam.
@@ -750,11 +770,8 @@ func (a STSAdmin) ListMFADevices(
 // userAt reads the user and checks that want is its ARN: a user that moved
 // since the caller was authorized is Changed(UserChanged).
 func (a STSAdmin) userAt(ctx context.Context, account resource.AccountID, user string, want iam.AuthorizedARN) error {
-	u, err := a.GetUser(ctx, account, user)
-	if err != nil {
-		return err
-	}
-	return want.Bind(u.ARN, iam.UserChanged)
+	_, err := a.GetUser(ctx, account, user, want)
+	return err
 }
 
 // virtualMFADevice maps one vws-iam device to an AWS row. A device with a user

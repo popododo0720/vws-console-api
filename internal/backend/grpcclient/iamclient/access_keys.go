@@ -144,14 +144,7 @@ func (a STSAdmin) DeleteAccessKey(
 func (a STSAdmin) keyUser(
 	ctx context.Context, account resource.AccountID, user string, want iam.AuthorizedARN,
 ) (iam.User, error) {
-	u, err := a.GetUser(ctx, account, user)
-	if err != nil {
-		return iam.User{}, err
-	}
-	if err := want.Bind(u.ARN, iam.UserChanged); err != nil {
-		return iam.User{}, err
-	}
-	return u, nil
+	return a.GetUser(ctx, account, user, want)
 }
 
 // keyError maps a vws-iam failure of an access key call. LimitExceeded is

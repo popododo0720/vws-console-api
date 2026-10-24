@@ -27,7 +27,7 @@ const (
 // Config wires the surface. Admin may be nil: then only GetCallerIdentity is
 // served and every other action is InvalidAction.
 type Config struct {
-	Admin      iam.Admin
+	Admin      iam.Directory
 	Authorizer iam.Authorizer
 	IAM        *sigv4.Verifier
 	STS        *sigv4.Verifier

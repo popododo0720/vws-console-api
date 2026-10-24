@@ -114,7 +114,7 @@ func userARN(h *handler, c *exchange) string {
 	if c.action == "CreateUser" {
 		return arnOf(c, "user", pathOr(c.form("Path")), name)
 	}
-	u, err := h.cfg.Admin.GetUser(c.r.Context(), c.caller.Account, name)
+	u, err := h.cfg.Admin.ResolveUser(c.r.Context(), c.caller.Account, name)
 	if err == nil {
 		return u.ARN
 	}
@@ -145,7 +145,7 @@ func groupARN(h *handler, c *exchange) string {
 	if c.action == "CreateGroup" {
 		return arnOf(c, "group", pathOr(c.form("Path")), name)
 	}
-	g, _, err := h.cfg.Admin.GetGroup(c.r.Context(), c.caller.Account, name)
+	g, err := h.cfg.Admin.ResolveGroup(c.r.Context(), c.caller.Account, name)
 	if err == nil {
 		return g.ARN
 	}
@@ -165,14 +165,11 @@ func authorizeMovedGroup(h *handler, c *exchange) error {
 	if newPath == "" && newName == "" {
 		return nil
 	}
-	g, _, err := h.cfg.Admin.GetGroup(c.r.Context(), c.caller.Account, c.form("GroupName"))
+	g, _, err := h.cfg.Admin.GetGroup(c.r.Context(), c.caller.Account, c.form("GroupName"), c.authorized)
 	if err != nil {
 		if resource.CodeOf(err) == resource.CodeNotFound {
 			return nil
 		}
-		return err
-	}
-	if err := c.authorized.Bind(g.ARN, iam.GroupChanged); err != nil {
 		return err
 	}
 	path, name := g.Path, g.Name
@@ -194,17 +191,21 @@ func authorizeMovedGroup(h *handler, c *exchange) error {
 // used, so UpdateUser can refuse a concurrent change. A missing user is
 // NoSuchEntity, never an empty snapshot.
 func authorizeMovedUser(h *handler, c *exchange) (iam.AuthorizedARN, error) {
-	u, err := h.cfg.Admin.GetUser(c.r.Context(), c.caller.Account, c.form("UserName"))
+	ref, err := h.cfg.Admin.ResolveUser(c.r.Context(), c.caller.Account, c.form("UserName"))
 	if err != nil {
 		return iam.AuthorizedARN{}, err
 	}
-	want, err := iam.Authorize(c.r.Context(), h.cfg.Authorizer, c.caller, "iam:"+c.action, u.ARN)
+	want, err := iam.Authorize(c.r.Context(), h.cfg.Authorizer, c.caller, "iam:"+c.action, ref.ARN)
 	if err != nil {
 		return iam.AuthorizedARN{}, err
 	}
 	newPath, newName := c.form("NewPath"), c.form("NewUserName")
 	if newPath == "" && newName == "" {
 		return want, nil
+	}
+	u, err := h.cfg.Admin.GetUser(c.r.Context(), c.caller.Account, c.form("UserName"), want)
+	if err != nil {
+		return iam.AuthorizedARN{}, err
 	}
 	path, name := u.Path, u.Name
 	if newPath != "" {
@@ -228,7 +229,7 @@ func roleARN(h *handler, c *exchange) string {
 	if c.action == "CreateRole" {
 		return arnOf(c, "role", pathOr(c.form("Path")), name)
 	}
-	r, err := h.cfg.Admin.GetRole(c.r.Context(), c.caller.Account, name)
+	r, err := h.cfg.Admin.ResolveRole(c.r.Context(), c.caller.Account, name)
 	if err == nil {
 		return r.ARN
 	}
@@ -414,11 +415,8 @@ func iamActions() map[string]spec {
 			}
 			// The lookup is read again for the response; a user that moved
 			// since it was authorized is not shown.
-			u, err := h.cfg.Admin.GetUser(c.r.Context(), c.caller.Account, name)
+			u, err := h.cfg.Admin.GetUser(c.r.Context(), c.caller.Account, name, c.authorized)
 			if err != nil {
-				return nil, err
-			}
-			if err := c.authorized.Bind(u.ARN, iam.UserChanged); err != nil {
 				return nil, err
 			}
 			return struct {
@@ -572,11 +570,8 @@ func iamActions() map[string]spec {
 				return nil, err
 			}
 			// A group that moved since it was authorized is not shown.
-			g, us, err := h.cfg.Admin.GetGroup(c.r.Context(), c.caller.Account, c.form("GroupName"))
+			g, us, err := h.cfg.Admin.GetGroup(c.r.Context(), c.caller.Account, c.form("GroupName"), c.authorized)
 			if err != nil {
-				return nil, err
-			}
-			if err := c.authorized.Bind(g.ARN, iam.GroupChanged); err != nil {
 				return nil, err
 			}
 			page, truncated, next := pageByName(us, userNameOf, marker, maxItems)
@@ -679,11 +674,8 @@ func iamActions() map[string]spec {
 		"GetRole": admin([]string{"RoleName"}, roleARN, func(h *handler, c *exchange) (any, error) {
 			// A role replaced on another path since it was authorized is
 			// not shown.
-			r, err := h.cfg.Admin.GetRole(c.r.Context(), c.caller.Account, c.form("RoleName"))
+			r, err := h.cfg.Admin.GetRole(c.r.Context(), c.caller.Account, c.form("RoleName"), c.authorized)
 			if err != nil {
-				return nil, err
-			}
-			if err := c.authorized.Bind(r.ARN, iam.RoleChanged); err != nil {
 				return nil, err
 			}
 			return struct {
@@ -1237,12 +1229,12 @@ func callerID(h *handler, c *exchange) string {
 	}
 	if _, rest, ok := strings.Cut(c.caller.Principal, ":assumed-role/"); ok {
 		role, session, _ := strings.Cut(rest, "/")
-		if r, err := h.cfg.Admin.GetRole(c.r.Context(), c.caller.Account, role); err == nil {
+		if r, err := h.cfg.Admin.ResolveRole(c.r.Context(), c.caller.Account, role); err == nil {
 			return r.ID + ":" + session
 		}
 	}
 	if n := userName(c); n != "" {
-		if u, err := h.cfg.Admin.GetUser(c.r.Context(), c.caller.Account, n); err == nil && u.ARN == c.caller.Principal {
+		if u, err := h.cfg.Admin.ResolveUser(c.r.Context(), c.caller.Account, n); err == nil && u.ARN == c.caller.Principal {
 			return u.ID
 		}
 	}

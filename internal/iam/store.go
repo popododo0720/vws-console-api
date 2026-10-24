@@ -292,15 +292,32 @@ func (f *Fake) CreateUser(_ context.Context, a resource.AccountID, name, path st
 	return u, nil
 }
 
-// GetUser implements Admin.
-func (f *Fake) GetUser(_ context.Context, a resource.AccountID, name string) (User, error) {
+// GetUser implements Admin. want must be the user's ARN.
+func (f *Fake) GetUser(_ context.Context, a resource.AccountID, name string, want AuthorizedARN) (User, error) {
+	if err := want.Require(); err != nil {
+		return User{}, err
+	}
 	f.mu.RLock()
 	defer f.mu.RUnlock()
 	u := f.account(a).users[name]
 	if u == nil {
 		return User{}, notFound("user", name)
 	}
+	if err := want.Bind(u.ARN, UserChanged); err != nil {
+		return User{}, err
+	}
 	return u.User, nil
+}
+
+// ResolveUser implements Resolver.
+func (f *Fake) ResolveUser(_ context.Context, a resource.AccountID, name string) (Ref, error) {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	u := f.account(a).users[name]
+	if u == nil {
+		return Ref{}, notFound("user", name)
+	}
+	return Ref{ARN: u.ARN, ID: u.ID}, nil
 }
 
 // ListUsers implements Admin.
@@ -552,8 +569,14 @@ func (f *Fake) CreateGroup(_ context.Context, a resource.AccountID, name, path s
 	return g, nil
 }
 
-// GetGroup implements Admin and returns the members.
-func (f *Fake) GetGroup(_ context.Context, a resource.AccountID, name string) (Group, []User, error) {
+// GetGroup implements Admin and returns the members. want must be the
+// group's ARN.
+func (f *Fake) GetGroup(
+	_ context.Context, a resource.AccountID, name string, want AuthorizedARN,
+) (Group, []User, error) {
+	if err := want.Require(); err != nil {
+		return Group{}, nil, err
+	}
 	f.mu.RLock()
 	defer f.mu.RUnlock()
 	st := f.account(a)
@@ -561,12 +584,26 @@ func (f *Fake) GetGroup(_ context.Context, a resource.AccountID, name string) (G
 	if g == nil {
 		return Group{}, nil, notFound("group", name)
 	}
+	if err := want.Bind(g.ARN, GroupChanged); err != nil {
+		return Group{}, nil, err
+	}
 	users := []User{}
 	for m := range g.members {
 		users = append(users, st.users[m].User)
 	}
 	sort.Slice(users, func(i, j int) bool { return users[i].Name < users[j].Name })
 	return g.Group, users, nil
+}
+
+// ResolveGroup implements Resolver.
+func (f *Fake) ResolveGroup(_ context.Context, a resource.AccountID, name string) (Ref, error) {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	g := f.account(a).groups[name]
+	if g == nil {
+		return Ref{}, notFound("group", name)
+	}
+	return Ref{ARN: g.ARN, ID: g.ID}, nil
 }
 
 // ListGroups implements Admin.
@@ -774,15 +811,32 @@ func (f *Fake) CreateRole(_ context.Context, a resource.AccountID, in RoleInput)
 	return r, nil
 }
 
-// GetRole implements Admin.
-func (f *Fake) GetRole(_ context.Context, a resource.AccountID, name string) (Role, error) {
+// GetRole implements Admin. want must be the role's ARN.
+func (f *Fake) GetRole(_ context.Context, a resource.AccountID, name string, want AuthorizedARN) (Role, error) {
+	if err := want.Require(); err != nil {
+		return Role{}, err
+	}
 	f.mu.RLock()
 	defer f.mu.RUnlock()
 	r := f.account(a).roles[name]
 	if r == nil {
 		return Role{}, notFound("role", name)
 	}
+	if err := want.Bind(r.ARN, RoleChanged); err != nil {
+		return Role{}, err
+	}
 	return r.Role, nil
+}
+
+// ResolveRole implements Resolver.
+func (f *Fake) ResolveRole(_ context.Context, a resource.AccountID, name string) (Ref, error) {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	r := f.account(a).roles[name]
+	if r == nil {
+		return Ref{}, notFound("role", name)
+	}
+	return Ref{ARN: r.ARN, ID: r.ID}, nil
 }
 
 // UpdateRole implements Admin. want must be the role's ARN.

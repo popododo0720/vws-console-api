@@ -321,9 +321,37 @@ func (a STSAdmin) CreateUser(
 	return userFromProto(account, created, userResource(account, name))
 }
 
-// GetUser implements iam.Admin over UserService.GetUser. The IAM Query
-// surface also uses it to authorize on a user's real ARN, path included.
-func (a STSAdmin) GetUser(ctx context.Context, account resource.AccountID, name string) (iam.User, error) {
+// GetUser implements iam.Admin over UserService.GetUser. want must be the
+// user's ARN; the zero value sends nothing.
+func (a STSAdmin) GetUser(
+	ctx context.Context, account resource.AccountID, name string, want iam.AuthorizedARN,
+) (iam.User, error) {
+	if err := want.Require(); err != nil {
+		return iam.User{}, err
+	}
+	u, err := a.lookupUser(ctx, account, name)
+	if err != nil {
+		return iam.User{}, err
+	}
+	if err := want.Bind(u.ARN, iam.UserChanged); err != nil {
+		return iam.User{}, err
+	}
+	return u, nil
+}
+
+// ResolveUser implements iam.Resolver over UserService.GetUser: the IAM
+// Query surface authorizes on the user's real ARN, path included.
+func (a STSAdmin) ResolveUser(ctx context.Context, account resource.AccountID, name string) (iam.Ref, error) {
+	u, err := a.lookupUser(ctx, account, name)
+	if err != nil {
+		return iam.Ref{}, err
+	}
+	return iam.Ref{ARN: u.ARN, ID: u.ID}, nil
+}
+
+// lookupUser reads one user by name; a missing or malformed name is
+// NoSuchEntity.
+func (a STSAdmin) lookupUser(ctx context.Context, account resource.AccountID, name string) (iam.User, error) {
 	if !entityName(name) {
 		return iam.User{}, entityNotFound("user", name)
 	}
@@ -540,25 +568,20 @@ func (a STSAdmin) CreateGroup(
 }
 
 // GetGroup implements iam.Admin over GroupService.GetGroup, with each member
-// read over UserService.GetUser. A member deleted since the group was read is
-// left out. The IAM Query surface also uses it to authorize on a group's real
-// ARN, path included.
+// read over UserService.GetUser. want must be the group's ARN; the zero
+// value sends nothing, and a moved group reads no member. A member deleted
+// since the group was read is left out.
 func (a STSAdmin) GetGroup(
-	ctx context.Context, account resource.AccountID, name string,
+	ctx context.Context, account resource.AccountID, name string, want iam.AuthorizedARN,
 ) (iam.Group, []iam.User, error) {
-	if !entityName(name) {
-		return iam.Group{}, nil, entityNotFound("group", name)
-	}
-	resourceName := groupResource(account, name)
-	g, err := retry(ctx, a.backoff, a.groups.GetGroup, &iamv1.GetGroupRequest{Name: resourceName})
-	if err != nil {
-		if err = authError(err); resource.CodeOf(err) == resource.CodeNotFound {
-			return iam.Group{}, nil, entityNotFound("group", name)
-		}
+	if err := want.Require(); err != nil {
 		return iam.Group{}, nil, err
 	}
-	out, err := groupFromProto(account, g, resourceName)
+	out, g, err := a.lookupGroup(ctx, account, name)
 	if err != nil {
+		return iam.Group{}, nil, err
+	}
+	if err := want.Bind(out.ARN, iam.GroupChanged); err != nil {
 		return iam.Group{}, nil, err
 	}
 	members := make([]iam.User, 0, len(g.GetSpec().GetMembers()))
@@ -578,6 +601,40 @@ func (a STSAdmin) GetGroup(
 	}
 	sort.Slice(members, func(i, j int) bool { return members[i].Name < members[j].Name })
 	return out, members, nil
+}
+
+// ResolveGroup implements iam.Resolver over one GroupService.GetGroup, with
+// no member read: the IAM Query surface authorizes on the group's real ARN,
+// path included.
+func (a STSAdmin) ResolveGroup(ctx context.Context, account resource.AccountID, name string) (iam.Ref, error) {
+	g, _, err := a.lookupGroup(ctx, account, name)
+	if err != nil {
+		return iam.Ref{}, err
+	}
+	return iam.Ref{ARN: g.ARN, ID: g.ID}, nil
+}
+
+// lookupGroup reads one group by name; a missing or malformed name is
+// NoSuchEntity.
+func (a STSAdmin) lookupGroup(
+	ctx context.Context, account resource.AccountID, name string,
+) (iam.Group, *iamv1.Group, error) {
+	if !entityName(name) {
+		return iam.Group{}, nil, entityNotFound("group", name)
+	}
+	resourceName := groupResource(account, name)
+	g, err := retry(ctx, a.backoff, a.groups.GetGroup, &iamv1.GetGroupRequest{Name: resourceName})
+	if err != nil {
+		if err = authError(err); resource.CodeOf(err) == resource.CodeNotFound {
+			return iam.Group{}, nil, entityNotFound("group", name)
+		}
+		return iam.Group{}, nil, err
+	}
+	out, err := groupFromProto(account, g, resourceName)
+	if err != nil {
+		return iam.Group{}, nil, err
+	}
+	return out, g, nil
 }
 
 // ListGroups implements iam.Admin over every page of GroupService.ListGroups,
