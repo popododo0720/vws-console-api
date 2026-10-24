@@ -1,4 +1,4 @@
-# Copy of vws-deploy's verify-queue.yml (vws-deploy#397); this repo only adds the tla trigger below.
+# Copy unchanged to every vws-* repo with repo-guard.yml (see docs/factory-orchestrator.md, vws-deploy#397).
 # Keeps the needs-verify label on a PR exactly while it waits for vws-verify: open, not a draft, base main,
 # no verify-approved, no vws-verify FAIL verdict on its head (vws-deploy#440), and every check on its head
 # green except verify-gate and vws-verify (which wait for the verdict by design). The orchestrator's verify
@@ -9,13 +9,14 @@ name: verify-queue
 
 on:
   # Runs from the default branch after these workflows finish on a PR head: every workflow that runs on
-  # pull_request in a vws-* repo (vws-console names its CI "CI"; vws-conformance adds english). Any of them
-  # can finish last, and a missing one leaves the PR unlabeled; tests/workflows/test_verify_queue.py fails
-  # when a pull_request workflow in this repo is not listed. Not check_suite: GitHub starts no workflow for
-  # check suites created by GitHub Actions. post-merge (closed PRs) only clears a stale label.
+  # pull_request in any vws-* repo (vws-console names its CI "CI"; vws-proto has buf; vws-conformance has
+  # conformance; vws-console-api has the path-filtered tla). Any of them can finish last, and a missing one
+  # leaves the PR unlabeled; tests/workflows/test_verify_queue.py fails when a pull_request workflow in this
+  # repo, or a known one of another vws-* repo, is not listed. A name a repo does not have is ignored. Not
+  # check_suite: GitHub starts no workflow for check suites created by GitHub Actions. post-merge (closed
+  # PRs) only clears a stale label.
   workflow_run:
-    # vws-console-api: tla is a path-filtered pull_request workflow that can finish last.
-    workflows: [ci, CI, drift-check, english, installer-image, post-merge, repo-guard, tla]
+    workflows: [buf, ci, CI, conformance, drift-check, english, installer-image, post-merge, repo-guard, tla]
     types: [completed]
   pull_request:
     types: [ready_for_review, synchronize]
