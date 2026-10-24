@@ -51,7 +51,8 @@ CONSTANTS
     FixPendingExpires, \* an expired record no longer holds (pendingDetachOps, #322)
     FixEtagReread, \* an etag mismatch rereads the instance (DetachVolume's loop)
     FixArchive,    \* a new record moves another request's record aside (#353)
-    FixResendRecover \* a write refused as a mismatch next to this request's record saves an op (#352)
+    FixResendRecover, \* a write refused as a mismatch next to this request's record saves an op (#352)
+    FixPersistOwnSlot \* persistDetachOp saves the op id next to this request's own record (#353, #359)
 
 ASSUME Budgets \subseteq Nat /\ MaxReplays \in Nat /\ MaxRestarts \in Nat /\ MaxReattach \in Nat
 
@@ -303,17 +304,22 @@ Recover(c) ==
     /\ UNCHANGED <<tokOf, volOf, Budget, expired, reqStore, snap, pay, tpc, tsnap, tpay,
                    acked, accepted, applied, restarts, reattaches>>
 
-\* persistDetachOp: GetInstance, then save the op id unless a later detach
-\* owns the record.
+\* persistDetachOp: GetInstance, then save the op id next to this request's
+\* record (detachReplayFor), wherever a later detach moved it; with no record
+\* of this request, save nothing. Without FixPersistOwnSlot the id goes to
+\* the volume's own key, whoever's record is there.
+PSlot(i, v, t) == IF FixPersistOwnSlot THEN RecSlot(i, v, t) ELSE v
+
 PRead(c) ==
     LET t == tokOf[c]
         v == volOf[t]
+        s == PSlot(inst, v, t)
     IN
     /\ pc[c] = "pread"
-    /\ IF RecSlot(inst, v, t) = None \/ inst.dop[RecSlot(inst, v, t)] = t
+    /\ IF s = None \/ inst.dop[s] = t
        THEN Finish(c, "ok", t) /\ UNCHANGED <<snap, pay>>
        ELSE /\ snap' = [snap EXCEPT ![c] = etag]
-            /\ pay' = [pay EXCEPT ![c] = [inst EXCEPT !.dop[RecSlot(inst, v, t)] = t]]
+            /\ pay' = [pay EXCEPT ![c] = [inst EXCEPT !.dop[s] = t]]
             /\ pc' = [pc EXCEPT ![c] = "pwrite"]
             /\ UNCHANGED <<result, retop>>
     /\ UNCHANGED <<tokOf, volOf, Budget, inst, etag, expired, reqStore, tpc, tsnap, tpay,
