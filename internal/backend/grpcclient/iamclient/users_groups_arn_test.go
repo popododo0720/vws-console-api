@@ -17,35 +17,29 @@ import (
 // first lookup of it. A concurrent UpdateGroup or UpdateUser does the same
 // between the authorization and the change.
 type movingAdmin struct {
-	iam.Admin
+	iam.Directory
 	tb          testing.TB
 	group, user string
 	moved       bool
 }
 
-func (a *movingAdmin) GetGroup(
-	ctx context.Context, account resource.AccountID, name string,
-) (iam.Group, []iam.User, error) {
-	g, us, err := a.Admin.GetGroup(ctx, account, name)
+func (a *movingAdmin) ResolveGroup(ctx context.Context, account resource.AccountID, name string) (iam.Ref, error) {
+	g, err := a.Directory.ResolveGroup(ctx, account, name)
 	if err == nil && !a.moved && name == a.group {
 		a.moved = true
-		if err := a.UpdateGroup(
-			ctx, account, name, "/denied/", "", backendtest.GroupGrant(ctx, a.tb, a, account, name),
-		); err != nil {
-			return iam.Group{}, nil, err
+		if err := a.UpdateGroup(ctx, account, name, "/denied/", "", backendtest.Grant(ctx, a.tb, g.ARN)); err != nil {
+			return iam.Ref{}, err
 		}
 	}
-	return g, us, err
+	return g, err
 }
 
-func (a *movingAdmin) GetUser(ctx context.Context, account resource.AccountID, name string) (iam.User, error) {
-	u, err := a.Admin.GetUser(ctx, account, name)
+func (a *movingAdmin) ResolveUser(ctx context.Context, account resource.AccountID, name string) (iam.Ref, error) {
+	u, err := a.Directory.ResolveUser(ctx, account, name)
 	if err == nil && !a.moved && name == a.user {
 		a.moved = true
-		if err := a.UpdateUser(
-			ctx, account, name, "/denied/", "", backendtest.UserGrant(ctx, a.tb, a, account, name),
-		); err != nil {
-			return iam.User{}, err
+		if err := a.UpdateUser(ctx, account, name, "/denied/", "", backendtest.Grant(ctx, a.tb, u.ARN)); err != nil {
+			return iam.Ref{}, err
 		}
 	}
 	return u, err
@@ -74,7 +68,7 @@ func TestGroupAndUserChangesActOnTheAuthorizedARNOverGRPC(t *testing.T) {
 		form        url.Values
 		group, user string // moved after the surface's lookup
 		racePath    string // moved by the writer that wins attempt 1
-		unchanged   func(t *testing.T, a iam.Admin, d *directory, writes int)
+		unchanged   func(t *testing.T, a iam.Directory, d *directory, writes int)
 	}{
 		{
 			name: "AddUserToGroup", group: "devs",
@@ -99,9 +93,14 @@ func TestGroupAndUserChangesActOnTheAuthorizedARNOverGRPC(t *testing.T) {
 		{
 			name: "DeleteGroup", group: "empty",
 			form: url.Values{"Action": {"DeleteGroup"}, "GroupName": {"empty"}},
-			unchanged: func(t *testing.T, a iam.Admin, _ *directory, _ int) {
+			unchanged: func(t *testing.T, a iam.Directory, _ *directory, _ int) {
 				t.Helper()
-				if _, _, err := a.GetGroup(t.Context(), account314, "empty"); err != nil {
+				if _, _, err := a.GetGroup(
+					t.Context(),
+					account314,
+					"empty",
+					backendtest.GroupGrant(t.Context(), t, a, account314, "empty"),
+				); err != nil {
 					t.Errorf("the group was deleted: %v", err)
 				}
 			},
@@ -109,9 +108,14 @@ func TestGroupAndUserChangesActOnTheAuthorizedARNOverGRPC(t *testing.T) {
 		{
 			name: "UpdateGroup", group: "devs",
 			form: url.Values{"Action": {"UpdateGroup"}, "GroupName": {"devs"}, "NewPath": {"/x/"}},
-			unchanged: func(t *testing.T, a iam.Admin, _ *directory, _ int) {
+			unchanged: func(t *testing.T, a iam.Directory, _ *directory, _ int) {
 				t.Helper()
-				if g, _, err := a.GetGroup(t.Context(), account314, "devs"); err != nil || g.Path != "/denied/" {
+				if g, _, err := a.GetGroup(
+					t.Context(),
+					account314,
+					"devs",
+					backendtest.GroupGrant(t.Context(), t, a, account314, "devs"),
+				); err != nil || g.Path != "/denied/" {
 					t.Errorf("the group moved to %+v: %v", g, err)
 				}
 			},
@@ -119,9 +123,14 @@ func TestGroupAndUserChangesActOnTheAuthorizedARNOverGRPC(t *testing.T) {
 		{
 			name: "DeleteUser", user: "erin",
 			form: url.Values{"Action": {"DeleteUser"}, "UserName": {"erin"}},
-			unchanged: func(t *testing.T, a iam.Admin, _ *directory, _ int) {
+			unchanged: func(t *testing.T, a iam.Directory, _ *directory, _ int) {
 				t.Helper()
-				if _, err := a.GetUser(t.Context(), account314, "erin"); err != nil {
+				if _, err := a.GetUser(
+					t.Context(),
+					account314,
+					"erin",
+					backendtest.UserGrant(t.Context(), t, a, account314, "erin"),
+				); err != nil {
 					t.Errorf("the user was deleted: %v", err)
 				}
 			},
@@ -129,8 +138,8 @@ func TestGroupAndUserChangesActOnTheAuthorizedARNOverGRPC(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			mover := &movingAdmin{tb: t, group: tc.group, user: tc.user}
-			h, _, d := dirQueryHarnessWith(t, func(a iam.Admin) iam.Admin {
-				mover.Admin = a
+			h, _, d := dirQueryHarnessWith(t, func(a iam.Directory) iam.Directory {
+				mover.Directory = a
 				return mover
 			})
 			ctx := t.Context()
@@ -150,7 +159,7 @@ func TestGroupAndUserChangesActOnTheAuthorizedARNOverGRPC(t *testing.T) {
 				before++ // attempt 1 is sent, and vws-iam refuses it on the etag
 			}
 			res := queryCall(t, h, tc.form)
-			tc.unchanged(t, mover.Admin, d, memberWrites(d)-before)
+			tc.unchanged(t, mover.Directory, d, memberWrites(d)-before)
 			expect(t, res, http.StatusConflict, "<Code>ConcurrentModification</Code>")
 		})
 	}
@@ -158,9 +167,14 @@ func TestGroupAndUserChangesActOnTheAuthorizedARNOverGRPC(t *testing.T) {
 
 // membersStay checks that devs still has only alice and that no member list
 // reached vws-iam beyond an attempt vws-iam refused on the etag.
-func membersStay(t *testing.T, a iam.Admin, _ *directory, writes int) {
+func membersStay(t *testing.T, a iam.Directory, _ *directory, writes int) {
 	t.Helper()
-	_, us, err := a.GetGroup(t.Context(), account314, "devs")
+	_, us, err := a.GetGroup(
+		t.Context(),
+		account314,
+		"devs",
+		backendtest.GroupGrant(t.Context(), t, a, account314, "devs"),
+	)
 	if err != nil || len(us) != 1 || us[0].Name != "alice" {
 		t.Errorf("members %+v: %v", us, err)
 	}
@@ -189,10 +203,15 @@ func TestDeletesCarryTheEtagTheyRead(t *testing.T) {
 	if !iam.IsChanged(err) || resource.AsError(err).Message != iam.GroupChanged {
 		t.Errorf("DeleteGroup of a changed group: %v", err)
 	}
-	if _, err := a.GetUser(ctx, account314, "bob"); err != nil {
+	if _, err := a.GetUser(ctx, account314, "bob", backendtest.UserGrant(ctx, t, a, account314, "bob")); err != nil {
 		t.Errorf("bob was deleted: %v", err)
 	}
-	if _, _, err := a.GetGroup(ctx, account314, "empty"); err != nil {
+	if _, _, err := a.GetGroup(
+		ctx,
+		account314,
+		"empty",
+		backendtest.GroupGrant(ctx, t, a, account314, "empty"),
+	); err != nil {
 		t.Errorf("empty was deleted: %v", err)
 	}
 	if err := a.DeleteUser(ctx, account314, "bob", backendtest.UserGrant(ctx, t, a, account314, "bob")); err != nil {

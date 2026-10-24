@@ -18,49 +18,51 @@ import (
 // authorizes on. A role cannot change its path, so it is deleted and created
 // again on /denied/.
 type boundMover struct {
-	iam.Admin
+	iam.Directory
 	tb                testing.TB
 	user, group, role string
 	moved             bool
 }
 
-func (a *boundMover) GetUser(ctx context.Context, account resource.AccountID, name string) (iam.User, error) {
-	u, err := a.Admin.GetUser(ctx, account, name)
+func (a *boundMover) ResolveUser(ctx context.Context, account resource.AccountID, name string) (iam.Ref, error) {
+	u, err := a.Directory.ResolveUser(ctx, account, name)
 	if err == nil && !a.moved && name == a.user {
 		a.moved = true
 		if err := a.UpdateUser(ctx, account, name, "/denied/", "", backendtest.Grant(ctx, a.tb, u.ARN)); err != nil {
-			return iam.User{}, err
+			return iam.Ref{}, err
 		}
 	}
 	return u, err
 }
 
-func (a *boundMover) GetGroup(
-	ctx context.Context, account resource.AccountID, name string,
-) (iam.Group, []iam.User, error) {
-	g, us, err := a.Admin.GetGroup(ctx, account, name)
+func (a *boundMover) ResolveGroup(ctx context.Context, account resource.AccountID, name string) (iam.Ref, error) {
+	g, err := a.Directory.ResolveGroup(ctx, account, name)
 	if err == nil && !a.moved && name == a.group {
 		a.moved = true
 		if err := a.UpdateGroup(ctx, account, name, "/denied/", "", backendtest.Grant(ctx, a.tb, g.ARN)); err != nil {
-			return iam.Group{}, nil, err
+			return iam.Ref{}, err
 		}
 	}
-	return g, us, err
+	return g, err
 }
 
-func (a *boundMover) GetRole(ctx context.Context, account resource.AccountID, name string) (iam.Role, error) {
-	r, err := a.Admin.GetRole(ctx, account, name)
+func (a *boundMover) ResolveRole(ctx context.Context, account resource.AccountID, name string) (iam.Ref, error) {
+	ref, err := a.Directory.ResolveRole(ctx, account, name)
 	if err == nil && !a.moved && name == a.role {
 		a.moved = true
+		r, err := a.GetRole(ctx, account, name, backendtest.Grant(ctx, a.tb, ref.ARN))
+		if err != nil {
+			return iam.Ref{}, err
+		}
 		if err := a.DeleteRole(ctx, account, name, backendtest.Grant(ctx, a.tb, r.ARN)); err != nil {
-			return iam.Role{}, err
+			return iam.Ref{}, err
 		}
 		in := iam.RoleInput{Name: name, Path: "/denied/", TrustPolicy: r.TrustPolicy}
 		if _, err := a.CreateRole(ctx, account, in); err != nil {
-			return iam.Role{}, err
+			return iam.Ref{}, err
 		}
 	}
-	return r, err
+	return ref, err
 }
 
 const boundTrustPolicy = `{"Version":"2012-10-17","Statement":[{"Effect":"Allow",` +
@@ -179,11 +181,11 @@ func cloneForm(v url.Values) url.Values {
 // users, groups and roles on /ok/ and nothing on /denied/.
 func boundActionHarness(t *testing.T, mover *boundMover) (http.Handler, sigv4.Credential) {
 	t.Helper()
-	h, f, _, root := harnessWith(t, func(a iam.Admin) iam.Admin {
+	h, f, _, root := harnessWith(t, func(a iam.Directory) iam.Directory {
 		if mover == nil {
 			return a
 		}
-		mover.Admin = a
+		mover.Directory = a
 		return mover
 	})
 	ctx, acct := t.Context(), root.Account

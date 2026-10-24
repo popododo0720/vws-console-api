@@ -25,11 +25,11 @@ func dirQueryHarness(t *testing.T) (http.Handler, *server, *directory) {
 
 // dirQueryHarnessWith is dirQueryHarness with the Admin the surface calls
 // wrapped by wrap, when it is not nil.
-func dirQueryHarnessWith(t *testing.T, wrap func(iam.Admin) iam.Admin) (http.Handler, *server, *directory) {
+func dirQueryHarnessWith(t *testing.T, wrap func(iam.Directory) iam.Directory) (http.Handler, *server, *directory) {
 	t.Helper()
 	auth, s := harness(t)
 	seededAdmin, d := seeded(t.Context(), t)
-	var admin iam.Admin = seededAdmin
+	var admin iam.Directory = seededAdmin
 	if wrap != nil {
 		admin = wrap(seededAdmin)
 	}

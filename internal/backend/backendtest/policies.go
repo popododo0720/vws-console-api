@@ -14,13 +14,13 @@ import (
 // IAMPolicyHarness returns a fresh Admin and a way to seed a managed policy
 // in it. vws-iam CreatePolicy is not served over gRPC yet, so the vws-iam
 // stand-in seeds its policies directly; the fake calls CreatePolicy.
-type IAMPolicyHarness func(t *testing.T) (iam.Admin, PolicySeeder)
+type IAMPolicyHarness func(t *testing.T) (iam.Directory, PolicySeeder)
 
 // PolicySeeder creates the managed policy name at path in the contract
 // account and returns its ARN.
 type PolicySeeder func(t *testing.T, name, path string) string
 
-// IAMEntityPolicies runs the #314 bundle 3 contract of the iam.Admin user and
+// IAMEntityPolicies runs the #314 bundle 3 contract of the iam.Directory user and
 // group policy calls, which the in-memory fake and the vws-iam client must
 // answer alike. Each row starts from the IAMUsersAndGroups seed (alice
 // /ops/, bob /eng/, devs /team/ with alice) and two managed policies:
@@ -45,7 +45,7 @@ type seededPolicies struct {
 
 type policyRow struct {
 	name string
-	run  func(ctx context.Context, t *testing.T, a iam.Admin, p seededPolicies)
+	run  func(ctx context.Context, t *testing.T, a iam.Directory, p seededPolicies)
 }
 
 // identityDoc is a valid identity policy on resource.
@@ -73,7 +73,7 @@ func attachedARNs(ps []iam.ManagedPolicy) []string {
 	return out
 }
 
-func wantAttached(ctx context.Context, t *testing.T, a iam.Admin, kind iam.Entity, name string, want ...string) {
+func wantAttached(ctx context.Context, t *testing.T, a iam.Directory, kind iam.Entity, name string, want ...string) {
 	t.Helper()
 	ps, err := a.ListAttachedPolicies(ctx, iamAccount(), kind, name, EntityGrant(ctx, t, a, iamAccount(), kind, name))
 	wantOK(t, "ListAttachedPolicies "+name, err)
@@ -90,7 +90,7 @@ func wantAttached(ctx context.Context, t *testing.T, a iam.Admin, kind iam.Entit
 	}
 }
 
-func wantInline(ctx context.Context, t *testing.T, a iam.Admin, kind iam.Entity, name string, want ...string) {
+func wantInline(ctx context.Context, t *testing.T, a iam.Directory, kind iam.Entity, name string, want ...string) {
 	t.Helper()
 	got, err := a.ListInlinePolicies(ctx, iamAccount(), kind, name, EntityGrant(ctx, t, a, iamAccount(), kind, name))
 	wantOK(t, "ListInlinePolicies "+name, err)
@@ -130,7 +130,7 @@ func holders() []policyHolder {
 func iamPolicyRows() []policyRow {
 	return []policyRow{
 		{"Attach lists the policy by name with its path; a second attach is a no-op", func(
-			ctx context.Context, t *testing.T, a iam.Admin, p seededPolicies,
+			ctx context.Context, t *testing.T, a iam.Directory, p seededPolicies,
 		) {
 			for _, h := range holders() {
 				wantAttached(ctx, t, a, h.kind, h.name)
@@ -158,7 +158,7 @@ func iamPolicyRows() []policyRow {
 			wantAttached(ctx, t, a, iam.EntityUser, "alice")
 		}},
 		{"an 11th managed policy is LimitExceeded; re-attaching one of the 10 is not", func(
-			ctx context.Context, t *testing.T, a iam.Admin, p seededPolicies,
+			ctx context.Context, t *testing.T, a iam.Directory, p seededPolicies,
 		) {
 			var arns []string
 			for i := range 11 {
@@ -198,7 +198,7 @@ func iamPolicyRows() []policyRow {
 			)
 		}},
 		{"Detach removes; a policy that is not attached is NoSuchEntity", func(
-			ctx context.Context, t *testing.T, a iam.Admin, p seededPolicies,
+			ctx context.Context, t *testing.T, a iam.Directory, p seededPolicies,
 		) {
 			for _, h := range holders() {
 				err := a.DetachPolicy(
@@ -224,7 +224,7 @@ func iamPolicyRows() []policyRow {
 			}
 		}},
 		{"a missing policy, another path or another account is NoSuchEntity", func(
-			ctx context.Context, t *testing.T, a iam.Admin, p seededPolicies,
+			ctx context.Context, t *testing.T, a iam.Directory, p seededPolicies,
 		) {
 			for _, h := range holders() {
 				for _, arn := range []string{
@@ -240,7 +240,7 @@ func iamPolicyRows() []policyRow {
 			}
 		}},
 		{"a missing user or group is NoSuchEntity on every call", func(
-			ctx context.Context, t *testing.T, a iam.Admin, p seededPolicies,
+			ctx context.Context, t *testing.T, a iam.Directory, p seededPolicies,
 		) {
 			for _, h := range []struct {
 				kind iam.Entity
@@ -287,7 +287,7 @@ func iamPolicyRows() []policyRow {
 			}
 		}},
 		{"inline policies round-trip byte for byte, list by name and are replaced by name", func(
-			ctx context.Context, t *testing.T, a iam.Admin, _ seededPolicies,
+			ctx context.Context, t *testing.T, a iam.Directory, _ seededPolicies,
 		) {
 			spaced := "{\n  \"Version\": \"2012-10-17\",\n  \"Statement\": {\"Effect\": \"Deny\", " +
 				"\"Action\": [\"ec2:*\"], \"Resource\": \"*\"}\n}\n"
@@ -327,7 +327,7 @@ func iamPolicyRows() []policyRow {
 			wantInline(ctx, t, a, iam.EntityUser, "alice")
 		}},
 		{"Delete removes an inline policy; a missing one is NoSuchEntity", func(
-			ctx context.Context, t *testing.T, a iam.Admin, _ seededPolicies,
+			ctx context.Context, t *testing.T, a iam.Directory, _ seededPolicies,
 		) {
 			for _, h := range holders() {
 				msg := "The " + h.kind.String() + " policy with name s3 cannot be found."
@@ -366,7 +366,7 @@ func iamPolicyRows() []policyRow {
 			}
 		}},
 		{"a malformed document is MalformedPolicyDocument and nothing is stored", func(
-			ctx context.Context, t *testing.T, a iam.Admin, _ seededPolicies,
+			ctx context.Context, t *testing.T, a iam.Directory, _ seededPolicies,
 		) {
 			for _, h := range holders() {
 				for _, doc := range []string{
@@ -385,7 +385,7 @@ func iamPolicyRows() []policyRow {
 			}
 		}},
 		{"an inline policy name outside the AWS pattern is a ValidationError", func(
-			ctx context.Context, t *testing.T, a iam.Admin, _ seededPolicies,
+			ctx context.Context, t *testing.T, a iam.Directory, _ seededPolicies,
 		) {
 			for _, h := range holders() {
 				for _, name := range []string{"", "bad name", "a/b", strings.Repeat("p", 129)} {
@@ -406,7 +406,7 @@ func iamPolicyRows() []policyRow {
 			}
 		}},
 		{"the inline policies of an entity share the AWS size limit, white space not counted", func(
-			ctx context.Context, t *testing.T, a iam.Admin, _ seededPolicies,
+			ctx context.Context, t *testing.T, a iam.Directory, _ seededPolicies,
 		) {
 			for _, h := range []struct {
 				kind  iam.Entity
@@ -469,7 +469,7 @@ func iamPolicyRows() []policyRow {
 			}
 		}},
 		{"DeleteUser and DeleteGroup with a policy are DeleteConflict", func(
-			ctx context.Context, t *testing.T, a iam.Admin, p seededPolicies,
+			ctx context.Context, t *testing.T, a iam.Directory, p seededPolicies,
 		) {
 			wantOK(
 				t,
@@ -585,7 +585,7 @@ func iamPolicyRows() []policyRow {
 			)
 		}},
 		{"every call at a stale ARN is ConcurrentModification and writes nothing", func(
-			ctx context.Context, t *testing.T, a iam.Admin, p seededPolicies,
+			ctx context.Context, t *testing.T, a iam.Directory, p seededPolicies,
 		) {
 			for _, h := range holders() {
 				wantOK(
@@ -635,7 +635,7 @@ func iamPolicyRows() []policyRow {
 			}
 		}},
 		{"another account sees none of the policies", func(
-			ctx context.Context, t *testing.T, a iam.Admin, p seededPolicies,
+			ctx context.Context, t *testing.T, a iam.Directory, p seededPolicies,
 		) {
 			wantOK(
 				t,

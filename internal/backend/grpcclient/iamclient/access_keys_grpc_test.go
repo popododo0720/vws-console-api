@@ -312,15 +312,15 @@ func TestAccessKeyCallsActOnTheAuthorizedARNOverGRPC(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			mover := &movingAdmin{tb: t, user: "erin"}
-			h, _, d := dirQueryHarnessWith(t, func(a iam.Admin) iam.Admin {
-				mover.Admin = a
+			h, _, d := dirQueryHarnessWith(t, func(a iam.Directory) iam.Directory {
+				mover.Directory = a
 				return mover
 			})
 			if _, err := mover.CreateUser(t.Context(), account314, "erin", "/ops/"); err != nil {
 				t.Fatal(err)
 			}
 			k, err := mover.CreateAccessKey(
-				t.Context(), account314, "erin", backendtest.UserGrant(t.Context(), t, mover.Admin, account314, "erin"),
+				t.Context(), account314, "erin", backendtest.UserGrant(t.Context(), t, mover.Directory, account314, "erin"),
 			)
 			if err != nil {
 				t.Fatal(err)

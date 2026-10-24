@@ -6,6 +6,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/popododo0720/vws-console-api/internal/backend/backendtest"
 	"github.com/popododo0720/vws-console-api/internal/resource"
 )
 
@@ -19,11 +20,16 @@ func TestGetUserAndGetGroupOverGRPC(t *testing.T) {
 	t.Run("requests", func(t *testing.T) {
 		_, s := queryHarness(t)
 		a := STSAdmin{Client: s.client}
-		u, err := a.GetUser(t.Context(), account, "alice")
+		u, err := a.GetUser(t.Context(), account, "alice", backendtest.UserGrant(t.Context(), t, a, account, "alice"))
 		if err != nil || u.Name != "alice" || u.Path != "/ops/" || u.ARN != aliceARN || u.ID != "AIDAALICE00000000001" {
 			t.Fatalf("GetUser: %+v %v", u, err)
 		}
-		g, members, err := a.GetGroup(t.Context(), account, "devs")
+		g, members, err := a.GetGroup(
+			t.Context(),
+			account,
+			"devs",
+			backendtest.GroupGrant(t.Context(), t, a, account, "devs"),
+		)
 		if err != nil || g.Name != "devs" || g.Path != "/team/" || g.ARN != devsARN ||
 			len(members) != 1 || members[0].ARN != aliceARN {
 			t.Fatalf("GetGroup: %+v %+v %v", g, members, err)
@@ -40,10 +46,20 @@ func TestGetUserAndGetGroupOverGRPC(t *testing.T) {
 	t.Run("a name that is not one segment is not sent", func(t *testing.T) {
 		_, s := queryHarness(t)
 		a := STSAdmin{Client: s.client}
-		if _, err := a.GetUser(t.Context(), account, "alice/../bob"); resource.CodeOf(err) != resource.CodeNotFound {
+		if _, err := a.GetUser(
+			t.Context(),
+			account,
+			"alice/../bob",
+			backendtest.UserGrant(t.Context(), t, a, account, "alice/../bob"),
+		); resource.CodeOf(err) != resource.CodeNotFound {
 			t.Errorf("GetUser: %v", err)
 		}
-		if _, _, err := a.GetGroup(t.Context(), account, ""); resource.CodeOf(err) != resource.CodeNotFound {
+		if _, _, err := a.GetGroup(
+			t.Context(),
+			account,
+			"",
+			backendtest.GroupGrant(t.Context(), t, a, account, ""),
+		); resource.CodeOf(err) != resource.CodeNotFound {
 			t.Errorf("GetGroup: %v", err)
 		}
 		if n := lookups(s); n != 0 {
@@ -53,7 +69,12 @@ func TestGetUserAndGetGroupOverGRPC(t *testing.T) {
 	t.Run("a member outside the account is an internal error", func(t *testing.T) {
 		_, s := queryHarness(t)
 		s.getGroupRes["projects/123456789012/groups/devs"].Spec.Members = []string{"projects/999999999999/users/eve"}
-		_, _, err := STSAdmin{Client: s.client}.GetGroup(t.Context(), account, "devs")
+		_, _, err := STSAdmin{Client: s.client}.GetGroup(
+			t.Context(),
+			account,
+			"devs",
+			backendtest.Grant(t.Context(), t, devsARN),
+		)
 		if resource.CodeOf(err) != resource.CodeInternal {
 			t.Errorf("got %v", err)
 		}
@@ -61,7 +82,12 @@ func TestGetUserAndGetGroupOverGRPC(t *testing.T) {
 	t.Run("a group outside the account is an internal error", func(t *testing.T) {
 		_, s := queryHarness(t)
 		s.getGroupRes["projects/123456789012/groups/devs"].Status.Arn = "arn:vws:iam::999999999999:group/devs"
-		_, _, err := STSAdmin{Client: s.client}.GetGroup(t.Context(), account, "devs")
+		_, _, err := STSAdmin{Client: s.client}.GetGroup(
+			t.Context(),
+			account,
+			"devs",
+			backendtest.Grant(t.Context(), t, devsARN),
+		)
 		if resource.CodeOf(err) != resource.CodeInternal {
 			t.Errorf("got %v", err)
 		}
@@ -69,18 +95,23 @@ func TestGetUserAndGetGroupOverGRPC(t *testing.T) {
 	t.Run("a member lookup outage fails the group", func(t *testing.T) {
 		_, s := queryHarness(t)
 		s.getUserErr = status.Error(codes.Unavailable, vwsIAMMsg)
-		if _, _, err := (STSAdmin{Client: s.client}).GetGroup(t.Context(), account, "devs"); err == nil {
+		if _, _, err := (STSAdmin{Client: s.client}).GetGroup(
+			t.Context(),
+			account,
+			"devs",
+			backendtest.Grant(t.Context(), t, devsARN),
+		); err == nil {
 			t.Error("GetGroup succeeded without its members")
 		}
 	})
 	t.Run("missing", func(t *testing.T) {
 		_, s := queryHarness(t)
 		a := STSAdmin{Client: s.client}
-		_, err := a.GetUser(t.Context(), account, "ghost")
+		_, err := a.GetUser(t.Context(), account, "ghost", backendtest.UserGrant(t.Context(), t, a, account, "ghost"))
 		if !noSuchEntity(err, "The user with name ghost cannot be found.") {
 			t.Errorf("GetUser: %v", err)
 		}
-		_, _, err = a.GetGroup(t.Context(), account, "ghost")
+		_, _, err = a.GetGroup(t.Context(), account, "ghost", backendtest.GroupGrant(t.Context(), t, a, account, "ghost"))
 		if !noSuchEntity(err, "The group with name ghost cannot be found.") {
 			t.Errorf("GetGroup: %v", err)
 		}

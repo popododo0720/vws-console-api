@@ -10,11 +10,11 @@ import (
 	"github.com/popododo0720/vws-console-api/internal/resource"
 )
 
-// IAMAdminHarness builds a fresh, empty iam.Admin for one IAMUsersAndGroups
+// IAMAdminHarness builds a fresh, empty iam.Directory for one IAMUsersAndGroups
 // row.
-type IAMAdminHarness func(t *testing.T) iam.Admin
+type IAMAdminHarness func(t *testing.T) iam.Directory
 
-// IAMUsersAndGroups runs the #314 contract of the iam.Admin user and group
+// IAMUsersAndGroups runs the #314 contract of the iam.Directory user and group
 // calls, which the in-memory fake and the vws-iam client must answer alike.
 // Each row starts from an account with the users alice (/ops/) and bob
 // (/eng/) and the group devs (/team/) with alice in it, set up through the
@@ -44,7 +44,7 @@ func mustAccount(s string) resource.AccountID {
 	return a
 }
 
-func seedIAM(ctx context.Context, t *testing.T, a iam.Admin) {
+func seedIAM(ctx context.Context, t *testing.T, a iam.Directory) {
 	t.Helper()
 	for _, u := range [][2]string{{"alice", "/ops/"}, {"bob", "/eng/"}} {
 		if _, err := a.CreateUser(ctx, iamAccount(), u[0], u[1]); err != nil {
@@ -102,9 +102,9 @@ func wantNames(t *testing.T, what string, got, want []string) {
 	}
 }
 
-func members(ctx context.Context, t *testing.T, a iam.Admin, group string) []string {
+func members(ctx context.Context, t *testing.T, a iam.Directory, group string) []string {
 	t.Helper()
-	_, us, err := a.GetGroup(ctx, iamAccount(), group)
+	_, us, err := a.GetGroup(ctx, iamAccount(), group, GroupGrant(ctx, t, a, iamAccount(), group))
 	wantOK(t, "GetGroup "+group, err)
 	return userNames(us)
 }
@@ -113,37 +113,37 @@ const arnPrefix = "arn:vws:iam::123456789012:"
 
 type iamRow struct {
 	name string
-	run  func(ctx context.Context, t *testing.T, a iam.Admin)
+	run  func(ctx context.Context, t *testing.T, a iam.Directory)
 }
 
 // iamUserGroupRows are the #314 bundle 1 rows.
 func iamUserGroupRows() []iamRow {
 	return []iamRow{
-		{"CreateUser returns the AWS user", func(ctx context.Context, t *testing.T, a iam.Admin) {
+		{"CreateUser returns the AWS user", func(ctx context.Context, t *testing.T, a iam.Directory) {
 			u, err := a.CreateUser(ctx, iamAccount(), "carol", "/qa/")
 			wantOK(t, "CreateUser", err)
 			if u.Name != "carol" || u.Path != "/qa/" || u.ARN != arnPrefix+"user/qa/carol" ||
 				!strings.HasPrefix(u.ID, "AIDA") || u.Created.IsZero() {
 				t.Fatalf("CreateUser: %+v", u)
 			}
-			got, err := a.GetUser(ctx, iamAccount(), "carol")
+			got, err := a.GetUser(ctx, iamAccount(), "carol", UserGrant(ctx, t, a, iamAccount(), "carol"))
 			wantOK(t, "GetUser", err)
 			if got.ARN != u.ARN || got.ID != u.ID || got.Path != "/qa/" {
 				t.Fatalf("GetUser: %+v, created %+v", got, u)
 			}
 		}},
-		{"CreateUser defaults the path to /", func(ctx context.Context, t *testing.T, a iam.Admin) {
+		{"CreateUser defaults the path to /", func(ctx context.Context, t *testing.T, a iam.Directory) {
 			u, err := a.CreateUser(ctx, iamAccount(), "dave", "")
 			wantOK(t, "CreateUser", err)
 			if u.Path != "/" || u.ARN != arnPrefix+"user/dave" {
 				t.Fatalf("CreateUser: %+v", u)
 			}
 		}},
-		{"CreateUser of an existing name is EntityAlreadyExists", func(ctx context.Context, t *testing.T, a iam.Admin) {
+		{"CreateUser of an existing name is EntityAlreadyExists", func(ctx context.Context, t *testing.T, a iam.Directory) {
 			_, err := a.CreateUser(ctx, iamAccount(), "alice", "/")
 			wantErr(t, "CreateUser", err, resource.CodeAlreadyExists, "User with name alice already exists.")
 		}},
-		{"CreateUser validates the name and the path", func(ctx context.Context, t *testing.T, a iam.Admin) {
+		{"CreateUser validates the name and the path", func(ctx context.Context, t *testing.T, a iam.Directory) {
 			for _, name := range []string{"bad name", "root", strings.Repeat("a", 65), "a/b", ""} {
 				_, err := a.CreateUser(ctx, iamAccount(), name, "/")
 				wantErr(t, "CreateUser "+name, err, resource.CodeInvalidArgument, "")
@@ -152,14 +152,14 @@ func iamUserGroupRows() []iamRow {
 				_, err := a.CreateUser(ctx, iamAccount(), "carol", path)
 				wantErr(t, "CreateUser path "+path, err, resource.CodeInvalidArgument, "")
 			}
-			_, err := a.GetUser(ctx, iamAccount(), "carol")
+			_, err := a.GetUser(ctx, iamAccount(), "carol", UserGrant(ctx, t, a, iamAccount(), "carol"))
 			wantErr(t, "GetUser after the rejects", err, resource.CodeNotFound, "")
 		}},
-		{"GetUser of a missing user is NoSuchEntity", func(ctx context.Context, t *testing.T, a iam.Admin) {
-			_, err := a.GetUser(ctx, iamAccount(), "ghost")
+		{"GetUser of a missing user is NoSuchEntity", func(ctx context.Context, t *testing.T, a iam.Directory) {
+			_, err := a.GetUser(ctx, iamAccount(), "ghost", UserGrant(ctx, t, a, iamAccount(), "ghost"))
 			wantErr(t, "GetUser", err, resource.CodeNotFound, "The user with name ghost cannot be found.")
 		}},
-		{"ListUsers is sorted by name and filtered by path prefix", func(ctx context.Context, t *testing.T, a iam.Admin) {
+		{"ListUsers is sorted by name and filtered by path prefix", func(ctx context.Context, t *testing.T, a iam.Directory) {
 			us, err := a.ListUsers(ctx, iamAccount(), "")
 			wantOK(t, "ListUsers", err)
 			wantNames(t, "ListUsers", userNames(us), []string{"alice", "bob"})
@@ -175,11 +175,11 @@ func iamUserGroupRows() []iamRow {
 				t.Fatalf("ListUsers /nobody/: %#v", us)
 			}
 		}},
-		{"UpdateUser moves the user to a new path", func(ctx context.Context, t *testing.T, a iam.Admin) {
-			before, err := a.GetUser(ctx, iamAccount(), "alice")
+		{"UpdateUser moves the user to a new path", func(ctx context.Context, t *testing.T, a iam.Directory) {
+			before, err := a.GetUser(ctx, iamAccount(), "alice", UserGrant(ctx, t, a, iamAccount(), "alice"))
 			wantOK(t, "GetUser", err)
 			wantOK(t, "UpdateUser", a.UpdateUser(ctx, iamAccount(), "alice", "/sre/", "", Grant(ctx, t, before.ARN)))
-			u, err := a.GetUser(ctx, iamAccount(), "alice")
+			u, err := a.GetUser(ctx, iamAccount(), "alice", UserGrant(ctx, t, a, iamAccount(), "alice"))
 			wantOK(t, "GetUser", err)
 			if u.Path != "/sre/" || u.ARN != arnPrefix+"user/sre/alice" || u.ID != before.ID {
 				t.Fatalf("after UpdateUser: %+v, before %+v", u, before)
@@ -187,7 +187,7 @@ func iamUserGroupRows() []iamRow {
 			wantNames(t, "devs members", members(ctx, t, a, "devs"), []string{"alice"})
 		}},
 		{"UpdateUser to the current path or with nothing to change succeeds", func(
-			ctx context.Context, t *testing.T, a iam.Admin,
+			ctx context.Context, t *testing.T, a iam.Directory,
 		) {
 			wantOK(
 				t,
@@ -201,31 +201,31 @@ func iamUserGroupRows() []iamRow {
 			)
 		}},
 		{"UpdateUser with a stale ARN is a conflict and changes nothing", func(
-			ctx context.Context, t *testing.T, a iam.Admin,
+			ctx context.Context, t *testing.T, a iam.Directory,
 		) {
 			err := a.UpdateUser(ctx, iamAccount(), "alice", "/sre/", "", Grant(ctx, t, arnPrefix+"user/alice"))
 			wantErr(t, "UpdateUser", err, resource.CodeConflict, iam.UserChanged)
-			u, err := a.GetUser(ctx, iamAccount(), "alice")
+			u, err := a.GetUser(ctx, iamAccount(), "alice", UserGrant(ctx, t, a, iamAccount(), "alice"))
 			wantOK(t, "GetUser", err)
 			if u.Path != "/ops/" {
 				t.Fatalf("path moved: %+v", u)
 			}
 		}},
-		{"UpdateUser validates the new path and finds the user", func(ctx context.Context, t *testing.T, a iam.Admin) {
+		{"UpdateUser validates the new path and finds the user", func(ctx context.Context, t *testing.T, a iam.Directory) {
 			err := a.UpdateUser(ctx, iamAccount(), "alice", "sre", "", UserGrant(ctx, t, a, iamAccount(), "alice"))
 			wantErr(t, "UpdateUser bad path", err, resource.CodeInvalidArgument, "")
 			err = a.UpdateUser(ctx, iamAccount(), "ghost", "/sre/", "", UserGrant(ctx, t, a, iamAccount(), "ghost"))
 			wantErr(t, "UpdateUser ghost", err, resource.CodeNotFound, "The user with name ghost cannot be found.")
 		}},
-		{"DeleteUser of a group member is DeleteConflict", func(ctx context.Context, t *testing.T, a iam.Admin) {
+		{"DeleteUser of a group member is DeleteConflict", func(ctx context.Context, t *testing.T, a iam.Directory) {
 			err := a.DeleteUser(ctx, iamAccount(), "alice", UserGrant(ctx, t, a, iamAccount(), "alice"))
 			wantErr(t, "DeleteUser", err, resource.CodeConflict, iam.UserDeleteConflict)
-			_, err = a.GetUser(ctx, iamAccount(), "alice")
+			_, err = a.GetUser(ctx, iamAccount(), "alice", UserGrant(ctx, t, a, iamAccount(), "alice"))
 			wantOK(t, "GetUser after the conflict", err)
 		}},
-		{"DeleteUser deletes, and a second delete is NoSuchEntity", func(ctx context.Context, t *testing.T, a iam.Admin) {
+		{"DeleteUser deletes, and a second delete is NoSuchEntity", func(ctx context.Context, t *testing.T, a iam.Directory) {
 			wantOK(t, "DeleteUser", a.DeleteUser(ctx, iamAccount(), "bob", UserGrant(ctx, t, a, iamAccount(), "bob")))
-			_, err := a.GetUser(ctx, iamAccount(), "bob")
+			_, err := a.GetUser(ctx, iamAccount(), "bob", UserGrant(ctx, t, a, iamAccount(), "bob"))
 			wantErr(t, "GetUser", err, resource.CodeNotFound, "")
 			err = a.DeleteUser(ctx, iamAccount(), "bob", UserGrant(ctx, t, a, iamAccount(), "bob"))
 			wantErr(t, "DeleteUser again", err, resource.CodeNotFound, "The user with name bob cannot be found.")
@@ -233,14 +233,14 @@ func iamUserGroupRows() []iamRow {
 			wantOK(t, "ListUsers", err)
 			wantNames(t, "ListUsers", userNames(us), []string{"alice"})
 		}},
-		{"CreateGroup returns the AWS group", func(ctx context.Context, t *testing.T, a iam.Admin) {
+		{"CreateGroup returns the AWS group", func(ctx context.Context, t *testing.T, a iam.Directory) {
 			g, err := a.CreateGroup(ctx, iamAccount(), "ops", "/x/")
 			wantOK(t, "CreateGroup", err)
 			if g.Name != "ops" || g.Path != "/x/" || g.ARN != arnPrefix+"group/x/ops" ||
 				!strings.HasPrefix(g.ID, "AGPA") || g.Created.IsZero() {
 				t.Fatalf("CreateGroup: %+v", g)
 			}
-			got, us, err := a.GetGroup(ctx, iamAccount(), "ops")
+			got, us, err := a.GetGroup(ctx, iamAccount(), "ops", GroupGrant(ctx, t, a, iamAccount(), "ops"))
 			wantOK(t, "GetGroup", err)
 			if got.ARN != g.ARN || got.ID != g.ID || len(us) != 0 {
 				t.Fatalf("GetGroup: %+v %+v", got, us)
@@ -251,11 +251,11 @@ func iamUserGroupRows() []iamRow {
 				t.Fatalf("CreateGroup root: %+v", g)
 			}
 		}},
-		{"CreateGroup of an existing name is EntityAlreadyExists", func(ctx context.Context, t *testing.T, a iam.Admin) {
+		{"CreateGroup of an existing name is EntityAlreadyExists", func(ctx context.Context, t *testing.T, a iam.Directory) {
 			_, err := a.CreateGroup(ctx, iamAccount(), "devs", "/")
 			wantErr(t, "CreateGroup", err, resource.CodeAlreadyExists, "Group with name devs already exists.")
 		}},
-		{"CreateGroup validates the name and the path", func(ctx context.Context, t *testing.T, a iam.Admin) {
+		{"CreateGroup validates the name and the path", func(ctx context.Context, t *testing.T, a iam.Directory) {
 			for _, name := range []string{"bad name", strings.Repeat("g", 129), "a/b", ""} {
 				_, err := a.CreateGroup(ctx, iamAccount(), name, "/")
 				wantErr(t, "CreateGroup "+name, err, resource.CodeInvalidArgument, "")
@@ -263,16 +263,20 @@ func iamUserGroupRows() []iamRow {
 			_, err := a.CreateGroup(ctx, iamAccount(), "ops", "x")
 			wantErr(t, "CreateGroup path", err, resource.CodeInvalidArgument, "")
 		}},
-		{"GetGroup lists the members; a missing group is NoSuchEntity", func(ctx context.Context, t *testing.T, a iam.Admin) {
-			g, us, err := a.GetGroup(ctx, iamAccount(), "devs")
+		{"GetGroup lists the members; a missing group is NoSuchEntity", func(
+			ctx context.Context, t *testing.T, a iam.Directory,
+		) {
+			g, us, err := a.GetGroup(ctx, iamAccount(), "devs", GroupGrant(ctx, t, a, iamAccount(), "devs"))
 			wantOK(t, "GetGroup", err)
 			if g.ARN != arnPrefix+"group/team/devs" || len(us) != 1 || us[0].ARN != arnPrefix+"user/ops/alice" {
 				t.Fatalf("GetGroup: %+v %+v", g, us)
 			}
-			_, _, err = a.GetGroup(ctx, iamAccount(), "ghost")
+			_, _, err = a.GetGroup(ctx, iamAccount(), "ghost", GroupGrant(ctx, t, a, iamAccount(), "ghost"))
 			wantErr(t, "GetGroup ghost", err, resource.CodeNotFound, "The group with name ghost cannot be found.")
 		}},
-		{"ListGroups is sorted by name and filtered by path prefix", func(ctx context.Context, t *testing.T, a iam.Admin) {
+		{"ListGroups is sorted by name and filtered by path prefix", func(
+			ctx context.Context, t *testing.T, a iam.Directory,
+		) {
 			_, err := a.CreateGroup(ctx, iamAccount(), "admins", "/ops/")
 			wantOK(t, "CreateGroup", err)
 			gs, err := a.ListGroups(ctx, iamAccount(), "")
@@ -285,13 +289,13 @@ func iamUserGroupRows() []iamRow {
 				t.Fatalf("ListGroups row: %+v", gs[0])
 			}
 		}},
-		{"UpdateGroup moves the group to a new path", func(ctx context.Context, t *testing.T, a iam.Admin) {
+		{"UpdateGroup moves the group to a new path", func(ctx context.Context, t *testing.T, a iam.Directory) {
 			wantOK(
 				t,
 				"UpdateGroup",
 				a.UpdateGroup(ctx, iamAccount(), "devs", "/eng/", "", GroupGrant(ctx, t, a, iamAccount(), "devs")),
 			)
-			g, us, err := a.GetGroup(ctx, iamAccount(), "devs")
+			g, us, err := a.GetGroup(ctx, iamAccount(), "devs", GroupGrant(ctx, t, a, iamAccount(), "devs"))
 			wantOK(t, "GetGroup", err)
 			if g.Path != "/eng/" || g.ARN != arnPrefix+"group/eng/devs" || len(us) != 1 {
 				t.Fatalf("after UpdateGroup: %+v %+v", g, us)
@@ -302,7 +306,7 @@ func iamUserGroupRows() []iamRow {
 				a.UpdateGroup(ctx, iamAccount(), "devs", "/eng/", "", GroupGrant(ctx, t, a, iamAccount(), "devs")),
 			)
 		}},
-		{"UpdateGroup validates the new path and finds the group", func(ctx context.Context, t *testing.T, a iam.Admin) {
+		{"UpdateGroup validates the new path and finds the group", func(ctx context.Context, t *testing.T, a iam.Directory) {
 			err := a.UpdateGroup(ctx, iamAccount(), "devs", "eng", "", GroupGrant(ctx, t, a, iamAccount(), "devs"))
 			wantErr(t, "UpdateGroup bad path", err, resource.CodeInvalidArgument, "")
 			wantErr(t, "UpdateGroup ghost", a.UpdateGroup(
@@ -310,7 +314,9 @@ func iamUserGroupRows() []iamRow {
 			),
 				resource.CodeNotFound, "The group with name ghost cannot be found.")
 		}},
-		{"AddUserToGroup adds a member and adding it again is a no-op", func(ctx context.Context, t *testing.T, a iam.Admin) {
+		{"AddUserToGroup adds a member and adding it again is a no-op", func(
+			ctx context.Context, t *testing.T, a iam.Directory,
+		) {
 			wantOK(
 				t,
 				"AddUserToGroup",
@@ -330,7 +336,9 @@ func iamUserGroupRows() []iamRow {
 				t.Fatalf("ListGroupsForUser row: %+v", gs[0])
 			}
 		}},
-		{"AddUserToGroup of a missing group or user is NoSuchEntity", func(ctx context.Context, t *testing.T, a iam.Admin) {
+		{"AddUserToGroup of a missing group or user is NoSuchEntity", func(
+			ctx context.Context, t *testing.T, a iam.Directory,
+		) {
 			wantErr(t, "missing group", a.AddUserToGroup(
 				ctx, iamAccount(), "ghost", "bob", GroupGrant(ctx, t, a, iamAccount(), "ghost"),
 			),
@@ -341,7 +349,7 @@ func iamUserGroupRows() []iamRow {
 				resource.CodeNotFound, "The user with name ghost cannot be found.")
 			wantNames(t, "members", members(ctx, t, a, "devs"), []string{"alice"})
 		}},
-		{"AddUserToGroup past GroupsPerUser is LimitExceeded", func(ctx context.Context, t *testing.T, a iam.Admin) {
+		{"AddUserToGroup past GroupsPerUser is LimitExceeded", func(ctx context.Context, t *testing.T, a iam.Directory) {
 			for i := range iam.MaxGroupsPerUser {
 				name := "g" + string(rune('a'+i))
 				_, err := a.CreateGroup(ctx, iamAccount(), name, "/")
@@ -375,7 +383,7 @@ func iamUserGroupRows() []iamRow {
 			}
 		}},
 		{"RemoveUserFromGroup removes a member; a non-member is NoSuchEntity", func(
-			ctx context.Context, t *testing.T, a iam.Admin,
+			ctx context.Context, t *testing.T, a iam.Directory,
 		) {
 			wantOK(
 				t,
@@ -405,7 +413,7 @@ func iamUserGroupRows() []iamRow {
 			)
 		}},
 		{"DeleteGroup with members is DeleteConflict; an empty group deletes", func(
-			ctx context.Context, t *testing.T, a iam.Admin,
+			ctx context.Context, t *testing.T, a iam.Directory,
 		) {
 			wantErr(t, "DeleteGroup", a.DeleteGroup(ctx, iamAccount(), "devs", GroupGrant(ctx, t, a, iamAccount(), "devs")),
 				resource.CodeConflict, iam.GroupDeleteConflict)
@@ -415,14 +423,14 @@ func iamUserGroupRows() []iamRow {
 				a.RemoveUserFromGroup(ctx, iamAccount(), "devs", "alice", GroupGrant(ctx, t, a, iamAccount(), "devs")),
 			)
 			wantOK(t, "DeleteGroup", a.DeleteGroup(ctx, iamAccount(), "devs", GroupGrant(ctx, t, a, iamAccount(), "devs")))
-			_, _, err := a.GetGroup(ctx, iamAccount(), "devs")
+			_, _, err := a.GetGroup(ctx, iamAccount(), "devs", GroupGrant(ctx, t, a, iamAccount(), "devs"))
 			wantErr(t, "GetGroup", err, resource.CodeNotFound, "")
 			wantErr(t, "DeleteGroup again", a.DeleteGroup(
 				ctx, iamAccount(), "devs", GroupGrant(ctx, t, a, iamAccount(), "devs"),
 			),
 				resource.CodeNotFound, "The group with name devs cannot be found.")
 		}},
-		{"ListGroupsForUser of a missing user is NoSuchEntity", func(ctx context.Context, t *testing.T, a iam.Admin) {
+		{"ListGroupsForUser of a missing user is NoSuchEntity", func(ctx context.Context, t *testing.T, a iam.Directory) {
 			_, err := a.ListGroupsForUser(ctx, iamAccount(), "ghost", UserGrant(ctx, t, a, iamAccount(), "ghost"))
 			wantErr(t, "ListGroupsForUser", err, resource.CodeNotFound, "The user with name ghost cannot be found.")
 			gs, err := a.ListGroupsForUser(ctx, iamAccount(), "bob", UserGrant(ctx, t, a, iamAccount(), "bob"))
@@ -430,7 +438,7 @@ func iamUserGroupRows() []iamRow {
 			wantNames(t, "ListGroupsForUser bob", groupNames(gs), []string{})
 		}},
 		{"changes bound to a stale ARN are ConcurrentModification and change nothing", func(
-			ctx context.Context, t *testing.T, a iam.Admin,
+			ctx context.Context, t *testing.T, a iam.Directory,
 		) {
 			// #325 r1: the surface passes the ARN it authorized; an entity
 			// that has moved since must not be changed.
@@ -455,14 +463,14 @@ func iamUserGroupRows() []iamRow {
 			changed("DeleteUser", a.DeleteUser(ctx, iamAccount(), "bob", Grant(ctx, t, arnPrefix+"user/bob")), iam.UserChanged)
 			changed("UpdateUser", a.UpdateUser(ctx, iamAccount(), "bob", "/x/", "", Grant(ctx, t, arnPrefix+"user/bob")),
 				iam.UserChanged)
-			g, _, err := a.GetGroup(ctx, iamAccount(), "devs")
+			g, _, err := a.GetGroup(ctx, iamAccount(), "devs", GroupGrant(ctx, t, a, iamAccount(), "devs"))
 			wantOK(t, "GetGroup devs", err)
 			if g.Path != "/team/" {
 				t.Fatalf("UpdateGroup moved the group: %+v", g)
 			}
-			_, _, err = a.GetGroup(ctx, iamAccount(), "empty")
+			_, _, err = a.GetGroup(ctx, iamAccount(), "empty", GroupGrant(ctx, t, a, iamAccount(), "empty"))
 			wantOK(t, "the empty group stays", err)
-			u, err := a.GetUser(ctx, iamAccount(), "bob")
+			u, err := a.GetUser(ctx, iamAccount(), "bob", UserGrant(ctx, t, a, iamAccount(), "bob"))
 			wantOK(t, "bob stays", err)
 			if u.Path != "/eng/" {
 				t.Fatalf("UpdateUser moved bob: %+v", u)
@@ -480,14 +488,14 @@ func iamUserGroupRows() []iamRow {
 			wantErr(t, "DeleteUser ghost", a.DeleteUser(ctx, iamAccount(), "ghost", Grant(ctx, t, arnPrefix+"user/ghost")),
 				resource.CodeNotFound, "The user with name ghost cannot be found.")
 		}},
-		{"another account sees none of it", func(ctx context.Context, t *testing.T, a iam.Admin) {
+		{"another account sees none of it", func(ctx context.Context, t *testing.T, a iam.Directory) {
 			us, err := a.ListUsers(ctx, iamOther(), "")
 			wantOK(t, "ListUsers", err)
 			wantNames(t, "ListUsers", userNames(us), []string{})
 			gs, err := a.ListGroups(ctx, iamOther(), "")
 			wantOK(t, "ListGroups", err)
 			wantNames(t, "ListGroups", groupNames(gs), []string{})
-			_, err = a.GetUser(ctx, iamOther(), "alice")
+			_, err = a.GetUser(ctx, iamOther(), "alice", UserGrant(ctx, t, a, iamOther(), "alice"))
 			wantErr(t, "GetUser", err, resource.CodeNotFound, "")
 			wantErr(
 				t,
@@ -513,7 +521,7 @@ func iamUserGroupRows() []iamRow {
 				"DeleteUser in the other account",
 				a.DeleteUser(ctx, iamOther(), "alice", UserGrant(ctx, t, a, iamOther(), "alice")),
 			)
-			_, err = a.GetUser(ctx, iamAccount(), "alice")
+			_, err = a.GetUser(ctx, iamAccount(), "alice", UserGrant(ctx, t, a, iamAccount(), "alice"))
 			wantOK(t, "alice is still in the first account", err)
 		}},
 	}
