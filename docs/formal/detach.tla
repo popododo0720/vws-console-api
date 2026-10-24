@@ -271,13 +271,14 @@ Write(c) ==
 \* writeDetach after IDEMPOTENCY_CONFLICT (#352): this request's record on
 \* the instance proves its detach was applied, but compute cannot replay the
 \* write, as the instance changed since. No record: the token was used with
-\* other parameters.
+\* other parameters. The record may be in its archive slot (#353): the
+\* recovery looks it up with detachReplayFor, as Read does.
 RRead(c) ==
     LET t == tokOf[c]
         v == volOf[t]
     IN
     /\ pc[c] = "rread"
-    /\ IF inst.rec[v] = t
+    /\ IF RecSlot(inst, v, t) # None
        THEN /\ snap' = [snap EXCEPT ![c] = etag]
             /\ pay' = [pay EXCEPT ![c] = inst]
             /\ pc' = [pc EXCEPT ![c] = "recover"]
@@ -463,9 +464,6 @@ HoldBlocksPrune == ~heldPruned
 \* CreateTags).
 NoLostUpdate == acked \subseteq inst.tags
 
-\* FINDINGS: the current code breaks these two; scripts/tla-detach.sh
-\* expects each to fail (see docs/formal/README.md).
-\*
 \* A recovery resend matches the original write: a retry of a detach whose
 \* op id was not saved is never refused as a fingerprint mismatch.
 \* ec2.go writeDetach(drop=false) rebuilds the update from the instance as
