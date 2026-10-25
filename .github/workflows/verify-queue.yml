@@ -1,6 +1,6 @@
-# Copy of vws-deploy's verify-queue.yml (vws-deploy#397); this repo only adds the tla trigger below.
+# Copy unchanged to every vws-* repo with repo-guard.yml (see docs/factory-orchestrator.md, vws-deploy#397).
 # Keeps the needs-verify label on a PR exactly while it waits for vws-verify: open, not a draft, base main,
-# no verify-approved, no vws-verify FAIL verdict on its head (vws-deploy#440), and every check on its head
+# no verify-approved, not blocked, held or do-not-merge (vws-deploy#487), no vws-verify FAIL verdict on its head (vws-deploy#440), and every check on its head
 # green except verify-gate and vws-verify (which wait for the verdict by design). The orchestrator's verify
 # wake (Rule A) counts only labeled PRs, so a head verify already failed must not wake it again.
 # It reads the PR, its check runs and commit statuses through the API and writes only labels: it checks
@@ -9,13 +9,14 @@ name: verify-queue
 
 on:
   # Runs from the default branch after these workflows finish on a PR head: every workflow that runs on
-  # pull_request in a vws-* repo (vws-console names its CI "CI"; vws-conformance adds english). Any of them
-  # can finish last, and a missing one leaves the PR unlabeled; tests/workflows/test_verify_queue.py fails
-  # when a pull_request workflow in this repo is not listed. Not check_suite: GitHub starts no workflow for
-  # check suites created by GitHub Actions. post-merge (closed PRs) only clears a stale label.
+  # pull_request in any vws-* repo (vws-console names its CI "CI"; vws-proto has buf; vws-conformance has
+  # conformance; vws-console-api has the path-filtered tla). Any of them can finish last, and a missing one
+  # leaves the PR unlabeled; tests/workflows/test_verify_queue.py fails when a pull_request workflow in this
+  # repo, or a known one of another vws-* repo, is not listed. A name a repo does not have is ignored. Not
+  # check_suite: GitHub starts no workflow for check suites created by GitHub Actions. post-merge (closed
+  # PRs) only clears a stale label.
   workflow_run:
-    # vws-console-api: tla is a path-filtered pull_request workflow that can finish last.
-    workflows: [ci, CI, drift-check, english, installer-image, post-merge, repo-guard, tla]
+    workflows: [buf, ci, CI, conformance, drift-check, english, installer-image, post-merge, repo-guard, tla]
     types: [completed]
   pull_request:
     types: [ready_for_review, synchronize]
@@ -47,8 +48,9 @@ jobs:
           HEAD_SHA: ${{ github.event.workflow_run.head_sha || github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
-          # Checks that wait for the verdict, plus this job's own check on pull_request events.
-          skip="verify-gate vws-verify needs-verify"
+          # Checks that wait for the verdict, plus this job's own check on pull_request events. "|"-separated:
+          # repo-guard.yml calls the gate, which reports as "gate / verify-gate" next to its bare shim (#402).
+          skip="verify-gate|gate / verify-gate|vws-verify|needs-verify"
           unlabel() {
             # A label that is already gone (HTTP 404) is the wanted state; other errors fail.
             if out=$(gh api -X DELETE "repos/${REPO}/issues/$1/labels/needs-verify" 2>&1); then
@@ -100,12 +102,17 @@ jobs:
               if [[ ",$labels," == *",needs-verify,"* ]]; then unlabel "$n" "not waiting for verify"; fi
               continue
             fi
+            # vws-deploy#487 AC7: a parked PR (blocked, hold, do-not-merge) only loses the label (PR #483).
+            if [[ ",$labels," == *",blocked,"* || ",$labels," == *",hold,"* || ",$labels," == *",do-not-merge,"* ]]; then
+              if [[ ",$labels," == *",needs-verify,"* ]]; then unlabel "$n" "parked"; else echo "#$n: parked; no label"; fi
+              continue
+            fi
             gh api --paginate "repos/${REPO}/commits/${sha}/check-runs?per_page=100" \
               --jq '.check_runs[] | [.name, (.id | tostring), .status, (.conclusion // "")] | @tsv' >"$tmp/checks"
             gh api "repos/${REPO}/commits/${sha}/status" --jq '.statuses[] | [.context, .state] | @tsv' >"$tmp/statuses"
             # The newest run per check name counts (a rerun supersedes a failed attempt).
             verdict=$(awk -F'\t' -v skip="$skip" '
-              BEGIN { n = split(skip, s, " "); for (i = 1; i <= n; i++) sk[s[i]] = 1 }
+              BEGIN { n = split(skip, s, "|"); for (i = 1; i <= n; i++) sk[s[i]] = 1 }
               FILENAME == ARGV[1] { if (!($1 in sk) && (!($1 in id) || $2 + 0 > id[$1])) { id[$1] = $2 + 0; st[$1] = $3; co[$1] = $4 }; next }
               !($1 in sk) { seen++; if ($2 == "failure" || $2 == "error") red = red " " $1; else if ($2 != "success") pend = pend " " $1 }
               END {
