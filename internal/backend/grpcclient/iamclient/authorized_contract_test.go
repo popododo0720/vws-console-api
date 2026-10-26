@@ -7,13 +7,13 @@ import (
 	"github.com/popododo0720/vws-console-api/internal/iam"
 )
 
-// #342: STSAdmin over vws-iam answers the AuthorizedARN contract as the fake
+// #342: STSAdmin over vws-iam answers the AuthorizedPrincipal contract as the fake
 // does. The directory serves users, groups, access keys and the user and
 // group policies; every other bound call (login profiles, MFA devices,
-// roles and their policies) is checked for the zero AuthorizedARN, which it
+// roles and their policies) is checked for the zero AuthorizedPrincipal, which it
 // refuses before it sends anything.
-func TestGRPCAuthorizedARNContract(t *testing.T) {
-	backendtest.IAMAuthorizedARN(t, func(t *testing.T) (iam.Directory, backendtest.PolicySeeder) {
+func TestGRPCAuthorizedPrincipalContract(t *testing.T) {
+	backendtest.IAMAuthorizedPrincipal(t, func(t *testing.T) (iam.Directory, backendtest.PolicySeeder) {
 		c, d := dirHarness(t)
 		seed := func(t *testing.T, name, path string) string {
 			t.Helper()

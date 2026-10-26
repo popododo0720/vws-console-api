@@ -30,7 +30,7 @@ const secretLen = 40
 // is sent once: a retry after a lost response would create a second key.
 // want must be the user's ARN when the user is read before the call.
 func (a STSAdmin) CreateAccessKey(
-	ctx context.Context, account resource.AccountID, user string, want iam.AuthorizedARN,
+	ctx context.Context, account resource.AccountID, user string, want iam.AuthorizedPrincipal,
 ) (out iam.NewAccessKey, err error) {
 	var keyID string
 	ctx, end := a.observeKey(ctx, "CreateAccessKey", true, account, user, "", &keyID)
@@ -67,7 +67,7 @@ func (a STSAdmin) CreateAccessKey(
 // every page, sorted by key id. want must be the user's ARN when the user is
 // read before the pages and again after them.
 func (a STSAdmin) ListAccessKeys(
-	ctx context.Context, account resource.AccountID, user string, want iam.AuthorizedARN,
+	ctx context.Context, account resource.AccountID, user string, want iam.AuthorizedPrincipal,
 ) (out []iam.AccessKeyMeta, err error) {
 	ctx, end := a.observe(ctx, "ListAccessKeys", false, account, user, "")
 	defer func() { end(err) }()
@@ -114,7 +114,7 @@ func (a STSAdmin) ListAccessKeys(
 // a key's version on every use, so an etag read here could already be
 // stale. want must be the user's ARN when the user is read before the call.
 func (a STSAdmin) DeleteAccessKey(
-	ctx context.Context, account resource.AccountID, user, keyID string, want iam.AuthorizedARN,
+	ctx context.Context, account resource.AccountID, user, keyID string, want iam.AuthorizedPrincipal,
 ) (err error) {
 	ctx, end := a.observeKey(ctx, "DeleteAccessKey", true, account, user, "", &keyID)
 	defer func() { end(err) }()
@@ -142,7 +142,7 @@ func (a STSAdmin) DeleteAccessKey(
 // keyUser reads the user an access key call acts on and checks that want is
 // its ARN.
 func (a STSAdmin) keyUser(
-	ctx context.Context, account resource.AccountID, user string, want iam.AuthorizedARN,
+	ctx context.Context, account resource.AccountID, user string, want iam.AuthorizedPrincipal,
 ) (iam.User, error) {
 	return a.GetUser(ctx, account, user, want)
 }

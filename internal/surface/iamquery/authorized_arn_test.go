@@ -119,11 +119,11 @@ func TestGroupAndUserChangesActOnTheAuthorizedARN(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name+"/not moved", func(t *testing.T) {
-			h, _, _, bob := authorizedARNHarness(t, nil)
+			h, _, _, bob := authorizedPrincipalHarness(t, nil)
 			has(t, call(t, h, bob, sigv4.ServiceIAM, tc.form), http.StatusOK)
 		})
 		t.Run(tc.name+"/moved after authorization", func(t *testing.T) {
-			h, f, account, bob := authorizedARNHarness(t, &movingAdmin{tb: t, group: tc.group, user: tc.user})
+			h, f, account, bob := authorizedPrincipalHarness(t, &movingAdmin{tb: t, group: tc.group, user: tc.user})
 			res := call(t, h, bob, sigv4.ServiceIAM, tc.form)
 			has(t, res, http.StatusConflict, "<Code>ConcurrentModification</Code>")
 			tc.unchanged(t, state{f, account})
@@ -131,11 +131,11 @@ func TestGroupAndUserChangesActOnTheAuthorizedARN(t *testing.T) {
 	}
 }
 
-// authorizedARNHarness seeds groups devs (member carol), empty and mover and
+// authorizedPrincipalHarness seeds groups devs (member carol), empty and mover and
 // users carol, dave and erin, all on /ok/. The caller bob may change
 // anything on /ok/ and nothing on /denied/. A non-nil mover wraps the Admin
 // the surface calls.
-func authorizedARNHarness(
+func authorizedPrincipalHarness(
 	t *testing.T, mover *movingAdmin,
 ) (http.Handler, *iam.Fake, resource.AccountID, sigv4.Credential) {
 	t.Helper()

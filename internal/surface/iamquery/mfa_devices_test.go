@@ -537,12 +537,12 @@ func TestListMFADevicesActsOnTheAuthorizedARN(t *testing.T) {
 		return serial
 	}
 	t.Run("not moved", func(t *testing.T) {
-		h, f, account, bob := authorizedARNHarness(t, nil)
+		h, f, account, bob := authorizedPrincipalHarness(t, nil)
 		serial := seed(t, f, account)
 		has(t, call(t, h, bob, sigv4.ServiceIAM, form), http.StatusOK, `<SerialNumber>`+serial+`</SerialNumber>`)
 	})
 	t.Run("moved after authorization", func(t *testing.T) {
-		h, f, account, bob := authorizedARNHarness(t, &movingAdmin{tb: t, user: "erin"})
+		h, f, account, bob := authorizedPrincipalHarness(t, &movingAdmin{tb: t, user: "erin"})
 		serial := seed(t, f, account)
 		res := call(t, h, bob, sigv4.ServiceIAM, form)
 		has(t, res, http.StatusConflict, "<Code>ConcurrentModification</Code>")

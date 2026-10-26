@@ -75,7 +75,7 @@ func TestAccessKeyCallsActOnTheAuthorizedARN(t *testing.T) {
 				mover = &movingAdmin{tb: t, user: tc.user}
 			}
 			t.Run(name, func(t *testing.T) {
-				h, f, account, bob := authorizedARNHarness(t, mover)
+				h, f, account, bob := authorizedPrincipalHarness(t, mover)
 				k, err := f.CreateAccessKey(t.Context(), account, "erin", backendtest.UserGrant(t.Context(), t, f, account, "erin"))
 				if err != nil {
 					t.Fatal(err)
@@ -95,7 +95,7 @@ func TestAccessKeyCallsActOnTheAuthorizedARN(t *testing.T) {
 // #314 bundle 2: ListAccessKeys pages with Marker and MaxItems as AWS does,
 // takes no PathPrefix, and DeleteAccessKey checks the AccessKeyId pattern.
 func TestAccessKeyPagingAndValidation(t *testing.T) {
-	h, f, account, bob := authorizedARNHarness(t, nil)
+	h, f, account, bob := authorizedPrincipalHarness(t, nil)
 	k1, err := f.CreateAccessKey(t.Context(), account, "carol", backendtest.UserGrant(t.Context(), t, f, account, "carol"))
 	if err != nil {
 		t.Fatal(err)

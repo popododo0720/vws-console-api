@@ -324,7 +324,7 @@ func (a STSAdmin) CreateUser(
 // GetUser implements iam.Admin over UserService.GetUser. want must be the
 // user's ARN; the zero value sends nothing.
 func (a STSAdmin) GetUser(
-	ctx context.Context, account resource.AccountID, name string, want iam.AuthorizedARN,
+	ctx context.Context, account resource.AccountID, name string, want iam.AuthorizedPrincipal,
 ) (iam.User, error) {
 	if err := want.Require(); err != nil {
 		return iam.User{}, err
@@ -411,7 +411,7 @@ func prefixOrRoot(p string) string {
 // vws-iam cannot rename a user: a new name answers Unimplemented after the
 // checks above.
 func (a STSAdmin) UpdateUser(
-	ctx context.Context, account resource.AccountID, name, newPath, newName string, want iam.AuthorizedARN,
+	ctx context.Context, account resource.AccountID, name, newPath, newName string, want iam.AuthorizedPrincipal,
 ) (err error) {
 	ctx, end := a.observe(ctx, "UpdateUser", true, account, name, "")
 	defer func() { end(err) }()
@@ -463,7 +463,7 @@ func (a STSAdmin) UpdateUser(
 // the user has access keys, an MFA device, a login profile, a group or a
 // policy, which is the AWS DeleteConflict.
 func (a STSAdmin) DeleteUser(
-	ctx context.Context, account resource.AccountID, name string, want iam.AuthorizedARN,
+	ctx context.Context, account resource.AccountID, name string, want iam.AuthorizedPrincipal,
 ) (err error) {
 	ctx, end := a.observe(ctx, "DeleteUser", true, account, name, "")
 	defer func() { end(err) }()
@@ -498,7 +498,7 @@ func (a STSAdmin) DeleteUser(
 // read over GroupService.GetGroup. A group deleted since is left out. want
 // must be the user's ARN at the read the groups come from.
 func (a STSAdmin) ListGroupsForUser(
-	ctx context.Context, account resource.AccountID, user string, want iam.AuthorizedARN,
+	ctx context.Context, account resource.AccountID, user string, want iam.AuthorizedPrincipal,
 ) (out []iam.Group, err error) {
 	ctx, end := a.observe(ctx, "ListGroupsForUser", false, account, user, "")
 	defer func() { end(err) }()
@@ -572,7 +572,7 @@ func (a STSAdmin) CreateGroup(
 // value sends nothing, and a moved group reads no member. A member deleted
 // since the group was read is left out.
 func (a STSAdmin) GetGroup(
-	ctx context.Context, account resource.AccountID, name string, want iam.AuthorizedARN,
+	ctx context.Context, account resource.AccountID, name string, want iam.AuthorizedPrincipal,
 ) (iam.Group, []iam.User, error) {
 	if err := want.Require(); err != nil {
 		return iam.Group{}, nil, err
@@ -677,7 +677,7 @@ func (a STSAdmin) ListGroups(
 // ARN, as in UpdateUser. A new name answers Unimplemented
 // once the group is known to exist: vws-iam cannot rename.
 func (a STSAdmin) UpdateGroup(
-	ctx context.Context, account resource.AccountID, name, newPath, newName string, want iam.AuthorizedARN,
+	ctx context.Context, account resource.AccountID, name, newPath, newName string, want iam.AuthorizedPrincipal,
 ) (err error) {
 	ctx, end := a.observe(ctx, "UpdateGroup", true, account, "", name)
 	defer func() { end(err) }()
@@ -734,7 +734,7 @@ func (a STSAdmin) UpdateGroup(
 // as DeleteUser does. vws-iam refuses while the group has members or
 // policies (DeleteConflict).
 func (a STSAdmin) DeleteGroup(
-	ctx context.Context, account resource.AccountID, name string, want iam.AuthorizedARN,
+	ctx context.Context, account resource.AccountID, name string, want iam.AuthorizedPrincipal,
 ) (err error) {
 	ctx, end := a.observe(ctx, "DeleteGroup", true, account, "", name)
 	defer func() { end(err) }()
@@ -777,7 +777,7 @@ func memberIndex(members []string, user string) int {
 // want binds the change to the group the caller was authorized on
 // (changeMembers).
 func (a STSAdmin) AddUserToGroup(
-	ctx context.Context, account resource.AccountID, group, user string, want iam.AuthorizedARN,
+	ctx context.Context, account resource.AccountID, group, user string, want iam.AuthorizedPrincipal,
 ) (err error) {
 	ctx, end := a.observe(ctx, "AddUserToGroup", true, account, user, group)
 	defer func() { end(err) }()
@@ -796,7 +796,7 @@ func (a STSAdmin) AddUserToGroup(
 // RemoveUserFromGroup implements iam.Admin as AddUserToGroup does. A user
 // that is not a member is NoSuchEntity, as in AWS.
 func (a STSAdmin) RemoveUserFromGroup(
-	ctx context.Context, account resource.AccountID, group, user string, want iam.AuthorizedARN,
+	ctx context.Context, account resource.AccountID, group, user string, want iam.AuthorizedPrincipal,
 ) (err error) {
 	ctx, end := a.observe(ctx, "RemoveUserFromGroup", true, account, user, group)
 	defer func() { end(err) }()
@@ -819,7 +819,7 @@ func (a STSAdmin) RemoveUserFromGroup(
 // ConcurrentModification, and nothing is written. The zero want is refused
 // before any read.
 func (a STSAdmin) changeMembers(
-	ctx context.Context, account resource.AccountID, group, user string, want iam.AuthorizedARN,
+	ctx context.Context, account resource.AccountID, group, user string, want iam.AuthorizedPrincipal,
 	change func(members []string, u *iamv1.User) ([]string, error),
 ) error {
 	if err := want.Require(); err != nil {

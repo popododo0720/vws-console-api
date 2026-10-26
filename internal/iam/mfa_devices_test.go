@@ -191,7 +191,7 @@ func TestFakeListMFADevices(t *testing.T) {
 	}
 }
 
-// #330 r2, #342: the AuthorizedARN must be the user's ARN, checked under the
+// #330 r2, #342: the AuthorizedPrincipal must be the user's ARN, checked under the
 // same lock as the read; otherwise the answer is Changed(UserChanged) and no
 // device. NotFound wins over the ARN check.
 func TestFakeListMFADevicesExpectsTheARN(t *testing.T) {

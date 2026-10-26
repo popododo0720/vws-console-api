@@ -293,7 +293,7 @@ func (f *Fake) CreateUser(_ context.Context, a resource.AccountID, name, path st
 }
 
 // GetUser implements Admin. want must be the user's ARN.
-func (f *Fake) GetUser(_ context.Context, a resource.AccountID, name string, want AuthorizedARN) (User, error) {
+func (f *Fake) GetUser(_ context.Context, a resource.AccountID, name string, want AuthorizedPrincipal) (User, error) {
 	if err := want.Require(); err != nil {
 		return User{}, err
 	}
@@ -344,7 +344,7 @@ func prefixOr(p string) string {
 // DeleteUser implements Admin. Like AWS it refuses while the user still has
 // access keys, policies, group memberships, a login profile or an assigned MFA
 // device. want must be the user's ARN, or nothing changes.
-func (f *Fake) DeleteUser(_ context.Context, a resource.AccountID, name string, want AuthorizedARN) error {
+func (f *Fake) DeleteUser(_ context.Context, a resource.AccountID, name string, want AuthorizedPrincipal) error {
 	if err := want.Require(); err != nil {
 		return err
 	}
@@ -372,7 +372,7 @@ func (f *Fake) DeleteUser(_ context.Context, a resource.AccountID, name string, 
 // change between the caller's authorization and this call is a conflict
 // rather than a move of another user or path.
 func (f *Fake) UpdateUser(
-	_ context.Context, a resource.AccountID, name, newPath, newName string, want AuthorizedARN,
+	_ context.Context, a resource.AccountID, name, newPath, newName string, want AuthorizedPrincipal,
 ) error {
 	if err := want.Require(); err != nil {
 		return err
@@ -455,7 +455,7 @@ func (f *Fake) UpdateUser(
 // CreateAccessKey implements Admin. The secret is returned only here. want
 // must be the user's current ARN.
 func (f *Fake) CreateAccessKey(
-	_ context.Context, a resource.AccountID, user string, want AuthorizedARN,
+	_ context.Context, a resource.AccountID, user string, want AuthorizedPrincipal,
 ) (NewAccessKey, error) {
 	if err := want.Require(); err != nil {
 		return NewAccessKey{}, err
@@ -481,7 +481,7 @@ func (f *Fake) CreateAccessKey(
 // ListAccessKeys implements Admin, sorted by key id. want must be the user's
 // current ARN.
 func (f *Fake) ListAccessKeys(
-	_ context.Context, a resource.AccountID, user string, want AuthorizedARN,
+	_ context.Context, a resource.AccountID, user string, want AuthorizedPrincipal,
 ) ([]AccessKeyMeta, error) {
 	if err := want.Require(); err != nil {
 		return nil, err
@@ -525,7 +525,9 @@ func (f *Fake) GetAccessKeyLastUsed(_ context.Context, a resource.AccountID, key
 
 // DeleteAccessKey implements Admin. The key stops authenticating at once.
 // want must be the user's current ARN.
-func (f *Fake) DeleteAccessKey(_ context.Context, a resource.AccountID, user, keyID string, want AuthorizedARN) error {
+func (f *Fake) DeleteAccessKey(
+	_ context.Context, a resource.AccountID, user, keyID string, want AuthorizedPrincipal,
+) error {
 	if err := want.Require(); err != nil {
 		return err
 	}
@@ -572,7 +574,7 @@ func (f *Fake) CreateGroup(_ context.Context, a resource.AccountID, name, path s
 // GetGroup implements Admin and returns the members. want must be the
 // group's ARN.
 func (f *Fake) GetGroup(
-	_ context.Context, a resource.AccountID, name string, want AuthorizedARN,
+	_ context.Context, a resource.AccountID, name string, want AuthorizedPrincipal,
 ) (Group, []User, error) {
 	if err := want.Require(); err != nil {
 		return Group{}, nil, err
@@ -623,7 +625,7 @@ func (f *Fake) ListGroups(_ context.Context, a resource.AccountID, prefix string
 // UpdateGroup implements Admin. A rename moves the group and its memberships;
 // the id stays the same. want must be the group's ARN, as in UpdateUser.
 func (f *Fake) UpdateGroup(
-	_ context.Context, a resource.AccountID, name, newPath, newName string, want AuthorizedARN,
+	_ context.Context, a resource.AccountID, name, newPath, newName string, want AuthorizedPrincipal,
 ) error {
 	if err := want.Require(); err != nil {
 		return err
@@ -678,7 +680,7 @@ func (f *Fake) UpdateGroup(
 
 // DeleteGroup implements Admin. want must be the group's ARN, as in
 // DeleteUser.
-func (f *Fake) DeleteGroup(_ context.Context, a resource.AccountID, name string, want AuthorizedARN) error {
+func (f *Fake) DeleteGroup(_ context.Context, a resource.AccountID, name string, want AuthorizedPrincipal) error {
 	if err := want.Require(); err != nil {
 		return err
 	}
@@ -701,7 +703,9 @@ func (f *Fake) DeleteGroup(_ context.Context, a resource.AccountID, name string,
 
 // AddUserToGroup implements Admin. want must be the group's ARN, or nothing
 // is written: the group moved since the caller was authorized on it.
-func (f *Fake) AddUserToGroup(_ context.Context, a resource.AccountID, group, user string, want AuthorizedARN) error {
+func (f *Fake) AddUserToGroup(
+	_ context.Context, a resource.AccountID, group, user string, want AuthorizedPrincipal,
+) error {
 	if err := want.Require(); err != nil {
 		return err
 	}
@@ -727,7 +731,7 @@ func (f *Fake) AddUserToGroup(_ context.Context, a resource.AccountID, group, us
 
 // RemoveUserFromGroup implements Admin, with want as in AddUserToGroup.
 func (f *Fake) RemoveUserFromGroup(
-	_ context.Context, a resource.AccountID, group, user string, want AuthorizedARN,
+	_ context.Context, a resource.AccountID, group, user string, want AuthorizedPrincipal,
 ) error {
 	if err := want.Require(); err != nil {
 		return err
@@ -752,7 +756,7 @@ func (f *Fake) RemoveUserFromGroup(
 
 // ListGroupsForUser implements Admin. want must be the user's ARN.
 func (f *Fake) ListGroupsForUser(
-	_ context.Context, a resource.AccountID, user string, want AuthorizedARN,
+	_ context.Context, a resource.AccountID, user string, want AuthorizedPrincipal,
 ) ([]Group, error) {
 	if err := want.Require(); err != nil {
 		return nil, err
@@ -812,7 +816,7 @@ func (f *Fake) CreateRole(_ context.Context, a resource.AccountID, in RoleInput)
 }
 
 // GetRole implements Admin. want must be the role's ARN.
-func (f *Fake) GetRole(_ context.Context, a resource.AccountID, name string, want AuthorizedARN) (Role, error) {
+func (f *Fake) GetRole(_ context.Context, a resource.AccountID, name string, want AuthorizedPrincipal) (Role, error) {
 	if err := want.Require(); err != nil {
 		return Role{}, err
 	}
@@ -841,7 +845,7 @@ func (f *Fake) ResolveRole(_ context.Context, a resource.AccountID, name string)
 
 // UpdateRole implements Admin. want must be the role's ARN.
 func (f *Fake) UpdateRole(
-	_ context.Context, a resource.AccountID, name string, in RoleUpdate, want AuthorizedARN,
+	_ context.Context, a resource.AccountID, name string, in RoleUpdate, want AuthorizedPrincipal,
 ) error {
 	if err := want.Require(); err != nil {
 		return err
@@ -879,7 +883,7 @@ func (f *Fake) UpdateRole(
 
 // UpdateRoleDescription implements Admin. want must be the role's ARN.
 func (f *Fake) UpdateRoleDescription(
-	_ context.Context, a resource.AccountID, name, description string, want AuthorizedARN,
+	_ context.Context, a resource.AccountID, name, description string, want AuthorizedPrincipal,
 ) (Role, error) {
 	if err := want.Require(); err != nil {
 		return Role{}, err
@@ -919,7 +923,7 @@ func (f *Fake) ListRoles(_ context.Context, a resource.AccountID, prefix string)
 
 // UpdateAssumeRolePolicy implements Admin. want must be the role's ARN.
 func (f *Fake) UpdateAssumeRolePolicy(
-	_ context.Context, a resource.AccountID, name, document string, want AuthorizedARN,
+	_ context.Context, a resource.AccountID, name, document string, want AuthorizedPrincipal,
 ) error {
 	if err := want.Require(); err != nil {
 		return err
@@ -943,7 +947,7 @@ func (f *Fake) UpdateAssumeRolePolicy(
 }
 
 // DeleteRole implements Admin. want must be the role's ARN.
-func (f *Fake) DeleteRole(_ context.Context, a resource.AccountID, name string, want AuthorizedARN) error {
+func (f *Fake) DeleteRole(_ context.Context, a resource.AccountID, name string, want AuthorizedPrincipal) error {
 	if err := want.Require(); err != nil {
 		return err
 	}
@@ -1329,7 +1333,7 @@ func (f *Fake) ListVirtualMFADevices(
 // and the read share one lock, so a user that moved since the caller was
 // authorized lists nothing.
 func (f *Fake) ListMFADevices(
-	_ context.Context, a resource.AccountID, user, marker string, maxItems int, want AuthorizedARN,
+	_ context.Context, a resource.AccountID, user, marker string, maxItems int, want AuthorizedPrincipal,
 ) (MFADevicePage, error) {
 	if err := want.Require(); err != nil {
 		return MFADevicePage{}, err
@@ -1488,7 +1492,7 @@ func (st *store) holderOf(kind Entity, name string) (*holder, error) {
 // boundHolder is holderOf for a call bound to want (#342): the entity's
 // current ARN must be the authorized one, or the call is Changed with no
 // data and no write.
-func (st *store) boundHolder(kind Entity, name string, want AuthorizedARN) (*holder, error) {
+func (st *store) boundHolder(kind Entity, name string, want AuthorizedPrincipal) (*holder, error) {
 	if err := want.Require(); err != nil {
 		return nil, err
 	}
@@ -1519,7 +1523,7 @@ func (st *store) boundHolder(kind Entity, name string, want AuthorizedARN) (*hol
 
 // AttachPolicy implements Admin.
 func (f *Fake) AttachPolicy(
-	_ context.Context, a resource.AccountID, kind Entity, name, arn string, want AuthorizedARN,
+	_ context.Context, a resource.AccountID, kind Entity, name, arn string, want AuthorizedPrincipal,
 ) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -1545,7 +1549,7 @@ func (f *Fake) AttachPolicy(
 
 // DetachPolicy implements Admin.
 func (f *Fake) DetachPolicy(
-	_ context.Context, a resource.AccountID, kind Entity, name, arn string, want AuthorizedARN,
+	_ context.Context, a resource.AccountID, kind Entity, name, arn string, want AuthorizedPrincipal,
 ) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -1568,7 +1572,7 @@ func (f *Fake) DetachPolicy(
 
 // ListAttachedPolicies implements Admin.
 func (f *Fake) ListAttachedPolicies(
-	_ context.Context, a resource.AccountID, kind Entity, name string, want AuthorizedARN,
+	_ context.Context, a resource.AccountID, kind Entity, name string, want AuthorizedPrincipal,
 ) ([]ManagedPolicy, error) {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
@@ -1589,7 +1593,7 @@ func (f *Fake) ListAttachedPolicies(
 
 // PutInlinePolicy implements Admin. It replaces a policy of the same name.
 func (f *Fake) PutInlinePolicy(
-	_ context.Context, a resource.AccountID, kind Entity, name, policy, document string, want AuthorizedARN,
+	_ context.Context, a resource.AccountID, kind Entity, name, policy, document string, want AuthorizedPrincipal,
 ) error {
 	if err := want.Require(); err != nil {
 		return err
@@ -1618,7 +1622,7 @@ func (f *Fake) PutInlinePolicy(
 
 // GetInlinePolicy implements Admin.
 func (f *Fake) GetInlinePolicy(
-	_ context.Context, a resource.AccountID, kind Entity, name, policy string, want AuthorizedARN,
+	_ context.Context, a resource.AccountID, kind Entity, name, policy string, want AuthorizedPrincipal,
 ) (string, error) {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
@@ -1635,7 +1639,7 @@ func (f *Fake) GetInlinePolicy(
 
 // DeleteInlinePolicy implements Admin.
 func (f *Fake) DeleteInlinePolicy(
-	_ context.Context, a resource.AccountID, kind Entity, name, policy string, want AuthorizedARN,
+	_ context.Context, a resource.AccountID, kind Entity, name, policy string, want AuthorizedPrincipal,
 ) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -1653,7 +1657,7 @@ func (f *Fake) DeleteInlinePolicy(
 
 // ListInlinePolicies implements Admin.
 func (f *Fake) ListInlinePolicies(
-	_ context.Context, a resource.AccountID, kind Entity, name string, want AuthorizedARN,
+	_ context.Context, a resource.AccountID, kind Entity, name string, want AuthorizedPrincipal,
 ) ([]string, error) {
 	f.mu.RLock()
 	defer f.mu.RUnlock()

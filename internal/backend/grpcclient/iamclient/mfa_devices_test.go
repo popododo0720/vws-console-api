@@ -358,7 +358,7 @@ func TestListMFADevicesErrorsOverGRPC(t *testing.T) {
 	}
 }
 
-// #330 r2, #342: the AuthorizedARN must be the user's ARN before the device
+// #330 r2, #342: the AuthorizedPrincipal must be the user's ARN before the device
 // pages are read and again after them; otherwise the answer is
 // Changed(UserChanged) with no device. NotFound wins over the ARN check.
 func TestListMFADevicesExpectsTheARNOverGRPC(t *testing.T) {
@@ -403,17 +403,17 @@ func TestListMFADevicesExpectsTheARNOverGRPC(t *testing.T) {
 		t.Fatalf("a user moved during the read: %+v, %v", page, err)
 	}
 
-	// The zero AuthorizedARN authorizes nothing: it is refused before the
+	// The zero AuthorizedPrincipal authorizes nothing: it is refused before the
 	// user is read (#342).
 	c, s = harness(t)
 	s.getUserRes = map[string]*iamv1.User{alice: user(aliceARN)}
 	s.listMfaDevicesRes = devices
-	page, err = (STSAdmin{Client: c}).ListMFADevices(t.Context(), accountID(t), "alice", "", 0, iam.AuthorizedARN{})
+	page, err = (STSAdmin{Client: c}).ListMFADevices(t.Context(), accountID(t), "alice", "", 0, iam.AuthorizedPrincipal{})
 	if resource.CodeOf(err) != resource.CodeInternal || len(page.Devices) != 0 {
-		t.Fatalf("zero AuthorizedARN: %+v, %v", page, err)
+		t.Fatalf("zero AuthorizedPrincipal: %+v, %v", page, err)
 	}
 	if len(s.getUser) != 0 || len(s.listMfaDevices) != 0 {
-		t.Fatalf("read with a zero AuthorizedARN: users %v, devices %v", s.getUser, s.listMfaDevices)
+		t.Fatalf("read with a zero AuthorizedPrincipal: users %v, devices %v", s.getUser, s.listMfaDevices)
 	}
 
 	c, s = harness(t)

@@ -59,7 +59,7 @@ func TestGetRole(t *testing.T) {
 
 // #358: GetRole answers only the role at the authorized ARN: a role now on
 // another path is ConcurrentModification with no data, and the zero
-// AuthorizedARN sends nothing.
+// AuthorizedPrincipal sends nothing.
 func TestGetRoleActsOnTheAuthorizedARN(t *testing.T) {
 	c, s := harness(t)
 	admin := STSAdmin{Client: c}
@@ -78,12 +78,12 @@ func TestGetRoleActsOnTheAuthorizedARN(t *testing.T) {
 		t.Context(),
 		accountID(t),
 		"ops",
-		iam.AuthorizedARN{},
+		iam.AuthorizedPrincipal{},
 	); resource.CodeOf(err) != resource.CodeInternal {
-		t.Fatalf("GetRole with the zero AuthorizedARN: %v", err)
+		t.Fatalf("GetRole with the zero AuthorizedPrincipal: %v", err)
 	}
 	if len(s.getRole) != sent {
-		t.Fatalf("GetRole with the zero AuthorizedARN sent %d requests", len(s.getRole)-sent)
+		t.Fatalf("GetRole with the zero AuthorizedPrincipal sent %d requests", len(s.getRole)-sent)
 	}
 }
 

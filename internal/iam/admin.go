@@ -203,7 +203,7 @@ type Ref struct{ ARN, ID string }
 // https://docs.aws.amazon.com/service-authorization/latest/reference/list_awsidentityandaccessmanagementiam.html),
 // so the surface reads it by name first. A Resolver answers that identity
 // only, never the entity's data: every read of a named entity's data is an
-// Admin call bound to the AuthorizedARN the caller was then authorized on
+// Admin call bound to the AuthorizedPrincipal the caller was then authorized on
 // (#342, #358). GetCallerIdentity also resolves the caller's own unique ID,
 // which AWS answers with no permission at all
 // (https://docs.aws.amazon.com/STS/latest/APIReference/API_GetCallerIdentity.html).
@@ -223,7 +223,7 @@ type Directory interface {
 
 // Admin is the IAM management API behind the IAM and STS Query surface. Every
 // call is scoped to one account. Every call that acts on a named user, group
-// or role after authorization takes the AuthorizedARN the caller was
+// or role after authorization takes the AuthorizedPrincipal the caller was
 // authorized on (#342): the zero value is Unbound (internal) before anything
 // is read, and an entity whose ARN is no longer the authorized one is a
 // ConcurrentModification (Changed) with no data and no write. The Create
@@ -237,45 +237,49 @@ type Directory interface {
 // trust).
 type Admin interface {
 	CreateUser(ctx context.Context, a resource.AccountID, name, path string) (User, error)
-	GetUser(ctx context.Context, a resource.AccountID, name string, want AuthorizedARN) (User, error)
+	GetUser(ctx context.Context, a resource.AccountID, name string, want AuthorizedPrincipal) (User, error)
 	ListUsers(ctx context.Context, a resource.AccountID, pathPrefix string) ([]User, error)
-	DeleteUser(ctx context.Context, a resource.AccountID, name string, want AuthorizedARN) error
+	DeleteUser(ctx context.Context, a resource.AccountID, name string, want AuthorizedPrincipal) error
 	// UpdateUser moves a user's path or name.
-	UpdateUser(ctx context.Context, a resource.AccountID, name, newPath, newName string, want AuthorizedARN) error
+	UpdateUser(ctx context.Context, a resource.AccountID, name, newPath, newName string, want AuthorizedPrincipal) error
 
 	CreateLoginProfile(
-		ctx context.Context, a resource.AccountID, user, password string, want AuthorizedARN,
+		ctx context.Context, a resource.AccountID, user, password string, want AuthorizedPrincipal,
 	) (LoginProfile, error)
-	GetLoginProfile(ctx context.Context, a resource.AccountID, user string, want AuthorizedARN) (LoginProfile, error)
-	UpdateLoginProfile(ctx context.Context, a resource.AccountID, user, password string, want AuthorizedARN) error
-	DeleteLoginProfile(ctx context.Context, a resource.AccountID, user string, want AuthorizedARN) error
+	GetLoginProfile(ctx context.Context, a resource.AccountID, user string, want AuthorizedPrincipal) (LoginProfile, error)
+	UpdateLoginProfile(ctx context.Context, a resource.AccountID, user, password string, want AuthorizedPrincipal) error
+	DeleteLoginProfile(ctx context.Context, a resource.AccountID, user string, want AuthorizedPrincipal) error
 
 	// The access key secret is only ever in the CreateAccessKey result.
-	CreateAccessKey(ctx context.Context, a resource.AccountID, user string, want AuthorizedARN) (NewAccessKey, error)
-	ListAccessKeys(ctx context.Context, a resource.AccountID, user string, want AuthorizedARN) ([]AccessKeyMeta, error)
+	CreateAccessKey(ctx context.Context, a resource.AccountID, user string, want AuthorizedPrincipal) (NewAccessKey, error)
+	ListAccessKeys(
+		ctx context.Context, a resource.AccountID, user string, want AuthorizedPrincipal,
+	) ([]AccessKeyMeta, error)
 	GetAccessKeyLastUsed(ctx context.Context, a resource.AccountID, keyID string) (AccessKeyLastUsed, error)
-	DeleteAccessKey(ctx context.Context, a resource.AccountID, user, keyID string, want AuthorizedARN) error
+	DeleteAccessKey(ctx context.Context, a resource.AccountID, user, keyID string, want AuthorizedPrincipal) error
 
 	CreateGroup(ctx context.Context, a resource.AccountID, name, path string) (Group, error)
-	GetGroup(ctx context.Context, a resource.AccountID, name string, want AuthorizedARN) (Group, []User, error)
+	GetGroup(ctx context.Context, a resource.AccountID, name string, want AuthorizedPrincipal) (Group, []User, error)
 	ListGroups(ctx context.Context, a resource.AccountID, pathPrefix string) ([]Group, error)
 	// UpdateGroup, DeleteGroup, AddUserToGroup and RemoveUserFromGroup are
 	// bound to the group's ARN; ListGroupsForUser to the user's.
-	UpdateGroup(ctx context.Context, a resource.AccountID, name, newPath, newName string, want AuthorizedARN) error
-	DeleteGroup(ctx context.Context, a resource.AccountID, name string, want AuthorizedARN) error
-	AddUserToGroup(ctx context.Context, a resource.AccountID, group, user string, want AuthorizedARN) error
-	RemoveUserFromGroup(ctx context.Context, a resource.AccountID, group, user string, want AuthorizedARN) error
-	ListGroupsForUser(ctx context.Context, a resource.AccountID, user string, want AuthorizedARN) ([]Group, error)
+	UpdateGroup(ctx context.Context, a resource.AccountID, name, newPath, newName string, want AuthorizedPrincipal) error
+	DeleteGroup(ctx context.Context, a resource.AccountID, name string, want AuthorizedPrincipal) error
+	AddUserToGroup(ctx context.Context, a resource.AccountID, group, user string, want AuthorizedPrincipal) error
+	RemoveUserFromGroup(ctx context.Context, a resource.AccountID, group, user string, want AuthorizedPrincipal) error
+	ListGroupsForUser(ctx context.Context, a resource.AccountID, user string, want AuthorizedPrincipal) ([]Group, error)
 
 	CreateRole(ctx context.Context, a resource.AccountID, in RoleInput) (Role, error)
-	GetRole(ctx context.Context, a resource.AccountID, name string, want AuthorizedARN) (Role, error)
-	UpdateRole(ctx context.Context, a resource.AccountID, name string, in RoleUpdate, want AuthorizedARN) error
+	GetRole(ctx context.Context, a resource.AccountID, name string, want AuthorizedPrincipal) (Role, error)
+	UpdateRole(ctx context.Context, a resource.AccountID, name string, in RoleUpdate, want AuthorizedPrincipal) error
 	UpdateRoleDescription(
-		ctx context.Context, a resource.AccountID, name, description string, want AuthorizedARN,
+		ctx context.Context, a resource.AccountID, name, description string, want AuthorizedPrincipal,
 	) (Role, error)
 	ListRoles(ctx context.Context, a resource.AccountID, pathPrefix string) ([]Role, error)
-	UpdateAssumeRolePolicy(ctx context.Context, a resource.AccountID, name, document string, want AuthorizedARN) error
-	DeleteRole(ctx context.Context, a resource.AccountID, name string, want AuthorizedARN) error
+	UpdateAssumeRolePolicy(
+		ctx context.Context, a resource.AccountID, name, document string, want AuthorizedPrincipal,
+	) error
+	DeleteRole(ctx context.Context, a resource.AccountID, name string, want AuthorizedPrincipal) error
 
 	CreatePolicy(ctx context.Context, a resource.AccountID, name, path, document, description string) (ManagedPolicy, error)
 	GetPolicy(ctx context.Context, a resource.AccountID, arn string) (ManagedPolicy, error)
@@ -297,26 +301,26 @@ type Admin interface {
 	// is Conflict.
 	DeletePolicyVersion(ctx context.Context, a resource.AccountID, arn, versionID string) error
 	// The managed and inline policy calls of a user, group or role take the
-	// AuthorizedARN the caller was authorized on. It must match the entity's
+	// AuthorizedPrincipal the caller was authorized on. It must match the entity's
 	// current ARN on every read, or the call is a ConcurrentModification
 	// (Changed) and nothing is written.
-	AttachPolicy(ctx context.Context, a resource.AccountID, kind Entity, name, arn string, want AuthorizedARN) error
-	DetachPolicy(ctx context.Context, a resource.AccountID, kind Entity, name, arn string, want AuthorizedARN) error
+	AttachPolicy(ctx context.Context, a resource.AccountID, kind Entity, name, arn string, want AuthorizedPrincipal) error
+	DetachPolicy(ctx context.Context, a resource.AccountID, kind Entity, name, arn string, want AuthorizedPrincipal) error
 	ListAttachedPolicies(
-		ctx context.Context, a resource.AccountID, kind Entity, name string, want AuthorizedARN,
+		ctx context.Context, a resource.AccountID, kind Entity, name string, want AuthorizedPrincipal,
 	) ([]ManagedPolicy, error)
 
 	PutInlinePolicy(
-		ctx context.Context, a resource.AccountID, kind Entity, name, policy, document string, want AuthorizedARN,
+		ctx context.Context, a resource.AccountID, kind Entity, name, policy, document string, want AuthorizedPrincipal,
 	) error
 	GetInlinePolicy(
-		ctx context.Context, a resource.AccountID, kind Entity, name, policy string, want AuthorizedARN,
+		ctx context.Context, a resource.AccountID, kind Entity, name, policy string, want AuthorizedPrincipal,
 	) (string, error)
 	DeleteInlinePolicy(
-		ctx context.Context, a resource.AccountID, kind Entity, name, policy string, want AuthorizedARN,
+		ctx context.Context, a resource.AccountID, kind Entity, name, policy string, want AuthorizedPrincipal,
 	) error
 	ListInlinePolicies(
-		ctx context.Context, a resource.AccountID, kind Entity, name string, want AuthorizedARN,
+		ctx context.Context, a resource.AccountID, kind Entity, name string, want AuthorizedPrincipal,
 	) ([]string, error)
 
 	TagPolicy(ctx context.Context, a resource.AccountID, arn string, tags []Tag) error
@@ -333,7 +337,7 @@ type Admin interface {
 	// argument is the AWS UserName, not an ARN. want must be the user's ARN
 	// for the whole read.
 	ListMFADevices(
-		ctx context.Context, a resource.AccountID, user, marker string, maxItems int, want AuthorizedARN,
+		ctx context.Context, a resource.AccountID, user, marker string, maxItems int, want AuthorizedPrincipal,
 	) (MFADevicePage, error)
 
 	// The MFA device argument is the device serial number, the ARN the AWS

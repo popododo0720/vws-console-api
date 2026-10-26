@@ -30,9 +30,9 @@ import (
 // which vws-iam replays, so a retry on UNAVAILABLE applies it once. When
 // another writer moved the etag, it reads again, up to membershipAttempts
 // times, as group membership changes do. Every read, the first included,
-// must find the entity at the AuthorizedARN: one moved since the caller was
+// must find the entity at the AuthorizedPrincipal: one moved since the caller was
 // authorized is a ConcurrentModification, and nothing is written. A zero
-// AuthorizedARN is Internal before anything is sent.
+// AuthorizedPrincipal is Internal before anything is sent.
 //
 // The AWS rules are checked here, before vws-iam's: the PoliciesPerUser and
 // PoliciesPerGroup quotas, the policy grammar and the aggregate inline
@@ -127,7 +127,7 @@ func entityWord(kind iam.Entity) string {
 // readHolder reads the user or group name of kind and checks it is still at
 // the authorized ARN.
 func (a STSAdmin) readHolder(
-	ctx context.Context, account resource.AccountID, kind iam.Entity, name string, want iam.AuthorizedARN,
+	ctx context.Context, account resource.AccountID, kind iam.Entity, name string, want iam.AuthorizedPrincipal,
 ) (policyHolder, error) {
 	if !entityName(name) {
 		return policyHolder{}, entityNotFound(entityWord(kind), name)
@@ -197,7 +197,7 @@ func (a STSAdmin) writeHolder(ctx context.Context, kind iam.Entity, name string,
 // changePolicies reads the holder, asks change for the new field and writes
 // it, reading again when another writer won, as changeMembers does.
 func (a STSAdmin) changePolicies(
-	ctx context.Context, account resource.AccountID, kind iam.Entity, name string, want iam.AuthorizedARN,
+	ctx context.Context, account resource.AccountID, kind iam.Entity, name string, want iam.AuthorizedPrincipal,
 	change func(ctx context.Context, h policyHolder) (policyChange, error),
 ) error {
 	ctx, cancel := context.WithTimeout(ctx, OperationTimeout)
@@ -231,7 +231,7 @@ func attachedIndex(attached []string, resourceName string) int {
 // attached policy is a no-op; one more than MaxAttachedPolicies is
 // LimitExceeded.
 func (a STSAdmin) AttachPolicy(
-	ctx context.Context, account resource.AccountID, kind iam.Entity, name, arn string, want iam.AuthorizedARN,
+	ctx context.Context, account resource.AccountID, kind iam.Entity, name, arn string, want iam.AuthorizedPrincipal,
 ) (err error) {
 	if err := want.Require(); err != nil {
 		return err
@@ -260,7 +260,7 @@ func (a STSAdmin) AttachPolicy(
 // DetachPolicy implements iam.Admin on spec.attached_policies. A policy that
 // is not attached is NoSuchEntity, as in AWS.
 func (a STSAdmin) DetachPolicy(
-	ctx context.Context, account resource.AccountID, kind iam.Entity, name, arn string, want iam.AuthorizedARN,
+	ctx context.Context, account resource.AccountID, kind iam.Entity, name, arn string, want iam.AuthorizedPrincipal,
 ) (err error) {
 	if err := want.Require(); err != nil {
 		return err
@@ -286,11 +286,11 @@ func (a STSAdmin) DetachPolicy(
 
 // ListAttachedPolicies implements iam.Admin: the attached policies of the
 // user or group, each read with PolicyService.GetPolicy, sorted by name. A
-// policy vws-iam no longer has is left out. The AuthorizedARN must be
+// policy vws-iam no longer has is left out. The AuthorizedPrincipal must be
 // the entity's ARN when it is read before the policies and again after
 // them, as in ListAccessKeys.
 func (a STSAdmin) ListAttachedPolicies(
-	ctx context.Context, account resource.AccountID, kind iam.Entity, name string, want iam.AuthorizedARN,
+	ctx context.Context, account resource.AccountID, kind iam.Entity, name string, want iam.AuthorizedPrincipal,
 ) (out []iam.ManagedPolicy, err error) {
 	if err := want.Require(); err != nil {
 		return nil, err
@@ -352,7 +352,7 @@ func managedFromProto(p *iamv1.Policy) iam.ManagedPolicy {
 // nothing.
 func (a STSAdmin) PutInlinePolicy(
 	ctx context.Context, account resource.AccountID, kind iam.Entity, name, policy, document string,
-	want iam.AuthorizedARN,
+	want iam.AuthorizedPrincipal,
 ) (err error) {
 	if err := want.Require(); err != nil {
 		return err
@@ -390,7 +390,7 @@ func (a STSAdmin) PutInlinePolicy(
 
 // GetInlinePolicy implements iam.Admin: the document as stored.
 func (a STSAdmin) GetInlinePolicy(
-	ctx context.Context, account resource.AccountID, kind iam.Entity, name, policy string, want iam.AuthorizedARN,
+	ctx context.Context, account resource.AccountID, kind iam.Entity, name, policy string, want iam.AuthorizedPrincipal,
 ) (doc string, err error) {
 	if err := want.Require(); err != nil {
 		return "", err
@@ -414,7 +414,7 @@ func (a STSAdmin) GetInlinePolicy(
 // DeleteInlinePolicy implements iam.Admin on spec.inline_policies. A policy
 // the entity does not have is NoSuchEntity.
 func (a STSAdmin) DeleteInlinePolicy(
-	ctx context.Context, account resource.AccountID, kind iam.Entity, name, policy string, want iam.AuthorizedARN,
+	ctx context.Context, account resource.AccountID, kind iam.Entity, name, policy string, want iam.AuthorizedPrincipal,
 ) (err error) {
 	if err := want.Require(); err != nil {
 		return err
@@ -437,7 +437,7 @@ func (a STSAdmin) DeleteInlinePolicy(
 
 // ListInlinePolicies implements iam.Admin: the inline policy names, sorted.
 func (a STSAdmin) ListInlinePolicies(
-	ctx context.Context, account resource.AccountID, kind iam.Entity, name string, want iam.AuthorizedARN,
+	ctx context.Context, account resource.AccountID, kind iam.Entity, name string, want iam.AuthorizedPrincipal,
 ) (out []string, err error) {
 	if err := want.Require(); err != nil {
 		return nil, err

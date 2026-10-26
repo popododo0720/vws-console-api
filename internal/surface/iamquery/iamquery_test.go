@@ -34,7 +34,9 @@ type vanishedUserAdmin struct {
 	iam.Directory
 }
 
-func (a *vanishedUserAdmin) GetUser(context.Context, resource.AccountID, string, iam.AuthorizedARN) (iam.User, error) {
+func (a *vanishedUserAdmin) GetUser(
+	context.Context, resource.AccountID, string, iam.AuthorizedPrincipal,
+) (iam.User, error) {
 	return iam.User{}, &resource.Error{Code: resource.CodeNotFound, Message: "The user cannot be found."}
 }
 

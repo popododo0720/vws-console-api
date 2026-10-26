@@ -40,7 +40,7 @@ func notServed(op string) error {
 
 // unboundOrNotServed is a bound call that is not served yet: the zero want
 // is still Unbound, as on every bound call.
-func unboundOrNotServed(want iam.AuthorizedARN, op string) error {
+func unboundOrNotServed(want iam.AuthorizedPrincipal, op string) error {
 	if err := want.Require(); err != nil {
 		return err
 	}
@@ -120,7 +120,7 @@ func (STSAdmin) CreateRole(_ context.Context, _ resource.AccountID, _ iam.RoleIn
 // GetRole implements iam.Admin over RoleService.GetRole. want must be the
 // role's ARN; the zero value sends nothing.
 func (a STSAdmin) GetRole(
-	ctx context.Context, account resource.AccountID, name string, want iam.AuthorizedARN,
+	ctx context.Context, account resource.AccountID, name string, want iam.AuthorizedPrincipal,
 ) (iam.Role, error) {
 	if err := want.Require(); err != nil {
 		return iam.Role{}, err
@@ -165,7 +165,7 @@ func roleName(account resource.AccountID, name string) string {
 // role deleted and created again on another path since the caller was
 // authorized is Changed(RoleChanged). A role with no ARN is internal.
 func (a STSAdmin) roleAt(
-	ctx context.Context, account resource.AccountID, name string, want iam.AuthorizedARN,
+	ctx context.Context, account resource.AccountID, name string, want iam.AuthorizedPrincipal,
 ) (*iamv1.Role, error) {
 	role, err := a.role(ctx, account, name)
 	if err != nil {
@@ -184,7 +184,7 @@ func (a STSAdmin) roleAt(
 // UpdateRole implements iam.Admin over RoleService.UpdateRole with a mask on
 // the fields the caller set. want must be the role's ARN when it is read.
 func (a STSAdmin) UpdateRole(
-	ctx context.Context, account resource.AccountID, name string, in iam.RoleUpdate, want iam.AuthorizedARN,
+	ctx context.Context, account resource.AccountID, name string, in iam.RoleUpdate, want iam.AuthorizedPrincipal,
 ) error {
 	if err := want.Require(); err != nil {
 		return err
@@ -233,7 +233,7 @@ func (a STSAdmin) UpdateRole(
 // UpdateRoleDescription implements iam.Admin over RoleService.UpdateRole with
 // a mask on spec.description. want must be the role's ARN when it is read.
 func (a STSAdmin) UpdateRoleDescription(
-	ctx context.Context, account resource.AccountID, name, description string, want iam.AuthorizedARN,
+	ctx context.Context, account resource.AccountID, name, description string, want iam.AuthorizedPrincipal,
 ) (iam.Role, error) {
 	if err := want.Require(); err != nil {
 		return iam.Role{}, err
@@ -298,13 +298,13 @@ func (STSAdmin) ListRoles(_ context.Context, _ resource.AccountID, _ string) ([]
 // UpdateAssumeRolePolicy implements iam.Admin. The zero want is refused
 // first, as on every bound call.
 func (STSAdmin) UpdateAssumeRolePolicy(
-	_ context.Context, _ resource.AccountID, _, _ string, want iam.AuthorizedARN,
+	_ context.Context, _ resource.AccountID, _, _ string, want iam.AuthorizedPrincipal,
 ) error {
 	return unboundOrNotServed(want, "UpdateAssumeRolePolicy")
 }
 
 // DeleteRole implements iam.Admin.
-func (STSAdmin) DeleteRole(_ context.Context, _ resource.AccountID, _ string, want iam.AuthorizedARN) error {
+func (STSAdmin) DeleteRole(_ context.Context, _ resource.AccountID, _ string, want iam.AuthorizedPrincipal) error {
 	return unboundOrNotServed(want, "DeleteRole")
 }
 
@@ -467,25 +467,29 @@ func (a STSAdmin) DeletePolicyVersion(
 
 // CreateLoginProfile implements iam.Admin.
 func (STSAdmin) CreateLoginProfile(
-	_ context.Context, _ resource.AccountID, _, _ string, want iam.AuthorizedARN,
+	_ context.Context, _ resource.AccountID, _, _ string, want iam.AuthorizedPrincipal,
 ) (iam.LoginProfile, error) {
 	return iam.LoginProfile{}, unboundOrNotServed(want, "CreateLoginProfile")
 }
 
 // GetLoginProfile implements iam.Admin.
 func (STSAdmin) GetLoginProfile(
-	_ context.Context, _ resource.AccountID, _ string, want iam.AuthorizedARN,
+	_ context.Context, _ resource.AccountID, _ string, want iam.AuthorizedPrincipal,
 ) (iam.LoginProfile, error) {
 	return iam.LoginProfile{}, unboundOrNotServed(want, "GetLoginProfile")
 }
 
 // UpdateLoginProfile implements iam.Admin.
-func (STSAdmin) UpdateLoginProfile(_ context.Context, _ resource.AccountID, _, _ string, want iam.AuthorizedARN) error {
+func (STSAdmin) UpdateLoginProfile(
+	_ context.Context, _ resource.AccountID, _, _ string, want iam.AuthorizedPrincipal,
+) error {
 	return unboundOrNotServed(want, "UpdateLoginProfile")
 }
 
 // DeleteLoginProfile implements iam.Admin.
-func (STSAdmin) DeleteLoginProfile(_ context.Context, _ resource.AccountID, _ string, want iam.AuthorizedARN) error {
+func (STSAdmin) DeleteLoginProfile(
+	_ context.Context, _ resource.AccountID, _ string, want iam.AuthorizedPrincipal,
+) error {
 	return unboundOrNotServed(want, "DeleteLoginProfile")
 }
 
@@ -710,7 +714,7 @@ func (a STSAdmin) ListVirtualMFADevices(
 // moved since the caller was authorized, or while the pages were read, is a
 // ConcurrentModification with no device.
 func (a STSAdmin) ListMFADevices(
-	ctx context.Context, account resource.AccountID, user, marker string, maxItems int, want iam.AuthorizedARN,
+	ctx context.Context, account resource.AccountID, user, marker string, maxItems int, want iam.AuthorizedPrincipal,
 ) (iam.MFADevicePage, error) {
 	if err := want.Require(); err != nil {
 		return iam.MFADevicePage{}, err
@@ -769,7 +773,9 @@ func (a STSAdmin) ListMFADevices(
 
 // userAt reads the user and checks that want is its ARN: a user that moved
 // since the caller was authorized is Changed(UserChanged).
-func (a STSAdmin) userAt(ctx context.Context, account resource.AccountID, user string, want iam.AuthorizedARN) error {
+func (a STSAdmin) userAt(
+	ctx context.Context, account resource.AccountID, user string, want iam.AuthorizedPrincipal,
+) error {
 	_, err := a.GetUser(ctx, account, user, want)
 	return err
 }

@@ -92,7 +92,7 @@ func TestEntityPolicyCallsActOnTheAuthorizedARN(t *testing.T) {
 					}
 				}
 				t.Run(name, func(t *testing.T) {
-					h, f, account, bob := authorizedARNHarness(t, mover)
+					h, f, account, bob := authorizedPrincipalHarness(t, mover)
 					arns := map[string]string{
 						"Kept": seedManaged(t, f, account, "Kept", "/"), "Other": seedManaged(t, f, account, "Other", "/"),
 					}
@@ -140,7 +140,7 @@ func TestEntityPolicyCallsActOnTheAuthorizedARN(t *testing.T) {
 // MaxItems and filters on the policy path; List*Policies pages and takes no
 // PathPrefix.
 func TestEntityPolicyListsPage(t *testing.T) {
-	h, f, account, bob := authorizedARNHarness(t, nil)
+	h, f, account, bob := authorizedPrincipalHarness(t, nil)
 	ctx := t.Context()
 	for _, p := range [][2]string{{"A", "/"}, {"B", "/x/"}, {"C", "/x/y/"}} {
 		arn := seedManaged(t, f, account, p[0], p[1])
@@ -217,7 +217,7 @@ func TestEntityPolicyListsPage(t *testing.T) {
 // messages for bad input, quotas and missing policies, and return inline
 // documents URL-encoded.
 func TestEntityPolicyErrorsAndShapes(t *testing.T) {
-	h, f, account, bob := authorizedARNHarness(t, nil)
+	h, f, account, bob := authorizedPrincipalHarness(t, nil)
 	arn := "arn:vws:iam::" + account.String() + ":"
 	var managed []string
 	for i := range 11 {
