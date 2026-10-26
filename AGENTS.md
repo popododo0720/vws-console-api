@@ -93,13 +93,16 @@ change both files together.
 - One issue is one branch from `main` and one PR. Commits are atomic and do
   not mix a refactor with a behavior change. Never force-push; never merge
   your own PR.
-- Scripts and bots may push branches and open PRs. Merges happen only
-  through the orchestrator's auto-merge (every CI check on the head green,
-  verify-gate PASS, the `vws-verify` App check run PASS, no conflicts,
-  squash with `--match-head-commit` set to the verified head, not labeled
-  `blocked`) or by the lead.
-- Bots contact the lead only for decisions, escalations after 3 failures,
-  or user approvals; all status lives on GitHub.
+- Deterministic scripts (the orchestrator, the handoff submit) and bots may
+  push branches and open PRs; scripts may also merge. A script merge needs
+  every CI check on the head green, verify-gate PASS, the `vws-verify` App
+  check run PASS, no conflicts, a squash with `--match-head-commit` set to
+  the verified head, and no `blocked` label; `ORCHESTRATE_MERGE=apply` is
+  approved only under these conditions. Otherwise only the lead merges.
+- The lead (dr eggbot) is woken only for decisions and failures (issue
+  scope, real conflicts, failed checks), not for routine push, PR or merge.
+  Bots contact the lead only for those, escalations after 3 failures, or
+  user approvals; all status lives on GitHub.
 - Verify T0 only (unit tests, fakes, envtest); the verification bot runs T1
   and T2.
 - pstack, for a new package, shared type, surface or backend method:
