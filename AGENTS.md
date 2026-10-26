@@ -49,7 +49,7 @@ change both files together.
 | IAM and STS actions are authorized on the real ARN first; a failed lookup authorizes nothing. | `TestEntityActionsFailClosedWhenTheLookupFails` |
 | Every console route is authenticated and authorized. | `TestEveryRouteIsAuthorized` |
 | Only `iamclient` speaks vws.iam.v1; no secret reaches vws-iam. | `TestSecretsNeverLeaveConsoleAPI` |
-| Named-entity `iam.Admin` methods take an `iam.AuthorizedARN`, built only by `iam.Authorize`. | `TestOnlyTheAuthorizerBuildsAnAuthorizedARN` |
+| Named-entity `iam.Admin` methods take an `iam.AuthorizedPrincipal`, built only by `iam.Authorize`. | `TestOnlyTheAuthorizerBuildsAnAuthorizedPrincipal` |
 | IAM tag, MFA, access key and policy actions follow AWS and act only on the authorized entity. | `TestAccessKeyCallsActOnTheAuthorizedARN`, `TestEntityPolicyCallsActOnTheAuthorizedARN` |
 | Access key secrets and policy documents are never logged or traced. | `TestAccessKeySecretIsNeverLoggedOrTraced` |
 | Every `resource.Action` has a console route. | `TestEveryActionHasARoute` |

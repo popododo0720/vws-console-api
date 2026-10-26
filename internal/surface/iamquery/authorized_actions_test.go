@@ -68,11 +68,11 @@ func (a *boundMover) ResolveRole(ctx context.Context, account resource.AccountID
 const boundTrustPolicy = `{"Version":"2012-10-17","Statement":[{"Effect":"Allow",` +
 	`"Principal":{"Service":"compute.vws"},"Action":"sts:AssumeRole"}]}`
 
-// #342 (#331): every IAM action bound to an AuthorizedARN answers a user,
+// #342 (#331): every IAM action bound to an AuthorizedPrincipal answers a user,
 // group or role that moved to a path the caller is denied between the
 // authorization and the call with 409 ConcurrentModification and no data.
 // Without the move the same request succeeds, so the policy allows it. The
-// backend contract (backendtest.IAMAuthorizedARN) shows that nothing is
+// backend contract (backendtest.IAMAuthorizedPrincipal) shows that nothing is
 // written.
 func TestEveryBoundActionActsOnTheAuthorizedARN(t *testing.T) {
 	doc := url.QueryEscape(

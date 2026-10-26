@@ -7,10 +7,10 @@ import (
 	"github.com/popododo0720/vws-console-api/internal/iam"
 )
 
-// #342: every Admin call of the fake bound to an AuthorizedARN refuses the
+// #342: every Admin call of the fake bound to an AuthorizedPrincipal refuses the
 // zero value and a moved entity, and serves the authorized one.
-func TestFakeAuthorizedARNContract(t *testing.T) {
-	backendtest.IAMAuthorizedARN(t, func(*testing.T) (iam.Directory, backendtest.PolicySeeder) {
+func TestFakeAuthorizedPrincipalContract(t *testing.T) {
+	backendtest.IAMAuthorizedPrincipal(t, func(*testing.T) (iam.Directory, backendtest.PolicySeeder) {
 		return iam.NewFake(), nil
 	}, backendtest.ServesAll)
 }

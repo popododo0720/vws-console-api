@@ -57,7 +57,7 @@ type exchange struct {
 	// authorized is the resource ARN the action was authorized on. Every
 	// Admin call on a named user, group or role takes it, so an entity that
 	// moved since is not read or changed (#342). Only iam.Authorize sets it.
-	authorized iam.AuthorizedARN
+	authorized iam.AuthorizedPrincipal
 	// lastUsed caches the key read, so the ARN check and the response use
 	// one snapshot.
 	lastUsed     iam.AccessKeyLastUsed

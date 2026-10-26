@@ -9,7 +9,7 @@ import (
 )
 
 // #358: every Admin call that answers one named user, group or role, other
-// than the Create call that makes it, takes the AuthorizedARN the caller was
+// than the Create call that makes it, takes the AuthorizedPrincipal the caller was
 // authorized on. The pre-authorization lookup is Resolver, which answers an
 // identity (ARN and unique ID) and never the entity's data.
 func TestAdminEntityReadsAreBound(t *testing.T) {
@@ -17,7 +17,7 @@ func TestAdminEntityReadsAreBound(t *testing.T) {
 	entity := map[reflect.Type]bool{
 		reflect.TypeFor[iam.User](): true, reflect.TypeFor[iam.Group](): true, reflect.TypeFor[iam.Role](): true,
 	}
-	bound := reflect.TypeFor[iam.AuthorizedARN]()
+	bound := reflect.TypeFor[iam.AuthorizedPrincipal]()
 	for i := range admin.NumMethod() {
 		m := admin.Method(i)
 		if strings.HasPrefix(m.Name, "Create") || m.Type.NumOut() == 0 || !entity[m.Type.Out(0)] {
@@ -28,7 +28,7 @@ func TestAdminEntityReadsAreBound(t *testing.T) {
 			takes = takes || m.Type.In(j) == bound
 		}
 		if !takes {
-			t.Errorf("iam.Admin.%s answers a %s without an AuthorizedARN", m.Name, m.Type.Out(0).Name())
+			t.Errorf("iam.Admin.%s answers a %s without an AuthorizedPrincipal", m.Name, m.Type.Out(0).Name())
 		}
 	}
 	resolver := reflect.TypeFor[iam.Resolver]()

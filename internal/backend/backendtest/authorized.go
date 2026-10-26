@@ -13,7 +13,7 @@ import (
 
 // IAMServes names the iam.Directory call families a backend serves beyond users,
 // groups and access keys. A family a backend does not serve is still checked
-// for the zero AuthorizedARN, which every bound call refuses before it reads
+// for the zero AuthorizedPrincipal, which every bound call refuses before it reads
 // anything.
 type IAMServes uint
 
@@ -32,14 +32,14 @@ const (
 )
 
 // IAMCallCounter is an iam.Directory that counts the requests it sends to its
-// backend. IAMAuthorizedARN then also checks that a call with the zero
-// AuthorizedARN sends none.
+// backend. IAMAuthorizedPrincipal then also checks that a call with the zero
+// AuthorizedPrincipal sends none.
 type IAMCallCounter interface {
 	iam.Directory
 	Calls() int
 }
 
-// boundRow is one iam.Directory call bound to an AuthorizedARN (#342).
+// boundRow is one iam.Directory call bound to an AuthorizedPrincipal (#342).
 type boundRow struct {
 	op     string
 	needs  IAMServes // zero: users, groups and access keys only
@@ -47,7 +47,7 @@ type boundRow struct {
 	moved  string    // the same entity on another path: a stale binding
 	msg    string    // the Changed message
 	writes bool      // an authorized call changes the snapshot
-	call   func(ctx context.Context, a iam.Directory, want iam.AuthorizedARN) error
+	call   func(ctx context.Context, a iam.Directory, want iam.AuthorizedPrincipal) error
 }
 
 const (
@@ -69,16 +69,18 @@ func boundPolicyARN(name string) string { return "arn:vws:iam::123456789012:poli
 // after the seed.
 func boundRows(key *string) []boundRow {
 	user := func(op, arn string, needs IAMServes, writes bool,
-		call func(context.Context, iam.Directory, iam.AuthorizedARN) error,
+		call func(context.Context, iam.Directory, iam.AuthorizedPrincipal) error,
 	) boundRow {
 		return boundRow{op, needs, arn, strings.Replace(arn, ":user/", ":user/denied/", 1), iam.UserChanged, writes, call}
 	}
 	group := func(
-		op, arn string, writes bool, call func(context.Context, iam.Directory, iam.AuthorizedARN) error,
+		op, arn string, writes bool, call func(context.Context, iam.Directory, iam.AuthorizedPrincipal) error,
 	) boundRow {
 		return boundRow{op, 0, arn, strings.Replace(arn, ":group/", ":group/denied/", 1), iam.GroupChanged, writes, call}
 	}
-	role := func(op string, needs IAMServes, call func(context.Context, iam.Directory, iam.AuthorizedARN) error) boundRow {
+	role := func(
+		op string, needs IAMServes, call func(context.Context, iam.Directory, iam.AuthorizedPrincipal) error,
+	) boundRow {
 		return boundRow{
 			op, ServesRoles | needs, boundOps, strings.Replace(boundOps, ":role/", ":role/denied/", 1),
 			iam.RoleChanged, true, call,
@@ -87,28 +89,34 @@ func boundRows(key *string) []boundRow {
 	acct := iamAccount()
 	desc := "bound"
 	return []boundRow{
-		user("DeleteUser", boundCarol, 0, true, func(ctx context.Context, a iam.Directory, w iam.AuthorizedARN) error {
+		user("DeleteUser", boundCarol, 0, true, func(ctx context.Context, a iam.Directory, w iam.AuthorizedPrincipal) error {
 			return a.DeleteUser(ctx, acct, "carol", w)
 		}),
-		user("UpdateUser", boundBob, 0, true, func(ctx context.Context, a iam.Directory, w iam.AuthorizedARN) error {
+		user("UpdateUser", boundBob, 0, true, func(ctx context.Context, a iam.Directory, w iam.AuthorizedPrincipal) error {
 			return a.UpdateUser(ctx, acct, "bob", "/moved/", "", w)
 		}),
-		user("CreateAccessKey", boundBob, 0, true, func(ctx context.Context, a iam.Directory, w iam.AuthorizedARN) error {
+		user("CreateAccessKey", boundBob, 0, true, func(
+			ctx context.Context, a iam.Directory, w iam.AuthorizedPrincipal,
+		) error {
 			_, err := a.CreateAccessKey(ctx, acct, "bob", w)
 			return err
 		}),
-		user("ListAccessKeys", boundBob, 0, false, func(ctx context.Context, a iam.Directory, w iam.AuthorizedARN) error {
+		user("ListAccessKeys", boundBob, 0, false, func(
+			ctx context.Context, a iam.Directory, w iam.AuthorizedPrincipal,
+		) error {
 			ks, err := a.ListAccessKeys(ctx, acct, "bob", w)
 			if err == nil && len(ks) != 1 {
 				return fmt.Errorf("keys %v, want the seeded one", ks)
 			}
 			return err
 		}),
-		user("DeleteAccessKey", boundBob, 0, true, func(ctx context.Context, a iam.Directory, w iam.AuthorizedARN) error {
+		user("DeleteAccessKey", boundBob, 0, true, func(
+			ctx context.Context, a iam.Directory, w iam.AuthorizedPrincipal,
+		) error {
 			return a.DeleteAccessKey(ctx, acct, "bob", *key, w)
 		}),
 		user("ListGroupsForUser", boundAlice, 0, false, func(
-			ctx context.Context, a iam.Directory, w iam.AuthorizedARN,
+			ctx context.Context, a iam.Directory, w iam.AuthorizedPrincipal,
 		) error {
 			gs, err := a.ListGroupsForUser(ctx, acct, "alice", w)
 			if err == nil && len(gs) != 1 {
@@ -116,7 +124,7 @@ func boundRows(key *string) []boundRow {
 			}
 			return err
 		}),
-		user("GetUser", boundAlice, 0, false, func(ctx context.Context, a iam.Directory, w iam.AuthorizedARN) error {
+		user("GetUser", boundAlice, 0, false, func(ctx context.Context, a iam.Directory, w iam.AuthorizedPrincipal) error {
 			u, err := a.GetUser(ctx, acct, "alice", w)
 			if err != nil && u != (iam.User{}) {
 				return fmt.Errorf("the error %q came with the user %+v", err.Error(), u)
@@ -126,7 +134,7 @@ func boundRows(key *string) []boundRow {
 			}
 			return err
 		}),
-		group("GetGroup", boundDevs, false, func(ctx context.Context, a iam.Directory, w iam.AuthorizedARN) error {
+		group("GetGroup", boundDevs, false, func(ctx context.Context, a iam.Directory, w iam.AuthorizedPrincipal) error {
 			g, us, err := a.GetGroup(ctx, acct, "devs", w)
 			if err != nil && (g != (iam.Group{}) || us != nil) {
 				return fmt.Errorf("the error %q came with the group %+v and members %v", err.Error(), g, us)
@@ -139,7 +147,7 @@ func boundRows(key *string) []boundRow {
 		{
 			"GetRole", ServesRoles, boundOps, strings.Replace(boundOps, ":role/", ":role/denied/", 1),
 			iam.RoleChanged, false,
-			func(ctx context.Context, a iam.Directory, w iam.AuthorizedARN) error {
+			func(ctx context.Context, a iam.Directory, w iam.AuthorizedPrincipal) error {
 				r, err := a.GetRole(ctx, acct, "ops", w)
 				if err != nil && r != (iam.Role{}) {
 					return fmt.Errorf("the error %q came with the role %+v", err.Error(), r)
@@ -150,64 +158,66 @@ func boundRows(key *string) []boundRow {
 				return err
 			},
 		},
-		group("UpdateGroup", boundDevs, true, func(ctx context.Context, a iam.Directory, w iam.AuthorizedARN) error {
+		group("UpdateGroup", boundDevs, true, func(ctx context.Context, a iam.Directory, w iam.AuthorizedPrincipal) error {
 			return a.UpdateGroup(ctx, acct, "devs", "/moved/", "", w)
 		}),
-		group("DeleteGroup", boundEmpty, true, func(ctx context.Context, a iam.Directory, w iam.AuthorizedARN) error {
+		group("DeleteGroup", boundEmpty, true, func(ctx context.Context, a iam.Directory, w iam.AuthorizedPrincipal) error {
 			return a.DeleteGroup(ctx, acct, "empty", w)
 		}),
-		group("AddUserToGroup", boundDevs, true, func(ctx context.Context, a iam.Directory, w iam.AuthorizedARN) error {
+		group("AddUserToGroup", boundDevs, true, func(ctx context.Context, a iam.Directory, w iam.AuthorizedPrincipal) error {
 			return a.AddUserToGroup(ctx, acct, "devs", "bob", w)
 		}),
-		group("RemoveUserFromGroup", boundDevs, true, func(ctx context.Context, a iam.Directory, w iam.AuthorizedARN) error {
+		group("RemoveUserFromGroup", boundDevs, true, func(
+			ctx context.Context, a iam.Directory, w iam.AuthorizedPrincipal,
+		) error {
 			return a.RemoveUserFromGroup(ctx, acct, "devs", "alice", w)
 		}),
 		user("CreateLoginProfile", boundBob, ServesLoginProfiles, true,
-			func(ctx context.Context, a iam.Directory, w iam.AuthorizedARN) error {
+			func(ctx context.Context, a iam.Directory, w iam.AuthorizedPrincipal) error {
 				_, err := a.CreateLoginProfile(ctx, acct, "bob", boundPw, w)
 				return err
 			}),
 		user("GetLoginProfile", boundAlice, ServesLoginProfiles, false,
-			func(ctx context.Context, a iam.Directory, w iam.AuthorizedARN) error {
+			func(ctx context.Context, a iam.Directory, w iam.AuthorizedPrincipal) error {
 				_, err := a.GetLoginProfile(ctx, acct, "alice", w)
 				return err
 			}),
 		user("UpdateLoginProfile", boundAlice, ServesLoginProfiles, false,
-			func(ctx context.Context, a iam.Directory, w iam.AuthorizedARN) error {
+			func(ctx context.Context, a iam.Directory, w iam.AuthorizedPrincipal) error {
 				return a.UpdateLoginProfile(ctx, acct, "alice", boundPw+"x", w)
 			}),
 		user("DeleteLoginProfile", boundAlice, ServesLoginProfiles, true,
-			func(ctx context.Context, a iam.Directory, w iam.AuthorizedARN) error {
+			func(ctx context.Context, a iam.Directory, w iam.AuthorizedPrincipal) error {
 				return a.DeleteLoginProfile(ctx, acct, "alice", w)
 			}),
 		user("ListMFADevices", boundAlice, ServesMFADevices, false,
-			func(ctx context.Context, a iam.Directory, w iam.AuthorizedARN) error {
+			func(ctx context.Context, a iam.Directory, w iam.AuthorizedPrincipal) error {
 				_, err := a.ListMFADevices(ctx, acct, "alice", "", 0, w)
 				return err
 			}),
-		role("UpdateRole", 0, func(ctx context.Context, a iam.Directory, w iam.AuthorizedARN) error {
+		role("UpdateRole", 0, func(ctx context.Context, a iam.Directory, w iam.AuthorizedPrincipal) error {
 			return a.UpdateRole(ctx, acct, "ops", iam.RoleUpdate{Description: &desc}, w)
 		}),
-		role("UpdateRoleDescription", 0, func(ctx context.Context, a iam.Directory, w iam.AuthorizedARN) error {
+		role("UpdateRoleDescription", 0, func(ctx context.Context, a iam.Directory, w iam.AuthorizedPrincipal) error {
 			_, err := a.UpdateRoleDescription(ctx, acct, "ops", desc, w)
 			return err
 		}),
-		role("UpdateAssumeRolePolicy", 0, func(ctx context.Context, a iam.Directory, w iam.AuthorizedARN) error {
+		role("UpdateAssumeRolePolicy", 0, func(ctx context.Context, a iam.Directory, w iam.AuthorizedPrincipal) error {
 			return a.UpdateAssumeRolePolicy(ctx, acct, "ops", strings.Replace(boundTrust, "compute", "storage", 1), w)
 		}),
-		role("DeleteRole", 0, func(ctx context.Context, a iam.Directory, w iam.AuthorizedARN) error {
+		role("DeleteRole", 0, func(ctx context.Context, a iam.Directory, w iam.AuthorizedPrincipal) error {
 			return a.DeleteRole(ctx, acct, "ops", w)
 		}),
 		user("AttachUserPolicy", boundAlice, ServesEntityPolicies, true,
-			func(ctx context.Context, a iam.Directory, w iam.AuthorizedARN) error {
+			func(ctx context.Context, a iam.Directory, w iam.AuthorizedPrincipal) error {
 				return a.AttachPolicy(ctx, acct, iam.EntityUser, "alice", boundPolicyARN("P2"), w)
 			}),
 		user("DetachUserPolicy", boundAlice, ServesEntityPolicies, true,
-			func(ctx context.Context, a iam.Directory, w iam.AuthorizedARN) error {
+			func(ctx context.Context, a iam.Directory, w iam.AuthorizedPrincipal) error {
 				return a.DetachPolicy(ctx, acct, iam.EntityUser, "alice", boundPolicyARN("P1"), w)
 			}),
 		user("ListAttachedUserPolicies", boundAlice, ServesEntityPolicies, false,
-			func(ctx context.Context, a iam.Directory, w iam.AuthorizedARN) error {
+			func(ctx context.Context, a iam.Directory, w iam.AuthorizedPrincipal) error {
 				ps, err := a.ListAttachedPolicies(ctx, acct, iam.EntityUser, "alice", w)
 				if err == nil && len(ps) != 1 {
 					return fmt.Errorf("attached %v, want P1", ps)
@@ -215,11 +225,11 @@ func boundRows(key *string) []boundRow {
 				return err
 			}),
 		user("PutUserPolicy", boundAlice, ServesEntityPolicies, true,
-			func(ctx context.Context, a iam.Directory, w iam.AuthorizedARN) error {
+			func(ctx context.Context, a iam.Directory, w iam.AuthorizedPrincipal) error {
 				return a.PutInlinePolicy(ctx, acct, iam.EntityUser, "alice", "inline2", boundDoc, w)
 			}),
 		user("GetUserPolicy", boundAlice, ServesEntityPolicies, false,
-			func(ctx context.Context, a iam.Directory, w iam.AuthorizedARN) error {
+			func(ctx context.Context, a iam.Directory, w iam.AuthorizedPrincipal) error {
 				doc, err := a.GetInlinePolicy(ctx, acct, iam.EntityUser, "alice", "inline", w)
 				if err == nil && doc != boundDoc {
 					return fmt.Errorf("document %q", doc)
@@ -227,11 +237,11 @@ func boundRows(key *string) []boundRow {
 				return err
 			}),
 		user("DeleteUserPolicy", boundAlice, ServesEntityPolicies, true,
-			func(ctx context.Context, a iam.Directory, w iam.AuthorizedARN) error {
+			func(ctx context.Context, a iam.Directory, w iam.AuthorizedPrincipal) error {
 				return a.DeleteInlinePolicy(ctx, acct, iam.EntityUser, "alice", "inline", w)
 			}),
 		user("ListUserPolicies", boundAlice, ServesEntityPolicies, false,
-			func(ctx context.Context, a iam.Directory, w iam.AuthorizedARN) error {
+			func(ctx context.Context, a iam.Directory, w iam.AuthorizedPrincipal) error {
 				names, err := a.ListInlinePolicies(ctx, acct, iam.EntityUser, "alice", w)
 				if err == nil && !slices.Equal(names, []string{"inline"}) {
 					return fmt.Errorf("inline policies %v", names)
@@ -241,20 +251,22 @@ func boundRows(key *string) []boundRow {
 		{
 			"AttachGroupPolicy", ServesEntityPolicies, boundDevs,
 			strings.Replace(boundDevs, ":group/", ":group/denied/", 1), iam.GroupChanged, true,
-			func(ctx context.Context, a iam.Directory, w iam.AuthorizedARN) error {
+			func(ctx context.Context, a iam.Directory, w iam.AuthorizedPrincipal) error {
 				return a.AttachPolicy(ctx, acct, iam.EntityGroup, "devs", boundPolicyARN("P2"), w)
 			},
 		},
-		role("AttachRolePolicy", ServesEntityPolicies, func(ctx context.Context, a iam.Directory, w iam.AuthorizedARN) error {
+		role("AttachRolePolicy", ServesEntityPolicies, func(
+			ctx context.Context, a iam.Directory, w iam.AuthorizedPrincipal,
+		) error {
 			return a.AttachPolicy(ctx, acct, iam.EntityRole, "ops", boundPolicyARN("P2"), w)
 		}),
 	}
 }
 
-// IAMAuthorizedARN runs the #342 contract of every iam.Directory call bound to
-// an AuthorizedARN, which the in-memory fake and the vws-iam client must
+// IAMAuthorizedPrincipal runs the #342 contract of every iam.Directory call bound to
+// an AuthorizedPrincipal, which the in-memory fake and the vws-iam client must
 // answer alike:
-//   - the zero AuthorizedARN is an internal error, and nothing is read or
+//   - the zero AuthorizedPrincipal is an internal error, and nothing is read or
 //     written (an IAMCallCounter sends no request);
 //   - a binding to the entity's ARN on another path (a user, group or role
 //     that moved since the caller was authorized) is ConcurrentModification
@@ -263,7 +275,7 @@ func boundRows(key *string) []boundRow {
 //     served.
 //
 // Families outside serves get the zero row only.
-func IAMAuthorizedARN(t *testing.T, newAdmin IAMPolicyHarness, serves IAMServes) {
+func IAMAuthorizedPrincipal(t *testing.T, newAdmin IAMPolicyHarness, serves IAMServes) {
 	t.Helper()
 	var key string
 	seed := func(ctx context.Context, t *testing.T, a iam.Directory, policy PolicySeeder) {
@@ -285,13 +297,13 @@ func IAMAuthorizedARN(t *testing.T, newAdmin IAMPolicyHarness, serves IAMServes)
 			if counts {
 				sent = counter.Calls()
 			}
-			err := row.call(ctx, a, iam.AuthorizedARN{})
-			wantErr(t, row.op+" with the zero AuthorizedARN", err, resource.CodeInternal, "")
+			err := row.call(ctx, a, iam.AuthorizedPrincipal{})
+			wantErr(t, row.op+" with the zero AuthorizedPrincipal", err, resource.CodeInternal, "")
 			if counts && counter.Calls() != sent {
-				t.Fatalf("%s with the zero AuthorizedARN sent %d requests", row.op, counter.Calls()-sent)
+				t.Fatalf("%s with the zero AuthorizedPrincipal sent %d requests", row.op, counter.Calls()-sent)
 			}
 			if after := boundSnapshot(ctx, t, a, serves); after != before {
-				t.Fatalf("%s with the zero AuthorizedARN changed the state:\n%s\nwant\n%s", row.op, after, before)
+				t.Fatalf("%s with the zero AuthorizedPrincipal changed the state:\n%s\nwant\n%s", row.op, after, before)
 			}
 		})
 		if !served {

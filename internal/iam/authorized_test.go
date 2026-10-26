@@ -16,11 +16,11 @@ type decide struct {
 
 func (a decide) Authorize(context.Context, iam.Request) (iam.Decision, error) { return a.d, a.err }
 
-// #342: iam.Authorize is the only way to an AuthorizedARN. It returns one for
+// #342: iam.Authorize is the only way to an AuthorizedPrincipal. It returns one for
 // the authorized ARN only after an allowed decision; a deny, an authorizer
 // error or no authorizer return the zero value, which Require and Bind refuse
 // as an internal error, even against an empty ARN.
-func TestAuthorizedARN(t *testing.T) {
+func TestAuthorizedPrincipal(t *testing.T) {
 	ctx := context.Background()
 	caller := resource.Caller{Principal: "arn:vws:iam::123456789012:user/admin"}
 	const arn = "arn:vws:iam::123456789012:user/ops/alice"
@@ -51,7 +51,7 @@ func TestAuthorizedARN(t *testing.T) {
 		}
 	}
 
-	var zero iam.AuthorizedARN
+	var zero iam.AuthorizedPrincipal
 	for what, err := range map[string]error{
 		"Require":       zero.Require(),
 		"Bind":          zero.Bind(arn, iam.UserChanged),

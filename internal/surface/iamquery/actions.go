@@ -190,14 +190,14 @@ func authorizeMovedGroup(h *handler, c *exchange) error {
 // ARN, as AWS requires. It returns the binding of the snapshot both checks
 // used, so UpdateUser can refuse a concurrent change. A missing user is
 // NoSuchEntity, never an empty snapshot.
-func authorizeMovedUser(h *handler, c *exchange) (iam.AuthorizedARN, error) {
+func authorizeMovedUser(h *handler, c *exchange) (iam.AuthorizedPrincipal, error) {
 	ref, err := h.cfg.Admin.ResolveUser(c.r.Context(), c.caller.Account, c.form("UserName"))
 	if err != nil {
-		return iam.AuthorizedARN{}, err
+		return iam.AuthorizedPrincipal{}, err
 	}
 	want, err := iam.Authorize(c.r.Context(), h.cfg.Authorizer, c.caller, "iam:"+c.action, ref.ARN)
 	if err != nil {
-		return iam.AuthorizedARN{}, err
+		return iam.AuthorizedPrincipal{}, err
 	}
 	newPath, newName := c.form("NewPath"), c.form("NewUserName")
 	if newPath == "" && newName == "" {
@@ -205,7 +205,7 @@ func authorizeMovedUser(h *handler, c *exchange) (iam.AuthorizedARN, error) {
 	}
 	u, err := h.cfg.Admin.GetUser(c.r.Context(), c.caller.Account, c.form("UserName"), want)
 	if err != nil {
-		return iam.AuthorizedARN{}, err
+		return iam.AuthorizedPrincipal{}, err
 	}
 	path, name := u.Path, u.Name
 	if newPath != "" {
@@ -219,7 +219,7 @@ func authorizeMovedUser(h *handler, c *exchange) (iam.AuthorizedARN, error) {
 		return want, nil
 	}
 	if err := iam.Check(c.r.Context(), h.cfg.Authorizer, c.caller, "iam:"+c.action, target); err != nil {
-		return iam.AuthorizedARN{}, err
+		return iam.AuthorizedPrincipal{}, err
 	}
 	return want, nil
 }

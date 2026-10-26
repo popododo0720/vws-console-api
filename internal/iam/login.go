@@ -35,7 +35,7 @@ func guardedVerify(ctx context.Context, g *guard, hash, pw string) (bool, error)
 // CreateLoginProfile implements Admin: it gives user a console password. want
 // must be the user's ARN.
 func (f *Fake) CreateLoginProfile(
-	ctx context.Context, a resource.AccountID, user, password string, want AuthorizedARN,
+	ctx context.Context, a resource.AccountID, user, password string, want AuthorizedPrincipal,
 ) (LoginProfile, error) {
 	if err := want.Require(); err != nil {
 		return LoginProfile{}, err
@@ -65,7 +65,7 @@ func (f *Fake) CreateLoginProfile(
 
 // GetLoginProfile implements Admin. want must be the user's ARN.
 func (f *Fake) GetLoginProfile(
-	_ context.Context, a resource.AccountID, user string, want AuthorizedARN,
+	_ context.Context, a resource.AccountID, user string, want AuthorizedPrincipal,
 ) (LoginProfile, error) {
 	if err := want.Require(); err != nil {
 		return LoginProfile{}, err
@@ -88,7 +88,7 @@ func (f *Fake) GetLoginProfile(
 // lockout. Existing sessions stay valid until they expire or sign out. want
 // must be the user's ARN.
 func (f *Fake) UpdateLoginProfile(
-	ctx context.Context, a resource.AccountID, user, password string, want AuthorizedARN,
+	ctx context.Context, a resource.AccountID, user, password string, want AuthorizedPrincipal,
 ) error {
 	if err := want.Require(); err != nil {
 		return err
@@ -117,7 +117,9 @@ func (f *Fake) UpdateLoginProfile(
 }
 
 // DeleteLoginProfile implements Admin. want must be the user's ARN.
-func (f *Fake) DeleteLoginProfile(_ context.Context, a resource.AccountID, user string, want AuthorizedARN) error {
+func (f *Fake) DeleteLoginProfile(
+	_ context.Context, a resource.AccountID, user string, want AuthorizedPrincipal,
+) error {
 	if err := want.Require(); err != nil {
 		return err
 	}

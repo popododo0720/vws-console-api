@@ -9,7 +9,7 @@ import (
 )
 
 // allowAll is an authorizer that allows every request, so a test can get an
-// iam.AuthorizedARN the only way the code can: from iam.Authorize.
+// iam.AuthorizedPrincipal the only way the code can: from iam.Authorize.
 type allowAll struct{}
 
 func (allowAll) Authorize(context.Context, iam.Request) (iam.Decision, error) {
@@ -19,7 +19,7 @@ func (allowAll) Authorize(context.Context, iam.Request) (iam.Decision, error) {
 // Grant is the binding iam.Authorize returns for arn when the caller is
 // allowed. An arn that is not the entity's own (a forged one) is still a
 // valid binding, and every bound Admin call must answer it as Changed.
-func Grant(ctx context.Context, t testing.TB, arn string) iam.AuthorizedARN {
+func Grant(ctx context.Context, t testing.TB, arn string) iam.AuthorizedPrincipal {
 	t.Helper()
 	caller := resource.Caller{Account: iamAccount(), Principal: iam.RootARN(iamAccount()), Root: true}
 	want, err := iam.Authorize(ctx, allowAll{}, caller, "iam:Test", arn)
@@ -54,7 +54,7 @@ func EntityARN(account resource.AccountID, kind, name string) string {
 // ARN, or the path-less one when it does not exist.
 func UserGrant(
 	ctx context.Context, t testing.TB, a UserLookup, account resource.AccountID, user string,
-) iam.AuthorizedARN {
+) iam.AuthorizedPrincipal {
 	t.Helper()
 	u, err := a.ResolveUser(ctx, account, user)
 	if err != nil {
@@ -66,7 +66,7 @@ func UserGrant(
 // GroupGrant is UserGrant for a group.
 func GroupGrant(
 	ctx context.Context, t testing.TB, a GroupLookup, account resource.AccountID, group string,
-) iam.AuthorizedARN {
+) iam.AuthorizedPrincipal {
 	t.Helper()
 	g, err := a.ResolveGroup(ctx, account, group)
 	if err != nil {
@@ -78,7 +78,7 @@ func GroupGrant(
 // RoleGrant is UserGrant for a role.
 func RoleGrant(
 	ctx context.Context, t testing.TB, a RoleLookup, account resource.AccountID, role string,
-) iam.AuthorizedARN {
+) iam.AuthorizedPrincipal {
 	t.Helper()
 	r, err := a.ResolveRole(ctx, account, role)
 	if err != nil || r.ARN == "" {
@@ -97,7 +97,7 @@ type EntityLookup interface {
 // EntityGrant is UserGrant, GroupGrant or RoleGrant by kind.
 func EntityGrant(
 	ctx context.Context, t testing.TB, a EntityLookup, account resource.AccountID, kind iam.Entity, name string,
-) iam.AuthorizedARN {
+) iam.AuthorizedPrincipal {
 	t.Helper()
 	switch kind {
 	case iam.EntityUser:
