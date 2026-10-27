@@ -46,7 +46,7 @@ change both files together.
 | Fakes and the gRPC client behave the same. | `backendtest.Run` |
 | Ops endpoints and `vws_` metrics. | `TestOpsEndpoints` |
 | Credentials come from env or files; grpc refuses defaults; values never logged. | `TestGRPCRefusesDefaultCredentials` |
-| IAM and STS actions validate UserName first, then authorize on the real ARN; a failed lookup authorizes nothing. | `TestUserNameValidationPrecedesAuthorization`, `TestEntityActionsFailClosedWhenTheLookupFails` |
+| IAM and STS actions validate UserName first, at each action's AWS limit (64 or 128), then authorize on the real ARN; a failed lookup authorizes nothing. | `TestUserNameValidationPrecedesAuthorization`, `TestUserNameLengthFollowsTheAWSLimitOfEachAction`, `TestEntityActionsFailClosedWhenTheLookupFails` |
 | Every console route is authenticated and authorized. | `TestEveryRouteIsAuthorized` |
 | Only `iamclient` speaks vws.iam.v1; no secret reaches vws-iam. | `TestSecretsNeverLeaveConsoleAPI` |
 | Named-entity `iam.Admin` methods take an `iam.AuthorizedPrincipal`, built only by `iam.Authorize`. | `TestOnlyTheAuthorizerBuildsAnAuthorizedPrincipal` |
