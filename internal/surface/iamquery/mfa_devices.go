@@ -1,14 +1,9 @@
 package iamquery
 
 import (
-	"regexp"
-
 	"github.com/popododo0720/vws-console-api/internal/iam"
 	"github.com/popododo0720/vws-console-api/internal/resource"
 )
-
-// listUserNameRE is the AWS UserName pattern.
-var listUserNameRE = regexp.MustCompile(`^[\w+=,.@-]+$`)
 
 // virtualMFADeviceXML is the AWS VirtualMFADevice structure. User is set only
 // when the device is enabled for a user.
@@ -58,38 +53,14 @@ func toListedMFADevice(d iam.MFADevice) listedMFADeviceXML {
 	}
 }
 
-// listMFADevicesARN is the ARN ListMFADevices is authorized on. AWS checks
-// UserName first, then authorizes iam:ListMFADevices on the user whose
-// devices are listed: the named user, else the caller. A malformed UserName
-// is answered before anything is authorized or looked up.
-func listMFADevicesARN(h *handler, c *exchange) string {
-	if c.r.Form.Has("UserName") {
-		if _, err := listMFADevicesUserName(c); err != nil {
-			c.resourceErr = err
-			return ""
-		}
-	}
-	return userARN(h, c)
-}
-
-// listMFADevicesUserName reads ListMFADevices UserName. AWS requires 1 to 128
-// characters from its user name pattern; when the member is omitted the
-// caller's user is used.
+// listMFADevicesUserName reads ListMFADevices UserName. The pre-authorization
+// hook validates a present name; when the member is omitted the caller's user
+// is used.
 func listMFADevicesUserName(c *exchange) (string, error) {
 	if !c.r.Form.Has("UserName") {
 		return requireUser(c)
 	}
-	if err := rejectEmpty(c, "UserName"); err != nil {
-		return "", err
-	}
-	name := c.form("UserName")
-	if len(name) > 128 {
-		return "", badMember("userName", "Member must have length less than or equal to 128")
-	}
-	if !listUserNameRE.MatchString(name) {
-		return "", badMember("userName", `Member must satisfy regular expression pattern: [\w+=,.@-]+`)
-	}
-	return name, nil
+	return c.form("UserName"), nil
 }
 
 // mfaDeviceMarkerParam checks the Marker of the MFA device list actions. AWS

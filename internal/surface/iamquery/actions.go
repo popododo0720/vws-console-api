@@ -100,6 +100,43 @@ func userName(c *exchange) string {
 	return ""
 }
 
+// userNameRE is the AWS UserName pattern.
+var userNameRE = regexp.MustCompile(`^[\w+=,.@-]+$`)
+
+// maxUserNameLen is the AWS UserName maximum length of the action. The
+// userNameType actions take 1 to 64 characters. Every other action takes
+// existingUserNameType, 1 to 128, so a 65 to 128 character name there is
+// looked up and authorized as AWS does, not refused as malformed.
+// iam.CheckUserName still enforces 64 when a user is made.
+func maxUserNameLen(action string) int {
+	switch action {
+	case "AttachUserPolicy", "CreateLoginProfile", "CreateUser", "DeleteLoginProfile", "DetachUserPolicy",
+		"GetLoginProfile", "GetMFADevice", "ListAttachedUserPolicies", "UpdateLoginProfile":
+		return 64
+	default:
+		return 128
+	}
+}
+
+// validateUserName checks a present UserName against the action's AWS
+// constraints. The member is optional on several actions, so an absent one is
+// left for the action.
+func validateUserName(c *exchange) error {
+	if !c.r.Form.Has("UserName") {
+		return nil
+	}
+	name, limit := c.form("UserName"), maxUserNameLen(c.action)
+	switch {
+	case name == "":
+		return badMember("userName", "Member must have length greater than or equal to 1")
+	case len(name) > limit:
+		return badMember("userName", "Member must have length less than or equal to "+strconv.Itoa(limit))
+	case !userNameRE.MatchString(name):
+		return badMember("userName", `Member must satisfy regular expression pattern: [\w+=,.@-]+`)
+	}
+	return nil
+}
+
 // userARN is the user's real ARN when it exists, so policies on paths apply.
 // Without UserName the call is about the caller, authorized on its own
 // authenticated ARN (path included) with no lookup, as AWS does. A named user
@@ -950,7 +987,7 @@ func iamActions() map[string]spec {
 		// caller's own devices. It takes Marker and MaxItems but not
 		// PathPrefix, so the spec lists them rather than setting list.
 		"ListMFADevices": {
-			params: []string{"UserName", "Marker", "MaxItems"}, needsAdmin: true, resource: listMFADevicesARN,
+			params: []string{"UserName", "Marker", "MaxItems"}, needsAdmin: true, resource: userARN,
 			run: func(h *handler, c *exchange) (any, error) {
 				user, err := listMFADevicesUserName(c)
 				if err != nil {

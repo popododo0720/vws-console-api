@@ -9,6 +9,7 @@ import (
 	"encoding/xml"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -113,6 +114,12 @@ func (h *handler) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		c.fail(resource.Invalid(k, "Parameter "+k+" is not supported"))
 		return
+	}
+	if slices.Contains(spec.params, "UserName") {
+		if err := validateUserName(c); err != nil {
+			c.fail(err)
+			return
+		}
 	}
 	arn := "*"
 	if spec.resource != nil {

@@ -46,11 +46,11 @@ change both files together.
 | Fakes and the gRPC client behave the same. | `backendtest.Run` |
 | Ops endpoints and `vws_` metrics. | `TestOpsEndpoints` |
 | Credentials come from env or files; grpc refuses defaults; values never logged. | `TestGRPCRefusesDefaultCredentials` |
-| IAM and STS actions are authorized on the real ARN first; a failed lookup authorizes nothing. | `TestEntityActionsFailClosedWhenTheLookupFails` |
+| IAM and STS actions validate UserName first, at each action's AWS limit (64 or 128), then authorize on the real ARN; a failed lookup authorizes nothing. | `TestUserNameValidationPrecedesAuthorization`, `TestUserNameLengthFollowsTheAWSLimitOfEachAction`, `TestEntityActionsFailClosedWhenTheLookupFails` |
 | Every console route is authenticated and authorized. | `TestEveryRouteIsAuthorized` |
 | Only `iamclient` speaks vws.iam.v1; no secret reaches vws-iam. | `TestSecretsNeverLeaveConsoleAPI` |
 | Named-entity `iam.Admin` methods take an `iam.AuthorizedPrincipal`, built only by `iam.Authorize`. | `TestOnlyTheAuthorizerBuildsAnAuthorizedPrincipal` |
-| IAM tag, MFA, access key and policy actions follow AWS and act only on the authorized entity. | `TestAccessKeyCallsActOnTheAuthorizedARN`, `TestEntityPolicyCallsActOnTheAuthorizedARN` |
+| IAM tag, MFA, access key and policy actions follow AWS and act only on the authorized entity. | `TestAccessKeyCallsActOnTheAuthorizedARN`, `TestEntityPolicyCallsActOnTheAuthorizedARN`, `TestMFADeviceTagSerialValidationPrecedesAuthorization` |
 | Access key secrets and policy documents are never logged or traced. | `TestAccessKeySecretIsNeverLoggedOrTraced` |
 | Every `resource.Action` has a console route. | `TestEveryActionHasARoute` |
 | An unapplied query parameter, filter or subresource is rejected. | `TestUnreadQueryFieldsAreRejected` |
