@@ -103,29 +103,19 @@ func userName(c *exchange) string {
 // userNameRE is the AWS UserName pattern.
 var userNameRE = regexp.MustCompile(`^[\w+=,.@-]+$`)
 
-// userNameMax64 are the served actions whose AWS UserName is userNameType,
-// 1 to 64 characters. Every other action takes existingUserNameType, 1 to 128,
-// so a 65 to 128 character name there is looked up and authorized as AWS does,
-// not refused as malformed. iam.CheckUserName still enforces 64 when a user
-// is made.
-var userNameMax64 = map[string]bool{
-	"AttachUserPolicy":         true,
-	"CreateLoginProfile":       true,
-	"CreateUser":               true,
-	"DeleteLoginProfile":       true,
-	"DetachUserPolicy":         true,
-	"GetLoginProfile":          true,
-	"GetMFADevice":             true,
-	"ListAttachedUserPolicies": true,
-	"UpdateLoginProfile":       true,
-}
-
-// maxUserNameLen is the AWS UserName maximum length of the action.
+// maxUserNameLen is the AWS UserName maximum length of the action. The
+// userNameType actions take 1 to 64 characters. Every other action takes
+// existingUserNameType, 1 to 128, so a 65 to 128 character name there is
+// looked up and authorized as AWS does, not refused as malformed.
+// iam.CheckUserName still enforces 64 when a user is made.
 func maxUserNameLen(action string) int {
-	if userNameMax64[action] {
+	switch action {
+	case "AttachUserPolicy", "CreateLoginProfile", "CreateUser", "DeleteLoginProfile", "DetachUserPolicy",
+		"GetLoginProfile", "GetMFADevice", "ListAttachedUserPolicies", "UpdateLoginProfile":
 		return 64
+	default:
+		return 128
 	}
-	return 128
 }
 
 // validateUserName checks a present UserName against the action's AWS
