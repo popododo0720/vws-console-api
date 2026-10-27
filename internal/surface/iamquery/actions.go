@@ -103,22 +103,44 @@ func userName(c *exchange) string {
 // userNameRE is the AWS UserName pattern.
 var userNameRE = regexp.MustCompile(`^[\w+=,.@-]+$`)
 
-// maxUserNameLen is the AWS IAM UserName limit VWS stores. iam.CheckUserName
-// enforces 1 to 64 when a user is made.
-const maxUserNameLen = 64
+// userNameMax64 are the served actions whose AWS UserName is userNameType,
+// 1 to 64 characters. Every other action takes existingUserNameType, 1 to 128,
+// so a 65 to 128 character name there is looked up and authorized as AWS does,
+// not refused as malformed. iam.CheckUserName still enforces 64 when a user
+// is made.
+var userNameMax64 = map[string]bool{
+	"AttachUserPolicy":         true,
+	"CreateLoginProfile":       true,
+	"CreateUser":               true,
+	"DeleteLoginProfile":       true,
+	"DetachUserPolicy":         true,
+	"GetLoginProfile":          true,
+	"GetMFADevice":             true,
+	"ListAttachedUserPolicies": true,
+	"UpdateLoginProfile":       true,
+}
 
-// validateUserName checks a present UserName. The member is optional on
-// several actions, so an absent one is left for the action.
+// maxUserNameLen is the AWS UserName maximum length of the action.
+func maxUserNameLen(action string) int {
+	if userNameMax64[action] {
+		return 64
+	}
+	return 128
+}
+
+// validateUserName checks a present UserName against the action's AWS
+// constraints. The member is optional on several actions, so an absent one is
+// left for the action.
 func validateUserName(c *exchange) error {
 	if !c.r.Form.Has("UserName") {
 		return nil
 	}
-	name := c.form("UserName")
+	name, limit := c.form("UserName"), maxUserNameLen(c.action)
 	switch {
 	case name == "":
 		return badMember("userName", "Member must have length greater than or equal to 1")
-	case len(name) > maxUserNameLen:
-		return badMember("userName", "Member must have length less than or equal to 64")
+	case len(name) > limit:
+		return badMember("userName", "Member must have length less than or equal to "+strconv.Itoa(limit))
 	case !userNameRE.MatchString(name):
 		return badMember("userName", `Member must satisfy regular expression pattern: [\w+=,.@-]+`)
 	}
