@@ -100,6 +100,31 @@ func userName(c *exchange) string {
 	return ""
 }
 
+// userNameRE is the AWS UserName pattern.
+var userNameRE = regexp.MustCompile(`^[\w+=,.@-]+$`)
+
+// maxUserNameLen is the AWS IAM UserName limit VWS stores. iam.CheckUserName
+// enforces 1 to 64 when a user is made.
+const maxUserNameLen = 64
+
+// validateUserName checks a present UserName. The member is optional on
+// several actions, so an absent one is left for the action.
+func validateUserName(c *exchange) error {
+	if !c.r.Form.Has("UserName") {
+		return nil
+	}
+	name := c.form("UserName")
+	switch {
+	case name == "":
+		return badMember("userName", "Member must have length greater than or equal to 1")
+	case len(name) > maxUserNameLen:
+		return badMember("userName", "Member must have length less than or equal to 64")
+	case !userNameRE.MatchString(name):
+		return badMember("userName", `Member must satisfy regular expression pattern: [\w+=,.@-]+`)
+	}
+	return nil
+}
+
 // userARN is the user's real ARN when it exists, so policies on paths apply.
 // Without UserName the call is about the caller, authorized on its own
 // authenticated ARN (path included) with no lookup, as AWS does. A named user
@@ -950,7 +975,7 @@ func iamActions() map[string]spec {
 		// caller's own devices. It takes Marker and MaxItems but not
 		// PathPrefix, so the spec lists them rather than setting list.
 		"ListMFADevices": {
-			params: []string{"UserName", "Marker", "MaxItems"}, needsAdmin: true, resource: listMFADevicesARN,
+			params: []string{"UserName", "Marker", "MaxItems"}, needsAdmin: true, resource: userARN,
 			run: func(h *handler, c *exchange) (any, error) {
 				user, err := listMFADevicesUserName(c)
 				if err != nil {

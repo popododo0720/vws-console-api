@@ -11,8 +11,14 @@ import (
 var serialNumberRE = regexp.MustCompile(`^[\w+=/:,.@-]+$`)
 
 // mfaDeviceARN is the ARN a virtual MFA device call is authorized on: in AWS
-// the device SerialNumber is its ARN.
-func mfaDeviceARN(_ *handler, c *exchange) string { return c.form("SerialNumber") }
+// the device SerialNumber is its ARN. The serial is checked before anything is
+// authorized.
+func mfaDeviceARN(_ *handler, c *exchange) string {
+	if err := validSerialNumber(c.form("SerialNumber")); err != nil {
+		c.resourceErr = err
+	}
+	return c.form("SerialNumber")
+}
 
 // getMFADeviceARN checks SerialNumber before anything is authorized, as AWS
 // validates input first, then authorizes GetMFADevice on the user.

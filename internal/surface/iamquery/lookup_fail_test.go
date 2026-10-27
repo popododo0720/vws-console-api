@@ -78,7 +78,7 @@ func TestEntityActionsFailClosedWhenTheLookupFails(t *testing.T) {
 				"AttachUserPolicy", "CreateAccessKey", "CreateLoginProfile", "CreateUser", "DeleteAccessKey",
 				"DeleteLoginProfile", "DeleteUser", "DeleteUserPolicy", "DetachUserPolicy", "GetLoginProfile",
 				"GetMFADevice", "GetUser", "GetUserPolicy", "ListAccessKeys", "ListAttachedUserPolicies",
-				"ListGroupsForUser", "ListUserPolicies", "PutUserPolicy", "UpdateLoginProfile", "UpdateUser",
+				"ListGroupsForUser", "ListMFADevices", "ListUserPolicies", "PutUserPolicy", "UpdateLoginProfile", "UpdateUser",
 			},
 		},
 		{
