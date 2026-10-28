@@ -142,6 +142,30 @@ func TestUpdateAccessKeyIsRetriedOverGRPC(t *testing.T) {
 	}
 }
 
+// A user moved after UpdateAccessKey read it is never reported as a
+// successful change under the old ARN: the key request carries no path or
+// parent version, so the client reads the user again after the call and
+// answers ConcurrentModification instead.
+func TestUpdateAccessKeyFailsClosedWhenTheUserMovesDuringTheCall(t *testing.T) {
+	ctx := t.Context()
+	a, d := seeded(ctx, t)
+	grant := backendtest.UserGrant(ctx, t, a, account314, "bob")
+	k, err := a.CreateAccessKey(ctx, account314, "bob", grant)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.mu.Lock()
+	d.keyRace, d.keyRacePath = 1, "/denied/"
+	d.mu.Unlock()
+	err = a.UpdateAccessKey(ctx, account314, "bob", k.AccessKeyID, iam.AccessKeyInactive, grant)
+	if !iam.IsChanged(err) || resource.AsError(err).Message != iam.UserChanged {
+		t.Fatalf("UpdateAccessKey of a user moved during the call: %v", err)
+	}
+	if n := len(d.sent("UpdateAccessKey")); n != 1 {
+		t.Errorf("%d UpdateAccessKey calls, want 1 (the move lands after the lookup)", n)
+	}
+}
+
 // The state vws-iam reports maps to AWS Status Active or Inactive. Any other
 // state, or a malformed CreateAccessKey answer, is an internal error that
 // never carries the secret.

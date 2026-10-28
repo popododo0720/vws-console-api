@@ -72,6 +72,10 @@ type directory struct {
 	// keyState, when set, is the state ListAccessKeys and GetAccessKey report
 	// for every key, so tests see INACTIVE and states vws-iam never sends.
 	keyState iamv1.AccessKeyState
+	// keyRace is the number of UpdateAccessKey calls that find the user moved
+	// to keyRacePath by another writer after the client read it.
+	keyRace     int
+	keyRacePath string
 	// createSecret, when set, replaces the secret CreateAccessKey returns.
 	createSecret *string
 	// onGetPolicy, when set, runs under d.mu in each GetPolicy, as another
@@ -741,6 +745,7 @@ func (d *directory) UpdateAccessKey(
 	if op, found, err := d.replay("UpdateAccessKey", req.GetRequestId(), req); found {
 		return op, err
 	}
+	d.raceKeyUser(user)
 	k := d.keys[id]
 	if k == nil || k.user != user {
 		return nil, awsErr(codes.NotFound, "NOT_FOUND", "NoSuchEntity")
@@ -760,6 +765,20 @@ func (d *directory) UpdateAccessKey(
 	}
 	k.version++
 	return d.done("UpdateAccessKey", req.GetRequestId(), req, d.keyProto(k))
+}
+
+// raceKeyUser moves the user of an access key call to keyRacePath, as a
+// concurrent UpdateUser NewPath does after the client read the user. The
+// caller holds d.mu.
+func (d *directory) raceKeyUser(name string) {
+	if d.keyRace == 0 {
+		return
+	}
+	d.keyRace--
+	if u := d.users[name]; u != nil {
+		u.path = d.keyRacePath
+		u.version++
+	}
 }
 
 func (d *directory) DeleteAccessKey(
