@@ -113,7 +113,10 @@ func (a STSAdmin) ListAccessKeys(
 // UpdateAccessKey implements iam.Admin over AccessKeyService.UpdateAccessKey,
 // replayed by request_id, so it is retried. It sends no etag for the same
 // reason DeleteAccessKey sends none. want must be the user's ARN when the
-// user is read before the call.
+// user is read before the call. The key name carries no path and the request
+// no parent version, so a user moved before vws-iam applies the change is
+// visible only in the second read, and the call answers
+// ConcurrentModification instead of success.
 func (a STSAdmin) UpdateAccessKey(
 	ctx context.Context, account resource.AccountID, user, keyID, keyStatus string, want iam.AuthorizedPrincipal,
 ) (err error) {
@@ -149,7 +152,11 @@ func (a STSAdmin) UpdateAccessKey(
 	if err != nil {
 		return keyError(err, "Access Key", keyID)
 	}
-	return opError(op, "Access Key", keyID)
+	if err := opError(op, "Access Key", keyID); err != nil {
+		return err
+	}
+	_, err = a.keyUser(ctx, account, user, want)
+	return err
 }
 
 // DeleteAccessKey implements iam.Admin over AccessKeyService.DeleteAccessKey,
