@@ -10,6 +10,7 @@ import (
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	iamv1 "github.com/popododo0720/vws-proto/gen/go/vws/iam/v1"
 
@@ -107,6 +108,48 @@ func (a STSAdmin) ListAccessKeys(
 	}
 	slices.SortFunc(out, func(x, y iam.AccessKeyMeta) int { return strings.Compare(x.AccessKeyID, y.AccessKeyID) })
 	return out, nil
+}
+
+// UpdateAccessKey implements iam.Admin over AccessKeyService.UpdateAccessKey,
+// replayed by request_id, so it is retried. It sends no etag for the same
+// reason DeleteAccessKey sends none. want must be the user's ARN when the
+// user is read before the call.
+func (a STSAdmin) UpdateAccessKey(
+	ctx context.Context, account resource.AccountID, user, keyID, keyStatus string, want iam.AuthorizedPrincipal,
+) (err error) {
+	ctx, end := a.observeKey(ctx, "UpdateAccessKey", true, account, user, "", &keyID)
+	defer func() { end(err) }()
+	if err := want.Require(); err != nil {
+		return err
+	}
+	if err := iam.CheckAccessKeyStatus(keyStatus); err != nil {
+		return err
+	}
+	if !entityName(user) {
+		return entityNotFound("user", user)
+	}
+	if _, err := a.keyUser(ctx, account, user, want); err != nil {
+		return err
+	}
+	if !vwsKeyID.MatchString(keyID) {
+		return iam.EntityNotFound("Access Key", keyID)
+	}
+	state := iamv1.AccessKeyState_ACCESS_KEY_STATE_INACTIVE
+	if keyStatus == iam.AccessKeyActive {
+		state = iamv1.AccessKeyState_ACCESS_KEY_STATE_ACTIVE
+	}
+	op, err := retry(ctx, a.backoff, a.accessKeys.UpdateAccessKey, &iamv1.UpdateAccessKeyRequest{
+		AccessKey: &iamv1.AccessKey{
+			Name: userResource(account, user) + "/accessKeys/" + keyID,
+			Spec: &iamv1.AccessKeySpec{State: state},
+		},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.state"}},
+		RequestId:  newRequestID(),
+	})
+	if err != nil {
+		return keyError(err, "Access Key", keyID)
+	}
+	return opError(op, "Access Key", keyID)
 }
 
 // DeleteAccessKey implements iam.Admin over AccessKeyService.DeleteAccessKey,

@@ -40,7 +40,7 @@ var userActions = []string{
 	"AttachUserPolicy", "CreateAccessKey", "CreateLoginProfile", "DeleteAccessKey",
 	"DeleteLoginProfile", "DeleteUser", "DeleteUserPolicy", "DetachUserPolicy", "GetLoginProfile",
 	"GetMFADevice", "GetUser", "GetUserPolicy", "ListAccessKeys", "ListAttachedUserPolicies",
-	"ListGroupsForUser", "ListUserPolicies", "PutUserPolicy", "UpdateLoginProfile", "UpdateUser",
+	"ListGroupsForUser", "ListUserPolicies", "PutUserPolicy", "UpdateAccessKey", "UpdateLoginProfile", "UpdateUser",
 }
 
 // groupActions authorize on a group's ARN and look the group up first; the

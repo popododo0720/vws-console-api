@@ -96,12 +96,22 @@ func TestAccessKeysAuthenticate(t *testing.T) {
 	if err != nil || !strings.HasPrefix(k.AccessKeyID, "AKIA") || len(k.AccessKeyID) != 20 || len(k.Secret) != 40 || k.Status != "Active" {
 		t.Fatalf("create key %+v %v", k, err)
 	}
-	if c, err := verify(t, f, credOf(k.AccessKeyID, k.Secret, "")); err != nil || c.Principal != "arn:vws:iam::123456789012:user/bob" {
+	if c, err := verify(t, f, credOf(k.AccessKeyID, k.Secret, "")); err != nil ||
+		c.Principal != "arn:vws:iam::123456789012:user/bob" {
 		t.Fatalf("new key: %+v %v", c, err)
 	}
 	keys, err := f.ListAccessKeys(ctx, a, "bob", testUserGrant(ctx, t, f, a, "bob"))
 	if err != nil || len(keys) != 1 || keys[0].AccessKeyID != k.AccessKeyID {
 		t.Fatalf("list keys %+v %v", keys, err)
+	}
+	must(t, f.UpdateAccessKey(ctx, a, "bob", k.AccessKeyID, AccessKeyInactive, testUserGrant(ctx, t, f, a, "bob")))
+	if _, err := verify(t, f, credOf(k.AccessKeyID, k.Secret, "")); resource.CodeOf(err) != resource.CodeUnauthenticated {
+		t.Fatalf("inactive key still works: %v", err)
+	}
+	must(t, f.UpdateAccessKey(ctx, a, "bob", k.AccessKeyID, AccessKeyActive, testUserGrant(ctx, t, f, a, "bob")))
+	if c, err := verify(t, f, credOf(k.AccessKeyID, k.Secret, "")); err != nil ||
+		c.Principal != "arn:vws:iam::123456789012:user/bob" {
+		t.Fatalf("reactivated key: %+v %v", c, err)
 	}
 	must(t, f.DeleteAccessKey(ctx, a, "bob", k.AccessKeyID, testUserGrant(ctx, t, f, a, "bob")))
 	if _, err := verify(t, f, credOf(k.AccessKeyID, k.Secret, "")); resource.CodeOf(err) != resource.CodeUnauthenticated {

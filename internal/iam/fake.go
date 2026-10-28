@@ -88,7 +88,7 @@ func (f *Fake) Authenticate(_ context.Context, req sigv4.AuthRequest) (Principal
 	f.mu.RLock()
 	k, ok := f.keys[req.AccessKeyID]
 	f.mu.RUnlock()
-	if !ok {
+	if !ok || k.Status == AccessKeyInactive {
 		return Principal{}, ErrUnknownKey
 	}
 	now := f.now()
@@ -98,7 +98,7 @@ func (f *Fake) Authenticate(_ context.Context, req sigv4.AuthRequest) (Principal
 	}
 	if strings.HasPrefix(k.AccessKey, "AKIA") && strings.Contains(k.Principal.ARN, ":user/") {
 		f.mu.Lock()
-		if _, live := f.keys[k.AccessKey]; live {
+		if live, ok := f.keys[k.AccessKey]; ok && live.Status != AccessKeyInactive {
 			f.used[k.AccessKey] = keyUse{
 				at: now.Truncate(time.Second), service: string(req.Service), region: req.Region,
 			}

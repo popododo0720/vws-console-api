@@ -147,7 +147,8 @@ func TestUpdateUserConflictIsConcurrentModification(t *testing.T) {
 func TestChangedIsConcurrentModification(t *testing.T) {
 	e := resource.AsError(iam.Changed(iam.GroupChanged))
 	for _, action := range []string{
-		"AddUserToGroup", "RemoveUserFromGroup", "UpdateGroup", "DeleteGroup", "DeleteUser", "UpdateUser",
+		"AddUserToGroup", "RemoveUserFromGroup", "UpdateGroup", "DeleteGroup", "DeleteUser", "UpdateAccessKey",
+		"UpdateUser",
 	} {
 		if got := iamWireAction(t, sigv4.ServiceIAM, action, e); got != (wireErr{409, "ConcurrentModification"}) {
 			t.Errorf("%s changed = %+v", action, got)
