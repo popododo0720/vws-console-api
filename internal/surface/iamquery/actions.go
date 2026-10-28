@@ -39,6 +39,15 @@ func accessKeyIDParam(c *exchange) (string, error) {
 	return id, nil
 }
 
+// accessKeyStatusParam reads the required Status of UpdateAccessKey.
+func accessKeyStatusParam(c *exchange) (string, error) {
+	status := c.form("Status")
+	if err := iam.CheckAccessKeyStatus(status); err != nil {
+		return "", err
+	}
+	return status, nil
+}
+
 // spec is one action: the form keys it reads, the ARN it is authorized on
 // (nil means "*"), and what it does.
 type spec struct {
@@ -565,6 +574,23 @@ func iamActions() map[string]spec {
 				return out, nil
 			},
 		},
+		"UpdateAccessKey": admin(
+			[]string{"UserName", "AccessKeyId", "Status"}, userARN, func(h *handler, c *exchange) (any, error) {
+				n, err := requireUser(c)
+				if err != nil {
+					return nil, err
+				}
+				id, err := accessKeyIDParam(c)
+				if err != nil {
+					return nil, err
+				}
+				status, err := accessKeyStatusParam(c)
+				if err != nil {
+					return nil, err
+				}
+				// The backend changes only a key of the user at the authorized ARN.
+				return nil, h.cfg.Admin.UpdateAccessKey(c.r.Context(), c.caller.Account, n, id, status, c.authorized)
+			}),
 		"GetAccessKeyLastUsed": {
 			params: []string{"AccessKeyId"}, needsAdmin: true,
 			resource: accessKeyLastUsedARN,

@@ -82,6 +82,7 @@ type directory struct {
 type dirKey struct {
 	id, user string // user: the folded user resource name
 	created  time.Time
+	state    iamv1.AccessKeyState
 	version  int
 }
 
@@ -591,7 +592,7 @@ func (d *directory) keysOf(user string) int {
 }
 
 func (d *directory) keyProto(k *dirKey) *iamv1.AccessKey {
-	st := iamv1.AccessKeyState_ACCESS_KEY_STATE_ACTIVE
+	st := k.state
 	if d.keyState != iamv1.AccessKeyState_ACCESS_KEY_STATE_UNSPECIFIED {
 		st = d.keyState
 	}
@@ -643,7 +644,10 @@ func (d *directory) CreateAccessKey(
 	id := fmt.Sprintf("AKIA%016d", d.seq)
 	id = strings.NewReplacer("0", "A", "1", "B", "8", "I", "9", "J").Replace(id[:4]) +
 		strings.NewReplacer("0", "A", "1", "B", "8", "I", "9", "J").Replace(id[4:])
-	k := &dirKey{id: id, user: user, created: time.Now().UTC().Truncate(time.Second), version: 1}
+	k := &dirKey{
+		id: id, user: user, created: time.Now().UTC().Truncate(time.Second),
+		state: iamv1.AccessKeyState_ACCESS_KEY_STATE_ACTIVE, version: 1,
+	}
 	d.keys[id] = k
 	secret := fmt.Sprintf("%040d", d.seq) // 40 characters, as vws-iam sends
 	secret = "s3cr3t" + secret[6:]
@@ -720,6 +724,42 @@ func (d *directory) ListAccessKeys(
 		out.NextPageToken = base64.RawURLEncoding.EncodeToString([]byte(ids[end-1]))
 	}
 	return out, nil
+}
+
+func (d *directory) UpdateAccessKey(
+	_ context.Context, req *iamv1.UpdateAccessKeyRequest,
+) (*longrunningpb.Operation, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if err := d.enter("UpdateAccessKey", req); err != nil {
+		return nil, err
+	}
+	user, id, err := keyRef(req.GetAccessKey().GetName())
+	if err != nil {
+		return nil, err
+	}
+	if op, found, err := d.replay("UpdateAccessKey", req.GetRequestId(), req); found {
+		return op, err
+	}
+	k := d.keys[id]
+	if k == nil || k.user != user {
+		return nil, awsErr(codes.NotFound, "NOT_FOUND", "NoSuchEntity")
+	}
+	if e := req.GetAccessKey().GetEtag(); e != "" && e != strconv.Itoa(k.version) {
+		return nil, awsErr(codes.Aborted, "ETAG_MISMATCH", "ConcurrentModification")
+	}
+	if req.GetAllowMissing() {
+		return nil, awsErr(codes.InvalidArgument, "INVALID_SPEC", "ValidationError")
+	}
+	state := req.GetAccessKey().GetSpec().GetState()
+	switch state { //nolint:exhaustive // any other state is invalid, as in vws-iam.
+	case iamv1.AccessKeyState_ACCESS_KEY_STATE_ACTIVE, iamv1.AccessKeyState_ACCESS_KEY_STATE_INACTIVE:
+		k.state = state
+	default:
+		return nil, awsErr(codes.InvalidArgument, "INVALID_SPEC", "ValidationError")
+	}
+	k.version++
+	return d.done("UpdateAccessKey", req.GetRequestId(), req, d.keyProto(k))
 }
 
 func (d *directory) DeleteAccessKey(

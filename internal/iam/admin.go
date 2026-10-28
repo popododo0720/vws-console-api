@@ -139,6 +139,26 @@ type PolicyVersionPage struct {
 	Marker      string
 }
 
+// The two AWS access key statuses.
+const (
+	AccessKeyActive   = "Active"
+	AccessKeyInactive = "Inactive"
+)
+
+// CheckAccessKeyStatus checks the Status member of UpdateAccessKey.
+func CheckAccessKeyStatus(status string) error {
+	switch status {
+	case AccessKeyActive, AccessKeyInactive:
+		return nil
+	case "":
+		return resource.Invalid("status",
+			"1 validation error detected: Value null at 'status' failed to satisfy constraint: Member must not be null")
+	default:
+		return resource.Invalid("status", "1 validation error detected: Value '"+status+
+			"' at 'status' failed to satisfy constraint: Member must satisfy enum value set: [Active, Inactive]")
+	}
+}
+
 // AccessKeyMeta is an access key without its secret.
 type AccessKeyMeta struct {
 	UserName, AccessKeyID, Status string
@@ -256,6 +276,11 @@ type Admin interface {
 		ctx context.Context, a resource.AccountID, user string, want AuthorizedPrincipal,
 	) ([]AccessKeyMeta, error)
 	GetAccessKeyLastUsed(ctx context.Context, a resource.AccountID, keyID string) (AccessKeyLastUsed, error)
+	// UpdateAccessKey sets an access key's status to AccessKeyActive or
+	// AccessKeyInactive. An inactive key stops authenticating.
+	UpdateAccessKey(
+		ctx context.Context, a resource.AccountID, user, keyID, status string, want AuthorizedPrincipal,
+	) error
 	DeleteAccessKey(ctx context.Context, a resource.AccountID, user, keyID string, want AuthorizedPrincipal) error
 
 	CreateGroup(ctx context.Context, a resource.AccountID, name, path string) (Group, error)

@@ -828,6 +828,24 @@ def identity():
     bob_ec2 = client("ec2", key["AccessKeyId"], key["SecretAccessKey"], url=EC2_URL)
     bob_iam = client("iam", key["AccessKeyId"], key["SecretAccessKey"])
     bob_sts = client("sts", key["AccessKeyId"], key["SecretAccessKey"])
+    # UpdateAccessKey Active/Inactive over gRPC: a deactivated key is refused
+    # for signing, and reactivating it makes it work again.
+    step("IAM UpdateAccessKey deactivates the key", lambda: iam.update_access_key(
+        UserName="e2e-bob", AccessKeyId=key["AccessKeyId"], Status="Inactive"))
+    step("IAM ListAccessKeys shows the key Inactive", lambda: check(
+        iam.list_access_keys(UserName="e2e-bob")["AccessKeyMetadata"][0]["Status"] == "Inactive", "Inactive"))
+    step("deactivated key is InvalidClientTokenId", lambda: aws_error(
+        "InvalidClientTokenId", lambda: bob_sts.get_caller_identity()))
+    step("IAM UpdateAccessKey with an unknown status is ValidationError", lambda: aws_error(
+        "ValidationError", lambda: loose_iam.update_access_key(
+            UserName="e2e-bob", AccessKeyId=key["AccessKeyId"], Status="Paused")))
+    step("IAM UpdateAccessKey with a missing key is NoSuchEntity", lambda: aws_error(
+        "NoSuchEntity", lambda: iam.update_access_key(
+            UserName="e2e-bob", AccessKeyId="AKIAAAAAAAAAAAAAAAAA", Status="Active")))
+    step("IAM UpdateAccessKey reactivates the key", lambda: iam.update_access_key(
+        UserName="e2e-bob", AccessKeyId=key["AccessKeyId"], Status="Active"))
+    step("reactivated key: STS GetCallerIdentity", lambda: check(
+        bob_sts.get_caller_identity()["Arn"] == f"arn:vws:iam::{account}:user/e2e/e2e-bob", "bob arn"))
     step("new user key: allowed EC2 DescribeVpcs", lambda: bob_ec2.describe_vpcs())
     step("new user key: EC2 CreateVpc is UnauthorizedOperation", lambda: aws_error(
         "UnauthorizedOperation", lambda: bob_ec2.create_vpc(CidrBlock="10.42.0.0/16")))

@@ -26,11 +26,13 @@ type Principal struct {
 	Ref     resource.PrincipalRef
 }
 
-// Key is an access key as an authenticator holds it. SessionToken and
-// Expires are set for temporary (STS) keys.
+// Key is an access key as an authenticator holds it. Status is the key's AWS
+// status, empty for a temporary (STS) key; SessionToken and Expires are set
+// for a temporary key.
 type Key struct {
 	AccessKey    string
 	Secret       string
+	Status       string
 	SessionToken string
 	Expires      time.Time
 	Principal    Principal

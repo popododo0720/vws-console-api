@@ -472,9 +472,14 @@ func (f *Fake) CreateAccessKey(
 	if len(u.keys) >= maxAccessKeysPerUser {
 		return NewAccessKey{}, AccessKeysPerUserExceeded()
 	}
-	k := NewAccessKey{AccessKeyMeta: AccessKeyMeta{UserName: user, AccessKeyID: randID("AKIA", 16), Status: "Active", Created: f.now()}, Secret: randSecret(30)}
+	k := NewAccessKey{AccessKeyMeta: AccessKeyMeta{
+		UserName: user, AccessKeyID: randID("AKIA", 16), Status: AccessKeyActive, Created: f.now(),
+	}, Secret: randSecret(30)}
 	u.keys[k.AccessKeyID] = k.Created
-	f.keys[k.AccessKeyID] = Key{AccessKey: k.AccessKeyID, Secret: k.Secret, Principal: Principal{Account: a, ARN: u.ARN}}
+	f.keys[k.AccessKeyID] = Key{
+		AccessKey: k.AccessKeyID, Secret: k.Secret, Status: AccessKeyActive,
+		Principal: Principal{Account: a, ARN: u.ARN},
+	}
 	return k, nil
 }
 
@@ -497,7 +502,11 @@ func (f *Fake) ListAccessKeys(
 	}
 	out := []AccessKeyMeta{}
 	for id, created := range u.keys {
-		out = append(out, AccessKeyMeta{UserName: user, AccessKeyID: id, Status: "Active", Created: created})
+		status := AccessKeyActive
+		if k, ok := f.keys[id]; ok && k.Status != "" {
+			status = k.Status
+		}
+		out = append(out, AccessKeyMeta{UserName: user, AccessKeyID: id, Status: status, Created: created})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].AccessKeyID < out[j].AccessKeyID })
 	return out, nil
@@ -521,6 +530,38 @@ func (f *Fake) GetAccessKeyLastUsed(_ context.Context, a resource.AccountID, key
 		}
 	}
 	return AccessKeyLastUsed{}, AccessKeyNotFound(keyID)
+}
+
+// UpdateAccessKey implements Admin. An inactive key stops authenticating at
+// once. want must be the user's current ARN.
+func (f *Fake) UpdateAccessKey(
+	_ context.Context, a resource.AccountID, user, keyID, status string, want AuthorizedPrincipal,
+) error {
+	if err := want.Require(); err != nil {
+		return err
+	}
+	if err := CheckAccessKeyStatus(status); err != nil {
+		return err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	u := f.account(a).users[user]
+	if u == nil {
+		return notFound("user", user)
+	}
+	if err := want.Bind(u.ARN, UserChanged); err != nil {
+		return err
+	}
+	if _, ok := u.keys[keyID]; !ok {
+		return notFound("Access Key", keyID)
+	}
+	k, ok := f.keys[keyID]
+	if !ok || k.Principal.ARN != u.ARN {
+		return notFound("Access Key", keyID)
+	}
+	k.Status = status
+	f.keys[keyID] = k
+	return nil
 }
 
 // DeleteAccessKey implements Admin. The key stops authenticating at once.

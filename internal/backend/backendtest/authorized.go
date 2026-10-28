@@ -110,6 +110,11 @@ func boundRows(key *string) []boundRow {
 			}
 			return err
 		}),
+		user("UpdateAccessKey", boundBob, 0, true, func(
+			ctx context.Context, a iam.Directory, w iam.AuthorizedPrincipal,
+		) error {
+			return a.UpdateAccessKey(ctx, acct, "bob", *key, iam.AccessKeyInactive, w)
+		}),
 		user("DeleteAccessKey", boundBob, 0, true, func(
 			ctx context.Context, a iam.Directory, w iam.AuthorizedPrincipal,
 		) error {

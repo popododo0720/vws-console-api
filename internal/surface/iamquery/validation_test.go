@@ -90,6 +90,7 @@ var awsUserNameMax = map[string]int{
 	"ListUserPolicies":         128,
 	"PutUserPolicy":            128,
 	"RemoveUserFromGroup":      128,
+	"UpdateAccessKey":          128,
 	"UpdateUser":               128,
 }
 
