@@ -96,10 +96,13 @@ access key is in the `CreateAccessKey` response and nowhere else: console-api
 never logs, traces or keeps it. `CreateAccessKey` is never retried, because
 vws-iam does not replay it and a retry would create a second key; a third key
 for a user is `LimitExceeded`. `UpdateAccessKey` sets `Active` or `Inactive`
-through the `spec.state` mask, carries a `request_id`, is retried, and reads
-the user again after the call, so a user that moved in between is `409
-ConcurrentModification`; an inactive key stops authenticating.
-`DeleteAccessKey` carries a `request_id` and is retried.
+through the `spec.state` mask, carries a `request_id`, is retried, and
+sends the authorized ARN as `expected_user_arn`, which vws-iam checks in the
+same transaction as the write, so a user that moved in between is `409
+ConcurrentModification` and the key is unchanged (the user is also read again
+after the call); an inactive key stops authenticating.
+`DeleteAccessKey` carries a `request_id`, is retried, and sends
+`expected_user_arn` the same way, so a moved user keeps the key.
 The user and group policy actions (`Attach`, `Detach`, `ListAttached`, `Put`,
 `Get`, `Delete` and `List` for `User` and `Group` policies) write the
 `attached_policies` or `inline_policies` field of the user or group under the
@@ -248,7 +251,7 @@ response, and this listener answers `RequestLimitExceeded` as 503. S3
 ## Resource API module
 
 The gRPC client imports `github.com/popododo0720/vws-proto` at a release tag
-(`go.mod` pins it; today `v0.5.0`). The repo is public, so `go mod download`
+(`go.mod` pins it; today `v0.7.0`). The repo is public, so `go mod download`
 fetches it through the default module proxy with no token or `GOPRIVATE`. To
 take a new proto release, run `go get github.com/popododo0720/vws-proto@vX.Y.Z`
 and `go mod tidy`. Never copy or `replace` the module.

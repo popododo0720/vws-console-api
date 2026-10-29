@@ -113,10 +113,12 @@ func (a STSAdmin) ListAccessKeys(
 // UpdateAccessKey implements iam.Admin over AccessKeyService.UpdateAccessKey,
 // replayed by request_id, so it is retried. It sends no etag for the same
 // reason DeleteAccessKey sends none. want must be the user's ARN when the
-// user is read before the call. The key name carries no path and the request
-// no parent version, so a user moved before vws-iam applies the change is
-// visible only in the second read, and the call answers
-// ConcurrentModification instead of success.
+// user is read before the call, and it is sent as expected_user_arn: vws-iam
+// reads the parent user in the same transaction as the write, so a user
+// moved after the first read is refused with no change to the key and the
+// call answers ConcurrentModification (#340). The user is read once more
+// after the write, so a vws-iam that ignores the precondition still never
+// reports success under a stale ARN.
 func (a STSAdmin) UpdateAccessKey(
 	ctx context.Context, account resource.AccountID, user, keyID, keyStatus string, want iam.AuthorizedPrincipal,
 ) (err error) {
@@ -146,8 +148,9 @@ func (a STSAdmin) UpdateAccessKey(
 			Name: userResource(account, user) + "/accessKeys/" + keyID,
 			Spec: &iamv1.AccessKeySpec{State: state},
 		},
-		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.state"}},
-		RequestId:  newRequestID(),
+		UpdateMask:      &fieldmaskpb.FieldMask{Paths: []string{"spec.state"}},
+		RequestId:       newRequestID(),
+		ExpectedUserArn: want.String(),
 	})
 	if err != nil {
 		return keyError(err, "Access Key", keyID)
@@ -162,7 +165,10 @@ func (a STSAdmin) UpdateAccessKey(
 // DeleteAccessKey implements iam.Admin over AccessKeyService.DeleteAccessKey,
 // replayed by request_id, so it is retried. It sends no etag: vws-iam bumps
 // a key's version on every use, so an etag read here could already be
-// stale. want must be the user's ARN when the user is read before the call.
+// stale. want must be the user's ARN when the user is read before the call,
+// and it is sent as expected_user_arn, as UpdateAccessKey sends it: a user
+// moved after the read keeps the key and the call answers
+// ConcurrentModification.
 func (a STSAdmin) DeleteAccessKey(
 	ctx context.Context, account resource.AccountID, user, keyID string, want iam.AuthorizedPrincipal,
 ) (err error) {
@@ -182,6 +188,7 @@ func (a STSAdmin) DeleteAccessKey(
 	}
 	op, err := retry(ctx, a.backoff, a.accessKeys.DeleteAccessKey, &iamv1.DeleteAccessKeyRequest{
 		Name: userResource(account, user) + "/accessKeys/" + keyID, RequestId: newRequestID(),
+		ExpectedUserArn: want.String(),
 	})
 	if err != nil {
 		return keyError(err, "Access Key", keyID)

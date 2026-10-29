@@ -72,8 +72,9 @@ type directory struct {
 	// keyState, when set, is the state ListAccessKeys and GetAccessKey report
 	// for every key, so tests see INACTIVE and states vws-iam never sends.
 	keyState iamv1.AccessKeyState
-	// keyRace is the number of UpdateAccessKey calls that find the user moved
-	// to keyRacePath by another writer after the client read it.
+	// keyRace is the number of UpdateAccessKey and DeleteAccessKey calls that
+	// find the user moved to keyRacePath by another writer after the client
+	// read it.
 	keyRace     int
 	keyRacePath string
 	// createSecret, when set, replaces the secret CreateAccessKey returns.
@@ -750,6 +751,9 @@ func (d *directory) UpdateAccessKey(
 	if k == nil || k.user != user {
 		return nil, awsErr(codes.NotFound, "NOT_FOUND", "NoSuchEntity")
 	}
+	if err := d.checkKeyUser(user, req.GetExpectedUserArn()); err != nil {
+		return nil, err
+	}
 	if e := req.GetAccessKey().GetEtag(); e != "" && e != strconv.Itoa(k.version) {
 		return nil, awsErr(codes.Aborted, "ETAG_MISMATCH", "ConcurrentModification")
 	}
@@ -781,6 +785,22 @@ func (d *directory) raceKeyUser(name string) {
 	}
 }
 
+// checkKeyUser is the expected_user_arn precondition of vws-iam f1238641
+// (internal/grpcapi/keys.go keyGuard.check): when arn is set, the parent
+// user read in the same transaction as the key write must have that ARN,
+// or the call is FAILED_PRECONDITION ConcurrentModification and nothing
+// changes. An empty arn checks nothing. The caller holds d.mu.
+func (d *directory) checkKeyUser(user, arn string) error {
+	if arn == "" {
+		return nil
+	}
+	project, _, _ := split(user, "users")
+	if u := d.users[user]; u == nil || entityARN(project, "user", u) != arn {
+		return awsErr(codes.FailedPrecondition, "GENERATION_CONFLICT", "ConcurrentModification")
+	}
+	return nil
+}
+
 func (d *directory) DeleteAccessKey(
 	_ context.Context, req *iamv1.DeleteAccessKeyRequest,
 ) (*longrunningpb.Operation, error) {
@@ -796,9 +816,13 @@ func (d *directory) DeleteAccessKey(
 	if op, found, err := d.replay("DeleteAccessKey", req.GetRequestId(), req); found {
 		return op, err
 	}
+	d.raceKeyUser(user)
 	k := d.keys[id]
 	if k == nil || k.user != user {
 		return nil, awsErr(codes.NotFound, "NOT_FOUND", "NoSuchEntity")
+	}
+	if err := d.checkKeyUser(user, req.GetExpectedUserArn()); err != nil {
+		return nil, err
 	}
 	if e := req.GetEtag(); e != "" && e != strconv.Itoa(k.version) {
 		return nil, awsErr(codes.Aborted, "ETAG_MISMATCH", "ConcurrentModification")

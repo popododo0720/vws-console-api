@@ -16,6 +16,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	otelcodes "go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
@@ -153,6 +154,9 @@ func backendUnavailable(err error) error {
 // or "group" and name the entity the caller named, so NoSuchEntity and
 // EntityAlreadyExists carry the AWS wording. A lost etag race is a
 // ConcurrentModification (iam.Changed); membership changes read again on it.
+// So is a precondition on the parent user that no longer holds, such as the
+// expected_user_arn of an access key write: FAILED_PRECONDITION with aws_code
+// ConcurrentModification, and vws-iam changed nothing.
 func entityError(err error, what, name string) error {
 	st, ok := status.FromError(err)
 	if !ok {
@@ -164,14 +168,27 @@ func entityError(err error, what, name string) error {
 	case codes.AlreadyExists:
 		return iam.EntityExists(strings.ToUpper(what[:1])+what[1:], name)
 	case codes.Aborted:
-		if what == "group" {
-			return iam.Changed(iam.GroupChanged)
+		return changedEntity(what)
+	case codes.FailedPrecondition:
+		for _, d := range st.Details() {
+			if info, ok := d.(*errdetails.ErrorInfo); ok && info.GetMetadata()["aws_code"] == "ConcurrentModification" {
+				return changedEntity(what)
+			}
 		}
-		return iam.Changed(iam.UserChanged)
 	case codes.Unavailable, codes.DeadlineExceeded, codes.Canceled:
 		return backendUnavailable(err)
 	}
 	return authError(err)
+}
+
+// changedEntity is the ConcurrentModification of a call on what: the group
+// changed for a group call, the user for every other (users and their
+// access keys).
+func changedEntity(what string) error {
+	if what == "group" {
+		return iam.Changed(iam.GroupChanged)
+	}
+	return iam.Changed(iam.UserChanged)
 }
 
 // opError is the error of a done vws-iam operation, mapped as entityError.
