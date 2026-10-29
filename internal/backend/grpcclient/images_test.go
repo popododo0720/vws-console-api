@@ -115,7 +115,10 @@ func TestDescribeImagesReadsCompute(t *testing.T) {
 			State: commonv1.ReconciliationState_RECONCILIATION_STATE_READY,
 		}},
 	}
-	srv := &imageListSrv{pages: [][]*computev1.Image{{own, public}, {seed, volume}}}
+	srv := &imageListSrv{
+		pages:    [][]*computev1.Image{{own, public}, {seed, volume}},
+		getImage: func(string) error { return nil },
+	}
 	client := startImageList(t, srv)
 	page, err := client.DescribeImages(context.Background(), backend.Scope{Account: caller}, resource.ImageQuery{
 		Page: resource.PageRequest{Size: 50},
@@ -184,6 +187,27 @@ func TestDescribeImagesPrivateCopyFromAnotherProject(t *testing.T) {
 	}
 }
 
+func TestDescribeImagesOwnerLookupFailureIsAnError(t *testing.T) {
+	caller := mustAccount(t)
+	other, err := resource.Parse[resource.AccountID]("210987654321")
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := mustImage(t, "ami-00000000000000004")
+	copied := imagePB(t, caller, id.String(), project(other), "copy")
+	srv := &imageListSrv{
+		pages:    [][]*computev1.Image{{copied}},
+		getImage: func(string) error { return status.Error(codes.Unavailable, "image store down") },
+	}
+	client := startImageList(t, srv)
+	_, err = client.DescribeImages(context.Background(), backend.Scope{Account: caller}, resource.ImageQuery{
+		Owner: caller, Page: resource.PageRequest{Size: 50},
+	})
+	if resource.CodeOf(err) != resource.CodeUnavailable {
+		t.Fatalf("got %v, want the owner lookup error", err)
+	}
+}
+
 func TestDescribeImagesPublicImageFromAnotherProject(t *testing.T) {
 	caller := mustAccount(t)
 	other, err := resource.Parse[resource.AccountID]("210987654321")
@@ -219,7 +243,10 @@ func TestDescribeImagesCatalogWinsADuplicate(t *testing.T) {
 	}
 	id := mustImage(t, "ami-0123456789abcdef0")
 	duplicate := imagePB(t, caller, id.String(), project(other), "other")
-	srv := &imageListSrv{pages: [][]*computev1.Image{{duplicate}}}
+	srv := &imageListSrv{
+		pages:    [][]*computev1.Image{{duplicate}},
+		getImage: func(string) error { return nil },
+	}
 	client := startImageList(t, srv)
 	page, err := client.DescribeImages(context.Background(), backend.Scope{Account: caller}, resource.ImageQuery{
 		Page: resource.PageRequest{Size: 50},
@@ -271,7 +298,10 @@ func TestDescribeImagesOwnerSelfExcludesPublicImages(t *testing.T) {
 		t.Fatal(err)
 	}
 	public := imagePB(t, caller, "ami-00000000000000002", project(other), "shared")
-	srv := &imageListSrv{pages: [][]*computev1.Image{{public}}}
+	srv := &imageListSrv{
+		pages:    [][]*computev1.Image{{public}},
+		getImage: func(string) error { return nil },
+	}
 	client := startImageList(t, srv)
 	page, err := client.DescribeImages(context.Background(), backend.Scope{Account: caller}, resource.ImageQuery{
 		Owner: caller, Page: resource.PageRequest{Size: 50},
