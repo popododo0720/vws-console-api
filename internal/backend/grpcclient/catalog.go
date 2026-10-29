@@ -89,7 +89,7 @@ func (c computeClient) DescribeKeyPairs(ctx context.Context, s backend.Scope, q 
 
 func (c computeClient) CreateSnapshot(ctx context.Context, m backend.Mutation, req resource.CreateSnapshotRequest) (resource.Accepted[resource.Snapshot], error) {
 	projectID := project(m.Account)
-	vol, err := c.getVolume(ctx, projectID, req.VolumeID.String())
+	vol, err := c.getTypedVolume(ctx, projectID, req.VolumeID.String(), resource.ActionCreateSnapshot.String())
 	if err != nil {
 		return resource.Accepted[resource.Snapshot]{}, err
 	}

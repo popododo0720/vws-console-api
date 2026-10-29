@@ -349,8 +349,9 @@ func (e *badRecordNameError) Unwrap() error { return e.err }
 
 // unknownVolumeTypeError marks a stored volume whose storage type this build
 // cannot name: UNSPECIFIED, or a type a later vws-proto added. Its type is
-// never guessed. A listing skips it and logs; an explicit id read still
-// fails, and DeleteVolume and DetachVolume still reach it (#335 review, #337).
+// never guessed. A listing skips it and logs, DeleteVolume and DetachVolume
+// still reach it (#335 review, #337), and an id read or an action that needs
+// the type answers UnknownVolumeType (#337).
 type unknownVolumeTypeError struct {
 	id  resource.VolumeID
 	typ storagev1.VolumeType
