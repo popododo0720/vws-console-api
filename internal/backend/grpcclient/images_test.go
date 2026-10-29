@@ -184,6 +184,27 @@ func TestDescribeImagesPrivateCopyFromAnotherProject(t *testing.T) {
 	}
 }
 
+func TestDescribeImagesOwnerLookupFailureIsAnError(t *testing.T) {
+	caller := mustAccount(t)
+	other, err := resource.Parse[resource.AccountID]("210987654321")
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := mustImage(t, "ami-00000000000000004")
+	copied := imagePB(t, caller, id.String(), project(other), "copy")
+	srv := &imageListSrv{
+		pages:    [][]*computev1.Image{{copied}},
+		getImage: func(string) error { return status.Error(codes.Unavailable, "image store down") },
+	}
+	client := startImageList(t, srv)
+	_, err = client.DescribeImages(context.Background(), backend.Scope{Account: caller}, resource.ImageQuery{
+		Owner: caller, Page: resource.PageRequest{Size: 50},
+	})
+	if resource.CodeOf(err) != resource.CodeUnavailable {
+		t.Fatalf("got %v, want the owner lookup error", err)
+	}
+}
+
 func TestDescribeImagesPublicImageFromAnotherProject(t *testing.T) {
 	caller := mustAccount(t)
 	other, err := resource.Parse[resource.AccountID]("210987654321")
