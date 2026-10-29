@@ -288,10 +288,29 @@ func unsupportedVolumeType(err error) error {
 	return resource.Invalid("volumeType", "unsupported")
 }
 
+// getTypedVolume reads a volume for a call that needs its type: AttachVolume,
+// ModifyVolume, CreateSnapshot, and a DescribeVolumes read by id. A stored
+// type this build cannot name (UNSPECIFIED, or a type a later vws-proto
+// added) is logged and answered as the volumeType error EC2 calls
+// UnknownVolumeType. It is never guessed, and it is not Internal, which SDKs
+// retry although the answer cannot change.
+func (c computeClient) getTypedVolume(ctx context.Context, projectID, id, call string) (resource.Volume, error) {
+	vol, err := c.getVolume(ctx, projectID, id)
+	var unknownType *unknownVolumeTypeError
+	if errors.As(err, &unknownType) {
+		c.logger().WarnContext(ctx, "refusing a call on a volume with an unknown volume type",
+			slog.String("call", call),
+			slog.String("name", volumeName(projectID, id)),
+			slog.String("type", unknownType.typ.String()))
+		return resource.Volume{}, resource.Invalid("volumeType", "unsupported")
+	}
+	return vol, err
+}
+
 func (c computeClient) AttachVolume(ctx context.Context, m backend.Mutation, req resource.AttachVolumeRequest) (resource.Accepted[resource.Volume], error) {
 	var zero resource.Accepted[resource.Volume]
 	projectID := project(m.Account)
-	vol, err := c.getVolume(ctx, projectID, req.VolumeID.String())
+	vol, err := c.getTypedVolume(ctx, projectID, req.VolumeID.String(), resource.ActionAttachVolume.String())
 	if err != nil {
 		return zero, err
 	}
@@ -1331,7 +1350,7 @@ func (c computeClient) DeleteVolume(ctx context.Context, m backend.Mutation, req
 // volume update vws-storage serves.
 func (c computeClient) ModifyVolume(ctx context.Context, m backend.Mutation, req resource.ModifyVolumeRequest) (resource.Accepted[resource.Volume], error) {
 	projectID := project(m.Account)
-	vol, err := c.getVolume(ctx, projectID, req.ID.String())
+	vol, err := c.getTypedVolume(ctx, projectID, req.ID.String(), resource.ActionModifyVolume.String())
 	if err != nil {
 		return resource.Accepted[resource.Volume]{}, err
 	}
@@ -1364,7 +1383,7 @@ func (c computeClient) DescribeVolumes(ctx context.Context, s backend.Scope, q r
 	if len(q.IDs) > 0 {
 		items := make([]resource.Volume, 0, len(q.IDs))
 		for _, id := range q.IDs {
-			vol, err := c.getVolume(ctx, projectID, id.String())
+			vol, err := c.getTypedVolume(ctx, projectID, id.String(), "DescribeVolumes")
 			if resource.CodeOf(err) == resource.CodeNotFound {
 				if len(q.IDs) == 1 {
 					return resource.Page[resource.Volume]{}, err

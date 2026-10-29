@@ -77,8 +77,8 @@ func dialUnknownTypeWorld(t *testing.T, world *unknownTypeWorld) (computeClient,
 // #335 r1: a stored volume whose type this build cannot name (UNSPECIFIED,
 // or a number a later vws-proto added) is left out of a DescribeVolumes
 // listing and logged by name, so it does not fail the listing for every
-// other volume. An explicit id read still answers Internal, never a guessed
-// gp2, and DeleteVolume still reaches the volume so it can be cleaned up.
+// other volume. An explicit id read answers UnknownVolumeType (#337), never a
+// guessed gp2, and DeleteVolume still reaches the volume so it can be cleaned up.
 func TestVolumeWithUnknownTypeIsSkippedInList(t *testing.T) {
 	account := mustAccount(t)
 	projectID := project(account)
@@ -121,8 +121,8 @@ func TestVolumeWithUnknownTypeIsSkippedInList(t *testing.T) {
 			t.Fatal(err)
 		}
 		_, err = client.DescribeVolumes(ctx, scope, resource.VolumeQuery{IDs: []resource.VolumeID{vid}})
-		if resource.CodeOf(err) != resource.CodeInternal {
-			t.Errorf("explicit read of %s: %v, want Internal", id, err)
+		if e := resource.AsError(err); e == nil || e.Code != resource.CodeInvalidArgument || e.Field != "volumeType" {
+			t.Errorf("explicit read of %s: %v, want the volumeType error", id, err)
 		}
 		acc, err := client.DeleteVolume(ctx, backend.Mutation{Scope: scope, Key: "delete-" + id},
 			resource.DeleteVolumeRequest{ID: vid})
