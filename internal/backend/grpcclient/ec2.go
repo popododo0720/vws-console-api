@@ -954,18 +954,37 @@ func detachAttachTime(vol resource.Volume, inst resource.Instance) time.Time {
 //
 // A record within the window with no saved operation id reserves the label
 // its id will take (pendingDetachOps), from the detach's first write until
-// persistDetachOp saves it. A write whose labels and reserved labels pass
-// compute's 64 is the tag capacity error and writes nothing, so a detach
-// refused for room changes nothing and no write in between can take the
-// label a detach already accepted needs (#322, #327 review). Saving the id
-// fills its own reserved label, so it is not checked again. A recovery
-// resend (instanceLabels) is not checked either: it replays a first write
-// that already passed.
+// persistDetachOp saves it. Saving the id fills its own reserved label, so it
+// is not checked again. A recovery resend (instanceLabels) is not checked
+// either: it replays a first write that already passed.
+//
+// During a hold, expired records and the reservations of records with no
+// binding take labels that EC2 does not count. When they would push a write
+// past compute's 64, the write ends the hold instead of being refused: the
+// expired records go, and only the record this write adds keeps its
+// reservation. A pending detach whose record carries its fingerprint binding
+// is still answered after that (#352), so holding is never worth refusing a
+// call EC2 accepts (#334). Only labels EC2 itself would count can then make
+// this the tag capacity error, which writes nothing.
 func instanceUpdateLabels(
 	inst resource.Instance, raw map[string]string, action resource.Action, fingerprint string,
 	record map[string]string, now time.Time,
 ) (map[string]string, error) {
-	records := pruneDetachRecords(raw, now)
+	hold := detachRecoveryPending(raw, now)
+	labels, err := detachRecordLabels(inst, raw, action, fingerprint, record, now, hold)
+	if hold && resource.CodeOf(err) == resource.CodeInvalidArgument {
+		return detachRecordLabels(inst, raw, action, fingerprint, record, now, false)
+	}
+	return labels, err
+}
+
+// detachRecordLabels is instanceUpdateLabels with the hold given. Without a
+// hold only record's own operation id is reserved.
+func detachRecordLabels(
+	inst resource.Instance, raw map[string]string, action resource.Action, fingerprint string,
+	record map[string]string, now time.Time, hold bool,
+) (map[string]string, error) {
+	records := pruneHeldDetachRecords(raw, now, hold)
 	for key := range record {
 		if volID, ok := strings.CutPrefix(key, labelDetachPrefix); ok {
 			delete(records, labelDetachOpPrefix+volID)
@@ -976,7 +995,11 @@ func instanceUpdateLabels(
 	if err != nil {
 		return nil, err
 	}
-	if len(labels)+pendingDetachOps(records, now) > labelMax {
+	reserved := len(record)
+	if hold {
+		reserved = pendingDetachOps(records, now)
+	}
+	if len(labels)+reserved > labelMax {
 		return nil, tagCapacityErr()
 	}
 	return labels, nil
@@ -1066,7 +1089,11 @@ func parseDetachRecord(raw string) (requestHex, device string, at time.Time, sta
 // no record, and a value no request can match, are dropped. The result
 // depends only on raw and now, so pruning twice changes nothing.
 func pruneDetachRecords(raw map[string]string, now time.Time) map[string]string {
-	hold := detachRecoveryPending(raw, now)
+	return pruneHeldDetachRecords(raw, now, detachRecoveryPending(raw, now))
+}
+
+// pruneHeldDetachRecords is pruneDetachRecords with the hold given.
+func pruneHeldDetachRecords(raw map[string]string, now time.Time, hold bool) map[string]string {
 	out := map[string]string{}
 	for key, value := range raw {
 		volID, ok := strings.CutPrefix(key, labelDetachPrefix)

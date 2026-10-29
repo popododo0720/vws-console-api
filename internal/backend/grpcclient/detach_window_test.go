@@ -175,9 +175,11 @@ func pruneHeldForRecovery(t *testing.T) {
 	}
 }
 
-// Kept expired records still count toward compute's 64 labels: a write they
-// would push past it is the tag capacity error, not a truncated label map.
-func TestHeldDetachRecordsKeepTheLabelGuard(t *testing.T) {
+// Kept expired records take compute labels that EC2 does not count. A write
+// they would push past compute's 64 ends the hold instead of being refused:
+// the expired records go and the record within the window stays (#334).
+// Without that pressure the hold keeps them.
+func TestHeldDetachRecordsGiveWayToTags(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0).UTC()
 	req := strings.Repeat("ef", 16)
 	expired := stampOf(now.Add(-backend.ClientTokenWindow - backend.ClientTokenGrace - time.Second))
@@ -193,12 +195,21 @@ func TestHeldDetachRecordsKeepTheLabelGuard(t *testing.T) {
 	for i := range resource.MaxTags {
 		inst.Tags[fmt.Sprintf("k%02d", i)] = "v"
 	}
-	_, err := instanceUpdateLabels(inst, raw, resource.ActionCreateTags, "fp", nil, now)
-	if resource.CodeOf(err) != resource.CodeInvalidArgument {
-		t.Fatalf("50 tags next to %d held records: %v, want the tag capacity error", 2*backend.MaxDetachReplays, err)
+	labels, err := instanceUpdateLabels(inst, raw, resource.ActionCreateTags, "fp", nil, now)
+	if err != nil {
+		t.Fatalf("50 tags next to %d held records: %v, want success", 2*backend.MaxDetachReplays, err)
+	}
+	if len(labels) > labelMax {
+		t.Fatalf("%d labels, compute holds %d", len(labels), labelMax)
+	}
+	if _, ok := labels[labelDetachPrefix+"vol-held-0"]; ok {
+		t.Fatal("an expired record was kept past compute's 64 labels")
+	}
+	if _, ok := labels[labelDetachPrefix+"vol-pending"]; !ok {
+		t.Fatal("the record within its window was dropped")
 	}
 	inst.Tags = map[string]string{"env": "prod"}
-	labels, err := instanceUpdateLabels(inst, raw, resource.ActionCreateTags, "fp", nil, now)
+	labels, err = instanceUpdateLabels(inst, raw, resource.ActionCreateTags, "fp", nil, now)
 	if err != nil {
 		t.Fatalf("one tag next to the held records: %v", err)
 	}
@@ -552,22 +563,23 @@ func recoveryAfterInterveningWrite(
 	}
 }
 
-// A detach saves its operation id in a second label write. Held expired
-// records take labels without counting toward backend.MaxDetachReplays, so
-// a detach can fit compute's 64 labels on its first write and have no room
-// for its vws-dop- label. That detach is the tag capacity error before
-// compute is called, and changes nothing; a same-token retry is refused the
-// same way, never answered for a detach that happened (#319 review, #322).
-// The pending detach next to it has no operation id yet either, and its
-// label is reserved too (#327 review): 49 tags leave no room for both.
+// A detach saves its operation id in a second label write, so its first
+// write needs room for that label too. Held expired records give way to it
+// (#334): with 49 or 50 tags the detach ends the hold and succeeds. A detach
+// with no room even then, because packed tags fill compute's labels, is the
+// tag capacity error before compute is called, and changes nothing (#319
+// review, #322).
 func TestDetachLeavesRoomForItsOperationID(t *testing.T) {
-	t.Run("the operation id would be label 65", func(t *testing.T) { detachOpIDBoundary(t, resource.MaxTags, false) })
-	t.Run("the pending detach's reserved label would be 65", func(t *testing.T) {
-		detachOpIDBoundary(t, resource.MaxTags-1, false)
+	t.Run("50 tags: the held records give way", func(t *testing.T) {
+		detachOpIDBoundary(t, resource.MaxTags, 8+resource.MaxTags+2)
 	})
-	t.Run("the operation id is label 63, next to the reserved label 64", func(t *testing.T) {
-		detachOpIDBoundary(t, resource.MaxTags-2, true)
+	t.Run("49 tags: the held records give way", func(t *testing.T) {
+		detachOpIDBoundary(t, resource.MaxTags-1, 8+resource.MaxTags-1+2)
 	})
+	t.Run("48 tags: the operation id is label 64 and the hold stays", func(t *testing.T) {
+		detachOpIDBoundary(t, resource.MaxTags-2, 14+resource.MaxTags-2+2)
+	})
+	t.Run("packed tags leave no room", detachWithNoRoom)
 }
 
 // heldRecordsNextToTags holds three expired records next to a pending one
@@ -622,42 +634,22 @@ func heldRecordsNextToTags(t *testing.T, tagCount int) (
 	return world, client, name, vols, inst, scope
 }
 
-// detachOpIDBoundary detaches one more volume next to heldRecordsNextToTags.
-func detachOpIDBoundary(t *testing.T, tagCount int, fits bool) {
+// detachOpIDBoundary detaches one more volume next to heldRecordsNextToTags
+// and wants it to succeed with wantLabels stored: 14 (see
+// heldRecordsNextToTags) while the hold stays, 8 once the three expired
+// records went, plus the tags and the new record with its operation id.
+func detachOpIDBoundary(t *testing.T, tagCount, wantLabels int) {
 	world, client, name, vols, inst, scope := heldRecordsNextToTags(t, tagCount)
 	ctx := context.Background()
-	spec := world.volumeNames(name)
 	mN := backend.Mutation{Scope: scope, Key: "k-new", Fingerprint: "fp-new"}
 	reqN := resource.DetachVolumeRequest{VolumeID: vols[5], InstanceID: inst}
 	first, err := client.DetachVolume(ctx, mN, reqN)
-	if !fits {
-		for attempt := range 2 {
-			if resource.CodeOf(err) != resource.CodeInvalidArgument {
-				t.Fatalf("attempt %d: %v, want the tag capacity error", attempt, err)
-			}
-			assertDetachRoomError(t, err)
-			world.mu.Lock()
-			_, sent := world.byRequest[requestUUID(mN.Key, "detach")]
-			world.mu.Unlock()
-			if sent {
-				t.Fatalf("attempt %d: the refused detach reached compute", attempt)
-			}
-			if got := world.volumeNames(name); !slices.Equal(got, spec) {
-				t.Fatalf("attempt %d: the refused detach changed the spec: %v, want %v", attempt, got, spec)
-			}
-			if _, ok := world.labelsOf(name)[labelDetachPrefix+vols[5].String()]; ok {
-				t.Fatalf("attempt %d: the refused detach wrote a record", attempt)
-			}
-			_, err = client.DetachVolume(ctx, mN, reqN)
-		}
-		return
-	}
 	if err != nil {
-		t.Fatalf("detach with room for its operation id: %v", err)
+		t.Fatalf("detach with %d tags: %v", tagCount, err)
 	}
 	labels := world.labelsOf(name)
-	if want := 14 + tagCount + 2; len(labels) != want { // 14: see heldRecordsNextToTags
-		t.Fatalf("%d labels, want %d", len(labels), want)
+	if len(labels) != wantLabels {
+		t.Fatalf("%d labels, want %d", len(labels), wantLabels)
 	}
 	if _, ok := labels[labelDetachOpPrefix+vols[5].String()]; !ok {
 		t.Fatal("the operation id was not saved")
@@ -668,24 +660,71 @@ func detachOpIDBoundary(t *testing.T, tagCount int, fits bool) {
 	}
 }
 
-// A detach's operation id label is reserved from its first write until the
-// id is saved: a label write in between that would take it is the tag
-// capacity error and writes nothing, and the detach completes with its id
-// saved (#327 review). With 49 tags there is no room for the detach next
-// to the pending one's reserved label, so it is refused before compute is
-// called and no write can race it.
-func TestATagWriteCannotTakeAPendingOperationIDsRoom(t *testing.T) {
-	t.Run("49 tags: the detach is refused before a tag write can race it", func(t *testing.T) {
-		tagWriteDuringOpIDSave(t, resource.MaxTags-1, false)
-	})
-	t.Run("48 tags: the tag write is refused and the detach saves its id", func(t *testing.T) {
-		tagWriteDuringOpIDSave(t, resource.MaxTags-2, true)
-	})
+// detachWithNoRoom detaches one volume, then fills compute's labels with
+// tags EC2 accepts, three of them packed into vws-tags- chunks. A second
+// detach has no room for its record and operation id and is refused before
+// compute is called, the same on a retry.
+func detachWithNoRoom(t *testing.T) {
+	world, client, name, vols, inst := capacityWorld(t, 2)
+	scope := backend.Scope{Account: mustAccount(t)}
+	ctx := context.Background()
+	if _, err := client.DetachVolume(ctx, backend.Mutation{Scope: scope, Key: "k-old", Fingerprint: "fp-old"},
+		resource.DetachVolumeRequest{VolumeID: vols[0], InstanceID: inst}); err != nil {
+		t.Fatalf("first detach: %v", err)
+	}
+	tag := func(key string, tags map[string]string) {
+		t.Helper()
+		if _, err := client.CreateTags(ctx, backend.Mutation{Scope: scope, Key: key, Fingerprint: "fp-" + key},
+			resource.CreateTagsRequest{IDs: []resource.InstanceID{inst}, Tags: tags}); err != nil {
+			t.Fatalf("%s: %v", key, err)
+		}
+	}
+	long := strings.Repeat("x", 256)
+	tag("k-long", map[string]string{"L0": long, "L1": long, "L2": long})
+	plain := map[string]string{}
+	for i := range labelMax - len(world.labelsOf(name)) {
+		plain[fmt.Sprintf("k%02d", i)] = "v"
+	}
+	if len(plain)+3 > resource.MaxTags {
+		t.Fatalf("%d tags: past EC2's limit", len(plain)+3)
+	}
+	tag("k-plain", plain)
+	if n := len(world.labelsOf(name)); n != labelMax {
+		t.Fatalf("%d labels, want %d", n, labelMax)
+	}
+	spec := world.volumeNames(name)
+	m := backend.Mutation{Scope: scope, Key: "k-new", Fingerprint: "fp-new"}
+	req := resource.DetachVolumeRequest{VolumeID: vols[1], InstanceID: inst}
+	for attempt := range 2 {
+		_, err := client.DetachVolume(ctx, m, req)
+		if resource.CodeOf(err) != resource.CodeInvalidArgument {
+			t.Fatalf("attempt %d: %v, want the tag capacity error", attempt, err)
+		}
+		assertDetachRoomError(t, err)
+		world.mu.Lock()
+		_, sent := world.byRequest[requestUUID(m.Key, "detach")]
+		world.mu.Unlock()
+		if sent {
+			t.Fatalf("attempt %d: the refused detach reached compute", attempt)
+		}
+		if got := world.volumeNames(name); !slices.Equal(got, spec) {
+			t.Fatalf("attempt %d: the refused detach changed the spec: %v, want %v", attempt, got, spec)
+		}
+	}
+}
+
+// A tag write between a detach's first write and the write that saves its
+// operation id is a call EC2 accepts. Where it needs the labels of held
+// expired records, it ends the hold and goes through, and the detach still
+// saves its id and answers its retry (#334).
+func TestATagWriteDuringADetachIsNotRefused(t *testing.T) {
+	t.Run("49 tags", func(t *testing.T) { tagWriteDuringOpIDSave(t, resource.MaxTags-1) })
+	t.Run("48 tags", func(t *testing.T) { tagWriteDuringOpIDSave(t, resource.MaxTags-2) })
 }
 
 // tagWriteDuringOpIDSave sends CreateTags with one more tag between a
 // detach's first write and the write that saves its operation id.
-func tagWriteDuringOpIDSave(t *testing.T, tagCount int, fits bool) {
+func tagWriteDuringOpIDSave(t *testing.T, tagCount int) {
 	world, client, name, vols, inst, scope := heldRecordsNextToTags(t, tagCount)
 	ctx := context.Background()
 	mN := backend.Mutation{Scope: scope, Key: "k-new", Fingerprint: "fp-new"}
@@ -708,34 +747,24 @@ func tagWriteDuringOpIDSave(t *testing.T, tagCount int, fits bool) {
 	}
 	world.mu.Unlock()
 	first, err := client.DetachVolume(ctx, mN, reqN)
-	if !fits {
-		if resource.CodeOf(err) != resource.CodeInvalidArgument {
-			t.Fatalf("detach with %d tags: %v, want the capacity error before compute", tagCount, err)
-		}
-		if raced {
-			t.Fatalf("the refused detach reached compute (%v)", err)
-		}
-		assertDetachRoomError(t, err)
-		return
-	}
 	if !raced {
 		t.Fatal("the tag write did not run between the detach's writes")
 	}
-	if resource.CodeOf(tagErr) != resource.CodeInvalidArgument {
-		t.Fatalf("tag write into the reserved label: %v, want the tag capacity error", tagErr)
+	if tagErr != nil {
+		t.Fatalf("tag write during the detach: %v, want success", tagErr)
 	}
 	if err != nil {
-		t.Fatalf("detach whose label was reserved: %v", err)
+		t.Fatalf("detach: %v", err)
 	}
 	labels := world.labelsOf(name)
 	if _, ok := labels[labelDetachOpPrefix+vols[5].String()]; !ok {
 		t.Fatal("the operation id was not saved")
 	}
-	if _, ok := labels[extra]; ok {
-		t.Fatal("the refused tag write was stored")
+	if labels[extra] != "v" {
+		t.Fatal("the tag write was not stored")
 	}
-	if want := 14 + tagCount + 2; len(labels) != want { // 14: see heldRecordsNextToTags
-		t.Fatalf("%d labels, want %d", len(labels), want)
+	if len(labels) > labelMax {
+		t.Fatalf("%d labels, compute holds %d", len(labels), labelMax)
 	}
 	again, err := client.DetachVolume(ctx, mN, reqN)
 	if err != nil || again.Operation.ID != first.Operation.ID {
