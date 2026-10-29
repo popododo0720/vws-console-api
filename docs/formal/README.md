@@ -85,8 +85,9 @@ t2's retry after a restart reads an op id of other parameters and answers
 
 ## Not modeled
 
-- Records written before #303 (no stamp) and the `writtenBefore303` /
-  `stampedRecordExpired` rule.
+- Records stored unstamped by older code (before #303, or before #329 with
+  a device name over 23 bytes) and the `stampedRecordExpired` rule. Every
+  record the code writes now is stamped (#329).
 - Records written before #362, with no `vws-dop-` label. `dop[v] = None`
   next to a record stands for the fingerprint binding the first write leaves.
 - More than one instance: `findDetachReplay` paging, a volume moved to

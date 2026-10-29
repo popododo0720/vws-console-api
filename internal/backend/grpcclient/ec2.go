@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"log/slog"
@@ -1039,23 +1040,34 @@ func storedDetachRecords(raw map[string]string) map[string]string {
 // A detach record value is "<request hex> <device> <stamp>": the stamp is
 // the time the detach was accepted, in base-36 Unix seconds rounded up, so
 // it is never earlier than the time compute starts remembering the request
-// id (PR #316 review). A record
-// written before #303 has no stamp, and neither does one whose device name
-// leaves no room for it in a 63-byte label value.
+// id (PR #316 review). Where the device name leaves no room for the stamp in
+// a 63-byte label value (over 23 bytes), the 16-byte request id is written
+// in unpadded base64url (22 bytes) instead of hex (32), so the stamp fits
+// with every device name the hex form could hold unstamped (#329). A record
+// written before #303 has no stamp, and neither does one with a long device
+// name written before #329; no record written now is unstamped.
 func detachRecordValue(requestHex, device string, at time.Time) string {
-	plain := requestHex + " " + device
 	sec := at.Unix()
 	if at.Nanosecond() > 0 {
 		sec++
 	}
-	if stamped := plain + " " + strconv.FormatInt(sec, 36); len(stamped) <= labelValueMax {
+	stamp := strconv.FormatInt(sec, 36)
+	if stamped := requestHex + " " + device + " " + stamp; len(stamped) <= labelValueMax {
 		return stamped
 	}
-	return plain
+	if id, err := hex.DecodeString(requestHex); err == nil && len(id) == detachRequestIDBytes {
+		return base64.RawURLEncoding.EncodeToString(id) + " " + device + " " + stamp
+	}
+	return requestHex + " " + device
 }
 
+// detachRequestIDBytes is the length of the request id a record names: a
+// UUID (requestUUID), 32 hex digits or 22 base64url bytes.
+const detachRequestIDBytes = 16
+
 // parseDetachRecord reads a detach record value. ok is false for a value no
-// request can match.
+// request can match. requestHex is always the hex form, whichever form the
+// record holds.
 func parseDetachRecord(raw string) (requestHex, device string, at time.Time, stamped, ok bool) {
 	parts := strings.Split(raw, " ")
 	switch len(parts) {
@@ -1072,7 +1084,15 @@ func parseDetachRecord(raw string) (requestHex, device string, at time.Time, sta
 	if parts[0] == "" {
 		return "", "", time.Time{}, false, false
 	}
-	return parts[0], parts[1], at, stamped, true
+	requestHex = parts[0]
+	if len(requestHex) == base64.RawURLEncoding.EncodedLen(detachRequestIDBytes) {
+		id, err := base64.RawURLEncoding.DecodeString(requestHex)
+		if err != nil || len(id) != detachRequestIDBytes {
+			return "", "", time.Time{}, false, false
+		}
+		requestHex = hex.EncodeToString(id)
+	}
+	return requestHex, parts[1], at, stamped, true
 }
 
 // pruneDetachRecords returns the detach records of raw, with their saved
@@ -1124,10 +1144,16 @@ func pruneHeldDetachRecords(raw map[string]string, now time.Time, hold bool) map
 // write failed, so its retry resends the original update by request id. It
 // ends when that id is saved or the record expires.
 //
-// A record written before #303 has no stamp, and a hold leaves it unstamped
+// A record written before #303 has no stamp, nor does one with a device name
+// over 23 bytes written before #329, and a hold leaves it unstamped
 // (pruneDetachRecords), so its own expiry cannot end the hold it causes.
-// Every stamped record was stamped after #303 was deployed, so after that
-// record was written: once a stamped record has expired, so has it (#322).
+// Once a stamped record has expired, an unstamped one no longer holds (#322,
+// #329): a record written before #303 was written before every stamped
+// record. A long-device record written before #329 may be younger than a
+// stamped record written before #329. Ending its hold early only costs its
+// retry the byte-for-byte resend (the #352 recovery still answers it when
+// its fingerprint binding is saved); the record itself is then stamped and
+// kept for a full window, so no record outlives its window.
 func detachRecoveryPending(raw map[string]string, now time.Time) bool {
 	return unsavedDetachOps(raw, now, true) > 0
 }
@@ -1150,11 +1176,11 @@ func unsavedDetachOps(raw map[string]string, now time.Time, withPending bool) in
 		if !ok {
 			continue
 		}
-		requestHex, device, at, stamped, ok := parseDetachRecord(value)
+		_, _, at, stamped, ok := parseDetachRecord(value)
 		if !ok || (stamped && backend.ClientTokenExpired(at, now)) {
 			continue
 		}
-		if !stamped && aged && writtenBefore303(requestHex, device, now) {
+		if !stamped && aged {
 			continue
 		}
 		op, present := raw[labelDetachOpPrefix+volID]
@@ -1177,13 +1203,6 @@ func stampedRecordExpired(raw map[string]string, now time.Time) bool {
 		}
 	}
 	return false
-}
-
-// writtenBefore303 reports whether an unstamped record has room for a stamp,
-// so code since #303 would have stamped it. A record whose device name
-// leaves no room is unstamped whenever it was written.
-func writtenBefore303(requestHex, device string, now time.Time) bool {
-	return detachRecordValue(requestHex, device, now) != requestHex+" "+device
 }
 
 // Every user tag EC2 allows and every detach record within the window fit
