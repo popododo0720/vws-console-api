@@ -6,8 +6,11 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
+
+	"google.golang.org/protobuf/proto"
 
 	iamv1 "github.com/popododo0720/vws-proto/gen/go/vws/iam/v1"
 
@@ -26,6 +29,12 @@ func TestAccessKeyRequestsOverGRPC(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := a.UpdateAccessKey(
+		ctx, account314, "bob", k.AccessKeyID, iam.AccessKeyInactive,
+		backendtest.UserGrant(ctx, t, a, account314, "bob"),
+	); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := a.ListAccessKeys(
 		ctx, account314, "bob", backendtest.UserGrant(ctx, t, a, account314, "bob"),
 	); err != nil {
@@ -36,6 +45,7 @@ func TestAccessKeyRequestsOverGRPC(t *testing.T) {
 	); err != nil {
 		t.Fatal(err)
 	}
+	bobARN := backendtest.UserGrant(ctx, t, a, account314, "bob").String()
 	ck := d.sent("CreateAccessKey")
 	if len(ck) != 1 || ck[0].(*iamv1.CreateAccessKeyRequest).GetParent() != "projects/123456789012/users/bob" ||
 		!uuidV4.MatchString(ck[0].(*iamv1.CreateAccessKeyRequest).GetRequestId()) {
@@ -45,13 +55,26 @@ func TestAccessKeyRequestsOverGRPC(t *testing.T) {
 	if len(lk) != 1 || lk[0].(*iamv1.ListAccessKeysRequest).GetParent() != "projects/123456789012/users/bob" {
 		t.Errorf("ListAccessKeys requests %v", lk)
 	}
+	uk := d.sent("UpdateAccessKey")
+	if len(uk) != 1 {
+		t.Fatalf("UpdateAccessKey requests %v", uk)
+	}
+	upd := uk[0].(*iamv1.UpdateAccessKeyRequest)
+	if upd.GetAccessKey().GetName() != "projects/123456789012/users/bob/accessKeys/"+k.AccessKeyID ||
+		upd.GetAccessKey().GetSpec().GetState() != iamv1.AccessKeyState_ACCESS_KEY_STATE_INACTIVE ||
+		!slices.Equal(upd.GetUpdateMask().GetPaths(), []string{"spec.state"}) ||
+		!uuidV4.MatchString(upd.GetRequestId()) || upd.GetAccessKey().GetEtag() != "" || upd.GetAllowMissing() ||
+		upd.GetExpectedUserArn() != bobARN || upd.GetExpectedUserPath() != "" {
+		t.Errorf("UpdateAccessKey request %v", upd)
+	}
 	dk := d.sent("DeleteAccessKey")
 	if len(dk) != 1 {
 		t.Fatalf("DeleteAccessKey requests %v", dk)
 	}
 	del := dk[0].(*iamv1.DeleteAccessKeyRequest)
 	if del.GetName() != "projects/123456789012/users/bob/accessKeys/"+k.AccessKeyID ||
-		!uuidV4.MatchString(del.GetRequestId()) || del.GetEtag() != "" || del.GetAllowMissing() {
+		!uuidV4.MatchString(del.GetRequestId()) || del.GetEtag() != "" || del.GetAllowMissing() ||
+		del.GetExpectedUserArn() != bobARN || del.GetExpectedUserPath() != "" {
 		t.Errorf("DeleteAccessKey request %v", del)
 	}
 }
@@ -96,6 +119,90 @@ func TestCreateAccessKeyIsNotRetriedOverGRPC(t *testing.T) {
 	if len(dk) != 2 || dk[0].(*iamv1.DeleteAccessKeyRequest).GetRequestId() !=
 		dk[1].(*iamv1.DeleteAccessKeyRequest).GetRequestId() {
 		t.Errorf("DeleteAccessKey attempts %v, want 2 with one request_id", dk)
+	}
+}
+
+// UpdateAccessKey is replayed by request_id, so a lost response is retried
+// with the same request_id instead of flipping the state twice.
+func TestUpdateAccessKeyIsRetriedOverGRPC(t *testing.T) {
+	ctx := t.Context()
+	a, d := seeded(ctx, t)
+	k, err := a.CreateAccessKey(ctx, account314, "bob", backendtest.UserGrant(ctx, t, a, account314, "bob"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.mu.Lock()
+	d.failAfter["UpdateAccessKey"] = 1
+	d.mu.Unlock()
+	if err := a.UpdateAccessKey(
+		ctx, account314, "bob", k.AccessKeyID, iam.AccessKeyInactive,
+		backendtest.UserGrant(ctx, t, a, account314, "bob"),
+	); err != nil {
+		t.Fatalf("UpdateAccessKey with a lost response: %v", err)
+	}
+	uk := d.sent("UpdateAccessKey")
+	if len(uk) != 2 || uk[0].(*iamv1.UpdateAccessKeyRequest).GetRequestId() !=
+		uk[1].(*iamv1.UpdateAccessKeyRequest).GetRequestId() {
+		t.Errorf("UpdateAccessKey attempts %v, want 2 with one request_id", uk)
+	}
+}
+
+// A user moved after the client read it and before vws-iam writes the key
+// is never changed under the old ARN (#340). UpdateAccessKey and
+// DeleteAccessKey send the authorized ARN as expected_user_arn, vws-iam
+// checks it in the same transaction as the write and refuses with
+// FAILED_PRECONDITION ConcurrentModification, and the client answers
+// ConcurrentModification (409) with the key as it was.
+func TestAccessKeyWritesFailClosedWhenTheUserMovesDuringTheCall(t *testing.T) {
+	for _, tc := range []struct {
+		method  string
+		write   func(a STSAdmin, key string, grant iam.AuthorizedPrincipal) error
+		sentARN func(m proto.Message) string
+	}{
+		{
+			"UpdateAccessKey",
+			func(a STSAdmin, key string, grant iam.AuthorizedPrincipal) error {
+				return a.UpdateAccessKey(t.Context(), account314, "bob", key, iam.AccessKeyInactive, grant)
+			},
+			func(m proto.Message) string { return m.(*iamv1.UpdateAccessKeyRequest).GetExpectedUserArn() },
+		},
+		{
+			"DeleteAccessKey",
+			func(a STSAdmin, key string, grant iam.AuthorizedPrincipal) error {
+				return a.DeleteAccessKey(t.Context(), account314, "bob", key, grant)
+			},
+			func(m proto.Message) string { return m.(*iamv1.DeleteAccessKeyRequest).GetExpectedUserArn() },
+		},
+	} {
+		t.Run(tc.method, func(t *testing.T) {
+			ctx := t.Context()
+			a, d := seeded(ctx, t)
+			grant := backendtest.UserGrant(ctx, t, a, account314, "bob")
+			k, err := a.CreateAccessKey(ctx, account314, "bob", grant)
+			if err != nil {
+				t.Fatal(err)
+			}
+			d.mu.Lock()
+			d.keyRace, d.keyRacePath = 1, "/denied/"
+			d.mu.Unlock()
+			err = tc.write(a, k.AccessKeyID, grant)
+			if !iam.IsChanged(err) || resource.AsError(err).Message != iam.UserChanged {
+				t.Errorf("%s of a user moved during the call: %v, want ConcurrentModification", tc.method, err)
+			}
+			sent := d.sent(tc.method)
+			if len(sent) != 1 {
+				t.Fatalf("%d %s calls, want 1 (the move lands after the lookup)", len(sent), tc.method)
+			}
+			if got := tc.sentARN(sent[0]); got != grant.String() {
+				t.Errorf("%s expected_user_arn %q, want the authorized ARN %q", tc.method, got, grant.String())
+			}
+			d.mu.Lock()
+			kept := d.keys[k.AccessKeyID]
+			d.mu.Unlock()
+			if kept == nil || kept.state != iamv1.AccessKeyState_ACCESS_KEY_STATE_ACTIVE {
+				t.Errorf("%s changed the key of a moved user: %+v", tc.method, kept)
+			}
+		})
 	}
 }
 
@@ -160,6 +267,12 @@ func TestAccessKeySecretIsNeverLoggedOrTraced(t *testing.T) {
 	if len(k.Secret) != 40 {
 		t.Fatalf("secret of %d characters", len(k.Secret))
 	}
+	if err := a.UpdateAccessKey(
+		ctx, account314, "bob", k.AccessKeyID, iam.AccessKeyInactive,
+		backendtest.UserGrant(ctx, t, a, account314, "bob"),
+	); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := a.ListAccessKeys(
 		ctx, account314, "bob", backendtest.UserGrant(ctx, t, a, account314, "bob"),
 	); err != nil {
@@ -207,7 +320,7 @@ func TestAccessKeySecretIsNeverLoggedOrTraced(t *testing.T) {
 			t.Errorf("a secret appears in a span, log record or error: %s", seen.String())
 		}
 	}
-	for _, want := range []string{"CreateAccessKey", "ListAccessKeys", "DeleteAccessKey"} {
+	for _, want := range []string{"CreateAccessKey", "ListAccessKeys", "UpdateAccessKey", "DeleteAccessKey"} {
 		if !strings.Contains(strings.Join(actions, " "), want) {
 			t.Errorf("no %s span in %q", want, actions)
 		}
@@ -263,10 +376,26 @@ func TestAccessKeyActionsThroughTheQuerySurfaceOverGRPC(t *testing.T) {
 	expect(t, queryCall(t, h, del), http.StatusBadRequest, "<Code>ValidationError</Code>")
 	expect(t, queryCall(t, h, url.Values{"Action": {"ListAccessKeys"}, "UserName": {"ghost"}}),
 		http.StatusNotFound, "<Code>NoSuchEntity</Code>", "The user with name ghost cannot be found.")
+	update := func(key, status string) url.Values {
+		return url.Values{"Action": {"UpdateAccessKey"}, "UserName": {"alice"}, "AccessKeyId": {key}, "Status": {status}}
+	}
+	expect(t, queryCall(t, h, update(second, "Inactive")), http.StatusOK, "<UpdateAccessKeyResponse")
+	expect(t, queryCall(t, h, list), http.StatusOK, "<AccessKeyId>"+second+"</AccessKeyId>", "<Status>Inactive</Status>")
+	expect(t, queryCall(t, h, update(second, "Active")), http.StatusOK)
+	expect(t, queryCall(t, h, list), http.StatusOK, "<Status>Active</Status>")
+	expect(t, queryCall(t, h, update(second, "Paused")), http.StatusBadRequest,
+		"<Code>ValidationError</Code>", "enum value set: [Active, Inactive]")
+	expect(t, queryCall(t, h, update(second, "")), http.StatusBadRequest,
+		"<Code>ValidationError</Code>", "Member must not be null")
+	expect(t, queryCall(t, h, update("AKIAAAAAAAAAAAAAAAAA", "Active")), http.StatusNotFound,
+		"<Code>NoSuchEntity</Code>")
 	expect(t, queryCall(t, h, url.Values{"Action": {"DeleteUser"}, "UserName": {"alice"}}),
 		http.StatusConflict, "<Code>DeleteConflict</Code>")
 	if n := len(d.sent("DeleteAccessKey")); n != 2 {
 		t.Errorf("%d DeleteAccessKey calls, want 2 (the malformed id is refused first)", n)
+	}
+	if n := len(d.sent("UpdateAccessKey")); n != 3 {
+		t.Errorf("%d UpdateAccessKey calls, want 3 (the invalid status and missing key are refused first)", n)
 	}
 }
 
@@ -295,6 +424,19 @@ func TestAccessKeyCallsActOnTheAuthorizedARNOverGRPC(t *testing.T) {
 				t.Helper()
 				if strings.Contains(body, "AKIA") {
 					t.Errorf("a key was listed: %s", body)
+				}
+			},
+		},
+		{
+			"UpdateAccessKey", func(key string) url.Values {
+				return url.Values{
+					"Action": {"UpdateAccessKey"}, "UserName": {"erin"}, "AccessKeyId": {key}, "Status": {"Inactive"},
+				}
+			},
+			func(t *testing.T, d *directory, _ string) {
+				t.Helper()
+				if n := len(d.sent("UpdateAccessKey")); n != 0 {
+					t.Errorf("%d UpdateAccessKey calls reached vws-iam", n)
 				}
 			},
 		},
@@ -329,5 +471,33 @@ func TestAccessKeyCallsActOnTheAuthorizedARNOverGRPC(t *testing.T) {
 			tc.unchanged(t, d, res.Body.String())
 			expect(t, res, http.StatusConflict, "<Code>ConcurrentModification</Code>")
 		})
+	}
+}
+
+// #340 through the Query surface: a user moved between the client's read
+// and the vws-iam write answers 409 ConcurrentModification on
+// UpdateAccessKey and DeleteAccessKey, and the key stays as it was.
+func TestAccessKeyWritesOfAMovedUserThroughTheQuerySurfaceOverGRPC(t *testing.T) {
+	h, _, d := dirQueryHarness(t)
+	res := queryCall(t, h, url.Values{"Action": {"CreateAccessKey"}, "UserName": {"alice"}})
+	expect(t, res, http.StatusOK)
+	id := regexp.MustCompile(`<AccessKeyId>(AKIA[A-Z2-7]{16})</AccessKeyId>`).FindStringSubmatch(res.Body.String())
+	if id == nil {
+		t.Fatalf("create: %s", res.Body.String())
+	}
+	for _, form := range []url.Values{
+		{"Action": {"UpdateAccessKey"}, "UserName": {"alice"}, "AccessKeyId": {id[1]}, "Status": {"Inactive"}},
+		{"Action": {"DeleteAccessKey"}, "UserName": {"alice"}, "AccessKeyId": {id[1]}},
+	} {
+		d.mu.Lock()
+		d.keyRace, d.keyRacePath = 1, "/moved-"+form.Get("Action")+"/"
+		d.mu.Unlock()
+		expect(t, queryCall(t, h, form), http.StatusConflict, "<Code>ConcurrentModification</Code>")
+		d.mu.Lock()
+		k := d.keys[id[1]]
+		d.mu.Unlock()
+		if k == nil || k.state != iamv1.AccessKeyState_ACCESS_KEY_STATE_ACTIVE {
+			t.Errorf("%s of a moved user changed the key: %+v", form.Get("Action"), k)
+		}
 	}
 }

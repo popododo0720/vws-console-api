@@ -66,6 +66,22 @@ func TestAccessKeyCallsActOnTheAuthorizedARN(t *testing.T) {
 				}
 			},
 		},
+		{
+			"UpdateAccessKey",
+			func(key string) url.Values {
+				return url.Values{
+					"Action": {"UpdateAccessKey"}, "UserName": {"erin"}, "AccessKeyId": {key}, "Status": {"Inactive"},
+				}
+			},
+			"erin", func(t *testing.T, f *iam.Fake, account resource.AccountID, _ string) {
+				t.Helper()
+				ks, err := f.ListAccessKeys(
+					t.Context(), account, "erin", backendtest.UserGrant(t.Context(), t, f, account, "erin"))
+				if err != nil || len(ks) != 1 || ks[0].Status != iam.AccessKeyActive {
+					t.Errorf("erin's key after a stale UpdateAccessKey: %+v, %v", ks, err)
+				}
+			},
+		},
 	} {
 		for _, moved := range []bool{false, true} {
 			name := tc.name + "/not moved"
@@ -152,4 +168,26 @@ func TestAccessKeyPagingAndValidation(t *testing.T) {
 	// denied before it is looked up: nothing tells bob it does not exist.
 	has(t, call(t, h, bob, sigv4.ServiceIAM, url.Values{"Action": {"ListAccessKeys"}, "UserName": {"ghost"}}),
 		http.StatusForbidden, "<Code>AccessDenied</Code>")
+	update := func(kv ...string) url.Values {
+		v := url.Values{"Action": {"UpdateAccessKey"}, "UserName": {"carol"}}
+		for i := 0; i < len(kv); i += 2 {
+			v.Set(kv[i], kv[i+1])
+		}
+		return v
+	}
+	has(t, call(t, h, bob, sigv4.ServiceIAM, update("AccessKeyId", second, "Status", "Inactive")),
+		http.StatusOK, "<UpdateAccessKeyResponse")
+	has(t, call(t, h, bob, sigv4.ServiceIAM, list()), http.StatusOK,
+		"<AccessKeyId>"+second+"</AccessKeyId>", "<Status>Inactive</Status>")
+	has(t, call(t, h, bob, sigv4.ServiceIAM, update("AccessKeyId", second, "Status", "Active")),
+		http.StatusOK)
+	has(t, call(t, h, bob, sigv4.ServiceIAM, list()), http.StatusOK, "<Status>Active</Status>")
+	has(t, call(t, h, bob, sigv4.ServiceIAM, update("AccessKeyId", second, "Status", "Paused")),
+		http.StatusBadRequest, "<Code>ValidationError</Code>", "enum value set: [Active, Inactive]")
+	has(t, call(t, h, bob, sigv4.ServiceIAM, update("AccessKeyId", second)),
+		http.StatusBadRequest, "<Code>ValidationError</Code>", "Member must not be null")
+	has(t, call(t, h, bob, sigv4.ServiceIAM, update("AccessKeyId", "not-a-key-id-00000", "Status", "Active")),
+		http.StatusBadRequest, "<Code>ValidationError</Code>", "accessKeyId")
+	has(t, call(t, h, bob, sigv4.ServiceIAM, update("AccessKeyId", "AKIAAAAAAAAAAAAAAAAA", "Status", "Active")),
+		http.StatusNotFound, "<Code>NoSuchEntity</Code>")
 }

@@ -72,6 +72,11 @@ type directory struct {
 	// keyState, when set, is the state ListAccessKeys and GetAccessKey report
 	// for every key, so tests see INACTIVE and states vws-iam never sends.
 	keyState iamv1.AccessKeyState
+	// keyRace is the number of UpdateAccessKey and DeleteAccessKey calls that
+	// find the user moved to keyRacePath by another writer after the client
+	// read it.
+	keyRace     int
+	keyRacePath string
 	// createSecret, when set, replaces the secret CreateAccessKey returns.
 	createSecret *string
 	// onGetPolicy, when set, runs under d.mu in each GetPolicy, as another
@@ -82,6 +87,7 @@ type directory struct {
 type dirKey struct {
 	id, user string // user: the folded user resource name
 	created  time.Time
+	state    iamv1.AccessKeyState
 	version  int
 }
 
@@ -591,7 +597,7 @@ func (d *directory) keysOf(user string) int {
 }
 
 func (d *directory) keyProto(k *dirKey) *iamv1.AccessKey {
-	st := iamv1.AccessKeyState_ACCESS_KEY_STATE_ACTIVE
+	st := k.state
 	if d.keyState != iamv1.AccessKeyState_ACCESS_KEY_STATE_UNSPECIFIED {
 		st = d.keyState
 	}
@@ -643,7 +649,10 @@ func (d *directory) CreateAccessKey(
 	id := fmt.Sprintf("AKIA%016d", d.seq)
 	id = strings.NewReplacer("0", "A", "1", "B", "8", "I", "9", "J").Replace(id[:4]) +
 		strings.NewReplacer("0", "A", "1", "B", "8", "I", "9", "J").Replace(id[4:])
-	k := &dirKey{id: id, user: user, created: time.Now().UTC().Truncate(time.Second), version: 1}
+	k := &dirKey{
+		id: id, user: user, created: time.Now().UTC().Truncate(time.Second),
+		state: iamv1.AccessKeyState_ACCESS_KEY_STATE_ACTIVE, version: 1,
+	}
 	d.keys[id] = k
 	secret := fmt.Sprintf("%040d", d.seq) // 40 characters, as vws-iam sends
 	secret = "s3cr3t" + secret[6:]
@@ -722,6 +731,76 @@ func (d *directory) ListAccessKeys(
 	return out, nil
 }
 
+func (d *directory) UpdateAccessKey(
+	_ context.Context, req *iamv1.UpdateAccessKeyRequest,
+) (*longrunningpb.Operation, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if err := d.enter("UpdateAccessKey", req); err != nil {
+		return nil, err
+	}
+	user, id, err := keyRef(req.GetAccessKey().GetName())
+	if err != nil {
+		return nil, err
+	}
+	if op, found, err := d.replay("UpdateAccessKey", req.GetRequestId(), req); found {
+		return op, err
+	}
+	d.raceKeyUser(user)
+	k := d.keys[id]
+	if k == nil || k.user != user {
+		return nil, awsErr(codes.NotFound, "NOT_FOUND", "NoSuchEntity")
+	}
+	if err := d.checkKeyUser(user, req.GetExpectedUserArn()); err != nil {
+		return nil, err
+	}
+	if e := req.GetAccessKey().GetEtag(); e != "" && e != strconv.Itoa(k.version) {
+		return nil, awsErr(codes.Aborted, "ETAG_MISMATCH", "ConcurrentModification")
+	}
+	if req.GetAllowMissing() {
+		return nil, awsErr(codes.InvalidArgument, "INVALID_SPEC", "ValidationError")
+	}
+	state := req.GetAccessKey().GetSpec().GetState()
+	switch state { //nolint:exhaustive // any other state is invalid, as in vws-iam.
+	case iamv1.AccessKeyState_ACCESS_KEY_STATE_ACTIVE, iamv1.AccessKeyState_ACCESS_KEY_STATE_INACTIVE:
+		k.state = state
+	default:
+		return nil, awsErr(codes.InvalidArgument, "INVALID_SPEC", "ValidationError")
+	}
+	k.version++
+	return d.done("UpdateAccessKey", req.GetRequestId(), req, d.keyProto(k))
+}
+
+// raceKeyUser moves the user of an access key call to keyRacePath, as a
+// concurrent UpdateUser NewPath does after the client read the user. The
+// caller holds d.mu.
+func (d *directory) raceKeyUser(name string) {
+	if d.keyRace == 0 {
+		return
+	}
+	d.keyRace--
+	if u := d.users[name]; u != nil {
+		u.path = d.keyRacePath
+		u.version++
+	}
+}
+
+// checkKeyUser is the expected_user_arn precondition of vws-iam f1238641
+// (internal/grpcapi/keys.go keyGuard.check): when arn is set, the parent
+// user read in the same transaction as the key write must have that ARN,
+// or the call is FAILED_PRECONDITION ConcurrentModification and nothing
+// changes. An empty arn checks nothing. The caller holds d.mu.
+func (d *directory) checkKeyUser(user, arn string) error {
+	if arn == "" {
+		return nil
+	}
+	project, _, _ := split(user, "users")
+	if u := d.users[user]; u == nil || entityARN(project, "user", u) != arn {
+		return awsErr(codes.FailedPrecondition, "GENERATION_CONFLICT", "ConcurrentModification")
+	}
+	return nil
+}
+
 func (d *directory) DeleteAccessKey(
 	_ context.Context, req *iamv1.DeleteAccessKeyRequest,
 ) (*longrunningpb.Operation, error) {
@@ -737,9 +816,13 @@ func (d *directory) DeleteAccessKey(
 	if op, found, err := d.replay("DeleteAccessKey", req.GetRequestId(), req); found {
 		return op, err
 	}
+	d.raceKeyUser(user)
 	k := d.keys[id]
 	if k == nil || k.user != user {
 		return nil, awsErr(codes.NotFound, "NOT_FOUND", "NoSuchEntity")
+	}
+	if err := d.checkKeyUser(user, req.GetExpectedUserArn()); err != nil {
+		return nil, err
 	}
 	if e := req.GetEtag(); e != "" && e != strconv.Itoa(k.version) {
 		return nil, awsErr(codes.Aborted, "ETAG_MISMATCH", "ConcurrentModification")

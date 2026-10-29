@@ -122,6 +122,51 @@ func iamAccessKeyRows() []iamRow {
 				"The Access Key with name not-a-vws-key-id cannot be found.")
 			wantKeys(ctx, t, a, "alice", alices.AccessKeyID)
 		}},
+		{"UpdateAccessKey sets Inactive and back to Active; a missing user or key is NoSuchEntity", func(
+			ctx context.Context, t *testing.T, a iam.Directory,
+		) {
+			k, err := a.CreateAccessKey(ctx, iamAccount(), "bob", UserGrant(ctx, t, a, iamAccount(), "bob"))
+			wantOK(t, "CreateAccessKey", err)
+			err = a.UpdateAccessKey(
+				ctx, iamAccount(), "alice", k.AccessKeyID, iam.AccessKeyInactive,
+				UserGrant(ctx, t, a, iamAccount(), "alice"),
+			)
+			wantErr(t, "UpdateAccessKey of bob's key as alice", err, resource.CodeNotFound,
+				"The Access Key with name "+k.AccessKeyID+" cannot be found.")
+			err = a.UpdateAccessKey(
+				ctx, iamAccount(), "bob", k.AccessKeyID, "Paused",
+				UserGrant(ctx, t, a, iamAccount(), "bob"),
+			)
+			wantErr(t, "UpdateAccessKey with an unknown status", err, resource.CodeInvalidArgument,
+				"1 validation error detected: Value 'Paused' at 'status' failed to satisfy constraint: "+
+					"Member must satisfy enum value set: [Active, Inactive]")
+			wantOK(t, "UpdateAccessKey Inactive", a.UpdateAccessKey(
+				ctx, iamAccount(), "bob", k.AccessKeyID, iam.AccessKeyInactive,
+				UserGrant(ctx, t, a, iamAccount(), "bob"),
+			))
+			if ks := wantKeys(ctx, t, a, "bob", k.AccessKeyID); ks[0].Status != iam.AccessKeyInactive {
+				t.Fatalf("status after Inactive: %q", ks[0].Status)
+			}
+			wantOK(t, "UpdateAccessKey Active", a.UpdateAccessKey(
+				ctx, iamAccount(), "bob", k.AccessKeyID, iam.AccessKeyActive,
+				UserGrant(ctx, t, a, iamAccount(), "bob"),
+			))
+			if ks := wantKeys(ctx, t, a, "bob", k.AccessKeyID); ks[0].Status != iam.AccessKeyActive {
+				t.Fatalf("status after Active: %q", ks[0].Status)
+			}
+			err = a.UpdateAccessKey(
+				ctx, iamAccount(), "ghost", k.AccessKeyID, iam.AccessKeyActive,
+				UserGrant(ctx, t, a, iamAccount(), "ghost"),
+			)
+			wantErr(t, "UpdateAccessKey for a missing user", err, resource.CodeNotFound,
+				"The user with name ghost cannot be found.")
+			err = a.UpdateAccessKey(
+				ctx, iamAccount(), "bob", "not-a-vws-key-id", iam.AccessKeyActive,
+				UserGrant(ctx, t, a, iamAccount(), "bob"),
+			)
+			wantErr(t, "UpdateAccessKey of an id vws-iam cannot hold", err, resource.CodeNotFound,
+				"The Access Key with name not-a-vws-key-id cannot be found.")
+		}},
 		{"GetAccessKeyLastUsed names the owner of a new key, never used", func(
 			ctx context.Context, t *testing.T, a iam.Directory,
 		) {
@@ -201,6 +246,8 @@ func iamAccessKeyRows() []iamRow {
 			if len(ks) != 0 {
 				t.Fatalf("a stale ListAccessKeys listed %q", keyIDs(ks))
 			}
+			changed("UpdateAccessKey", a.UpdateAccessKey(
+				ctx, iamAccount(), "bob", k.AccessKeyID, iam.AccessKeyInactive, Grant(ctx, t, stale)))
 			changed("DeleteAccessKey", a.DeleteAccessKey(ctx, iamAccount(), "bob", k.AccessKeyID, Grant(ctx, t, stale)))
 			wantKeys(ctx, t, a, "bob", k.AccessKeyID)
 			ks, err = a.ListAccessKeys(ctx, iamAccount(), "bob", Grant(ctx, t, arnPrefix+"user/eng/bob"))

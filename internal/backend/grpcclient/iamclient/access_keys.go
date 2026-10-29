@@ -10,6 +10,7 @@ import (
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	iamv1 "github.com/popododo0720/vws-proto/gen/go/vws/iam/v1"
 
@@ -109,10 +110,65 @@ func (a STSAdmin) ListAccessKeys(
 	return out, nil
 }
 
+// UpdateAccessKey implements iam.Admin over AccessKeyService.UpdateAccessKey,
+// replayed by request_id, so it is retried. It sends no etag for the same
+// reason DeleteAccessKey sends none. want must be the user's ARN when the
+// user is read before the call, and it is sent as expected_user_arn: vws-iam
+// reads the parent user in the same transaction as the write, so a user
+// moved after the first read is refused with no change to the key and the
+// call answers ConcurrentModification (#340). The user is read once more
+// after the write, so a vws-iam that ignores the precondition still never
+// reports success under a stale ARN.
+func (a STSAdmin) UpdateAccessKey(
+	ctx context.Context, account resource.AccountID, user, keyID, keyStatus string, want iam.AuthorizedPrincipal,
+) (err error) {
+	ctx, end := a.observeKey(ctx, "UpdateAccessKey", true, account, user, "", &keyID)
+	defer func() { end(err) }()
+	if err := want.Require(); err != nil {
+		return err
+	}
+	if err := iam.CheckAccessKeyStatus(keyStatus); err != nil {
+		return err
+	}
+	if !entityName(user) {
+		return entityNotFound("user", user)
+	}
+	if _, err := a.keyUser(ctx, account, user, want); err != nil {
+		return err
+	}
+	if !vwsKeyID.MatchString(keyID) {
+		return iam.EntityNotFound("Access Key", keyID)
+	}
+	state := iamv1.AccessKeyState_ACCESS_KEY_STATE_INACTIVE
+	if keyStatus == iam.AccessKeyActive {
+		state = iamv1.AccessKeyState_ACCESS_KEY_STATE_ACTIVE
+	}
+	op, err := retry(ctx, a.backoff, a.accessKeys.UpdateAccessKey, &iamv1.UpdateAccessKeyRequest{
+		AccessKey: &iamv1.AccessKey{
+			Name: userResource(account, user) + "/accessKeys/" + keyID,
+			Spec: &iamv1.AccessKeySpec{State: state},
+		},
+		UpdateMask:      &fieldmaskpb.FieldMask{Paths: []string{"spec.state"}},
+		RequestId:       newRequestID(),
+		ExpectedUserArn: want.String(),
+	})
+	if err != nil {
+		return keyError(err, "Access Key", keyID)
+	}
+	if err := opError(op, "Access Key", keyID); err != nil {
+		return err
+	}
+	_, err = a.keyUser(ctx, account, user, want)
+	return err
+}
+
 // DeleteAccessKey implements iam.Admin over AccessKeyService.DeleteAccessKey,
 // replayed by request_id, so it is retried. It sends no etag: vws-iam bumps
 // a key's version on every use, so an etag read here could already be
-// stale. want must be the user's ARN when the user is read before the call.
+// stale. want must be the user's ARN when the user is read before the call,
+// and it is sent as expected_user_arn, as UpdateAccessKey sends it: a user
+// moved after the read keeps the key and the call answers
+// ConcurrentModification.
 func (a STSAdmin) DeleteAccessKey(
 	ctx context.Context, account resource.AccountID, user, keyID string, want iam.AuthorizedPrincipal,
 ) (err error) {
@@ -132,6 +188,7 @@ func (a STSAdmin) DeleteAccessKey(
 	}
 	op, err := retry(ctx, a.backoff, a.accessKeys.DeleteAccessKey, &iamv1.DeleteAccessKeyRequest{
 		Name: userResource(account, user) + "/accessKeys/" + keyID, RequestId: newRequestID(),
+		ExpectedUserArn: want.String(),
 	})
 	if err != nil {
 		return keyError(err, "Access Key", keyID)
