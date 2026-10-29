@@ -380,7 +380,7 @@ func (c computeClient) DetachVolume(
 ) (resource.Accepted[resource.VolumeAttachment], error) {
 	var zero resource.Accepted[resource.VolumeAttachment]
 	projectID := project(m.Account)
-	vol, err := c.getVolume(ctx, projectID, req.VolumeID.String())
+	vol, err := c.getUntypedVolume(ctx, projectID, req.VolumeID.String(), resource.ActionDetachVolume)
 	if err != nil {
 		return zero, err
 	}
@@ -1298,16 +1298,8 @@ func protoBootCount(vols []*computev1.VolumeAttachment) int {
 
 func (c computeClient) DeleteVolume(ctx context.Context, m backend.Mutation, req resource.DeleteVolumeRequest) (resource.Accepted[resource.Volume], error) {
 	projectID := project(m.Account)
-	vol, err := c.getVolume(ctx, projectID, req.ID.String())
-	var unknownType *unknownVolumeTypeError
-	switch {
-	case errors.As(err, &unknownType):
-		// Deleting needs no type, so a volume this build cannot name can
-		// still be cleaned up (#335 review).
-		c.logger().WarnContext(ctx, "deleting a volume with an unknown volume type",
-			slog.String("name", volumeName(projectID, req.ID.String())),
-			slog.String("type", unknownType.typ.String()))
-	case err != nil:
+	vol, err := c.getUntypedVolume(ctx, projectID, req.ID.String(), resource.ActionDeleteVolume)
+	if err != nil {
 		return resource.Accepted[resource.Volume]{}, err
 	}
 	deleted, err := c.volumes.DeleteVolume(ctx, &storagev1.DeleteVolumeRequest{
@@ -1947,6 +1939,25 @@ func (c computeClient) getVolume(ctx context.Context, projectID, id string) (res
 	return volumeModel(out)
 }
 
+// getUntypedVolume reads a volume for an action that needs no volume type,
+// such as DeleteVolume and DetachVolume. A stored type this build cannot name
+// is logged and the rest of the volume is returned, so the volume can still be
+// detached and cleaned up (#335 review, #337).
+func (c computeClient) getUntypedVolume(
+	ctx context.Context, projectID, id string, action resource.Action,
+) (resource.Volume, error) {
+	vol, err := c.getVolume(ctx, projectID, id)
+	var unknownType *unknownVolumeTypeError
+	if errors.As(err, &unknownType) {
+		c.logger().WarnContext(ctx, "acting on a volume with an unknown volume type",
+			slog.String("action", action.String()),
+			slog.String("name", volumeName(projectID, id)),
+			slog.String("type", unknownType.typ.String()))
+		return vol, nil
+	}
+	return vol, err
+}
+
 func (c networkClient) getVpc(ctx context.Context, projectID, id string) (resource.Vpc, error) {
 	name := vpcName(projectID, id)
 	out, err := c.vpcs.GetVpc(ctx, &networkv1.GetVpcRequest{Name: name})
@@ -2071,11 +2082,6 @@ func volumeModel(in *storagev1.Volume) (resource.Volume, error) {
 		Type: volumeTypeOf(in.GetSpec().GetType()), State: state, InstanceID: inst,
 		Device: in.GetStatus().GetDeviceName(), CreateTime: in.GetCreateTime().AsTime().UTC(),
 	}
-	if vol.Type == "" {
-		// The volume is returned with no type beside the error, so only
-		// DeleteVolume, which needs no type, can act on it.
-		return vol, resource.Internal(&unknownVolumeTypeError{id: id, typ: in.GetSpec().GetType()})
-	}
 	if rootVolume(in) {
 		// RunInstances made it from the image, and compute deletes it with
 		// the instance. Storage may not report the attachment, so the
@@ -2096,6 +2102,11 @@ func volumeModel(in *storagev1.Volume) (resource.Volume, error) {
 	if !vol.InstanceID.IsZero() {
 		// Storage names the instance once the disk is on the machine.
 		vol.AttachState = resource.AttachmentAttached
+	}
+	if vol.Type == "" {
+		// The volume is returned whole, with no type, beside the error, so
+		// actions that need no type (DeleteVolume, DetachVolume) can act on it.
+		return vol, resource.Internal(&unknownVolumeTypeError{id: id, typ: in.GetSpec().GetType()})
 	}
 	return vol, nil
 }
