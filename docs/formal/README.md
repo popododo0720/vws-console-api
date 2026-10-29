@@ -9,7 +9,7 @@ restarts at any step, and the client-token window passing.
 Run it with `scripts/tla-detach.sh` (needs Java 11+; about 5 minutes on 8
 cores). CI runs it in `.github/workflows/tla.yml`.
 
-Last confirmed against the code at commit `2fbef54`. When a file in
+Last confirmed against the code at commit `6fd3fcb` with the #334 change. When a file in
 "Coverage" changes after that commit, read the change against the model
 before trusting a pass, and move this commit forward only once the model
 describes the new code.
@@ -28,7 +28,8 @@ describes the new code.
 | `Read` | `detachOnce`, `detachBind`, `writeDetach` before the call, `detachRecordsInWindow`, `instanceUpdateLabels` |
 | `Write` | `writeDetach`'s `UpdateInstance`; `etagMismatchError` reread in `DetachVolume` |
 | `PRead`, `PWrite` | `persistDetachOp` |
-| `Prune`, `Hold`, `Pending` | `pruneDetachRecords`, `detachRecoveryPending`, `pendingDetachOps` |
+| `Prune`, `PruneHeld`, `Hold`, `Pending` | `pruneDetachRecords`, `pruneHeldDetachRecords`, `detachRecoveryPending`, `pendingDetachOps` |
+| `Pruned` | `instanceUpdateLabels`: the hold stays while the write has room, and ends when it has none (#334) |
 | `TRead`, `TWrite` | `CreateTags` through `instanceUpdateLabels` |
 | `Reattach` | `AttachVolume` through `instanceUpdateLabels` |
 | `Restart`, `Abandon` | a console-api restart or lost response (the client retries with the same token), or a client that gives up |
@@ -45,7 +46,8 @@ atomically. `AttachVolume`'s read-modify-write is one step.
 | `ReplayReturnsFirst` | A successful retry answers its own operation, never another detach's. | `detachReplay.opMatch`, `detachFPToken`; `writeDetach` deletes the old `vws-dop-` | `FixOpBinding=FALSE` with `FixArchive=FALSE` (before #213, #302; the archive moves the old op id with its record, so it hides this seed alone) |
 | `LabelBudget` | Labels never pass the limit, and compute never refuses a write for it: an accepted detach always has room for its op id. | `instanceUpdateLabels` (`pendingDetachOps`), `detachRoomErr` | `FixPendingReserve=FALSE`: the #327 race |
 | `PruneKeepsLive` | No write removes a record a running caller's retry still reads. | `pruneDetachRecords` | `FixPruneExpiredOnly=FALSE` |
-| `HoldBlocksPrune` | No write prunes an expired record while a recovery is pending. | `detachRecoveryPending`, `pruneDetachRecords` | `FixHold=FALSE` (before #319) |
+| `HoldBlocksPrune` | No write prunes an expired record while a recovery is pending, unless the write has no room for it. | `detachRecoveryPending`, `pruneDetachRecords` | `FixHold=FALSE` (before #319) |
+| `HoldNeverRefuses` | A hold never refuses a tag write that fits once the hold ends: records are not EC2 tags. | `instanceUpdateLabels` (#334) | `FixHoldGivesWay=FALSE`: the #327 hold keeps an expired record and refuses the tag |
 | `NoLostUpdate` | A tag write that compute applied is never overwritten by a concurrent write. | the etag on every `UpdateInstance` in `writeDetach`, `persistDetachOp`, `CreateTags` | `FixEtagCAS=FALSE` |
 | `CallsFinish` (liveness) | Every `DetachVolume` call returns. | the reread loop in `DetachVolume` | `FixEtagReread=FALSE`: resend the stale write on an etag mismatch |
 | `HoldEnds` (liveness) | Every pending recovery ends. | `pendingDetachOps` skips expired records (#322) | `FixPendingExpires=FALSE` |
@@ -79,12 +81,14 @@ t2's retry after a restart reads an op id of other parameters and answers
 - Up to 2 restarts and 1 reattach per run.
 - `WithinWindow`: no caller retries a token after its record expired (#305
   covers that case).
-- Real design result: 4,934,768 distinct states, 0 violations, depth 26.
+- Real design result: 5,045,040 distinct states, 0 violations, depth 26.
 
 ## Not modeled
 
 - Records written before #303 (no stamp) and the `writtenBefore303` /
   `stampedRecordExpired` rule.
+- Records written before #362, with no `vws-dop-` label. `dop[v] = None`
+  next to a record stands for the fingerprint binding the first write leaves.
 - More than one instance: `findDetachReplay` paging, a volume moved to
   another instance, `volumeBoundElsewhere`.
 - The 5-attempt bound on the etag loops, the post-replay etag check

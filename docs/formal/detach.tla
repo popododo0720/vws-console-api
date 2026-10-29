@@ -25,6 +25,10 @@
 (*  - Records written before #303 (no stamp) and other instances           *)
 (*    (findDetachReplay paging, a move to another instance) are not        *)
 (*    modeled.                                                             *)
+(*  - dop[v] = None next to a record stands for the fingerprint binding    *)
+(*    the first write leaves (detachOpPending, #362); Pending counts the   *)
+(*    label it holds. Records written before #362, with no vws-dop- label, *)
+(*    are not modeled.                                                     *)
 (*                                                                         *)
 (* Fix* constants switch one fix of the real code off, to show that the   *)
 (* invariant it guards can fail. The real design has every Fix* TRUE.      *)
@@ -52,7 +56,8 @@ CONSTANTS
     FixEtagReread, \* an etag mismatch rereads the instance (DetachVolume's loop)
     FixArchive,    \* a new record moves another request's record aside (#353)
     FixResendRecover, \* a write refused as a mismatch next to this request's record saves an op (#352)
-    FixPersistOwnSlot \* persistDetachOp saves the op id next to this request's own record (#353, #359)
+    FixPersistOwnSlot, \* persistDetachOp saves the op id next to this request's own record (#353, #359)
+    FixHoldGivesWay   \* a write the hold has no room for ends the hold instead of failing (#334)
 
 ASSUME Budgets \subseteq Nat /\ MaxReplays \in Nat /\ MaxRestarts \in Nat /\ MaxReattach \in Nat
 
@@ -98,14 +103,15 @@ Pending(i) ==
 Hold(i) == FixHold /\ Pending(i) > 0
 
 \* pruneDetachRecords: an expired record goes, with its op id, unless a
-\* recovery is pending; an op id with no record goes.
-Drop(i, v) == IF FixPruneExpiredOnly
-              THEN i.rec[v] \in expired /\ ~Hold(i)
-              ELSE (i.rec[v] \in expired /\ ~Hold(i)) \/ i.dop[v] = None
-Prune(i) ==
-    LET kept == {v \in Recs(i) : ~Drop(i, v)}
+\* recovery is pending (h); an op id with no record goes.
+Drop(i, v, h) == IF FixPruneExpiredOnly
+                 THEN i.rec[v] \in expired /\ ~h
+                 ELSE (i.rec[v] \in expired /\ ~h) \/ i.dop[v] = None
+PruneHeld(i, h) ==
+    LET kept == {v \in Recs(i) : ~Drop(i, v, h)}
     IN [i EXCEPT !.rec = [s \in Slots |-> IF s \in kept THEN i.rec[s] ELSE None],
                  !.dop = [s \in Slots |-> IF s \in kept THEN i.dop[s] ELSE None]]
+Prune(i) == PruneHeld(i, Hold(i))
 
 \* detachReplayFor: the slot holding t's record of v, or None.
 RecSlot(i, v, t) ==
@@ -133,10 +139,23 @@ Fits(i, isDetach) ==
     Count(i) + (IF FixPendingReserve THEN Pending(i)
                 ELSE IF isDetach THEN 1 ELSE 0) <= Budget
 
-\* An expired record pruned by a write while a recovery was pending.
+\* instanceUpdateLabels with the change f applied to the pruned instance:
+\* while the hold has room it stays; a write it has no room for ends it
+\* (#334). isDetach as in Fits.
+Pruned(i, f(_), isDetach) ==
+    LET held == f(Prune(i))
+    IN IF FixHoldGivesWay /\ ~Fits(held, isDetach) THEN f(PruneHeld(i, FALSE)) ELSE held
+
+\* Expired records pruned by a write while a recovery was pending, though
+\* the write had room for them.
+DroppedHeld(before, after) ==
+    {v \in Recs(before) : before.rec[v] \in expired /\ after.rec[v] = None}
 PrunesHeld(before, after) ==
-    Pending(before) > 0 /\
-    \E v \in Recs(before) : before.rec[v] \in expired /\ after.rec[v] = None
+    LET d == DroppedHeld(before, after) IN
+    /\ Pending(before) > 0
+    /\ d # {}
+    /\ Count(after) + Cardinality(d) + Cardinality({v \in d : before.dop[v] # None})
+           + Pending(after) <= Budget
 
 \* A write that removes, without replacing, a record whose token a running
 \* caller still holds (a later detach of the volume replaces it instead).
@@ -222,9 +241,9 @@ Read(c) ==
               \* bound: writeDetach(drop=true), a new record.
               IF InWindow(Arch(i, v, t), v) >= MaxReplays
               THEN Finish(c, "exhausted", None) /\ UNCHANGED pay
-              ELSE LET q == Prune(Arch(i, v, t))
-                       p == [q EXCEPT !.spec = @ \ {v}, !.rec[v] = t,
-                                      !.dop[v] = IF FixOpBinding THEN None ELSE @]
+              ELSE LET New(q) == [q EXCEPT !.spec = @ \ {v}, !.rec[v] = t,
+                                               !.dop[v] = IF FixOpBinding THEN None ELSE @]
+                       p == Pruned(Arch(i, v, t), New, TRUE)
                    IN IF Fits(p, TRUE)
                       THEN /\ pay' = [pay EXCEPT ![c] = p]
                            /\ pc' = [pc EXCEPT ![c] = "write"]
@@ -360,13 +379,19 @@ Abandon(c) ==
                    restarts, reattaches>>
 
 \* CreateTags on the instance (ec2.go CreateTags, instanceUpdateLabels).
+\* A refusal the hold caused, where the write fits once the hold ends, is
+\* "heldrefused".
 TRead(k) ==
-    LET p == [Prune(inst) EXCEPT !.tags = @ \cup {k}] IN
+    LET Tag(q) == [q EXCEPT !.tags = @ \cup {k}]
+        p == Pruned(inst, Tag, FALSE)
+    IN
     /\ tpc[k] = "read"
     /\ tsnap' = [tsnap EXCEPT ![k] = etag]
     /\ IF Fits(p, FALSE)
        THEN tpay' = [tpay EXCEPT ![k] = p] /\ tpc' = [tpc EXCEPT ![k] = "write"]
-       ELSE tpc' = [tpc EXCEPT ![k] = "refused"] /\ UNCHANGED tpay
+       ELSE /\ tpc' = [tpc EXCEPT ![k] =
+                         IF Fits(Tag(PruneHeld(inst, FALSE)), FALSE) THEN "heldrefused" ELSE "refused"]
+            /\ UNCHANGED tpay
     /\ UNCHANGED <<tokOf, volOf, Budget, inst, etag, expired, reqStore, pc, snap, pay, result,
                    retop, acked, accepted, applied, heldPruned, liveDropped, restarts, reattaches>>
 
@@ -387,7 +412,9 @@ TWrite(k) ==
 \* AttachVolume puts a detached volume back (ec2.go AttachVolume,
 \* instanceUpdateLabels). Its read-modify-write is one step here.
 Reattach(v) ==
-    LET p == [Prune(inst) EXCEPT !.spec = @ \cup {v}] IN
+    LET Back(q) == [q EXCEPT !.spec = @ \cup {v}]
+        p == Pruned(inst, Back, FALSE)
+    IN
     /\ reattaches < MaxReattach
     /\ v \notin inst.spec
     /\ Fits(p, FALSE)
@@ -461,8 +488,13 @@ LabelBudget ==
 PruneKeepsLive == ~liveDropped
 
 \* A hold blocks prune: no write drops an expired record while a recovery is
-\* pending. ec2.go detachRecoveryPending, pruneDetachRecords.
+\* pending, unless the write has no room for it. ec2.go
+\* detachRecoveryPending, pruneDetachRecords.
 HoldBlocksPrune == ~heldPruned
+
+\* A hold never refuses a tag write that fits once the hold ends: records
+\* are not EC2 tags (#334). ec2.go instanceUpdateLabels.
+HoldNeverRefuses == \A k \in TagKeys : tpc[k] # "heldrefused"
 
 \* No lost update under concurrent label writes: every applied tag write
 \* is still on the instance, since tags are only added. Every instance
