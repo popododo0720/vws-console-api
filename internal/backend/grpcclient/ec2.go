@@ -1553,7 +1553,10 @@ func (c computeClient) listImages(
 				return nil, err
 			}
 			if img.OwnerID != account {
-				img = c.confirmImageOwner(ctx, img, account)
+				img, err = c.confirmImageOwner(ctx, img, account)
+				if err != nil {
+					return nil, err
+				}
 			}
 			items = append(items, img)
 		}
@@ -1573,24 +1576,23 @@ func (c computeClient) listImages(
 // confirmImageOwner keeps a foreign copy source only when the source project
 // owns the image. A private image copied in the caller's project names the
 // source it was copied from, so a read under that project finds nothing and
-// the image stays the caller's own. A compute that cannot answer leaves the
-// source-derived owner, the only one it exposes.
+// the image stays the caller's own. Any other failed read is reported: a
+// guessed owner would let an owner filter hide the caller's image.
 func (c computeClient) confirmImageOwner(
 	ctx context.Context, img resource.Image, caller resource.AccountID,
-) resource.Image {
+) (resource.Image, error) {
 	_, err := c.images.GetImage(ctx, &computev1.GetImageRequest{
 		Name: imageName(project(img.OwnerID), img.ID.String()),
 	})
 	if err == nil {
-		return img
+		return img, nil
 	}
-	if resource.CodeOf(fromRPC(err)) == resource.CodeNotFound {
+	err = fromRPC(err)
+	if resource.CodeOf(err) == resource.CodeNotFound {
 		img.OwnerID, img.Public = caller, false
-		return img
+		return img, nil
 	}
-	c.logger().WarnContext(ctx, "image owner read failed, keeping the copy source",
-		slog.String("image", img.ID.String()), slog.Any("err", err))
-	return img
+	return resource.Image{}, err
 }
 
 // withCatalog adds the launchable catalog image when compute did not list the
