@@ -50,7 +50,7 @@ func TestPruneDetachRecords(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0).UTC()
 	const grace = backend.ClientTokenGrace
 	req := strings.Repeat("ab", 16)
-	longDevice := "/dev/" + strings.Repeat("x", 20) // 25 bytes: no room for a stamp
+	longDevice := "/dev/" + strings.Repeat("x", 20) // 25 bytes: no room for a stamp next to the hex id
 	raw := map[string]string{
 		"env":                         "dev",
 		labelImage:                    "ami-0123456789abcdef0",
@@ -82,8 +82,9 @@ func TestPruneDetachRecords(t *testing.T) {
 		// Exactly the window and the grace old is still within it.
 		labelDetachPrefix + "vol-e":   raw[labelDetachPrefix+"vol-e"],
 		labelDetachOpPrefix + "vol-e": raw[labelDetachOpPrefix+"vol-e"],
-		// Too long to stamp: kept as it is, as before #303.
-		labelDetachPrefix + "vol-g":   raw[labelDetachPrefix+"vol-g"],
+		// Too long to stamp next to the hex request id: stamped with the
+		// id in base64url, so it expires like any other (#329).
+		labelDetachPrefix + "vol-g":   detachRecordValue(req, longDevice, now),
 		labelDetachOpPrefix + "vol-g": raw[labelDetachOpPrefix+"vol-g"],
 	}
 	got := pruneDetachRecords(raw, now)
@@ -97,8 +98,11 @@ func TestPruneDetachRecords(t *testing.T) {
 	if rec, ok := detachReplayFrom(got, "vol-c"); !ok || rec.requestHex != req || rec.device != "/dev/sdh" {
 		t.Fatalf("stamped record reads back as %+v %v", rec, ok)
 	}
-	if rec, ok := detachReplayFrom(got, "vol-g"); !ok || rec.device != longDevice {
-		t.Fatalf("unstamped record reads back as %+v %v", rec, ok)
+	if rec, ok := detachReplayFrom(got, "vol-g"); !ok || rec.requestHex != req || rec.device != longDevice {
+		t.Fatalf("long-device record reads back as %+v %v", rec, ok)
+	}
+	if _, _, at, stamped, _ := parseDetachRecord(got[labelDetachPrefix+"vol-g"]); !stamped || !at.Equal(now) {
+		t.Fatalf("long-device record %q, want it stamped now", got[labelDetachPrefix+"vol-g"])
 	}
 }
 
