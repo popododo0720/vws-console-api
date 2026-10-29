@@ -97,6 +97,25 @@ func TestInvalidAMIIDNotFoundShape(t *testing.T) {
 	}
 }
 
+// #337: EC2 refuses DeleteVolume on an attached volume with VolumeInUse.
+// Every other volume conflict stays IncorrectState.
+func TestVolumeAttachedCode(t *testing.T) {
+	vol, err := resource.Parse[resource.VolumeID]("vol-0123456789abcdef0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := ec2Wire(t, resource.VolumeAttached(vol)); got != (wireErr{400, "VolumeInUse"}) {
+		t.Fatalf("attached %+v", got)
+	}
+	for _, e := range []*resource.Error{
+		resource.VolumeNotAvailable(vol), resource.VolumeNotInUse(vol), resource.VolumeRootDevice(vol),
+	} {
+		if got := ec2Wire(t, e); got != (wireErr{400, "IncorrectState"}) {
+			t.Fatalf("%q %+v", e.Message, got)
+		}
+	}
+}
+
 func TestAttachmentNotFoundCode(t *testing.T) {
 	vol, err := resource.Parse[resource.VolumeID]("vol-0123456789abcdef0")
 	if err != nil {

@@ -357,7 +357,7 @@ func (c compute) DeleteVolume(ctx context.Context, m backend.Mutation, req resou
 	// Storage rejects a delete while an instance spec still names the volume.
 	// State is only the projection attach and detach keep beside that list.
 	if c.w.volumeOnInstance(vol.ID) {
-		return resource.Accepted[resource.Volume]{}, resource.Conflict(resource.KindVolume, vol.ID.String(), "volume is in use")
+		return resource.Accepted[resource.Volume]{}, resource.VolumeAttached(vol.ID)
 	}
 	prev := vol.State
 	vol.State = resource.VolumeDeleting

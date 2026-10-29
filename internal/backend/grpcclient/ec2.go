@@ -1325,8 +1325,8 @@ func (c computeClient) DeleteVolume(ctx context.Context, m backend.Mutation, req
 		Name:      volumeName(projectID, req.ID.String()),
 		RequestId: requestUUID(m.Key, "delete-vol"),
 	})
-	if err := rpcErr(deleted, err); err != nil {
-		return resource.Accepted[resource.Volume]{}, err
+	if mapped := rpcErr(deleted, err); mapped != nil {
+		return resource.Accepted[resource.Volume]{}, volumeDeleteConflict(deleted, err, mapped, req.ID)
 	}
 	op, err := operationFrom(deleted, resource.ServiceCompute)
 	if err != nil {
@@ -2433,6 +2433,35 @@ func keyPairConflict(op *longrunningpb.Operation, rpc, mapped error, name string
 		}
 	}
 	return out
+}
+
+// volumeDeleteConflict names the EC2 error for a storage refusal of
+// DeleteVolume (#337). mapped is the client's reading of storage's answer,
+// which is the gRPC error rpc or the error of the finished operation op.
+//
+// DEPENDENCY_MISSING means an instance spec still uses the volume
+// (vws-storage#152), which EC2 answers as VolumeInUse. Storage decides this
+// in the same admission as the delete; the client does not probe the
+// attachment first. Any other conflict refuses the volume in its current
+// state, so it names the volume and reads as IncorrectState, not as an
+// instance error. Other errors are returned as they are.
+func volumeDeleteConflict(op *longrunningpb.Operation, rpc, mapped error, id resource.VolumeID) error {
+	if resource.CodeOf(mapped) != resource.CodeConflict {
+		return mapped
+	}
+	raw := rpc
+	if raw == nil && op.GetError() != nil {
+		raw = status.ErrorProto(op.GetError())
+	}
+	st, _ := status.FromError(raw)
+	if vwsReason(st) == "DEPENDENCY_MISSING" {
+		return resource.VolumeAttached(id).WithCause(mapped)
+	}
+	out := resource.Conflict(resource.KindVolume, id.String(), st.Message())
+	if out.Message == "" {
+		out.Message = "the volume cannot be deleted in its current state"
+	}
+	return out.WithCause(mapped)
 }
 
 // vwsReason is the vws.dev ErrorInfo reason of st, or "" when it has none.

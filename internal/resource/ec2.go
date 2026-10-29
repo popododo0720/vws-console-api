@@ -268,6 +268,21 @@ func VolumeRootDevice(id VolumeID) *Error {
 	return Conflict(KindVolume, id.String(), "Volume '"+id.String()+"' is in use as the root device.")
 }
 
+// VolumeAttached reports a DeleteVolume for a volume an instance still uses.
+// EC2 answers VolumeInUse ("The specified EBS volume is attached to an
+// instance", EC2 API Reference, Error codes) (#337).
+func VolumeAttached(id VolumeID) *Error {
+	return &Error{
+		Code: CodeConflict, Kind: KindVolume, ID: id.String(),
+		Field: "attachment", Message: "Volume " + id.String() + " is currently attached.",
+	}
+}
+
+// IsVolumeAttached reports whether e came from VolumeAttached.
+func IsVolumeAttached(e *Error) bool {
+	return e != nil && e.Code == CodeConflict && e.Kind == KindVolume && e.Field == "attachment"
+}
+
 // AttachVolumeRequest attaches a volume to an instance.
 type AttachVolumeRequest struct {
 	VolumeID   VolumeID   `json:"volumeId"`
