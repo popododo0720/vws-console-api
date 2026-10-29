@@ -998,6 +998,10 @@ func ec2Code(e *resource.Error) string {
 	case resource.CodeAlreadyExists:
 		return alreadyExistsCode(e.Kind)
 	case resource.CodeConflict:
+		// EC2 refuses DeleteVolume on an attached volume with VolumeInUse.
+		if resource.IsVolumeAttached(e) {
+			return "VolumeInUse"
+		}
 		return conflictCode(e.Kind)
 	case resource.CodeIdempotencyMismatch:
 		return "IdempotentParameterMismatch"

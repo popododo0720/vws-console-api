@@ -148,6 +148,13 @@ func TestVolumeAttachmentIdentityIsTheInstance(t *testing.T) {
 	if IsAttachmentNotFound(NotFound(KindVolume, vol.String())) {
 		t.Fatal("plain volume not-found")
 	}
+	busy := VolumeAttached(vol)
+	if !IsVolumeAttached(busy) || busy.Kind != KindVolume || busy.Code != CodeConflict || busy.ID != vol.String() {
+		t.Fatalf("%+v", busy)
+	}
+	if IsVolumeAttached(VolumeNotAvailable(vol)) || IsVolumeAttached(miss) {
+		t.Fatal("other volume errors read as attached")
+	}
 }
 
 // The EC2 surface sends the model message, so each volume error carries the
