@@ -65,6 +65,63 @@ func TestDescribeImagesListsPublicButNotForeignPrivate(t *testing.T) {
 	}
 }
 
+func TestRunInstancesLaunchesASeededImage(t *testing.T) {
+	ctx := context.Background()
+	account, err := resource.Parse[resource.AccountID]("123456789012")
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := resource.Parse[resource.AccountID]("210987654321")
+	if err != nil {
+		t.Fatal(err)
+	}
+	own := image(t, "ami-00000000000000011", account, false)
+	public := image(t, "ami-00000000000000012", other, true)
+	private := image(t, "ami-00000000000000013", other, false)
+	w := New(Options{Images: []resource.Image{own, public, private}})
+	set := w.Set()
+	scope := backend.Scope{Account: account}
+	sub, err := set.Network.CreateSubnet(ctx, backend.Mutation{
+		Scope: scope, Key: "sub", Fingerprint: "sub",
+	}, resource.CreateSubnetRequest{Cidr: "10.9.0.0/24"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := set.Network.GetOperation(ctx, scope, sub.Operation.ID); err != nil {
+		t.Fatal(err)
+	}
+	for _, tt := range []struct {
+		name   string
+		img    resource.Image
+		launch bool
+	}{
+		{name: "own", img: own, launch: true},
+		{name: "public", img: public, launch: true},
+		{name: "foreign-private", img: private},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			acc, err := set.Compute.RunInstances(ctx, backend.Mutation{
+				Scope: scope, Key: "run-" + tt.name, Fingerprint: "run",
+			}, resource.RunInstancesRequest{
+				ImageID: tt.img.ID, InstanceType: "vws.small", SubnetID: sub.Items[0].ID, Count: 1,
+			})
+			if !tt.launch {
+				got := resource.AsError(err)
+				if got == nil || got.Code != resource.CodeNotFound || got.Kind != resource.KindImage {
+					t.Fatalf("foreign private image: %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(acc.Items) != 1 || acc.Items[0].ImageID != tt.img.ID {
+				t.Fatalf("launch of %s: %+v", tt.img.ID, acc.Items)
+			}
+		})
+	}
+}
+
 func image(t *testing.T, id string, owner resource.AccountID, public bool) resource.Image {
 	t.Helper()
 	parsed, err := resource.Parse[resource.ImageID](id)

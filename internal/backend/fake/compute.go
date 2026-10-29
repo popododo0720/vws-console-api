@@ -40,7 +40,12 @@ func (c compute) RunInstances(ctx context.Context, m backend.Mutation, req resou
 		}
 	}
 	if !resource.CanLaunchImage(m.Account, req.ImageID) {
-		return resource.Accepted[resource.Instance]{}, resource.ImageNotFound(req.ImageID)
+		// A seeded image launches when the caller can read it, the same
+		// visibility DescribeImages applies (#350).
+		img, ok := c.w.img[req.ImageID]
+		if !ok || (img.OwnerID != m.Account && !img.Public) {
+			return resource.Accepted[resource.Instance]{}, resource.ImageNotFound(req.ImageID)
+		}
 	}
 	resID, err := resource.Mint[resource.ReservationID](c.w.entropy)
 	if err != nil {
