@@ -152,6 +152,10 @@ type BlockDevice struct {
 	// Status is the attachment status (EC2 EbsInstanceBlockDevice.Status).
 	// It is attached only once the backend reports the disk on the machine.
 	Status AttachmentStatus `json:"status"`
+	// AttachTime is when the attachment initiated (EC2
+	// EbsInstanceBlockDevice.AttachTime). It is zero when the backend does
+	// not record one.
+	AttachTime time.Time `json:"attachTime,omitzero"`
 }
 
 // Owner returns the account that owns the instance.

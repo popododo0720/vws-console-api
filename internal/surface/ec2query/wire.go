@@ -86,8 +86,7 @@ func blockSetOf(inst resource.Instance) *blockSet {
 		}
 		item.EBS.VolumeID, item.EBS.Status = b.VolumeID.String(), string(status)
 		item.EBS.DeleteOnTermination = b.DeleteOnTermination
-		// No backend records an attach time; the root volume is attached at launch.
-		item.EBS.AttachTime = awsTime(inst.LaunchTime)
+		item.EBS.AttachTime = awsTime(attachTimeOr(b.AttachTime, inst.LaunchTime))
 		out.Items = append(out.Items, item)
 	}
 	return out
@@ -269,6 +268,7 @@ type attachVolumeXML struct {
 	InstanceID string   `xml:"instanceId"`
 	Device     string   `xml:"device"`
 	Status     string   `xml:"status"`
+	AttachTime string   `xml:"attachTime,omitempty"`
 }
 
 type detachVolumeXML struct {
@@ -759,8 +759,7 @@ func volumeXML(v resource.Volume) volumeItem {
 		}
 		item.Attachments.Items = []attachmentItem{{
 			VolumeID: v.ID.String(), InstanceID: v.InstanceID.String(), Device: v.Device, Status: string(status),
-			// No backend records an attach time; the volume's creation time stands in.
-			AttachTime:          awsTime(v.CreateTime),
+			AttachTime:          awsTime(attachTimeOr(v.AttachTime, v.CreateTime)),
 			DeleteOnTermination: v.DeleteOnTermination,
 		}}
 	}
@@ -816,6 +815,18 @@ func imageXML(img resource.Image) imageItem {
 }
 
 // awsTime renders t as EC2 does (ISO 8601, UTC, milliseconds); zero is omitted.
+// attachTimeOr is the attachment's attachTime: the time the backend recorded
+// when the attachment initiated, or standIn when it records none. The gRPC
+// backend records none: vws-proto has no attach timestamp (vws-proto#83),
+// so a data volume shows its creation time and a block device its instance's
+// launch time, the earliest the attachment can have initiated.
+func attachTimeOr(recorded, standIn time.Time) time.Time {
+	if !recorded.IsZero() {
+		return recorded
+	}
+	return standIn
+}
+
 func awsTime(t time.Time) string {
 	if t.IsZero() {
 		return ""
