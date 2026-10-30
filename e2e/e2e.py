@@ -336,6 +336,20 @@ def key_launch():
             SubnetId=S["subnet"], ClientToken="tok-nokey", KeyName="e2e-missing")), "vm")
         step("TerminateInstances keyed instance", lambda: ec2.terminate_instances(InstanceIds=[iid]), "vm")
 
+    def root_gp3():
+        """#323: the root device mapping's VolumeType reads back from DescribeVolumes."""
+        inst = ec2.run_instances(
+            ImageId="ami-0123456789abcdef0", InstanceType="t3.micro", MinCount=1, MaxCount=1,
+            SubnetId=S["subnet"], ClientToken="tok-root-gp3",
+            BlockDeviceMappings=[{"DeviceName": "/dev/xvda", "Ebs": {"VolumeType": "gp3"}}],
+        )["Instances"][0]
+        got = ec2.describe_instances(InstanceIds=[inst["InstanceId"]])["Reservations"][0]["Instances"][0]
+        vid = got["BlockDeviceMappings"][0]["Ebs"]["VolumeId"]
+        typ = ec2.describe_volumes(VolumeIds=[vid])["Volumes"][0]["VolumeType"]
+        ec2.terminate_instances(InstanceIds=[inst["InstanceId"]])
+        check(typ == "gp3", f"root volume type {typ}")
+    step("RunInstances root BlockDeviceMapping VolumeType=gp3 reads back as gp3", root_gp3, "vm")
+
     def delete_key(name):
         deadline = time.monotonic() + WAIT_TIMEOUT
         while True:
