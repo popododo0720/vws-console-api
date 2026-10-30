@@ -198,7 +198,11 @@ from elsewhere; each address gets 10 sign-in attempts, refilling one every
 slots and a sign-in that cannot get one within 200 ms is `503` with
 `Retry-After`. Sign-in and every state-changing cookie request must be
 `Content-Type: application/json` (else `415`) and carry an `Origin` that is
-the console's own host or one listed in `-console-origins` (else `403`). `GET /api/v1/auth/session` names
+the console's own host or one listed in `-console-origins` (else `403`). The
+one exception to the JSON rule is an object upload
+(`PUT /api/v1/buckets/{name}/objects/{key}`), whose `Content-Type` is the
+object's and is stored and returned as S3 does; it still needs the `Origin`
+and `X-CSRF-Token` (else `403`). `GET /api/v1/auth/session` names
 the caller; `POST /api/v1/auth/logout` ends the session. The bearer
 `-console-token` still acts as the account root until it is retired.
 

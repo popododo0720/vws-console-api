@@ -124,7 +124,7 @@ func (h *handler) routes(mux *http.ServeMux) {
 	handle("PUT /api/v1/buckets/{name}", h.createBucket)
 	handle("GET /api/v1/buckets/{name}", h.getBucket)
 	handle("DELETE /api/v1/buckets/{name}", h.deleteBucket)
-	handle("PUT /api/v1/buckets/{name}/objects/{key...}", h.putObject)
+	handle(routePutObject, h.putObject)
 	handle("GET /api/v1/buckets/{name}/objects/{key...}", h.getObject)
 	handle("DELETE /api/v1/buckets/{name}/objects/{key...}", h.deleteObject)
 }

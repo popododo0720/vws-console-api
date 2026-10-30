@@ -168,13 +168,18 @@ func retryAfter(w http.ResponseWriter, d time.Duration) {
 }
 
 // browserWriteOK enforces, on sign-in and on every state-changing cookie
-// request, a JSON Content-Type (no HTML form can send one) and an Origin that
-// is the console's own host or one in Config.Origins.
-func (h *handler) browserWriteOK(w http.ResponseWriter, r *http.Request) bool {
-	mt, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
-	if err != nil || mt != "application/json" {
-		unsupportedMedia(w)
-		return false
+// request, an Origin that is the console's own host or one in Config.Origins
+// and, when needJSON, a JSON Content-Type (no HTML form can send one). An
+// object upload skips the JSON rule to keep the object's Content-Type; the
+// Origin check and the X-CSRF-Token header that authenticate requires still
+// refuse a cross-site request (#224).
+func (h *handler) browserWriteOK(w http.ResponseWriter, r *http.Request, needJSON bool) bool {
+	if needJSON {
+		mt, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+		if err != nil || mt != "application/json" {
+			unsupportedMedia(w)
+			return false
+		}
 	}
 	if !h.originOK(r.Header.Get("Origin"), r.Host) {
 		writeErr(w, r, resource.Denied("origin not allowed"))
