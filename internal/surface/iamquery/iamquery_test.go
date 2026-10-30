@@ -1069,6 +1069,17 @@ func TestUpdateRoleDescription(t *testing.T) {
 	})
 	has(t, res, http.StatusOK, `<Description>new</Description>`)
 
+	res = call(t, h, root, sigv4.ServiceIAM, url.Values{
+		"Action": {"UpdateRoleDescription"}, "RoleName": {"ops"}, "Description": {""},
+	})
+	has(t, res, http.StatusOK,
+		`<UpdateRoleDescriptionResponse><UpdateRoleDescriptionResult><Role>`, `<RoleName>ops</RoleName>`)
+	if role, err := f.GetRole(
+		ctx, root.Account, "ops", backendtest.RoleGrant(ctx, t, f, root.Account, "ops"),
+	); err != nil || role.Description != "" {
+		t.Fatalf("empty description stored as %q: %v", role.Description, err)
+	}
+
 	if _, err := f.CreateRole(ctx, root.Account, iam.RoleInput{
 		Name: "team", Path: "/team/", TrustPolicy: trust,
 	}); err != nil {

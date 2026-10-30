@@ -352,10 +352,28 @@ func accessKeyLastUsedARN(h *handler, c *exchange) string {
 func required(c *exchange, keys ...string) error {
 	for _, k := range keys {
 		if c.form(k) == "" {
-			return resource.Invalid(lowerFirst(k), "1 validation error detected: Value null at '"+lowerFirst(k)+"' failed to satisfy constraint: Member must not be null")
+			return nullValue(k)
 		}
 	}
 	return nil
+}
+
+// requiredPresent reports a required member that is absent, as opposed to one
+// whose pattern accepts an empty value.
+func requiredPresent(c *exchange, keys ...string) error {
+	for _, k := range keys {
+		if !c.r.Form.Has(k) {
+			return nullValue(k)
+		}
+	}
+	return nil
+}
+
+func nullValue(key string) error {
+	field := lowerFirst(key)
+	msg := "1 validation error detected: Value null at '" + field +
+		"' failed to satisfy constraint: Member must not be null"
+	return resource.Invalid(field, msg)
 }
 
 func rejectEmpty(c *exchange, keys ...string) error {
@@ -787,7 +805,10 @@ func iamActions() map[string]spec {
 		"UpdateRoleDescription": admin(
 			[]string{"RoleName", "Description"}, roleARN,
 			func(h *handler, c *exchange) (any, error) {
-				if err := required(c, "RoleName", "Description"); err != nil {
+				if err := required(c, "RoleName"); err != nil {
+					return nil, err
+				}
+				if err := requiredPresent(c, "Description"); err != nil {
 					return nil, err
 				}
 				r, err := h.cfg.Admin.UpdateRoleDescription(
