@@ -1091,6 +1091,10 @@ func ec2Code(e *resource.Error) string {
 		if resource.IsInvalidCombination(e) {
 			return "InvalidParameterCombination"
 		}
+		// EC2 names a malformed instance ID separately (#246).
+		if e.Kind == resource.KindInstance {
+			return "InvalidInstanceID.Malformed"
+		}
 		// EC2 reports a block device mapping it cannot read as
 		// InvalidBlockDeviceMapping.
 		if e.Field == "blockDeviceMapping" {

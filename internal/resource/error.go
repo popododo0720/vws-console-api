@@ -184,9 +184,14 @@ func IsMissingParameter(e *Error) bool { return e != nil && e.invalid == invalid
 // IsInvalidCombination reports whether e came from InvalidCombination.
 func IsInvalidCombination(e *Error) bool { return e != nil && e.invalid == invalidCombination }
 
-// Malformed reports an identifier that failed validation.
+// Malformed reports an identifier that failed validation. EC2 names a
+// malformed instance ID in its own sentence.
 func Malformed(kind Kind, id string) *Error {
-	return &Error{Code: CodeInvalidArgument, Kind: kind, ID: id, Message: "malformed identifier"}
+	message := "malformed identifier"
+	if kind == KindInstance {
+		message = "The instance ID '" + id + "' is malformed."
+	}
+	return &Error{Code: CodeInvalidArgument, Kind: kind, ID: id, Message: message}
 }
 
 // NotFound reports a missing resource. Callers in another account get the same code.
