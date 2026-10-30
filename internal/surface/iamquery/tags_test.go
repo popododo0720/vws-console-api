@@ -69,9 +69,10 @@ func TestPolicyTagActions(t *testing.T) {
 	}
 }
 
-// A key repeated within one TagPolicy request is last-wins, whether it repeats
-// as two members or as a field sent twice. The member limit still counts the
-// request, not the distinct keys.
+// A key repeated across Tags members is last-wins. A field sent twice is still
+// refused, because SigV4 sorts duplicate values in the canonical query, so the
+// wire order is not signed and could change what is stored. The member limit
+// still counts the request, not the distinct keys.
 func TestPolicyTagRepeatedKeyLastWins(t *testing.T) {
 	h, _, _, root := harness(t)
 	createTagPolicy(t, h, root)
@@ -86,9 +87,10 @@ func TestPolicyTagRepeatedKeyLastWins(t *testing.T) {
 	has(t, call(t, h, root, sigv4.ServiceIAM, url.Values{
 		"Action": {"TagPolicy"}, "PolicyArn": {policyTagARN},
 		"Tags.member.1.Key": {"Dup", "Dup"}, "Tags.member.1.Value": {"second", "last"},
-	}), http.StatusOK, `<TagPolicyResponse>`)
+	}), http.StatusBadRequest, `<Code>InvalidInput</Code>`, `<Message>repeated</Message>`)
+	// The refused request stored nothing.
 	has(t, call(t, h, root, sigv4.ServiceIAM, list), http.StatusOK,
-		`<Tags><member><Key>Dup</Key><Value>last</Value></member></Tags>`)
+		`<Tags><member><Key>Dup</Key><Value>second</Value></member></Tags>`)
 	many := url.Values{"Action": {"TagPolicy"}, "PolicyArn": {policyTagARN}}
 	for i := 1; i <= iam.MaxTags+1; i++ {
 		many.Set("Tags.member."+strconv.Itoa(i)+".Key", "Dup")
@@ -98,7 +100,7 @@ func TestPolicyTagRepeatedKeyLastWins(t *testing.T) {
 		`<Code>ValidationError</Code>`, "less than or equal to 50")
 	// The refused request stored nothing.
 	has(t, call(t, h, root, sigv4.ServiceIAM, list), http.StatusOK,
-		`<Tags><member><Key>Dup</Key><Value>last</Value></member></Tags>`)
+		`<Tags><member><Key>Dup</Key><Value>second</Value></member></Tags>`)
 }
 
 func TestPolicyTagPaging(t *testing.T) {

@@ -14,10 +14,6 @@ import (
 // protocol encodes it.
 var tagMemberRE = regexp.MustCompile(`^Tags\.member\.([1-9][0-9]*)\.(Key|Value)$`)
 
-// isTagMemberField reports whether a form field is a Tags member. A repeated
-// Tags field is last-wins; every other repeated field is ambiguous.
-func isTagMemberField(key string) bool { return tagMemberRE.MatchString(key) }
-
 // tagKeyMemberRE matches one indexed member of TagKeys.
 var tagKeyMemberRE = regexp.MustCompile(`^TagKeys\.member\.([1-9][0-9]*)$`)
 
@@ -69,9 +65,8 @@ func requirePolicyArn(c *exchange, h *handler, action string) error {
 
 // parseTagMembers reads Tags.member.N.Key/Value into request order. Key and
 // Value are required members: a missing one is a validation failure, while an
-// empty Value that is present is the AWS empty tag value. A field sent more
-// than once keeps its last value, and two members with one key keep the later
-// value, as overwriting a named key does.
+// empty Value that is present is the AWS empty tag value. Two members with one
+// key keep the later value, as overwriting a named key does.
 func parseTagMembers(c *exchange) ([]iam.Tag, error) {
 	type members struct{ key, value bool }
 	byIndex := map[int]*iam.Tag{}
@@ -92,12 +87,10 @@ func parseTagMembers(c *exchange) ([]iam.Tag, error) {
 			byIndex[index] = &iam.Tag{}
 			present[index] = &members{}
 		}
-		values := c.r.Form[key]
-		last := values[len(values)-1]
 		if m[2] == "Key" {
-			byIndex[index].Key, present[index].key = last, true
+			byIndex[index].Key, present[index].key = c.form(key), true
 		} else {
-			byIndex[index].Value, present[index].value = last, true
+			byIndex[index].Value, present[index].value = c.form(key), true
 		}
 	}
 	indexes := make([]int, 0, len(byIndex))

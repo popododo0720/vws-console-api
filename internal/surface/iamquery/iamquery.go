@@ -89,7 +89,7 @@ func (h *handler) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for k, vs := range r.Form {
-		if len(vs) > 1 && !isTagMemberField(k) {
+		if len(vs) > 1 {
 			c.fail(resource.Invalid(k, "repeated"))
 			return
 		}
