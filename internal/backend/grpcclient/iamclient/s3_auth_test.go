@@ -55,6 +55,10 @@ func TestS3AnswersVwsIAMRefusalsWithS3Codes(t *testing.T) {
 			http.StatusBadRequest, "ExpiredToken", "The provided token has expired.",
 		},
 		{
+			"InvalidToken", awsErrMsg(codes.Unauthenticated, "INVALID_CREDENTIALS", "InvalidToken", iamText),
+			http.StatusBadRequest, "InvalidToken", "The provided token is malformed or otherwise not valid.",
+		},
+		{
 			"RequestTimeTooSkewed", awsErrMsg(codes.Unauthenticated, "INVALID_CREDENTIALS", "RequestTimeTooSkewed", iamText),
 			http.StatusForbidden, "RequestTimeTooSkewed",
 			"The difference between the request time and the current time is too large.",
