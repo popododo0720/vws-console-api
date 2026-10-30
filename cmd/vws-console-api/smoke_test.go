@@ -14,13 +14,14 @@ import (
 	"github.com/popododo0720/vws-console-api/internal/sigv4"
 )
 
-// TestFakeProcessSmoke starts the console-api process on three listeners.
-// The compute, network, and storage repositories are not part of this module,
-// so -backend=fake stands in for those three processes.
+// TestFakeProcessSmoke starts the console-api process with every listener on
+// a free address. The compute, network, and storage repositories are not part
+// of this module, so -backend=fake stands in for those three processes.
 func TestFakeProcessSmoke(t *testing.T) {
 	consoleAddr := freeAddr(t)
 	ec2Addr := freeAddr(t)
 	s3Addr := freeAddr(t)
+	iamAddr := freeAddr(t)
 	opsAddr := freeAddr(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	errc := make(chan error, 1)
@@ -30,6 +31,7 @@ func TestFakeProcessSmoke(t *testing.T) {
 			"-console-addr=" + consoleAddr,
 			"-ec2-addr=" + ec2Addr,
 			"-s3-addr=" + s3Addr,
+			"-iam-addr=" + iamAddr,
 			"-ops-addr=" + opsAddr,
 		})
 	}()
@@ -47,6 +49,7 @@ func TestFakeProcessSmoke(t *testing.T) {
 	waitListen(t, ec2Addr)
 	waitListen(t, s3Addr)
 	waitListen(t, consoleAddr)
+	waitListen(t, iamAddr)
 	waitListen(t, opsAddr)
 	for _, path := range []string{"/healthz", "/readyz", "/metrics"} {
 		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://"+opsAddr+path, nil)
