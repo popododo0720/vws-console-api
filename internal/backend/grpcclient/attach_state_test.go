@@ -149,8 +149,10 @@ func TestDescribeVolumesReadsPendingAttachFromSpec(t *testing.T) {
 			wantState: resource.VolumeInUse, wantInst: instID, wantAtt: resource.AttachmentAttaching, wantLists: 1,
 		},
 		{
+			// Storage names the instance before hot-plug Ready; compute has
+			// no attach state for the volume yet, so it is attaching (#448).
 			name: "storage names the instance", inst: []*computev1.Instance{holder(ready)}, reported: instID,
-			wantState: resource.VolumeInUse, wantInst: instID, wantAtt: resource.AttachmentAttached,
+			wantState: resource.VolumeInUse, wantInst: instID, wantAtt: resource.AttachmentAttaching, wantLists: 1,
 		},
 		{
 			name: "no spec names it", inst: []*computev1.Instance{observedInstance(projectID, instID, ready, running)},
@@ -229,4 +231,187 @@ func mustVolume(t *testing.T, id string) resource.VolumeID {
 		t.Fatal(err)
 	}
 	return v
+}
+
+// TestDescribeVolumesFollowsComputeAttachState pins #448: the EC2
+// attachment status comes from the attach state compute reports on
+// InstanceStatus.volumes (vws-proto v0.8.0), never from the instance spec or
+// the volume's status.instance, which are set before hot-plug finishes. Only
+// ATTACHED is attached. A spec volume compute has no entry for is attaching,
+// as instance.proto says. The AWS states are those of EC2 VolumeAttachment:
+// https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_VolumeAttachment.html
+func TestDescribeVolumesFollowsComputeAttachState(t *testing.T) {
+	account := mustAccount(t)
+	projectID := project(account)
+	const instID = "i-0123456789abcdef0"
+	const volID = "vol-0123456789abcdef0"
+	const bootID = "vol-0fedcba9876543210"
+	ready := commonv1.ReconciliationState_RECONCILIATION_STATE_READY
+	running := computev1.InstancePower_INSTANCE_POWER_RUNNING
+	const none = computev1.VolumeAttachState(-1)
+	holder := func(inSpec bool, observed computev1.VolumeAttachState) *computev1.Instance {
+		inst := observedInstance(projectID, instID, ready, running)
+		inst.Spec.Volumes = []*computev1.VolumeAttachment{
+			{Volume: volumeName(projectID, bootID), DeviceName: "/dev/xvda", Boot: true},
+		}
+		inst.Status.Volumes = []*computev1.ObservedVolumeAttachment{{
+			Volume: volumeName(projectID, bootID), DeviceName: "/dev/xvda",
+			State: computev1.VolumeAttachState_VOLUME_ATTACH_STATE_ATTACHED,
+		}}
+		if inSpec {
+			inst.Spec.Volumes = append(inst.Spec.Volumes,
+				&computev1.VolumeAttachment{Volume: volumeName(projectID, volID), DeviceName: "/dev/sdf"})
+		}
+		if observed != none {
+			inst.Status.Volumes = append(inst.Status.Volumes, &computev1.ObservedVolumeAttachment{
+				Volume: volumeName(projectID, volID), DeviceName: "/dev/sdf", State: observed,
+			})
+		}
+		return inst
+	}
+	rows := []struct {
+		name     string
+		inSpec   bool
+		observed computev1.VolumeAttachState
+		reported string
+		want     resource.AttachmentStatus
+	}{
+		{
+			name: "compute reports attached", inSpec: true, reported: instID,
+			observed: computev1.VolumeAttachState_VOLUME_ATTACH_STATE_ATTACHED, want: resource.AttachmentAttached,
+		},
+		{
+			name: "compute reports attached before storage names the instance", inSpec: true,
+			observed: computev1.VolumeAttachState_VOLUME_ATTACH_STATE_ATTACHED, want: resource.AttachmentAttached,
+		},
+		{
+			name: "storage names the instance while compute reports attaching", inSpec: true, reported: instID,
+			observed: computev1.VolumeAttachState_VOLUME_ATTACH_STATE_ATTACHING, want: resource.AttachmentAttaching,
+		},
+		{
+			name: "storage names the instance and compute has no entry yet", inSpec: true, reported: instID,
+			observed: none, want: resource.AttachmentAttaching,
+		},
+		{
+			name: "only the spec names it and compute has no entry yet", inSpec: true,
+			observed: none, want: resource.AttachmentAttaching,
+		},
+		{
+			name: "compute reports busy while the node retries", inSpec: true, reported: instID,
+			observed: computev1.VolumeAttachState_VOLUME_ATTACH_STATE_BUSY, want: resource.AttachmentBusy,
+		},
+		{
+			name: "an entry with no state is not attached", inSpec: true, reported: instID,
+			observed: computev1.VolumeAttachState_VOLUME_ATTACH_STATE_UNSPECIFIED, want: resource.AttachmentAttaching,
+		},
+		{
+			name: "compute reports detaching after the spec dropped it", reported: instID,
+			observed: computev1.VolumeAttachState_VOLUME_ATTACH_STATE_DETACHING, want: resource.AttachmentDetaching,
+		},
+		{
+			name: "storage still names the instance after compute let go", reported: instID,
+			observed: none, want: resource.AttachmentDetaching,
+		},
+	}
+	for _, row := range rows {
+		for _, listed := range []bool{false, true} {
+			name := row.name + ", by id"
+			if listed {
+				name = row.name + ", listed"
+			}
+			t.Run(name, func(t *testing.T) {
+				world := &specWorld{
+					inst: []*computev1.Instance{holder(row.inSpec, row.observed)},
+					vol:  []*storagev1.Volume{observedVolume(projectID, volID, ready, row.reported)},
+				}
+				client := dialSpecWorld(t, world)
+				q := resource.VolumeQuery{Page: resource.PageRequest{Size: 50}}
+				if !listed {
+					q.IDs = []resource.VolumeID{mustVolume(t, volID)}
+				}
+				page, err := client.DescribeVolumes(context.Background(), backend.Scope{Account: account}, q)
+				if err != nil || len(page.Items) != 1 {
+					t.Fatalf("describe: %v %+v", err, page.Items)
+				}
+				v := page.Items[0]
+				if v.State != resource.VolumeInUse || v.InstanceID.String() != instID || v.AttachState != row.want {
+					t.Fatalf("got %s on %q %q, want in-use on %q %q", v.State, v.InstanceID, v.AttachState, instID, row.want)
+				}
+				if world.listings.Load() != 1 {
+					t.Fatalf("ListInstances calls %d, want 1", world.listings.Load())
+				}
+			})
+		}
+	}
+}
+
+// TestAttachStateOfCoversEveryComputeState pins the one-to-one map from
+// VolumeAttachState to the EC2 VolumeAttachment state.
+func TestAttachStateOfCoversEveryComputeState(t *testing.T) {
+	want := map[computev1.VolumeAttachState]resource.AttachmentStatus{
+		computev1.VolumeAttachState_VOLUME_ATTACH_STATE_UNSPECIFIED: resource.AttachmentAttaching,
+		computev1.VolumeAttachState_VOLUME_ATTACH_STATE_ATTACHING:   resource.AttachmentAttaching,
+		computev1.VolumeAttachState_VOLUME_ATTACH_STATE_ATTACHED:    resource.AttachmentAttached,
+		computev1.VolumeAttachState_VOLUME_ATTACH_STATE_DETACHING:   resource.AttachmentDetaching,
+		computev1.VolumeAttachState_VOLUME_ATTACH_STATE_BUSY:        resource.AttachmentBusy,
+	}
+	for v := range computev1.VolumeAttachState_name {
+		state := computev1.VolumeAttachState(v)
+		got, ok := want[state]
+		if !ok {
+			t.Fatalf("%s has no expected EC2 state", state)
+		}
+		if attachStateOf(state) != got {
+			t.Fatalf("%s maps to %q, want %q", state, attachStateOf(state), got)
+		}
+	}
+	if attachStateOf(computev1.VolumeAttachState(99)) != resource.AttachmentAttaching {
+		t.Fatal("an unknown state must not read as attached")
+	}
+}
+
+// TestAttachStateFailureAndBadRecords covers the failure paths of #448: a
+// volume storage reports on an instance is not shown attached when compute
+// cannot be read, and an instance whose status names a malformed volume is
+// skipped without failing the listing or hiding the real holder.
+func TestAttachStateFailureAndBadRecords(t *testing.T) {
+	account := mustAccount(t)
+	projectID := project(account)
+	const instID = "i-0123456789abcdef0"
+	const volID = "vol-0123456789abcdef0"
+	ready := commonv1.ReconciliationState_RECONCILIATION_STATE_READY
+	running := computev1.InstancePower_INSTANCE_POWER_RUNNING
+	holder := observedInstance(projectID, instID, ready, running)
+	holder.Spec.Volumes = []*computev1.VolumeAttachment{
+		{Volume: volumeName(projectID, "vol-0fedcba9876543210"), DeviceName: "/dev/xvda", Boot: true},
+		{Volume: volumeName(projectID, volID), DeviceName: "/dev/sdf"},
+	}
+	holder.Status.Volumes = []*computev1.ObservedVolumeAttachment{{
+		Volume: volumeName(projectID, volID), DeviceName: "/dev/sdf",
+		State: computev1.VolumeAttachState_VOLUME_ATTACH_STATE_ATTACHED,
+	}}
+	bad := observedInstance(projectID, "i-0fedcba987654321f", ready, running)
+	bad.Status.Volumes = []*computev1.ObservedVolumeAttachment{{
+		Volume: "projects/" + projectID + "/volumes/not-a-volume-id", DeviceName: "/dev/sdg",
+		State: computev1.VolumeAttachState_VOLUME_ATTACH_STATE_ATTACHED,
+	}}
+	vol := []*storagev1.Volume{observedVolume(projectID, volID, ready, instID)}
+	q := resource.VolumeQuery{IDs: []resource.VolumeID{mustVolume(t, volID)}, Page: resource.PageRequest{Size: 50}}
+
+	t.Run("compute cannot be read", func(t *testing.T) {
+		world := &specWorld{
+			inst: []*computev1.Instance{holder}, vol: vol, listErr: status.Error(codes.Unavailable, "compute down"),
+		}
+		_, err := dialSpecWorld(t, world).DescribeVolumes(context.Background(), backend.Scope{Account: account}, q)
+		if resource.CodeOf(err) != resource.CodeUnavailable {
+			t.Fatalf("err %v, want Unavailable rather than a guessed attachment status", err)
+		}
+	})
+	t.Run("a malformed status volume is skipped", func(t *testing.T) {
+		world := &specWorld{inst: []*computev1.Instance{bad, holder}, vol: vol}
+		page, err := dialSpecWorld(t, world).DescribeVolumes(context.Background(), backend.Scope{Account: account}, q)
+		if err != nil || len(page.Items) != 1 || page.Items[0].AttachState != resource.AttachmentAttached {
+			t.Fatalf("describe: %v %+v, want the holder's attached", err, page.Items)
+		}
+	})
 }

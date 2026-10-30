@@ -76,7 +76,16 @@ func blockSetOf(inst resource.Instance) *blockSet {
 	out := &blockSet{}
 	for _, b := range inst.BlockDevices {
 		item := blockItem{Device: b.Device}
-		item.EBS.VolumeID, item.EBS.Status, item.EBS.DeleteOnTermination = b.VolumeID.String(), "attached", b.DeleteOnTermination
+		// The backend reports attached only once the disk is on the machine;
+		// an unset status is never shown as attached (#448). EC2
+		// EbsInstanceBlockDevice.Status has no busy: a block device is in the
+		// instance spec, so a busy one is a plug the node is retrying.
+		status := b.Status
+		if status == "" || status == resource.AttachmentBusy {
+			status = resource.AttachmentAttaching
+		}
+		item.EBS.VolumeID, item.EBS.Status = b.VolumeID.String(), string(status)
+		item.EBS.DeleteOnTermination = b.DeleteOnTermination
 		// No backend records an attach time; the root volume is attached at launch.
 		item.EBS.AttachTime = awsTime(inst.LaunchTime)
 		out.Items = append(out.Items, item)
@@ -742,9 +751,11 @@ func volumeXML(v resource.Volume) volumeItem {
 		Iops: v.ReportedIops(), Throughput: v.Throughput,
 	}
 	if !v.InstanceID.IsZero() {
+		// The backend reports attached only once the disk is on the machine;
+		// an unset status is never shown as attached (#448).
 		status := v.AttachState
 		if status == "" {
-			status = resource.AttachmentAttached
+			status = resource.AttachmentAttaching
 		}
 		item.Attachments.Items = []attachmentItem{{
 			VolumeID: v.ID.String(), InstanceID: v.InstanceID.String(), Device: v.Device, Status: string(status),

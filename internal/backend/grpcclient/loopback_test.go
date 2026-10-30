@@ -937,7 +937,8 @@ func (s *instanceSrv) GetInstance(ctx context.Context, req *computev1.GetInstanc
 			inst.BlockDevices = page.Items[0].BlockDevices
 			inst.RootDeviceName = page.Items[0].RootDeviceName
 		}
-		return s.stampAction(instanceProto(inst, projectID, snap.vpc), inst.ID.String()), nil
+		msg := s.observeVolumes(ctx, account, instanceProto(inst, projectID, snap.vpc), inst)
+		return s.stampAction(msg, inst.ID.String()), nil
 	}
 	id, err := resource.Parse[resource.InstanceID](idText)
 	if err != nil {
@@ -953,7 +954,32 @@ func (s *instanceSrv) GetInstance(ctx context.Context, req *computev1.GetInstanc
 		return nil, toStatus(resource.NotFound(resource.KindInstance, idText))
 	}
 	inst := page.Items[0]
-	return s.stampAction(instanceProto(inst, projectID, s.w.vpcOf(inst.SubnetID.String())), inst.ID.String()), nil
+	msg := s.observeVolumes(ctx, account, instanceProto(inst, projectID, s.w.vpcOf(inst.SubnetID.String())), inst)
+	return s.stampAction(msg, inst.ID.String()), nil
+}
+
+// observeVolumes writes InstanceStatus.volumes as the vws-compute node agent
+// does (vws-compute#141): a data volume is ATTACHED once the fake settles its
+// attach, standing in for hot-plug Ready, and ATTACHING until then. A boot
+// volume is attached once the instance converges; the loopback's own boot
+// volumes are not in the fake, so they read as attached.
+func (s *instanceSrv) observeVolumes(
+	ctx context.Context, account resource.AccountID, msg *computev1.Instance, inst resource.Instance,
+) *computev1.Instance {
+	projectID := project(account)
+	for _, block := range inst.BlockDevices {
+		state := computev1.VolumeAttachState_VOLUME_ATTACH_STATE_ATTACHED
+		page, err := s.w.set.Compute.DescribeVolumes(ctx, backend.Scope{Account: account}, resource.VolumeQuery{
+			IDs: []resource.VolumeID{block.VolumeID}, Page: resource.PageRequest{Size: 1},
+		})
+		if err == nil && len(page.Items) == 1 && page.Items[0].AttachState == resource.AttachmentAttaching {
+			state = computev1.VolumeAttachState_VOLUME_ATTACH_STATE_ATTACHING
+		}
+		msg.Status.Volumes = append(msg.Status.Volumes, &computev1.ObservedVolumeAttachment{
+			Volume: volumeName(projectID, block.VolumeID.String()), DeviceName: block.Device, State: state,
+		})
+	}
+	return msg
 }
 
 func (s *instanceSrv) stampAction(msg *computev1.Instance, id string) *computev1.Instance {
@@ -989,7 +1015,7 @@ func (s *instanceSrv) ListInstances(ctx context.Context, req *computev1.ListInst
 	}
 	items := make([]*computev1.Instance, 0, len(page.Items))
 	for _, inst := range page.Items {
-		msg := instanceProto(inst, projectID, s.w.vpcOf(inst.SubnetID.String()))
+		msg := s.observeVolumes(ctx, account, instanceProto(inst, projectID, s.w.vpcOf(inst.SubnetID.String())), inst)
 		items = append(items, s.stampAction(msg, inst.ID.String()))
 	}
 	return &computev1.ListInstancesResponse{Instances: items, NextPageToken: page.NextToken}, nil

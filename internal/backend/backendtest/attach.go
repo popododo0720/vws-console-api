@@ -16,7 +16,8 @@ type AttachHarness func() (set backend.Set, step func())
 // AttachLifecycle runs the #214 table. As on EC2, an accepted AttachVolume is
 // attaching, the volume is in-use from the accept with its attachment
 // attaching, and once the backend has put the disk on the machine the
-// attachment is attached. A volume nobody attached stays available.
+// attachment is attached. A volume nobody attached stays available. The
+// instance's block device for the volume carries the same status (#448).
 func AttachLifecycle(t *testing.T, newSet AttachHarness) {
 	t.Helper()
 	ctx := context.Background()
@@ -120,6 +121,18 @@ func AttachLifecycle(t *testing.T, newSet AttachHarness) {
 			}
 			if _, ok := backend.BindOf(page.Items[0], vol); !ok {
 				t.Fatalf("instance block devices %+v, want %s", page.Items[0].BlockDevices, vol)
+			}
+			// The instance view says the same as the volume view (#448):
+			// the data volume is attached only once the attach settles, and
+			// the root volume is attached from launch.
+			for _, block := range page.Items[0].BlockDevices {
+				want := resource.AttachmentAttached
+				if block.VolumeID == vol {
+					want = row.want
+				}
+				if block.Status != want {
+					t.Fatalf("instance block %s %s: status %q, want %q", block.Device, block.VolumeID, block.Status, want)
+				}
 			}
 		})
 	}

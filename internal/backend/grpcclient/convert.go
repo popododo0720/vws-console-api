@@ -322,6 +322,20 @@ func instanceProto(inst resource.Instance, projectID, vpcID string) *computev1.I
 	return out
 }
 
+// observedVolumes indexes InstanceStatus.volumes by volume id. A malformed
+// volume name makes the record bad, so a listing skips it.
+func observedVolumes(in *computev1.Instance) (map[resource.VolumeID]*computev1.ObservedVolumeAttachment, error) {
+	out := map[resource.VolumeID]*computev1.ObservedVolumeAttachment{}
+	for _, o := range in.GetStatus().GetVolumes() {
+		id, err := resource.Parse[resource.VolumeID](lastSegment(o.GetVolume()))
+		if err != nil {
+			return nil, resource.Internal(&badRecordNameError{err})
+		}
+		out[id] = o
+	}
+	return out, nil
+}
+
 func instanceObserved(st resource.InstanceState) (commonv1.ReconciliationState, computev1.InstancePower) {
 	switch st {
 	case resource.InstancePending:
@@ -517,6 +531,10 @@ func instanceModel(in *computev1.Instance) (resource.Instance, error) {
 			return resource.Instance{}, resource.Internal(err)
 		}
 	}
+	attach, err := observedVolumes(in)
+	if err != nil {
+		return resource.Instance{}, err
+	}
 	var rootDevice string
 	var blocks []resource.BlockDevice
 	for _, v := range in.GetSpec().GetVolumes() {
@@ -528,7 +546,15 @@ func instanceModel(in *computev1.Instance) (resource.Instance, error) {
 		if v.GetBoot() {
 			device, rootDevice = resource.RootDeviceName, resource.RootDeviceName
 		}
-		blocks = append(blocks, resource.BlockDevice{Device: device, VolumeID: volID, DeleteOnTermination: v.GetBoot()})
+		// A spec volume compute has no entry for is attaching: the node has
+		// not started the attach yet (instance.proto, #448).
+		state := resource.AttachmentAttaching
+		if o, ok := attach[volID]; ok {
+			state = attachStateOf(o.GetState())
+		}
+		blocks = append(blocks, resource.BlockDevice{
+			Device: device, VolumeID: volID, DeleteOnTermination: v.GetBoot(), Status: state,
+		})
 	}
 	private := ""
 	if nics := in.GetStatus().GetNetworkInterfaces(); len(nics) > 0 {

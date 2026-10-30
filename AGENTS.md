@@ -61,6 +61,7 @@ change both files together.
 | EC2 catalog actions are served on both surfaces. | `TestCatalogActionsAreImplemented` |
 | EC2 describe calls take boto3's parameter names. | `TestDescribeStandardParameters` |
 | EC2 instance, image, volume and address behavior. | `exerciseEC2`, `backendtest.AttachLifecycle` |
+| A volume or block device is `attached` only when compute reports `ATTACHED` on `InstanceStatus.volumes`; no surface defaults to `attached` (#448). | `TestDescribeVolumesFollowsComputeAttachState`, `TestInstanceBlockDeviceStatus`, `backendtest.AttachLifecycle` |
 | One bad backend record never fails a listing. | `TestErrorRecordDoesNotFailDescribe`, `TestInvalidResourceNameIsSkippedInList` |
 | Key pair keys come from `crypto/rand`, are never stored, and names stay unique. | `TestCreatedKeyIsNotDerivedFromTheRequest`, `TestConcurrentCreatesOfOneNameMakeOneKeyPair` |
 | A missing resource is `NotFound` of its own kind; an EC2, EBS or VPC resource and an S3 bucket carry the AWS message for that kind, naming the id where AWS does. | `TestMissingResourceKeepsItsKind`, `TestNotFoundMessagesMatchAWS`, `TestNoSuchBucketMessagesMatchAWS` |

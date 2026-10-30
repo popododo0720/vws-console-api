@@ -224,12 +224,14 @@ func (r CreateVolumeRequest) WithSize(sizeGiB int64) (CreateVolumeRequest, error
 // It is not a volume state: a volume that is attaching is already in-use.
 type AttachmentStatus string
 
-// Attachment statuses this process returns. An attach accept is attaching,
-// as on EC2, and a detach accept is detaching.
+// Attachment statuses this process returns, as EC2 VolumeAttachment.State.
+// An attach accept is attaching, as on EC2, and a detach accept is
+// detaching. Busy is a hot-plug or unplug the node is retrying.
 const (
 	AttachmentAttaching AttachmentStatus = "attaching"
 	AttachmentAttached  AttachmentStatus = "attached"
 	AttachmentDetaching AttachmentStatus = "detaching"
+	AttachmentBusy      AttachmentStatus = "busy"
 )
 
 // VolumeAttachment is the accept item for DetachVolume.

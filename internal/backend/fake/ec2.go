@@ -218,7 +218,9 @@ func (c compute) AttachVolume(ctx context.Context, m backend.Mutation, req resou
 	vol.Device = req.Device
 	vol.AttachTime = c.w.now().UTC()
 	vol.AttachState = resource.AttachmentAttaching
-	inst.BlockDevices = append(inst.BlockDevices, resource.BlockDevice{Device: req.Device, VolumeID: req.VolumeID})
+	inst.BlockDevices = append(inst.BlockDevices, resource.BlockDevice{
+		Device: req.Device, VolumeID: req.VolumeID, Status: resource.AttachmentAttaching,
+	})
 	volID, instID, attachedAt := vol.ID, req.InstanceID, vol.AttachTime
 	targets := []resource.Ref{vol.ID.Ref()}
 	op, err := c.w.newOp(m.Account, resource.ServiceCompute, resource.ActionAttachVolume, targets, func(time.Time) {
@@ -228,6 +230,7 @@ func (c compute) AttachVolume(ctx context.Context, m backend.Mutation, req resou
 		if cur != nil && cur.InstanceID == instID && cur.AttachTime.Equal(attachedAt) &&
 			cur.AttachState == resource.AttachmentAttaching {
 			cur.AttachState = resource.AttachmentAttached
+			c.w.settleBlock(instID, volID)
 		}
 	})
 	if err != nil {
@@ -805,6 +808,20 @@ func cidrInside(child, parent string) bool {
 	childOnes, childBits := childNet.Mask.Size()
 	parentOnes, parentBits := parentNet.Mask.Size()
 	return childBits == 32 && parentBits == 32 && childOnes > parentOnes
+}
+
+// settleBlock marks the instance's block device for the volume attached,
+// as the volume itself is once its attach settles.
+func (w *World) settleBlock(instID resource.InstanceID, volID resource.VolumeID) {
+	inst := w.inst[instID]
+	if inst == nil {
+		return
+	}
+	for i := range inst.BlockDevices {
+		if inst.BlockDevices[i].VolumeID == volID {
+			inst.BlockDevices[i].Status = resource.AttachmentAttached
+		}
+	}
 }
 
 func (w *World) volumeOnInstance(id resource.VolumeID) bool {

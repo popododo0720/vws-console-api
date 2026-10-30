@@ -83,7 +83,10 @@ func TestVolumeAttachmentStatus(t *testing.T) {
 	}{
 		{name: "attaching", state: resource.AttachmentAttaching, want: "attaching"},
 		{name: "attached", state: resource.AttachmentAttached, want: "attached"},
-		{name: "a backend that sets no state", state: "", want: "attached"},
+		{name: "detaching", state: resource.AttachmentDetaching, want: "detaching"},
+		{name: "busy", state: resource.AttachmentBusy, want: "busy"},
+		// #448: no fallback claims attached before the backend reports it.
+		{name: "a backend that sets no state", state: "", want: "attaching"},
 	}
 	for _, row := range rows {
 		t.Run(row.name, func(t *testing.T) {
@@ -100,5 +103,42 @@ func TestVolumeAttachmentStatus(t *testing.T) {
 	}
 	if item := volumeXML(resource.Volume{ID: vol, State: resource.VolumeAvailable}); len(item.Attachments.Items) != 0 {
 		t.Fatalf("detached volume has attachments %+v", item.Attachments.Items)
+	}
+}
+
+// TestInstanceBlockDeviceStatus pins #448 on the instance view:
+// DescribeInstances blockDeviceMapping ebs status is the status the backend
+// reports for the block device (EC2 EbsInstanceBlockDevice.Status), and an
+// unset status is never shown as attached.
+func TestInstanceBlockDeviceStatus(t *testing.T) {
+	vol, err := resource.Parse[resource.VolumeID]("vol-0123456789abcdef0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := []struct {
+		name  string
+		state resource.AttachmentStatus
+		want  string
+	}{
+		{name: "attaching", state: resource.AttachmentAttaching, want: "attaching"},
+		{name: "attached", state: resource.AttachmentAttached, want: "attached"},
+		{name: "detaching", state: resource.AttachmentDetaching, want: "detaching"},
+		// EbsInstanceBlockDevice.Status is attaching | attached | detaching |
+		// detached: a busy spec volume is a plug being retried.
+		{name: "busy", state: resource.AttachmentBusy, want: "attaching"},
+		{name: "a backend that sets no state", state: "", want: "attaching"},
+	}
+	for _, row := range rows {
+		t.Run(row.name, func(t *testing.T) {
+			set := blockSetOf(resource.Instance{BlockDevices: []resource.BlockDevice{
+				{Device: "/dev/sdf", VolumeID: vol, Status: row.state},
+			}})
+			if set == nil || len(set.Items) != 1 {
+				t.Fatalf("block set %+v", set)
+			}
+			if got := set.Items[0].EBS; got.Status != row.want || got.VolumeID != vol.String() {
+				t.Fatalf("ebs %+v, want status %s", got, row.want)
+			}
+		})
 	}
 }

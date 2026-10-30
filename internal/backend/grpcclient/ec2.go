@@ -1475,7 +1475,7 @@ func (c computeClient) DescribeVolumes(ctx context.Context, s backend.Scope, q r
 			}
 			items = append(items, vol)
 		}
-		if err := c.markAttaching(ctx, s.Account, items); err != nil {
+		if err := c.markAttachState(ctx, s.Account, items); err != nil {
 			return resource.Page[resource.Volume]{}, err
 		}
 		return pageByID(items, q.Page, func(item resource.Volume) string { return item.ID.String() })
@@ -1497,61 +1497,89 @@ func (c computeClient) DescribeVolumes(ctx context.Context, s backend.Scope, q r
 		}
 		items = append(items, vol)
 	}
-	if err := c.markAttaching(ctx, s.Account, items); err != nil {
+	if err := c.markAttachState(ctx, s.Account, items); err != nil {
 		return resource.Page[resource.Volume]{}, err
 	}
 	return resource.Page[resource.Volume]{Items: items, NextToken: out.GetNextPageToken()}, nil
 }
 
-// markAttaching shows an accepted attach that storage does not report yet.
-// AttachVolume writes the volume into the instance spec, and storage names
-// the instance only once compute has put the disk on the machine, so for a
-// while the volume reads as available. The spec is the attachment, as for
-// DetachVolume: a volume that storage reports with no instance and that a
-// live instance spec names is in-use, attaching. It lists instances only when
-// some volume reads as available, and fails rather than show such a volume
-// as available when compute cannot be read.
-func (c computeClient) markAttaching(ctx context.Context, account resource.AccountID, items []resource.Volume) error {
-	free := 0
+// markAttachState sets each volume's EC2 attachment status from the attach
+// state compute reports on InstanceStatus.volumes (vws-proto v0.8.0). The
+// instance spec and the volume's status.instance are both set before the
+// hot-plug finishes, so neither one makes a volume attached (#448):
+//
+//   - A volume that storage reports with no instance and that a live
+//     instance spec names is in-use from the accept, as on EC2 (#214).
+//   - The status is the one compute reports for the volume on that instance:
+//     only ATTACHED is attached.
+//   - A spec volume compute has no entry for is attaching: the node has not
+//     started the attach yet (instance.proto, InstanceStatus.volumes).
+//   - A volume storage still names but no live spec or compute entry holds
+//     is detaching: compute has let go and storage has not caught up.
+//
+// It lists instances only when some volume may be on one, and fails rather
+// than guess a status when compute cannot be read.
+func (c computeClient) markAttachState(ctx context.Context, account resource.AccountID, items []resource.Volume) error {
+	need := false
 	for _, v := range items {
-		if v.State == resource.VolumeAvailable && v.InstanceID.IsZero() {
-			free++
+		if !v.InstanceID.IsZero() || v.State == resource.VolumeAvailable {
+			need = true
+			break
 		}
 	}
-	if free == 0 {
+	if !need {
 		return nil
 	}
-	binds, err := c.specBinds(ctx, account)
+	views, err := c.attachViews(ctx, account)
 	if err != nil {
 		return err
 	}
 	for i := range items {
 		v := &items[i]
-		if v.State != resource.VolumeAvailable || !v.InstanceID.IsZero() {
-			continue
+		view, ok := views[v.ID]
+		if v.InstanceID.IsZero() {
+			if v.State != resource.VolumeAvailable || !ok || !view.inSpec || view.bind.Boot {
+				continue
+			}
+			v.State = resource.VolumeInUse
+			v.InstanceID = view.bind.InstanceID
+			v.Device = view.bind.Device
 		}
-		bind, ok := binds[v.ID]
-		if !ok || bind.Boot {
-			continue
+		switch {
+		case ok && view.bind.InstanceID == v.InstanceID:
+			v.AttachState = view.state
+			if v.Device == "" {
+				v.Device = view.bind.Device
+			}
+		case ok:
+			// Storage names an instance other than the one compute holds the
+			// volume on. Storage lags compute, so the old attachment is going.
+			v.AttachState = resource.AttachmentDetaching
+		default:
+			v.AttachState = resource.AttachmentDetaching
 		}
-		v.State = resource.VolumeInUse
-		v.InstanceID = bind.InstanceID
-		v.Device = bind.Device
-		v.AttachState = resource.AttachmentAttaching
 	}
 	return nil
 }
 
-// specBinds maps each volume a live instance spec names to that bind. It
-// pages all of the caller's instances; a repeated page token is an error.
-// A terminated instance holds no volume. A record owned by another account
-// is an internal error, never the caller's attachment. A list that runs out
-// of time is Unavailable, so the read can be retried.
-func (c computeClient) specBinds(
+// attachView is compute's view of one volume on one live instance.
+type attachView struct {
+	bind   backend.VolumeBind
+	inSpec bool
+	state  resource.AttachmentStatus
+}
+
+// attachViews maps each volume a live instance spec names, or compute still
+// reports, to compute's view of it. It pages all of the caller's instances;
+// a repeated page token is an error. A terminated instance holds no volume.
+// A record owned by another account is an internal error, never the caller's
+// attachment. A list that runs out of time is Unavailable, so the read can be
+// retried.
+func (c computeClient) attachViews(
 	ctx context.Context, account resource.AccountID,
-) (map[resource.VolumeID]backend.VolumeBind, error) {
+) (map[resource.VolumeID]attachView, error) {
 	projectID := project(account)
-	out := map[resource.VolumeID]backend.VolumeBind{}
+	out := map[resource.VolumeID]attachView{}
 	token := ""
 	seen := map[string]struct{}{}
 	for {
@@ -1572,6 +1600,9 @@ func (c computeClient) specBinds(
 		}
 		for _, item := range page.GetInstances() {
 			model, err := instanceModel(item)
+			if err == nil {
+				err = addAttachViews(out, item, model)
+			}
 			if err != nil {
 				if c.skipBadRecord(ctx, item.GetName(), err) {
 					continue
@@ -1581,19 +1612,69 @@ func (c computeClient) specBinds(
 			if model.OwnerID != account {
 				return nil, resource.Internal(errors.New("instance " + item.GetName() + " is owned by another account"))
 			}
-			if model.State == resource.InstanceTerminated {
-				continue
-			}
-			for _, block := range model.BlockDevices {
-				if bind, ok := backend.BindOf(model, block.VolumeID); ok {
-					out[block.VolumeID] = bind
-				}
-			}
 		}
 		token = page.GetNextPageToken()
 		if token == "" {
 			return out, nil
 		}
+	}
+}
+
+// addAttachViews adds the volumes of one instance to out. A spec volume with
+// no compute entry is attaching. A compute entry for a volume the spec no
+// longer names keeps the state compute reports, which is detaching or busy
+// while the node lets go.
+func addAttachViews(out map[resource.VolumeID]attachView, in *computev1.Instance, model resource.Instance) error {
+	if model.State == resource.InstanceTerminated {
+		return nil
+	}
+	observed, err := observedVolumes(in)
+	if err != nil {
+		return err
+	}
+	staged := map[resource.VolumeID]attachView{}
+	for _, block := range model.BlockDevices {
+		bind, ok := backend.BindOf(model, block.VolumeID)
+		if !ok {
+			continue
+		}
+		staged[block.VolumeID] = attachView{bind: bind, inSpec: true, state: block.Status}
+	}
+	for id, o := range observed {
+		if _, ok := staged[id]; ok {
+			continue
+		}
+		staged[id] = attachView{
+			bind:  backend.VolumeBind{VolumeID: id, InstanceID: model.ID, Device: o.GetDeviceName()},
+			state: attachStateOf(o.GetState()),
+		}
+	}
+	for id, view := range staged {
+		// A spec holder wins over an instance still letting the volume go.
+		if prev, ok := out[id]; ok && prev.inSpec && !view.inSpec {
+			continue
+		}
+		out[id] = view
+	}
+	return nil
+}
+
+// attachStateOf maps compute's VolumeAttachState to the EC2 VolumeAttachment
+// state (attaching | attached | detaching | busy). Only ATTACHED is attached;
+// an unset or unknown state is attaching, never attached.
+func attachStateOf(s computev1.VolumeAttachState) resource.AttachmentStatus {
+	switch s {
+	case computev1.VolumeAttachState_VOLUME_ATTACH_STATE_ATTACHED:
+		return resource.AttachmentAttached
+	case computev1.VolumeAttachState_VOLUME_ATTACH_STATE_DETACHING:
+		return resource.AttachmentDetaching
+	case computev1.VolumeAttachState_VOLUME_ATTACH_STATE_BUSY:
+		return resource.AttachmentBusy
+	case computev1.VolumeAttachState_VOLUME_ATTACH_STATE_ATTACHING,
+		computev1.VolumeAttachState_VOLUME_ATTACH_STATE_UNSPECIFIED:
+		return resource.AttachmentAttaching
+	default:
+		return resource.AttachmentAttaching
 	}
 }
 
@@ -2335,8 +2416,10 @@ func volumeModel(in *storagev1.Volume) (resource.Volume, error) {
 		}
 	}
 	if !vol.InstanceID.IsZero() {
-		// Storage names the instance once the disk is on the machine.
-		vol.AttachState = resource.AttachmentAttached
+		// Storage names the instance before hot-plug finishes, so storage
+		// alone never makes a volume attached. Only the attach state compute
+		// reports does (markAttachState, #448).
+		vol.AttachState = resource.AttachmentAttaching
 	}
 	if vol.Type == "" {
 		// The volume is returned whole, with no type, beside the error, so
