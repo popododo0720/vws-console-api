@@ -100,15 +100,38 @@ func (h *handler) createVolume(w http.ResponseWriter, r *http.Request, c resourc
 			return
 		}
 	}
+	iops, err := optionalInt(r, "Iops")
+	if err != nil {
+		writeErr(w, r, err)
+		return
+	}
+	throughput, err := optionalInt(r, "Throughput")
+	if err != nil {
+		writeErr(w, r, err)
+		return
+	}
 	acc, err := h.svc.CreateVolume(r.Context(), c, token, resource.CreateVolumeRequest{
 		SizeGiB: size, Zone: r.Form.Get("AvailabilityZone"), Type: resource.VolumeType(r.Form.Get("VolumeType")),
-		SnapshotID: snap,
+		SnapshotID: snap, Iops: iops, Throughput: throughput,
 	})
 	if err != nil {
 		writeErr(w, r, err)
 		return
 	}
 	writeXML(w, volumeCreatedXML(requestID(r), acc.Items[0]))
+}
+
+// optionalInt reads a positive integer parameter. Left out is 0.
+func optionalInt(r *http.Request, key string) (int64, error) {
+	raw := r.Form.Get(key)
+	if raw == "" {
+		return 0, nil
+	}
+	n, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || n < 1 {
+		return 0, resource.Invalid(key, "Value ("+raw+") for parameter "+strings.ToLower(key[:1])+key[1:]+" is invalid.")
+	}
+	return n, nil
 }
 
 func (h *handler) describeVolumes(w http.ResponseWriter, r *http.Request, c resource.Caller) {

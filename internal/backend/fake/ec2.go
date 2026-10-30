@@ -148,7 +148,11 @@ func (c compute) CreateVolume(ctx context.Context, m backend.Mutation, req resou
 			return resource.Accepted[resource.Volume]{}, resource.Conflict(resource.KindSnapshot, req.SnapshotID.String(), "snapshot is not completed")
 		}
 		if req.SizeGiB == 0 {
-			req.SizeGiB = snap.VolumeSize
+			sized, err := req.WithSize(snap.VolumeSize)
+			if err != nil {
+				return resource.Accepted[resource.Volume]{}, err
+			}
+			req = sized
 		}
 		if req.SizeGiB < snap.VolumeSize {
 			return resource.Accepted[resource.Volume]{}, resource.Invalid("size", "smaller than the snapshot")
@@ -163,7 +167,7 @@ func (c compute) CreateVolume(ctx context.Context, m backend.Mutation, req resou
 	}
 	vol := resource.Volume{
 		ID: id, OwnerID: m.Account, SizeGiB: req.SizeGiB, Zone: req.Zone, Type: req.Type, State: resource.VolumeCreating,
-		SnapshotID: req.SnapshotID, CreateTime: c.w.now().UTC(),
+		SnapshotID: req.SnapshotID, CreateTime: c.w.now().UTC(), Iops: req.Iops, Throughput: req.Throughput,
 	}
 	op, err := c.w.newOp(m.Account, resource.ServiceCompute, resource.ActionCreateVolume, []resource.Ref{id.Ref()}, func(time.Time) {
 		if cur := c.w.vol[id]; cur != nil && cur.State == resource.VolumeCreating {

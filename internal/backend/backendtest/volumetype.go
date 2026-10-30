@@ -8,7 +8,7 @@ import (
 	"github.com/popododo0720/vws-console-api/internal/resource"
 )
 
-// exerciseVolumeTypes covers #323: every EBS volume type a backend stores
+// exerciseVolumeTypes covers #323 and #324: every EBS volume type a backend stores
 // reads back as the same type from CreateVolume, DescribeVolumes and after
 // ModifyVolume, and a type that is not an EBS type is refused with nothing
 // created. Which types CreateVolume accepts on the wire is the surface's
@@ -71,6 +71,27 @@ func exerciseVolumeTypes(ctx context.Context, t *testing.T, set backend.Set, acc
 		}
 		if _, err := set.Compute.DeleteVolume(ctx, mut("delete", typ), resource.DeleteVolumeRequest{ID: id}); err != nil {
 			t.Fatalf("delete %s: %v", typ, err)
+		}
+	}
+	// #324: provisioned Iops and Throughput are stored and read back.
+	for _, want := range []resource.CreateVolumeRequest{
+		{SizeGiB: 125, Zone: resource.ZoneName, Type: resource.VolumeGP3, Iops: 4000, Throughput: 250},
+		{SizeGiB: 125, Zone: resource.ZoneName, Type: resource.VolumeIO2, Iops: 1000},
+	} {
+		created, err := set.Compute.CreateVolume(ctx, mut("perf", want.Type), want)
+		if err != nil {
+			t.Fatalf("create %s with iops: %v", want.Type, err)
+		}
+		if got := created.Items[0]; got.Iops != want.Iops || got.Throughput != want.Throughput {
+			t.Fatalf("create %s returned iops %d throughput %d", want.Type, got.Iops, got.Throughput)
+		}
+		id := created.Items[0].ID
+		if got := describe(id); len(got) != 1 || got[0].Iops != want.Iops || got[0].Throughput != want.Throughput {
+			t.Fatalf("%s with iops reads back as %+v", want.Type, got)
+		}
+		del := resource.DeleteVolumeRequest{ID: id}
+		if _, err := set.Compute.DeleteVolume(ctx, mut("perf-delete", want.Type), del); err != nil {
+			t.Fatalf("delete %s: %v", want.Type, err)
 		}
 	}
 	for _, typ := range []resource.VolumeType{"", "ssd", "GP3", "io3"} {

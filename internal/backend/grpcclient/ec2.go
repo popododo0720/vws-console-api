@@ -236,7 +236,7 @@ func (c computeClient) CreateVolume(ctx context.Context, m backend.Mutation, req
 		return resource.Accepted[resource.Volume]{}, resource.Invalid("volumeType", "unsupported")
 	}
 	projectID := project(m.Account)
-	spec := &storagev1.VolumeSpec{SizeGib: req.SizeGiB, Type: typ}
+	spec := &storagev1.VolumeSpec{SizeGib: req.SizeGiB, Type: typ, Iops: req.Iops, ThroughputMibps: req.Throughput}
 	if !req.SnapshotID.IsZero() {
 		// A size of 0 is the snapshot size, which only the snapshot knows.
 		snap, err := c.getSnapshot(ctx, projectID, req.SnapshotID.String())
@@ -244,8 +244,10 @@ func (c computeClient) CreateVolume(ctx context.Context, m backend.Mutation, req
 			return resource.Accepted[resource.Volume]{}, err
 		}
 		if req.SizeGiB == 0 {
-			req.SizeGiB = snap.VolumeSize
-			spec.SizeGib = snap.VolumeSize
+			if req, err = req.WithSize(snap.VolumeSize); err != nil {
+				return resource.Accepted[resource.Volume]{}, err
+			}
+			spec.SizeGib = req.SizeGiB
 		}
 		if req.SizeGiB < snap.VolumeSize {
 			return resource.Accepted[resource.Volume]{}, resource.Invalid("size", "smaller than the snapshot")
@@ -2111,7 +2113,11 @@ func acceptedVolume(op *longrunningpb.Operation, req resource.CreateVolumeReques
 	if err != nil {
 		return resource.Accepted[resource.Volume]{}, err
 	}
-	vol := resource.Volume{ID: id, OwnerID: named, SizeGiB: req.SizeGiB, Zone: req.Zone, Type: req.Type, State: state, SnapshotID: req.SnapshotID, CreateTime: parsed.CreateTime}
+	vol := resource.Volume{
+		ID: id, OwnerID: named, SizeGiB: req.SizeGiB, Zone: req.Zone, Type: req.Type, State: state,
+		SnapshotID: req.SnapshotID, CreateTime: parsed.CreateTime,
+		Iops: req.Iops, Throughput: req.Throughput,
+	}
 	parsed.Action = resource.ActionCreateVolume
 	parsed.Targets = []resource.Ref{id.Ref()}
 	return resource.Accepted[resource.Volume]{Operation: parsed, Items: []resource.Volume{vol}}, nil
@@ -2179,6 +2185,7 @@ func volumeModel(in *storagev1.Volume) (resource.Volume, error) {
 		ID: id, OwnerID: owner, SizeGiB: in.GetSpec().GetSizeGib(), Zone: parts[3], SnapshotID: snap,
 		Type: volumeTypeOf(in.GetSpec().GetType()), State: state, InstanceID: inst,
 		Device: in.GetStatus().GetDeviceName(), CreateTime: in.GetCreateTime().AsTime().UTC(),
+		Iops: in.GetSpec().GetIops(), Throughput: in.GetSpec().GetThroughputMibps(),
 	}
 	if rootVolume(in) {
 		// RunInstances made it from the image, and compute deletes it with
@@ -2258,7 +2265,9 @@ func volumeProto(v resource.Volume, projectID string) *storagev1.Volume {
 	if !v.CreateTime.IsZero() {
 		created = timestamppb.New(v.CreateTime)
 	}
-	spec := &storagev1.VolumeSpec{SizeGib: v.SizeGiB, Type: storageType(v.Type)}
+	spec := &storagev1.VolumeSpec{
+		SizeGib: v.SizeGiB, Type: storageType(v.Type), Iops: v.Iops, ThroughputMibps: v.Throughput,
+	}
 	if !v.SnapshotID.IsZero() {
 		spec.Source = &storagev1.VolumeSpec_Snapshot{Snapshot: snapshotName(projectID, v.SnapshotID.String())}
 	}

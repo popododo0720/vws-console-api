@@ -84,7 +84,18 @@ type Error struct {
 	// duplicate marks a security group rule that already exists, which EC2
 	// answers as InvalidPermission.Duplicate (#272).
 	duplicate bool
+	// invalid refines CodeInvalidArgument for EC2, which tells a missing
+	// parameter and a bad combination apart from a bad value.
+	invalid invalidReason
 }
+
+type invalidReason uint8
+
+const (
+	invalidValue invalidReason = iota
+	invalidMissing
+	invalidCombination
+)
 
 func (e *Error) Error() string {
 	if e.cause != nil {
@@ -151,6 +162,24 @@ func AsError(err error) *Error {
 func Invalid(field, message string) *Error {
 	return &Error{Code: CodeInvalidArgument, Field: field, Message: message}
 }
+
+// MissingParameter reports a parameter the request must carry. EC2 answers
+// MissingParameter.
+func MissingParameter(field, message string) *Error {
+	return &Error{Code: CodeInvalidArgument, Field: field, Message: message, invalid: invalidMissing}
+}
+
+// InvalidCombination reports a parameter that is valid alone but not with
+// the rest of the request. EC2 answers InvalidParameterCombination.
+func InvalidCombination(field, message string) *Error {
+	return &Error{Code: CodeInvalidArgument, Field: field, Message: message, invalid: invalidCombination}
+}
+
+// IsMissingParameter reports whether e came from MissingParameter.
+func IsMissingParameter(e *Error) bool { return e != nil && e.invalid == invalidMissing }
+
+// IsInvalidCombination reports whether e came from InvalidCombination.
+func IsInvalidCombination(e *Error) bool { return e != nil && e.invalid == invalidCombination }
 
 // Malformed reports an identifier that failed validation.
 func Malformed(kind Kind, id string) *Error {
