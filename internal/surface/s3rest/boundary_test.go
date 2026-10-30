@@ -27,6 +27,9 @@ func TestMalformedNamesAndBodies(t *testing.T) {
 		{"short bucket", http.MethodPut, "/ab", "", 400, "InvalidArgument"},
 		{"long bucket", http.MethodPut, "/" + strings.Repeat("a", 64), "", 400, "InvalidArgument"},
 		{"ip bucket", http.MethodPut, "/192.168.0.1", "", 400, "InvalidArgument"},
+		{"leading period", http.MethodPut, "/.edge-bucket", "", 400, "InvalidArgument"},
+		{"trailing period", http.MethodPut, "/edge-bucket.", "", 400, "InvalidArgument"},
+		{"adjacent periods", http.MethodPut, "/edge..bucket", "", 400, "InvalidArgument"},
 		{"long key", http.MethodPut, "/edge-bucket/" + strings.Repeat("k", 1025), "x", 400, "InvalidArgument"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

@@ -48,6 +48,47 @@ func TestParseRejectsRawShapes(t *testing.T) {
 	}
 }
 
+// TestBucketNameFollowsAWSNamingRules pins the general purpose bucket rules
+// that involve periods: dotted names are valid, but a name may not start or
+// end with a period, contain two adjacent periods, or match an IP address.
+// https://docs.aws.amazon.com/AmazonS3/latest/userguide/bucketnamingrules.html
+func TestBucketNameFollowsAWSNamingRules(t *testing.T) {
+	valid := []string{
+		"logs",
+		"build-logs",
+		"a.b",
+		"example.com",
+		"www.example.com",
+		"my.example.s3.bucket",
+		"a-b.c-d",
+		"192.168.0.1.example",
+		strings.Repeat("a", 61) + ".b",
+	}
+	for _, name := range valid {
+		if _, err := Parse[BucketName](name); err != nil {
+			t.Errorf("%q must be valid: %v", name, err)
+		}
+	}
+	invalid := []string{
+		"ab",
+		strings.Repeat("a", 64),
+		"Edge-Bucket",
+		".example.com",
+		"example.com.",
+		"example..com",
+		"192.168.5.4",
+		"999.999.999.999",
+		"example_com",
+		"-example.com",
+		"example.com-",
+	}
+	for _, name := range invalid {
+		if _, err := Parse[BucketName](name); err == nil {
+			t.Errorf("%q must be invalid", name)
+		}
+	}
+}
+
 func TestJSONDecodesValidatedIDs(t *testing.T) {
 	var req RunInstancesRequest
 	body := []byte(`{"imageId":"ami-0123456789abcdef0","instanceType":"vws.small","subnetId":"subnet-0123456789abcdef0","count":1}`)

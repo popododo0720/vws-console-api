@@ -147,15 +147,39 @@ func isHex(r rune) bool {
 }
 
 func validBucketName(s string) bool {
-	if len(s) < 3 || len(s) > 63 {
+	if len(s) < 3 || len(s) > 63 || strings.Contains(s, "..") || ipv4Shaped(s) {
 		return false
 	}
 	for i, r := range s {
 		switch {
 		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
-		case r == '-' && i > 0 && i < len(s)-1:
+		case r == '-' || r == '.':
+			if i == 0 || i == len(s)-1 {
+				return false
+			}
 		default:
 			return false
+		}
+	}
+	return true
+}
+
+// ipv4Shaped reports whether s is four dot-separated runs of one to three
+// digits. S3 refuses that shape so a bucket name never matches an IP address.
+// https://docs.aws.amazon.com/AmazonS3/latest/userguide/bucketnamingrules.html
+func ipv4Shaped(s string) bool {
+	labels := strings.Split(s, ".")
+	if len(labels) != 4 {
+		return false
+	}
+	for _, label := range labels {
+		if len(label) < 1 || len(label) > 3 {
+			return false
+		}
+		for _, r := range label {
+			if r < '0' || r > '9' {
+				return false
+			}
 		}
 	}
 	return true
