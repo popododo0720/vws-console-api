@@ -380,7 +380,7 @@ func exerciseEC2(ctx context.Context, t *testing.T, set backend.Set, account res
 	}
 	if _, err := set.Network.AuthorizeSecurityGroupIngress(ctx, backend.Mutation{Scope: scope, Key: "k-auth-2", Fingerprint: "fp-auth-2"}, resource.AuthorizeSecurityGroupIngressRequest{
 		ID: group.Items[0].ID, Rule: resource.IngressRule{Protocol: "tcp", FromPort: 22, ToPort: 22, Cidr: "10.0.0.0/16"},
-	}); resource.CodeOf(err) != resource.CodeAlreadyExists {
+	}); !resource.IsDuplicatePermission(err) {
 		t.Fatalf("duplicate rule: %v", err)
 	}
 	openedMore, err := set.Network.AuthorizeSecurityGroupIngress(ctx, backend.Mutation{Scope: scope, Key: "k-auth-3", Fingerprint: "fp-auth-3"}, resource.AuthorizeSecurityGroupIngressRequest{

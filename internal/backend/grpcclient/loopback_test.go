@@ -169,6 +169,7 @@ type loopWorld struct {
 	inst      map[string]instSnap
 	sub       map[string]subSnap
 	groups    map[string]resource.SecurityGroup
+	etagN     int
 	keyLine   map[string]string
 	keySHA1   map[string]string
 	opLaunch  map[string]string

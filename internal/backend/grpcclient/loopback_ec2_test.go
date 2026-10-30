@@ -3,6 +3,7 @@ package grpcclient
 import (
 	"context"
 	"errors"
+	"strconv"
 	"strings"
 
 	longrunningpb "cloud.google.com/go/longrunning/autogen/longrunningpb"
@@ -10,6 +11,7 @@ import (
 	computev1 "github.com/popododo0720/vws-proto/gen/go/vws/compute/v1"
 	networkv1 "github.com/popododo0720/vws-proto/gen/go/vws/network/v1"
 	storagev1 "github.com/popododo0720/vws-proto/gen/go/vws/storage/v1"
+	"google.golang.org/grpc/codes"
 
 	"github.com/popododo0720/vws-console-api/internal/backend"
 	"github.com/popododo0720/vws-console-api/internal/resource"
@@ -227,10 +229,6 @@ func (s *groupSrv) UpdateSecurityGroup(ctx context.Context, req *networkv1.Updat
 	if err := ctx.Err(); err != nil {
 		return nil, toStatus(err)
 	}
-	group, ok := s.w.group(id.String(), account)
-	if !ok {
-		return nil, toStatus(resource.NotFound(resource.KindSecurityGroup, id.String()))
-	}
 	decoded := make([]resource.IngressRule, 0, len(rules))
 	for _, rule := range rules {
 		decoded = append(decoded, resource.IngressRule{
@@ -240,8 +238,12 @@ func (s *groupSrv) UpdateSecurityGroup(ctx context.Context, req *networkv1.Updat
 			Cidr:     rule.GetCidr(),
 		})
 	}
-	group.Rules = decoded
-	s.w.saveGroup(group)
+	if _, err := s.w.updateGroup(id.String(), account, req.GetSecurityGroup().GetEtag(), decoded); err != nil {
+		if errors.Is(err, etagMismatchError{}) {
+			return nil, vwsStatus(codes.Aborted, "ETAG_MISMATCH", "etag mismatch")
+		}
+		return nil, toStatus(err)
+	}
 	return runningNamed(projectID, req.GetRequestId(), req.GetSecurityGroup().GetName(), commonv1.OperationVerb_OPERATION_VERB_UPDATE, s.w.now)
 }
 
@@ -287,7 +289,30 @@ func (w *loopWorld) cidrOf(name string) (string, bool) {
 func (w *loopWorld) saveGroup(group resource.SecurityGroup) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	w.etagN++
+	group.Etag = strconv.Itoa(w.etagN)
 	w.groups[group.ID.String()] = group
+}
+
+// updateGroup replaces the rules only while etag still matches and rotates the
+// etag, like the network service's compare-and-swap.
+func (w *loopWorld) updateGroup(
+	id string, owner resource.AccountID, etag string, rules []resource.IngressRule,
+) (resource.SecurityGroup, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	group, ok := w.groups[id]
+	if !ok || group.OwnerID != owner {
+		return resource.SecurityGroup{}, resource.NotFound(resource.KindSecurityGroup, id)
+	}
+	if etag != "" && etag != group.Etag {
+		return resource.SecurityGroup{}, etagMismatchError{}
+	}
+	w.etagN++
+	group.Etag = strconv.Itoa(w.etagN)
+	group.Rules = rules
+	w.groups[id] = group
+	return group, nil
 }
 
 func (w *loopWorld) group(id string, owner resource.AccountID) (resource.SecurityGroup, bool) {
@@ -315,6 +340,7 @@ func groupProto(group resource.SecurityGroup, projectID string) *networkv1.Secur
 	}
 	return &networkv1.SecurityGroup{
 		Name: securityGroupName(projectID, group.VpcID.String(), group.ID.String()),
+		Etag: group.Etag,
 		Spec: &networkv1.SecurityGroupSpec{Description: group.Name, Rules: rules},
 		Status: &networkv1.SecurityGroupStatus{Observed: &commonv1.ObservedState{
 			State: commonv1.ReconciliationState_RECONCILIATION_STATE_READY,

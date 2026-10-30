@@ -801,7 +801,7 @@ func errorDetail(c resource.Code) (string, codes.Code, *commonv1.ReconciliationF
 	}
 }
 
-// etagMismatch reports the compute compare-and-swap failure for a stale instance etag.
+// etagMismatch reports a compare-and-swap failure for a stale resource etag.
 func etagMismatch(err error) bool {
 	if err == nil {
 		return false
