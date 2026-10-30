@@ -99,7 +99,7 @@ func (c computeClient) RunInstances(ctx context.Context, m backend.Mutation, req
 			Volume:    bootVolume(projectID, m.Fingerprint, req.ImageID, instID),
 		})
 		if err := rpcErr(volOp, err); err != nil {
-			return resource.Accepted[resource.Instance]{}, err
+			return resource.Accepted[resource.Instance]{}, unsupportedVolumeType(err)
 		}
 		created, err := c.instances.CreateInstance(ctx, &computev1.CreateInstanceRequest{
 			Parent:     instanceParent(projectID),

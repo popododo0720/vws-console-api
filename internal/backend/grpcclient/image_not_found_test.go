@@ -94,7 +94,16 @@ func wantImageNotFound(t *testing.T, err error) {
 	}
 }
 
-func dialRefused(t *testing.T, boot *refusedImage) computeClient {
+// bootWorld is the network, storage and compute servers a RunInstances
+// test dials.
+type bootWorld interface {
+	networkv1.VpcServiceServer
+	networkv1.SubnetServiceServer
+	storagev1.VolumeServiceServer
+	computev1.InstanceServiceServer
+}
+
+func dialRefused(t *testing.T, boot bootWorld) computeClient {
 	t.Helper()
 	lis := bufconn.Listen(MaxMessageBytes())
 	srv := grpc.NewServer()
