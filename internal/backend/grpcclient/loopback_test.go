@@ -567,18 +567,16 @@ func (s *instanceSrv) CreateInstance(ctx context.Context, req *computev1.CreateI
 		keyName = keys.Items[0].Name
 	}
 	var rootType resource.VolumeType
+	var rootIops, rootMiBps int64
 	if boot := s.w.boot(spec.GetVolumes()[0].GetVolume()); boot != nil {
 		rootType = volumeTypeOf(boot.GetSpec().GetType())
 		if rootType == "" {
 			return nil, toStatus(resource.Invalid("volumeType", "unsupported"))
 		}
-		// The fake fills Iops and Throughput from the type, so the stub
-		// refuses a boot volume whose own values differ: a client that
-		// drops them fails the contract.
-		iops, miBps := resource.RunInstancesRequest{RootVolumeType: rootType}.RootPerformance()
-		if boot.GetSpec().GetIops() != iops || boot.GetSpec().GetThroughputMibps() != miBps {
-			return nil, toStatus(resource.Invalid("iops", "boot volume performance does not match its type"))
-		}
+		// The fake creates the root volume with the boot volume's own Iops
+		// and Throughput, so a client that drops or changes them reads back
+		// other values in the contract.
+		rootIops, rootMiBps = boot.GetSpec().GetIops(), boot.GetSpec().GetThroughputMibps()
 	}
 	acc, err := s.w.set.Compute.RunInstances(ctx, backend.Mutation{
 		Scope: backend.Scope{Account: account}, Key: req.GetRequestId(), Fingerprint: fp,
@@ -588,7 +586,7 @@ func (s *instanceSrv) CreateInstance(ctx context.Context, req *computev1.CreateI
 		// The fake creates the root volume itself. It takes the type of the
 		// boot volume the client created, so a type the client drops or
 		// changes on the way to vws-storage shows in the contract (#323).
-		RootVolumeType: rootType,
+		RootVolumeType: rootType, RootIops: rootIops, RootThroughput: rootMiBps,
 	})
 	if err != nil {
 		return nil, toStatus(err)

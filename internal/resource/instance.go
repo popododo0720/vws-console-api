@@ -1,6 +1,7 @@
 package resource
 
 import (
+	"fmt"
 	"strings"
 	"time"
 	"unicode"
@@ -184,7 +185,14 @@ type RunInstancesRequest struct {
 	// block device mapping for the root device. Empty means the image
 	// default; see RootType.
 	RootVolumeType VolumeType `json:"rootVolumeType,omitempty"`
+	// RootIops and RootThroughput are the root mapping's Ebs.Iops and
+	// Ebs.Throughput (MiB/s). Zero means omitted; see RootPerformance.
+	RootIops       int64 `json:"rootIops,omitempty"`
+	RootThroughput int64 `json:"rootThroughput,omitempty"`
 }
+
+// RootVolumeSizeGiB is the size of the root volume RunInstances creates.
+const RootVolumeSizeGiB = 8
 
 // RootType is the EBS type RunInstances gives the root volume. A VWS image
 // carries no block device mapping, so an omitted type is gp2, the EC2
@@ -198,10 +206,10 @@ func (r RunInstancesRequest) RootType() VolumeType {
 }
 
 // RootPerformance is the Iops and Throughput (MiB/s) RunInstances gives the
-// root volume. The mapping carries neither, so they are what EC2 fills in
-// for RootType: 3,000 IOPS and 125 MiB/s for gp3, none for the other types.
+// root volume: the mapping's values, and for an omitted one what EC2 fills
+// in for RootType (3,000 IOPS and 125 MiB/s for gp3, none for the others).
 func (r RunInstancesRequest) RootPerformance() (iops, miBps int64) {
-	return withDefaultPerformance(r.RootType(), 0, 0)
+	return withDefaultPerformance(r.RootType(), r.RootIops, r.RootThroughput)
 }
 
 // MaxUserDataBytes is the EC2 limit on decoded user data.
@@ -242,18 +250,32 @@ func (r RunInstancesRequest) Normalize() (RunInstancesRequest, error) {
 		return RunInstancesRequest{}, Invalid("userData", "must be UTF-8 text")
 	}
 	switch r.RootVolumeType {
-	case "", VolumeStandard, VolumeGP2, VolumeGP3:
+	case "", VolumeStandard, VolumeGP2, VolumeGP3, VolumeIO1, VolumeIO2:
 	case VolumeST1, VolumeSC1:
 		// EC2 CreateVolume: st1 and sc1 volumes can't be used as boot volumes.
 		return RunInstancesRequest{}, Invalid("volumeType", "st1 and sc1 cannot be boot volumes")
-	case VolumeIO1, VolumeIO2:
-		// io1 and io2 need Iops, and the mapping does not carry Ebs.Iops yet.
-		// EC2 answers MissingParameter, as CreateVolume does without Iops.
-		return RunInstancesRequest{}, checkVolumePerformance(r.RootVolumeType, 0, 0)
 	default:
 		return RunInstancesRequest{}, Invalid("volumeType", "unsupported")
 	}
+	if err := r.checkRootPerformance(); err != nil {
+		return RunInstancesRequest{}, err
+	}
 	return r, nil
+}
+
+// checkRootPerformance applies the CreateVolume per-type rules (EC2 API
+// Reference, EbsBlockDevice Iops and Throughput) to the root volume with
+// the values it will have. The gp3 defaults change no outcome: gp3 takes
+// both parameters.
+func (r RunInstancesRequest) checkRootPerformance() error {
+	if r.RootIops < 0 {
+		return Invalid("iops", fmt.Sprintf("Value (%d) for parameter iops is invalid.", r.RootIops))
+	}
+	if r.RootThroughput < 0 {
+		return Invalid("throughput", fmt.Sprintf("Value (%d) for parameter throughput is invalid.", r.RootThroughput))
+	}
+	iops, miBps := r.RootPerformance()
+	return CheckVolumeShape(r.RootType(), RootVolumeSizeGiB, iops, miBps)
 }
 
 // StopInstancesRequest stops instances that are running.

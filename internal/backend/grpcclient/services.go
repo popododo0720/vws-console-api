@@ -186,7 +186,7 @@ func bootVolume(projectID, fingerprint string, req resource.RunInstancesRequest,
 	return &storagev1.Volume{
 		Labels: map[string]string{labelFingerprint: clip(fingerprint, 63), labelInstance: instance},
 		Spec: &storagev1.VolumeSpec{
-			SizeGib: 8,
+			SizeGib: resource.RootVolumeSizeGiB,
 			Type:    storageType(req.RootType()),
 			Iops:    iops, ThroughputMibps: miBps,
 			Source: &storagev1.VolumeSpec_Image{Image: imageName(projectID, req.ImageID.String())},
