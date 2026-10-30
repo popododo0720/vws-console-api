@@ -97,6 +97,18 @@ func arnOf(c *exchange, kind, path, name string) string {
 	return "arn:vws:iam::" + c.caller.Account.String() + ":" + kind + path + name
 }
 
+// awsPartition names an internal arn:vws ARN in the aws partition for the
+// wire. STS GetCallerIdentity answers the caller ARN as AWS does, because
+// SDKs, CLI scripts and policy tooling parse the partition (#247). Other IAM
+// and STS responses still carry arn:vws (#430).
+func awsPartition(arn string) string {
+	rest, ok := strings.CutPrefix(arn, "arn:vws:")
+	if !ok {
+		return arn
+	}
+	return "arn:aws:" + rest
+}
+
 // userName is UserName, or the calling user when it is omitted, as in AWS.
 func userName(c *exchange) string {
 	if n := c.form("UserName"); n != "" {
@@ -1242,7 +1254,7 @@ func stsActions() map[string]spec {
 				Arn     string `xml:"Arn"`
 				UserID  string `xml:"UserId"`
 				Account string `xml:"Account"`
-			}{c.caller.Principal, callerID(h, c), c.caller.Account.String()}, nil
+			}{awsPartition(c.caller.Principal), callerID(h, c), c.caller.Account.String()}, nil
 		}},
 		"AssumeRole": {
 			params: []string{"RoleArn", "RoleSessionName", "DurationSeconds"}, needsAdmin: true,

@@ -59,7 +59,9 @@ or `sts:<Action>`; every request must be signed. `-iam=static` (the
 default) serves only `GetCallerIdentity` for the `-access-key` root key.
 `-iam=fake` adds users, groups, roles, managed and inline policies, access keys
 and `AssumeRole` in memory, lost on restart. The root key keeps working in every mode, and keys created
-there also sign EC2 and S3 calls.
+there also sign EC2 and S3 calls. `GetCallerIdentity` answers `Arn` in the `aws`
+partition, as AWS does; IAM resource ARNs and `AssumeRole`'s role ARN still use
+`arn:vws` (#430).
 
 `-iam=grpc -iam-endpoint <host:port>` hands every other key to vws-iam
 (vws-proto v0.3.0, `vws.iam.v1`). `Authenticate` gets the canonical request,

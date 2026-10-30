@@ -331,7 +331,8 @@ func TestGetCallerIdentityNamesTheUserByItsUniqueIDOverGRPC(t *testing.T) {
 	h, _ := queryHarness(t)
 	form := url.Values{"Action": {"GetCallerIdentity"}, "Version": {iamquery.STSVersion}}
 	rec := signedCall(t, h, sigv4.ServiceSTS, form)
-	expect(t, rec, http.StatusOK, "<UserId>AIDABOB0000000000001</UserId>", "<Arn>"+bobARN+"</Arn>")
+	expect(t, rec, http.StatusOK,
+		"<UserId>AIDABOB0000000000001</UserId>", "<Arn>arn:aws:iam::123456789012:user/eng/bob</Arn>")
 	if strings.Contains(rec.Body.String(), "AKIABOB") {
 		t.Errorf("UserId is the access key id: %s", rec.Body)
 	}
