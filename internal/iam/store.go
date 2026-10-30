@@ -1504,6 +1504,31 @@ func (f *Fake) UntagMFADevice(_ context.Context, a resource.AccountID, serial st
 	return nil
 }
 
+// mfaTagMarkerPrefix separates a generated Marker from a raw tag key. No tag
+// key can start with it.
+const mfaTagMarkerPrefix = "~"
+
+// mfaTagMarker encodes a tag key as the opaque Marker of ListMFADeviceTags.
+// A key may hold characters outside the AWS Marker range U+0020 to U+00FF, so
+// the wire value is base64url.
+func mfaTagMarker(key string) string {
+	return mfaTagMarkerPrefix + base64.RawURLEncoding.EncodeToString([]byte(key))
+}
+
+// mfaTagMarkerKey decodes a Marker. A raw key, or a Marker from another
+// version, resumes after its literal value.
+func mfaTagMarkerKey(marker string) string {
+	encoded, ok := strings.CutPrefix(marker, mfaTagMarkerPrefix)
+	if !ok {
+		return marker
+	}
+	key, err := base64.RawURLEncoding.DecodeString(encoded)
+	if err != nil {
+		return marker
+	}
+	return string(key)
+}
+
 // ListMFADeviceTags implements Admin. Tags are sorted by key and paged with an
 // opaque marker, as in AWS.
 func (f *Fake) ListMFADeviceTags(
@@ -1528,7 +1553,8 @@ func (f *Fake) ListMFADeviceTags(
 	sort.Strings(keys)
 	start := 0
 	if marker != "" {
-		start = sort.Search(len(keys), func(i int) bool { return keys[i] > marker })
+		key := mfaTagMarkerKey(marker)
+		start = sort.Search(len(keys), func(i int) bool { return keys[i] > key })
 	}
 	end := min(start+maxItems, len(keys))
 	page := TagPage{Tags: []Tag{}}
@@ -1537,7 +1563,7 @@ func (f *Fake) ListMFADeviceTags(
 	}
 	if end < len(keys) {
 		page.IsTruncated = true
-		page.Marker = keys[end-1]
+		page.Marker = mfaTagMarker(keys[end-1])
 	}
 	return page, nil
 }

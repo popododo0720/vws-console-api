@@ -1,6 +1,7 @@
 package iamquery
 
 import (
+	"encoding/xml"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -88,6 +89,79 @@ func TestMFADeviceTagPaging(t *testing.T) {
 		"MaxItems": {"2"}, "Marker": {m[1]},
 	}), http.StatusOK, `<IsTruncated>false</IsTruncated>`,
 		`<Tags><member><Key>c</Key><Value>c-value</Value></member></Tags>`)
+}
+
+// Paging follows Marker through tag keys outside ASCII, and the Marker keeps
+// the AWS character range.
+func TestMFADeviceTagPagingUnicodeKeys(t *testing.T) {
+	h, f, _, root := harness(t)
+	serial := seedMfaDevice(t, f, root, "unicode-phone")
+	keys := []string{"a", "z", "é", "ключ", "漢字"}
+	form := url.Values{"Action": {"TagMFADevice"}, "SerialNumber": {serial}}
+	for i, key := range keys {
+		form.Set("Tags.member."+strconv.Itoa(i+1)+".Key", key)
+		form.Set("Tags.member."+strconv.Itoa(i+1)+".Value", key+"-value")
+	}
+	has(t, call(t, h, root, sigv4.ServiceIAM, form), http.StatusOK)
+
+	seen := map[string]int{}
+	var markers []string
+	marker := ""
+	for page := 0; ; page++ {
+		if page > len(keys) {
+			t.Fatal("paging did not end")
+		}
+		query := url.Values{"Action": {"ListMFADeviceTags"}, "SerialNumber": {serial}, "MaxItems": {"2"}}
+		if marker != "" {
+			query.Set("Marker", marker)
+		}
+		res := call(t, h, root, sigv4.ServiceIAM, query)
+		if res.Code != http.StatusOK {
+			t.Fatalf("page %d with Marker %q: %d %s", page, marker, res.Code, res.Body)
+		}
+		var body struct {
+			Result struct {
+				IsTruncated bool   `xml:"IsTruncated"`
+				Marker      string `xml:"Marker"`
+				Tags        []struct {
+					Key   string `xml:"Key"`
+					Value string `xml:"Value"`
+				} `xml:"Tags>member"`
+			} `xml:"ListMFADeviceTagsResult"`
+		}
+		if err := xml.Unmarshal(res.Body.Bytes(), &body); err != nil {
+			t.Fatalf("decode page %d: %v", page, err)
+		}
+		for _, tag := range body.Result.Tags {
+			seen[tag.Key]++
+			if want := tag.Key + "-value"; tag.Value != want {
+				t.Errorf("tag %q value %q, want %q", tag.Key, tag.Value, want)
+			}
+		}
+		if !body.Result.IsTruncated {
+			break
+		}
+		marker = body.Result.Marker
+		if marker == "" {
+			t.Fatalf("page %d is truncated without a Marker", page)
+		}
+		markers = append(markers, marker)
+	}
+	for _, marker := range markers {
+		for _, r := range marker {
+			if r < 0x20 || r > 0xFF {
+				t.Fatalf("Marker %q is outside U+0020 to U+00FF", marker)
+			}
+		}
+	}
+	if len(seen) != len(keys) {
+		t.Fatalf("saw %d keys %v, want %d", len(seen), seen, len(keys))
+	}
+	for _, key := range keys {
+		if seen[key] != 1 {
+			t.Errorf("key %q seen %d times", key, seen[key])
+		}
+	}
 }
 
 func TestMFADeviceTagErrors(t *testing.T) {
