@@ -298,6 +298,18 @@ func VolumeNotInUse(id VolumeID) *Error {
 	return Conflict(KindVolume, id.String(), "Volume '"+id.String()+"' is in the 'available' state.")
 }
 
+// DetachTokenExpiredMessage is the VWS answer to a DetachVolume retry whose
+// client token compute no longer remembers while its detach record still
+// lingers, and whose volume is attached again or elsewhere since. EC2
+// DetachVolume takes no ClientToken, so AWS has no text for this (#305).
+const DetachTokenExpiredMessage = "The client token for this DetachVolume expired; retry without it."
+
+// DetachTokenExpired reports such a retry as IncorrectState. It never
+// detaches again: once the record is pruned, the same token is a new detach.
+func DetachTokenExpired(id VolumeID) *Error {
+	return Conflict(KindVolume, id.String(), DetachTokenExpiredMessage)
+}
+
 // VolumeRootDevice reports a DetachVolume for an attached boot volume.
 // EC2 answers IncorrectState with this sentence (#212).
 func VolumeRootDevice(id VolumeID) *Error {
