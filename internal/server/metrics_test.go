@@ -39,7 +39,8 @@ func TestHTTPServerMetrics(t *testing.T) {
 		w.WriteHeader(http.StatusBadRequest)
 	})
 	h := surfaceHandler(slog.New(slog.DiscardHandler), NewMetrics(), Surface{Name: "ec2", Handler: ec2})
-	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/i-0123456789abcdef0", strings.NewReader("Action=DescribeInstances&Version=2016-11-15"))
+	body := strings.NewReader("Action=DescribeInstances&Version=2016-11-15")
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/i-0123456789abcdef0", body)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	h.ServeHTTP(httptest.NewRecorder(), req)
 
@@ -65,7 +66,8 @@ func TestHTTPServerMetrics(t *testing.T) {
 	}
 	for name, found := range want {
 		if !found {
-			t.Errorf("metric %s was not recorded with route \"/\", service %q, status 4xx: %+v", name, service.Name, rm.ScopeMetrics)
+			t.Errorf("metric %s was not recorded with route \"/\", service %q, status 4xx: %+v",
+				name, service.Name, rm.ScopeMetrics)
 		}
 	}
 }

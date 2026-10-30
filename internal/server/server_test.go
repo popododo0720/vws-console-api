@@ -178,7 +178,8 @@ func TestHTTPMiddlewareStartsAServerSpan(t *testing.T) {
 	h := surfaceHandler(slog.New(slog.DiscardHandler), NewMetrics(), Surface{Name: "ec2", Handler: ec2})
 
 	const inboundTrace = "4bf92f3577b34da6a3ce929d0e0e4736"
-	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/", strings.NewReader("Action=DescribeInstances&Version=2016-11-15"))
+	body := strings.NewReader("Action=DescribeInstances&Version=2016-11-15")
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/", body)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("traceparent", "00-"+inboundTrace+"-00f067aa0ba902b7-01")
 	rec := httptest.NewRecorder()
@@ -218,13 +219,14 @@ func newTraceBackend(t *testing.T) *traceBackend {
 	t.Helper()
 	b := &traceBackend{}
 	lis := bufconn.Listen(1 << 20)
-	srv := grpc.NewServer(grpc.UnaryInterceptor(func(ctx context.Context, req any, _ *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+	record := func(ctx context.Context, req any, _ *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
 		md, _ := metadata.FromIncomingContext(ctx)
 		b.mu.Lock()
 		b.received = md.Copy()
 		b.mu.Unlock()
 		return handler(ctx, req)
-	}))
+	}
+	srv := grpc.NewServer(grpc.UnaryInterceptor(record))
 	healthpb.RegisterHealthServer(srv, health.NewServer())
 	go func() { _ = srv.Serve(lis) }()
 	t.Cleanup(srv.Stop)
