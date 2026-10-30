@@ -75,7 +75,7 @@ func (h *handler) serve(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, r, err)
 			return
 		}
-		if action != "DescribeInstances" {
+		if !describeTakesFilters(action) {
 			if err := rejectPlainFilters(r); err != nil {
 				writeErr(w, r, err)
 				return
@@ -163,6 +163,20 @@ func (h *handler) serve(w http.ResponseWriter, r *http.Request) {
 		h.describeAddresses(w, r, caller)
 	case "DescribeSnapshots":
 		h.describeSnapshots(w, r, caller)
+	case "DescribeInstanceStatus":
+		h.describeInstanceStatus(w, r, caller)
+	case "DescribeInstanceTypes":
+		h.describeInstanceTypes(w, r, caller)
+	case "DescribeTags":
+		h.describeTags(w, r, caller)
+	case "DescribeVolumesModifications":
+		h.describeVolumesModifications(w, r, caller)
+	case "DescribeAvailabilityZones":
+		h.describeAvailabilityZones(w, r, caller)
+	case "DescribeRegions":
+		h.describeRegions(w, r, caller)
+	case "DescribeRouteTables":
+		h.describeRouteTables(w, r, caller)
 	default:
 		writeErr(w, r, resource.Unimplemented(action))
 	}
@@ -663,6 +677,20 @@ func rejectUnknown(r *http.Request, action string) error {
 		allow = allowDescribeAddresses
 	case "DescribeSnapshots":
 		allow = allowDescribeSnapshots
+	case "DescribeInstanceStatus":
+		allow = allowDescribeInstanceStatus
+	case "DescribeInstanceTypes":
+		allow = allowDescribeInstanceTypes
+	case "DescribeTags":
+		allow = allowDescribeTags
+	case "DescribeVolumesModifications":
+		allow = allowDescribeVolumesModifications
+	case "DescribeAvailabilityZones":
+		allow = allowDescribeAvailabilityZones
+	case "DescribeRegions":
+		allow = allowDescribeRegions
+	case "DescribeRouteTables":
+		allow = allowDescribeRouteTables
 	default:
 		allow = allowCommon
 	}
@@ -859,6 +887,46 @@ func allowDescribeSubnets(key string) bool {
 	return allowDescribeBase(key) || indexed(key, "SubnetId", 100)
 }
 
+func allowDescribeInstanceStatus(key string) bool {
+	return allowDescribeBase(key) || indexed(key, "InstanceId", 100) ||
+		key == "IncludeAllInstances" || key == "includeAllInstances"
+}
+
+func allowDescribeInstanceTypes(key string) bool {
+	return allowDescribeBase(key) || indexed(key, "InstanceType", 100)
+}
+
+func allowDescribeTags(key string) bool {
+	return allowDescribeBase(key)
+}
+
+func allowDescribeVolumesModifications(key string) bool {
+	return allowDescribeBase(key) || indexed(key, "VolumeId", 100)
+}
+
+// allowDescribeSimple is the describe shape without pagination.
+func allowDescribeSimple(key string) bool {
+	switch key {
+	case "Action", "Version", "DryRun", "dryRun":
+		return true
+	default:
+		return filterField(key)
+	}
+}
+
+func allowDescribeAvailabilityZones(key string) bool {
+	return allowDescribeSimple(key) || indexed(key, "ZoneName", 100) || indexed(key, "ZoneId", 100) ||
+		key == "AllAvailabilityZones"
+}
+
+func allowDescribeRegions(key string) bool {
+	return allowDescribeSimple(key) || indexed(key, "RegionName", 100) || key == "AllRegions"
+}
+
+func allowDescribeRouteTables(key string) bool {
+	return allowDescribeBase(key) || indexed(key, "RouteTableId", 100)
+}
+
 func rejectDryRun(r *http.Request) error {
 	raw := r.Form.Get("DryRun")
 	if raw == "" {
@@ -871,6 +939,18 @@ func rejectDryRun(r *http.Request) error {
 		return resource.Invalid("DryRun", "unsupported")
 	default:
 		return resource.Invalid("DryRun", "malformed")
+	}
+}
+
+// describeTakesFilters reports whether the action's handler reads Filter.N.
+// Every other describe rejects a filter rather than ignoring it.
+func describeTakesFilters(action string) bool {
+	switch action {
+	case "DescribeInstances", "DescribeInstanceStatus", "DescribeInstanceTypes", "DescribeTags",
+		"DescribeVolumesModifications", "DescribeAvailabilityZones", "DescribeRegions", "DescribeRouteTables":
+		return true
+	default:
+		return false
 	}
 }
 

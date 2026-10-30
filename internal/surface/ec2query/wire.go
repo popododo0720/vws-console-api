@@ -511,6 +511,162 @@ type snapshotItem struct {
 	Description string `xml:"description,omitempty"`
 }
 
+type describeInstanceStatusXML struct {
+	XMLName          struct{}             `xml:"DescribeInstanceStatusResponse"`
+	RequestID        string               `xml:"requestId"`
+	InstanceStatuses instanceStatusSetXML `xml:"instanceStatusSet"`
+	NextToken        string               `xml:"nextToken,omitempty"`
+}
+
+type instanceStatusSetXML struct {
+	Items []instanceStatusItem `xml:"item"`
+}
+
+type instanceStatusItem struct {
+	InstanceID       string         `xml:"instanceId"`
+	AvailabilityZone string         `xml:"availabilityZone"`
+	State            stateXML       `xml:"instanceState"`
+	SystemStatus     statusCheckXML `xml:"systemStatus"`
+	InstanceStatus   statusCheckXML `xml:"instanceStatus"`
+}
+
+type statusCheckXML struct {
+	Status  string            `xml:"status"`
+	Details []statusDetailXML `xml:"details>item,omitempty"`
+}
+
+type statusDetailXML struct {
+	Name   string `xml:"name"`
+	Status string `xml:"status"`
+}
+
+type describeInstanceTypesXML struct {
+	XMLName       struct{}           `xml:"DescribeInstanceTypesResponse"`
+	RequestID     string             `xml:"requestId"`
+	InstanceTypes instanceTypeSetXML `xml:"instanceTypeSet"`
+	NextToken     string             `xml:"nextToken,omitempty"`
+}
+
+type instanceTypeSetXML struct {
+	Items []instanceTypeItem `xml:"item"`
+}
+
+type instanceTypeItem struct {
+	InstanceType                 string           `xml:"instanceType"`
+	CurrentGeneration            bool             `xml:"currentGeneration"`
+	FreeTierEligible             bool             `xml:"freeTierEligible"`
+	SupportedUsageClasses        stringSetXML     `xml:"supportedUsageClasses"`
+	SupportedRootDeviceTypes     stringSetXML     `xml:"supportedRootDeviceTypes"`
+	SupportedVirtualizationTypes stringSetXML     `xml:"supportedVirtualizationTypes"`
+	BareMetal                    bool             `xml:"bareMetal"`
+	ProcessorInfo                processorInfoXML `xml:"processorInfo"`
+	VCpuInfo                     vcpuInfoXML      `xml:"vCpuInfo"`
+	MemoryInfo                   memoryInfoXML    `xml:"memoryInfo"`
+}
+
+type processorInfoXML struct {
+	SupportedArchitectures stringSetXML `xml:"supportedArchitectures"`
+}
+
+type stringSetXML struct {
+	Items []string `xml:"item"`
+}
+
+type vcpuInfoXML struct {
+	DefaultVCpus          int `xml:"defaultVCpus"`
+	DefaultCores          int `xml:"defaultCores"`
+	DefaultThreadsPerCore int `xml:"defaultThreadsPerCore"`
+}
+
+type memoryInfoXML struct {
+	SizeInMiB int64 `xml:"sizeInMiB"`
+}
+
+type describeTagsXML struct {
+	XMLName   struct{}             `xml:"DescribeTagsResponse"`
+	RequestID string               `xml:"requestId"`
+	Tags      tagDescriptionSetXML `xml:"tagSet"`
+	NextToken string               `xml:"nextToken,omitempty"`
+}
+
+type tagDescriptionSetXML struct {
+	Items []tagDescriptionItem `xml:"item"`
+}
+
+type tagDescriptionItem struct {
+	Key          string `xml:"key"`
+	ResourceID   string `xml:"resourceId"`
+	ResourceType string `xml:"resourceType"`
+	Value        string `xml:"value"`
+}
+
+type describeVolumesModificationsXML struct {
+	XMLName              struct{}                 `xml:"DescribeVolumesModificationsResponse"`
+	RequestID            string                   `xml:"requestId"`
+	VolumesModifications volumeModificationSetXML `xml:"volumeModificationSet"`
+	NextToken            string                   `xml:"nextToken,omitempty"`
+}
+
+type volumeModificationSetXML struct {
+	Items []volumeModificationItem `xml:"item"`
+}
+
+type volumeModificationItem struct {
+	VolumeID string `xml:"volumeId"`
+}
+
+type describeAvailabilityZonesXML struct {
+	XMLName           struct{}               `xml:"DescribeAvailabilityZonesResponse"`
+	RequestID         string                 `xml:"requestId"`
+	AvailabilityZones availabilityZoneSetXML `xml:"availabilityZoneInfo"`
+}
+
+type availabilityZoneSetXML struct {
+	Items []availabilityZoneItem `xml:"item"`
+}
+
+type availabilityZoneItem struct {
+	ZoneName           string `xml:"zoneName"`
+	ZoneID             string `xml:"zoneId"`
+	State              string `xml:"zoneState"`
+	RegionName         string `xml:"regionName"`
+	OptInStatus        string `xml:"optInStatus"`
+	GroupName          string `xml:"groupName,omitempty"`
+	NetworkBorderGroup string `xml:"networkBorderGroup,omitempty"`
+	ZoneType           string `xml:"zoneType,omitempty"`
+}
+
+type describeRegionsXML struct {
+	XMLName   struct{}     `xml:"DescribeRegionsResponse"`
+	RequestID string       `xml:"requestId"`
+	Regions   regionSetXML `xml:"regionInfo"`
+}
+
+type regionSetXML struct {
+	Items []regionItem `xml:"item"`
+}
+
+type regionItem struct {
+	RegionName  string `xml:"regionName"`
+	Endpoint    string `xml:"regionEndpoint"`
+	OptInStatus string `xml:"optInStatus"`
+}
+
+type describeRouteTablesXML struct {
+	XMLName     struct{}         `xml:"DescribeRouteTablesResponse"`
+	RequestID   string           `xml:"requestId"`
+	RouteTables routeTableSetXML `xml:"routeTableSet"`
+	NextToken   string           `xml:"nextToken,omitempty"`
+}
+
+type routeTableSetXML struct {
+	Items []routeTableItem `xml:"item"`
+}
+
+// routeTableItem is unreachable while VWS has no route tables. The type keeps
+// the empty response's element name stable for EC2 clients.
+type routeTableItem struct{}
+
 type errorXML struct {
 	XMLName   struct{} `xml:"Response"`
 	Code      string   `xml:"Errors>Error>Code"`
