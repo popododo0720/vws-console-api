@@ -169,6 +169,7 @@ type loopWorld struct {
 	inst      map[string]instSnap
 	sub       map[string]subSnap
 	groups    map[string]resource.SecurityGroup
+	groupOps  map[string]resource.Operation
 	etagN     int
 	keyLine   map[string]string
 	keySHA1   map[string]string
@@ -199,6 +200,7 @@ func newLoopWorld(set backend.Set, now time.Time) *loopWorld {
 		vpcCIDR: map[string]string{}, subnetVPC: map[string]string{},
 		inst: map[string]instSnap{}, sub: map[string]subSnap{},
 		groups:   map[string]resource.SecurityGroup{},
+		groupOps: map[string]resource.Operation{},
 		keyLine:  map[string]string{},
 		keySHA1:  map[string]string{},
 		opLaunch: map[string]string{},
@@ -475,6 +477,15 @@ func (w *loopWorld) lookup(ctx context.Context, name string) (resource.Operation
 			return resource.Operation{}, err
 		}
 		op, err = w.set.Network.GetOperation(ctx, scope, id)
+		if resource.CodeOf(err) == resource.CodeNotFound {
+			w.mu.Lock()
+			op, ok := w.groupOps[id.String()]
+			w.mu.Unlock()
+			if ok {
+				w.clearSnaps(op)
+				return op, nil
+			}
+		}
 	}
 	if err != nil {
 		return resource.Operation{}, err
@@ -1442,7 +1453,8 @@ func (s *opsSrv) GetOperation(ctx context.Context, req *longrunningpb.GetOperati
 func operationVerb(action resource.Action) commonv1.OperationVerb {
 	switch action {
 	case resource.ActionStopInstances, resource.ActionStartInstances, resource.ActionAttachVolume,
-		resource.ActionAuthorizeSecurityGroupIngress, resource.ActionAssociateAddress,
+		resource.ActionAuthorizeSecurityGroupIngress, resource.ActionRevokeSecurityGroupIngress,
+		resource.ActionAssociateAddress,
 		resource.ActionDisassociateAddress, resource.ActionModifyVolume,
 		resource.ActionCreateTags, resource.ActionDetachVolume:
 		return commonv1.OperationVerb_OPERATION_VERB_UPDATE

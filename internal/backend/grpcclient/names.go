@@ -20,6 +20,7 @@ const (
 	labelFingerprint = "vws-fingerprint"
 	labelImage       = "vws-image"
 	labelAction      = "vws-action"
+	labelRequest     = "vws-request"
 	labelReservation = "vws-reservation"
 	labelLaunch      = "vws-launch"
 	// labelKeySHA1 holds EC2's fingerprint of a created RSA key: the hex

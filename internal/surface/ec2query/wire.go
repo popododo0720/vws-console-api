@@ -312,6 +312,12 @@ type authorizeXML struct {
 	Return    bool     `xml:"return"`
 }
 
+type revokeXML struct {
+	XMLName   struct{} `xml:"RevokeSecurityGroupIngressResponse"`
+	RequestID string   `xml:"requestId"`
+	Return    bool     `xml:"return"`
+}
+
 type instancesChangedXML struct {
 	XMLName   xml.Name
 	RequestID string `xml:"requestId"`

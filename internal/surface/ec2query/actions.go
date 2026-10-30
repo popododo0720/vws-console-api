@@ -354,6 +354,31 @@ func (h *handler) authorizeIngress(w http.ResponseWriter, r *http.Request, c res
 	writeXML(w, authorizeXML{RequestID: requestID(r), Return: true})
 }
 
+func (h *handler) revokeIngress(w http.ResponseWriter, r *http.Request, c resource.Caller) {
+	token, err := optionalClientToken(r)
+	if err != nil {
+		writeErr(w, r, err)
+		return
+	}
+	id, err := resource.Parse[resource.SecurityGroupID](r.Form.Get("GroupId"))
+	if err != nil {
+		writeErr(w, r, err)
+		return
+	}
+	rule, err := ingressRule(r)
+	if err != nil {
+		writeErr(w, r, err)
+		return
+	}
+	if _, err := h.svc.RevokeSecurityGroupIngress(r.Context(), c, token, resource.RevokeSecurityGroupIngressRequest{
+		ID: id, Rule: rule,
+	}); err != nil {
+		writeErr(w, r, err)
+		return
+	}
+	writeXML(w, revokeXML{RequestID: requestID(r), Return: true})
+}
+
 func (h *handler) startInstances(w http.ResponseWriter, r *http.Request, c resource.Caller) {
 	h.changeInstances(w, r, "StartInstancesResponse", func(ctx context.Context, token resource.ClientToken, ids []resource.InstanceID) (resource.Accepted[resource.InstanceStateChange], error) {
 		return h.svc.StartInstances(ctx, c, token, resource.StartInstancesRequest{IDs: ids})
