@@ -3,6 +3,7 @@ package iam
 import (
 	"context"
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -846,6 +847,51 @@ func TestListPolicyVersions(t *testing.T) {
 	}
 	if _, err := f.ListPolicyVersions(ctx, a, "not-an-arn", "", 0); resource.CodeOf(err) != resource.CodeNotFound {
 		t.Errorf("unknown policy ARN: %v", err)
+	}
+}
+
+func TestListPolicyVersionsPagesPastV9(t *testing.T) {
+	ctx := t.Context()
+	a := account(t)
+	f := NewFake()
+	p, err := f.CreatePolicy(ctx, a, "ten-versions", "/", describeOnly, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The fake holds five versions at once, so once the window is full the
+	// oldest non-default version goes before the next create.
+	for next := 2; next <= 10; next++ {
+		if next > maxPolicyVersions {
+			must(t, f.DeletePolicyVersion(ctx, a, p.ARN, "v"+strconv.Itoa(next-maxPolicyVersions+1)))
+		}
+		v, err := f.CreatePolicyVersion(ctx, a, p.ARN, describeOnly, false)
+		if err != nil || v.ID != "v"+strconv.Itoa(next) {
+			t.Fatalf("created %+v, want v%d: %v", v, next, err)
+		}
+	}
+	page, err := f.ListPolicyVersions(ctx, a, p.ARN, "", 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := make([]string, len(page.Versions))
+	for i, v := range page.Versions {
+		ids[i] = v.ID
+	}
+	if got := strings.Join(ids, ","); got != "v1,v7,v8,v9" || !page.IsTruncated || page.Marker != "v9" {
+		t.Fatalf("first page %q truncated=%v marker=%q, want v1,v7,v8,v9 and v9",
+			got, page.IsTruncated, page.Marker)
+	}
+	page, err = f.ListPolicyVersions(ctx, a, p.ARN, page.Marker, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids = make([]string, len(page.Versions))
+	for i, v := range page.Versions {
+		ids[i] = v.ID
+	}
+	if got := strings.Join(ids, ","); got != "v10" || page.IsTruncated || page.Marker != "" {
+		t.Fatalf("second page %q truncated=%v marker=%q, want v10 on the last page",
+			got, page.IsTruncated, page.Marker)
 	}
 }
 
