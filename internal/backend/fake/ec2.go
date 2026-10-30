@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"slices"
 	"time"
 
 	"github.com/popododo0720/vws-console-api/internal/sshkey"
@@ -284,21 +285,23 @@ func (c compute) DetachVolume(
 		return zero, err
 	}
 	prevVol := *vol
-	prevBlocks := inst.BlockDevices
+	prevBlocks, prevDetaching := inst.BlockDevices, inst.DetachingDevices
 	inst.BlockDevices = next.BlockDevices
+	// The volume stays in-use and detaching until the operation settles,
+	// which stands in for the node unplugging the disk, as on EC2.
 	attachedAt := vol.AttachTime
-	vol.State = resource.VolumeAvailable
-	vol.InstanceID = resource.InstanceID{}
-	vol.Device = ""
-	vol.AttachTime = time.Time{}
-	vol.AttachState = ""
+	vol.AttachState = resource.AttachmentDetaching
+	inst.DetachingDevices = append(append([]resource.BlockDevice(nil), prevDetaching...), resource.BlockDevice{
+		Device: bind.Device, VolumeID: vol.ID, Status: resource.AttachmentDetaching,
+	})
+	instID, volID := inst.ID, vol.ID
 	op, err := c.w.newOp(
 		m.Account, resource.ServiceCompute, resource.ActionDetachVolume,
-		[]resource.Ref{inst.ID.Ref()}, func(time.Time) {},
+		[]resource.Ref{inst.ID.Ref()}, func(time.Time) { c.w.finishDetach(instID, volID, attachedAt) },
 	)
 	if err != nil {
 		*vol = prevVol
-		inst.BlockDevices = prevBlocks
+		inst.BlockDevices, inst.DetachingDevices = prevBlocks, prevDetaching
 		return zero, err
 	}
 	item := resource.VolumeAttachment{
@@ -826,13 +829,34 @@ func (w *World) settleBlock(instID resource.InstanceID, volID resource.VolumeID)
 
 func (w *World) volumeOnInstance(id resource.VolumeID) bool {
 	for _, inst := range w.inst {
-		for _, block := range inst.BlockDevices {
+		for _, block := range slices.Concat(inst.BlockDevices, inst.DetachingDevices) {
 			if block.VolumeID == id {
 				return true
 			}
 		}
 	}
 	return false
+}
+
+// finishDetach completes a detach once its operation settles: the instance
+// lets the volume go, and the volume is available unless a later attach or
+// detach already replaced this attachment.
+func (w *World) finishDetach(instID resource.InstanceID, volID resource.VolumeID, attachedAt time.Time) {
+	if inst := w.inst[instID]; inst != nil {
+		inst.DetachingDevices = slices.DeleteFunc(slices.Clone(inst.DetachingDevices), func(b resource.BlockDevice) bool {
+			return b.VolumeID == volID
+		})
+	}
+	vol := w.vol[volID]
+	if vol == nil || vol.InstanceID != instID || !vol.AttachTime.Equal(attachedAt) ||
+		vol.AttachState != resource.AttachmentDetaching {
+		return
+	}
+	vol.State = resource.VolumeAvailable
+	vol.InstanceID = resource.InstanceID{}
+	vol.Device = ""
+	vol.AttachTime = time.Time{}
+	vol.AttachState = ""
 }
 
 // dropRootVolumes deletes the volumes that go with a terminated instance.

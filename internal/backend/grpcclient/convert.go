@@ -555,6 +555,19 @@ func instanceModel(in *computev1.Instance) (resource.Instance, error) {
 		blocks = append(blocks, resource.BlockDevice{
 			Device: device, VolumeID: volID, DeleteOnTermination: v.GetBoot(), Status: state,
 		})
+		delete(attach, volID)
+	}
+	// A compute entry for a volume the spec no longer names is a detach the
+	// node has not finished; EC2 lists it as detaching (instance.proto).
+	var detaching []resource.BlockDevice
+	for _, o := range in.GetStatus().GetVolumes() {
+		volID, err := resource.Parse[resource.VolumeID](lastSegment(o.GetVolume()))
+		if err != nil || attach[volID] != o || state == resource.InstanceTerminated {
+			continue
+		}
+		detaching = append(detaching, resource.BlockDevice{
+			Device: o.GetDeviceName(), VolumeID: volID, Status: resource.AttachmentDetaching,
+		})
 	}
 	private := ""
 	if nics := in.GetStatus().GetNetworkInterfaces(); len(nics) > 0 {
@@ -565,7 +578,7 @@ func instanceModel(in *computev1.Instance) (resource.Instance, error) {
 		InstanceType: in.GetSpec().GetMachineType(), SubnetID: sub, VpcID: vpcID, Zone: parts[3],
 		LaunchTime: launchTime(in), PrivateIP: private, Tags: userTags(in.GetLabels()),
 		KeyPairID: keyPairID, UserData: in.GetSpec().GetUserData(),
-		RootDeviceName: rootDevice, BlockDevices: blocks,
+		RootDeviceName: rootDevice, BlockDevices: blocks, DetachingDevices: detaching,
 	}, nil
 }
 

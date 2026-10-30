@@ -935,6 +935,7 @@ func (s *instanceSrv) GetInstance(ctx context.Context, req *computev1.GetInstanc
 		if rowErr == nil && len(page.Items) == 1 {
 			// The launch snapshot is taken before a later attach.
 			inst.BlockDevices = page.Items[0].BlockDevices
+			inst.DetachingDevices = page.Items[0].DetachingDevices
 			inst.RootDeviceName = page.Items[0].RootDeviceName
 		}
 		msg := s.observeVolumes(ctx, account, instanceProto(inst, projectID, snap.vpc), inst)
@@ -960,7 +961,8 @@ func (s *instanceSrv) GetInstance(ctx context.Context, req *computev1.GetInstanc
 
 // observeVolumes writes InstanceStatus.volumes as the vws-compute node agent
 // does (vws-compute#141): a data volume is ATTACHED once the fake settles its
-// attach, standing in for hot-plug Ready, and ATTACHING until then. A boot
+// attach, standing in for hot-plug Ready, and ATTACHING until then. A
+// detached volume is DETACHING until the fake settles the detach. A boot
 // volume is attached once the instance converges; the loopback's own boot
 // volumes are not in the fake, so they read as attached.
 func (s *instanceSrv) observeVolumes(
@@ -977,6 +979,13 @@ func (s *instanceSrv) observeVolumes(
 		}
 		msg.Status.Volumes = append(msg.Status.Volumes, &computev1.ObservedVolumeAttachment{
 			Volume: volumeName(projectID, block.VolumeID.String()), DeviceName: block.Device, State: state,
+		})
+	}
+	// The node keeps a detaching entry until the fake settles the detach.
+	for _, block := range inst.DetachingDevices {
+		msg.Status.Volumes = append(msg.Status.Volumes, &computev1.ObservedVolumeAttachment{
+			Volume: volumeName(projectID, block.VolumeID.String()), DeviceName: block.Device,
+			State: computev1.VolumeAttachState_VOLUME_ATTACH_STATE_DETACHING,
 		})
 	}
 	return msg

@@ -139,6 +139,11 @@ type Instance struct {
 	// RootDeviceName is RootDeviceName when the instance boots from a volume.
 	RootDeviceName string        `json:"rootDeviceName,omitempty"`
 	BlockDevices   []BlockDevice `json:"blockDeviceMappings,omitempty"`
+	// DetachingDevices are volumes the spec no longer names that the node is
+	// still letting go. EC2 lists them in blockDeviceMapping as detaching
+	// until the detach completes. They hold no bind: nothing can detach,
+	// rebind or boot from them.
+	DetachingDevices []BlockDevice `json:"-"`
 }
 
 // RootDeviceName is the device EC2 reports for an instance's boot volume.
