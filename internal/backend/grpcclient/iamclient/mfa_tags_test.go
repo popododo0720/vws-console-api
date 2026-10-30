@@ -1,6 +1,7 @@
 package iamclient
 
 import (
+	"strings"
 	"testing"
 
 	longrunningpb "cloud.google.com/go/longrunning/autogen/longrunningpb"
@@ -81,6 +82,54 @@ func TestMFADeviceTagErrorsOverGRPC(t *testing.T) {
 	err := admin.TagMFADevice(t.Context(), accountID(t), mfaSerial, tags)
 	if resource.CodeOf(err) != resource.CodeNotFound {
 		t.Fatalf("NoSuchEntity mapped to %v", err)
+	}
+}
+
+// An invalid Tags or TagKeys request is a ValidationError before vws-iam is
+// called, as the fake answers it on a direct Admin call.
+func TestMFADeviceTagValidationOverGRPC(t *testing.T) {
+	c, s := harness(t)
+	admin := STSAdmin{Client: c}
+	for _, tc := range []struct {
+		name  string
+		tags  []iam.Tag
+		field string
+	}{
+		{"bad key character", []iam.Tag{{Key: "bad#key", Value: "v"}}, "tags.member.key"},
+		{"key too long", []iam.Tag{{Key: strings.Repeat("k", iam.MaxTagKeyLen+1), Value: "v"}}, "tags.member.key"},
+		{"bad value character", []iam.Tag{{Key: "k", Value: "bad#value"}}, "tags.member.value"},
+		{"value too long", []iam.Tag{{Key: "k", Value: strings.Repeat("v", iam.MaxTagValueLen+1)}}, "tags.member.value"},
+		{"empty list", nil, "tags"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := admin.TagMFADevice(t.Context(), accountID(t), mfaSerial, tc.tags)
+			if re := resource.AsError(err); re == nil || re.Code != resource.CodeInvalidArgument || re.Field != tc.field {
+				t.Fatalf("TagMFADevice error %v, want InvalidArgument at %s", err, tc.field)
+			}
+		})
+	}
+	if len(s.tagMfa) != 0 {
+		t.Fatalf("an invalid tag reached vws-iam: %v", s.tagMfa)
+	}
+	for _, tc := range []struct {
+		name  string
+		keys  []string
+		field string
+	}{
+		{"bad key character", []string{"bad#key"}, "tagKeys.member"},
+		{"key too long", []string{strings.Repeat("k", iam.MaxTagKeyLen+1)}, "tagKeys.member"},
+		{"empty key", []string{""}, "tagKeys.member"},
+		{"empty list", nil, "tagKeys"},
+	} {
+		t.Run("untag "+tc.name, func(t *testing.T) {
+			err := admin.UntagMFADevice(t.Context(), accountID(t), mfaSerial, tc.keys)
+			if re := resource.AsError(err); re == nil || re.Code != resource.CodeInvalidArgument || re.Field != tc.field {
+				t.Fatalf("UntagMFADevice error %v, want InvalidArgument at %s", err, tc.field)
+			}
+		})
+	}
+	if len(s.untagMfa) != 0 {
+		t.Fatalf("an invalid tag key reached vws-iam: %v", s.untagMfa)
 	}
 }
 

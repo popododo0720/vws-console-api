@@ -619,8 +619,13 @@ func operationResult(op *longrunningpb.Operation) error {
 	return nil
 }
 
-// TagPolicy implements iam.Admin over PolicyService.TagPolicy.
+// TagPolicy implements iam.Admin over PolicyService.TagPolicy. The request
+// is validated before the lookup, as the fake does, so both backends answer
+// a bad tag as AWS ValidationError.
 func (a STSAdmin) TagPolicy(ctx context.Context, account resource.AccountID, arn string, tags []iam.Tag) error {
+	if err := iam.ValidateTagList(tags); err != nil {
+		return err
+	}
 	name, err := a.policyFor(ctx, account, arn)
 	if err != nil {
 		return err
@@ -638,6 +643,9 @@ func (a STSAdmin) TagPolicy(ctx context.Context, account resource.AccountID, arn
 
 // UntagPolicy implements iam.Admin over PolicyService.UntagPolicy.
 func (a STSAdmin) UntagPolicy(ctx context.Context, account resource.AccountID, arn string, keys []string) error {
+	if err := iam.ValidateTagKeyList(keys); err != nil {
+		return err
+	}
 	name, err := a.policyFor(ctx, account, arn)
 	if err != nil {
 		return err
@@ -853,8 +861,12 @@ func (a STSAdmin) virtualMFADevice(
 	return out, nil
 }
 
-// TagMFADevice implements iam.Admin over MfaDeviceService.TagMFADevice.
+// TagMFADevice implements iam.Admin over MfaDeviceService.TagMFADevice. The
+// request is validated before the lookup, as the fake does.
 func (a STSAdmin) TagMFADevice(ctx context.Context, account resource.AccountID, serial string, tags []iam.Tag) error {
+	if err := iam.ValidateTagList(tags); err != nil {
+		return err
+	}
 	name, err := a.mfaDeviceFor(ctx, account, serial)
 	if err != nil {
 		return err
@@ -872,6 +884,9 @@ func (a STSAdmin) TagMFADevice(ctx context.Context, account resource.AccountID, 
 
 // UntagMFADevice implements iam.Admin over MfaDeviceService.UntagMFADevice.
 func (a STSAdmin) UntagMFADevice(ctx context.Context, account resource.AccountID, serial string, keys []string) error {
+	if err := iam.ValidateTagKeyList(keys); err != nil {
+		return err
+	}
 	name, err := a.mfaDeviceFor(ctx, account, serial)
 	if err != nil {
 		return err
