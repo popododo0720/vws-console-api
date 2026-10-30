@@ -206,15 +206,17 @@ type deleteVpcXML struct {
 }
 
 type createVolumeXML struct {
-	XMLName   struct{} `xml:"CreateVolumeResponse"`
-	RequestID string   `xml:"requestId"`
-	VolumeID  string   `xml:"volumeId"`
-	Size      int64    `xml:"size"`
-	Zone      string   `xml:"availabilityZone"`
-	Status    string   `xml:"status"`
-	Type      string   `xml:"volumeType"`
-	Snapshot  string   `xml:"snapshotId,omitempty"`
-	Created   string   `xml:"createTime,omitempty"`
+	XMLName    struct{} `xml:"CreateVolumeResponse"`
+	RequestID  string   `xml:"requestId"`
+	VolumeID   string   `xml:"volumeId"`
+	Size       int64    `xml:"size"`
+	Zone       string   `xml:"availabilityZone"`
+	Status     string   `xml:"status"`
+	Type       string   `xml:"volumeType"`
+	Snapshot   string   `xml:"snapshotId,omitempty"`
+	Created    string   `xml:"createTime,omitempty"`
+	Iops       int64    `xml:"iops,omitempty"`
+	Throughput int64    `xml:"throughput,omitempty"`
 }
 
 type describeVolumesXML struct {
@@ -234,6 +236,8 @@ type volumeItem struct {
 	Type        string `xml:"volumeType"`
 	Snapshot    string `xml:"snapshotId,omitempty"`
 	Created     string `xml:"createTime,omitempty"`
+	Iops        int64  `xml:"iops,omitempty"`
+	Throughput  int64  `xml:"throughput,omitempty"`
 	Attachments struct {
 		Items []attachmentItem `xml:"item"`
 	} `xml:"attachmentSet,omitempty"`
@@ -557,7 +561,7 @@ func volumeCreatedXML(requestID string, v resource.Volume) createVolumeXML {
 	return createVolumeXML{
 		RequestID: requestID, VolumeID: v.ID.String(), Size: v.SizeGiB,
 		Zone: v.Zone, Status: string(v.State), Type: string(v.Type), Created: awsTime(v.CreateTime),
-		Snapshot: snapshotOf(v),
+		Snapshot: snapshotOf(v), Iops: v.ReportedIops(), Throughput: v.Throughput,
 	}
 }
 
@@ -572,6 +576,7 @@ func volumeXML(v resource.Volume) volumeItem {
 	item := volumeItem{
 		VolumeID: v.ID.String(), Size: v.SizeGiB, Zone: v.Zone, Status: string(v.State), Type: string(v.Type),
 		Snapshot: snapshotOf(v), Created: awsTime(v.CreateTime),
+		Iops: v.ReportedIops(), Throughput: v.Throughput,
 	}
 	if !v.InstanceID.IsZero() {
 		status := v.AttachState

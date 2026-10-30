@@ -629,7 +629,7 @@ func allowDeleteVpc(key string) bool {
 }
 
 func allowCreateVolume(key string) bool {
-	return key == "Action" || key == "Version" || key == "ClientToken" || key == "Size" || key == "AvailabilityZone" || key == "VolumeType" || key == "SnapshotId"
+	return key == "Action" || key == "Version" || key == "ClientToken" || key == "Size" || key == "AvailabilityZone" || key == "VolumeType" || key == "SnapshotId" || key == "Iops" || key == "Throughput"
 }
 
 func allowAttachVolume(key string) bool {
@@ -989,6 +989,12 @@ func ec2Code(e *resource.Error) string {
 				return "MissingParameter"
 			}
 			return "InvalidKey.Format"
+		}
+		if resource.IsMissingParameter(e) {
+			return "MissingParameter"
+		}
+		if resource.IsInvalidCombination(e) {
+			return "InvalidParameterCombination"
 		}
 		// EC2 reports a volume type it does not support as UnknownVolumeType.
 		if strings.EqualFold(e.Field, "volumeType") {
