@@ -140,6 +140,23 @@ def network():
         all(s.get("AvailabilityZone") == "vws-1a" and s.get("MapPublicIpOnLaunch") is False
             for s in ec2.describe_subnets(SubnetIds=[S["subnet"]])["Subnets"]), "subnet fields missing"))
     S["sg"] = step("CreateSecurityGroup", lambda: ec2.create_security_group(GroupName="web", Description="d", VpcId=S["vpc"])["GroupId"])
+
+    def revoke_ingress():
+        """#202: boto3 authorizes a rule, revokes it, and a second revoke is
+        InvalidPermission.NotFound. The rule is gone from DescribeSecurityGroups."""
+        rule = {"IpProtocol": "tcp", "FromPort": 22, "ToPort": 22,
+                "IpRanges": [{"CidrIp": "10.0.0.0/16"}]}
+        ec2.authorize_security_group_ingress(GroupId=S["sg"], IpPermissions=[rule])
+        opened = ec2.describe_security_groups(GroupIds=[S["sg"]])["SecurityGroups"][0]["IpPermissions"]
+        check(any(p.get("FromPort") == 22 for p in opened), f"rule not authorized {opened}")
+        revoked = ec2.revoke_security_group_ingress(GroupId=S["sg"], IpPermissions=[rule])
+        check(revoked["Return"] is True, f"return {revoked.get('Return')}")
+        left = ec2.describe_security_groups(GroupIds=[S["sg"]])["SecurityGroups"][0]["IpPermissions"]
+        check(not any(p.get("FromPort") == 22 for p in left), f"rule survived {left}")
+        ec2_error("InvalidPermission.NotFound", lambda: ec2.revoke_security_group_ingress(
+            GroupId=S["sg"], IpPermissions=[rule]))
+    step("RevokeSecurityGroupIngress removes the rule", revoke_ingress)
+
     step("CreateKeyPair", lambda: ec2.create_key_pair(KeyName="k1"))
     S["vol"] = step("CreateVolume", lambda: ec2.create_volume(AvailabilityZone="vws-1a", Size=10, ClientToken="v0")["VolumeId"])
 
