@@ -305,6 +305,9 @@ func authError(err error) error {
 		switch aws {
 		case "InvalidClientTokenId":
 			return sigv4.ErrUnknownKey
+		case "InvalidToken":
+			return sigv4.Reject(sigv4.FailureInvalidToken,
+				resource.Unauthenticated("the security token included in the request is invalid"))
 		case "ExpiredToken":
 			return sigv4.Reject(sigv4.FailureExpiredToken,
 				resource.Unauthenticated("the security token included in the request is expired"))
