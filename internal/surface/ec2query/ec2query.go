@@ -196,9 +196,14 @@ func (h *handler) runInstances(w http.ResponseWriter, r *http.Request, c resourc
 		writeErr(w, r, err)
 		return
 	}
+	rootType, err := rootVolumeType(r)
+	if err != nil {
+		writeErr(w, r, err)
+		return
+	}
 	acc, err := h.svc.RunInstances(r.Context(), c, token, resource.RunInstancesRequest{
 		ImageID: img, InstanceType: r.Form.Get("InstanceType"), SubnetID: sub, Count: count, Tags: tags,
-		KeyName: r.Form.Get("KeyName"), UserData: userData,
+		KeyName: r.Form.Get("KeyName"), UserData: userData, RootVolumeType: rootType,
 	})
 	if err != nil {
 		writeErr(w, r, err)
@@ -425,6 +430,39 @@ func tagSpecificationsFor(r *http.Request, kind string) (map[string]string, erro
 	return tagSpecifications(r)
 }
 
+// maxBlockDeviceMappings caps the BlockDeviceMapping.N index this surface reads.
+const maxBlockDeviceMappings = 100
+
+// rootVolumeType reads the RunInstances block device mapping. VWS creates
+// only the root volume, so the one mapping it takes names the root device
+// and may set Ebs.VolumeType; Normalize checks the type. A mapping for any
+// other device would add a volume, which VWS does not support yet (#323
+// follow-up), so it is refused rather than ignored. The other mapping fields
+// are refused by allowRun.
+func rootVolumeType(r *http.Request) (resource.VolumeType, error) {
+	var typ resource.VolumeType
+	mapped := false
+	for i := 1; i <= maxBlockDeviceMappings; i++ {
+		prefix := "BlockDeviceMapping." + strconv.Itoa(i) + "."
+		if !r.Form.Has(prefix+"DeviceName") && !r.Form.Has(prefix+"Ebs.VolumeType") {
+			continue
+		}
+		device := r.Form.Get(prefix + "DeviceName")
+		switch {
+		case device == "":
+			return "", resource.Invalid("blockDeviceMapping", prefix+"DeviceName is required")
+		case device != resource.RootDeviceName:
+			return "", resource.Invalid(prefix+"DeviceName",
+				"unsupported: only the root device "+resource.RootDeviceName+" can be mapped")
+		case mapped:
+			return "", resource.Invalid("blockDeviceMapping", "the root device is mapped more than once")
+		}
+		mapped = true
+		typ = resource.VolumeType(r.Form.Get(prefix + "Ebs.VolumeType"))
+	}
+	return typ, nil
+}
+
 func instanceQuery(r *http.Request) (resource.InstanceQuery, error) {
 	ids, err := indexedIDs[resource.InstanceID](r, "InstanceId")
 	if err != nil {
@@ -608,8 +646,18 @@ func allowRun(key string) bool {
 	case "Action", "Version", "ImageId", "InstanceType", "SubnetId", "MinCount", "MaxCount", "ClientToken", "KeyName", "UserData":
 		return true
 	default:
-		return tagField(key) || tagSpecField(key)
+		return tagField(key) || tagSpecField(key) || blockDeviceField(key)
 	}
+}
+
+// blockDeviceField is a BlockDeviceMapping.N field rootVolumeType reads.
+func blockDeviceField(key string) bool {
+	rest, ok := strings.CutPrefix(key, "BlockDeviceMapping.")
+	if !ok {
+		return false
+	}
+	n, field, ok := strings.Cut(rest, ".")
+	return ok && inRange(n, maxBlockDeviceMappings) && (field == "DeviceName" || field == "Ebs.VolumeType")
 }
 
 func allowStop(key string) bool {
@@ -989,6 +1037,11 @@ func ec2Code(e *resource.Error) string {
 				return "MissingParameter"
 			}
 			return "InvalidKey.Format"
+		}
+		// EC2 reports a block device mapping it cannot read as
+		// InvalidBlockDeviceMapping.
+		if e.Field == "blockDeviceMapping" {
+			return "InvalidBlockDeviceMapping"
 		}
 		// EC2 reports a volume type it does not support as UnknownVolumeType.
 		if strings.EqualFold(e.Field, "volumeType") {
