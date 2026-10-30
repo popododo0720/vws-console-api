@@ -90,6 +90,9 @@ type Error struct {
 	// permissionMissing marks a security group rule that is not there, which
 	// EC2 answers as InvalidPermission.NotFound (#272).
 	permissionMissing bool
+	// deleting marks a bucket create refused because the caller's own bucket
+	// of that name is still being deleted (#321).
+	deleting bool
 }
 
 type invalidReason uint8
@@ -264,6 +267,26 @@ func BucketAlreadyOwned(name string) *Error {
 func OwnedByCaller(err error) bool {
 	var e *Error
 	return errors.As(err, &e) && e.owned
+}
+
+// BucketDeletingMessage is the text S3 sends with OperationAborted, from the
+// List of Error Codes in the S3 API Reference PDF (API Version 2006-03-01).
+const BucketDeletingMessage = "A conflicting conditional action is currently in progress " +
+	"against this resource. Try again."
+
+// BucketDeleting reports a bucket create for a name the caller's own bucket
+// still holds while vws-storage deletes it. S3 answers 409 OperationAborted:
+// the name is neither another account's (BucketAlreadyExists) nor a bucket
+// the caller can use (BucketAlreadyOwnedByYou), and a retry after the delete
+// finishes can succeed (#321).
+func BucketDeleting(name string) *Error {
+	return &Error{Code: CodeConflict, Kind: KindBucket, ID: name, Message: BucketDeletingMessage, deleting: true}
+}
+
+// IsBucketDeleting reports whether err is a BucketDeleting error.
+func IsBucketDeleting(err error) bool {
+	var e *Error
+	return errors.As(err, &e) && e.deleting
 }
 
 // Conflict reports a lifecycle or occupancy conflict.

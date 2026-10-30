@@ -730,6 +730,9 @@ func s3Code(e *resource.Error) string {
 		}
 		return "BucketAlreadyExists"
 	case resource.CodeConflict:
+		if resource.IsBucketDeleting(e) {
+			return "OperationAborted"
+		}
 		return "BucketNotEmpty"
 	case resource.CodeInvalidArgument:
 		return "InvalidArgument"

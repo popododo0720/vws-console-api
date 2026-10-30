@@ -13,6 +13,7 @@ import (
 	"time"
 
 	longrunningpb "cloud.google.com/go/longrunning/autogen/longrunningpb"
+	commonv1 "github.com/popododo0720/vws-proto/gen/go/vws/common/v1"
 	computev1 "github.com/popododo0720/vws-proto/gen/go/vws/compute/v1"
 	networkv1 "github.com/popododo0720/vws-proto/gen/go/vws/network/v1"
 	storagev1 "github.com/popododo0720/vws-proto/gen/go/vws/storage/v1"
@@ -460,14 +461,20 @@ type storageClient struct{ *api }
 // answer a create after DeleteBucket with the first create's operation, and
 // no bucket. An operation that names another request id is a create
 // already in flight for this project, so the caller owns the name.
+//
+// vws-storage also answers ALREADY_EXISTS for the project's own bucket while
+// it is Deleting, the same code as for a name another project holds. The
+// client tells them apart by reading the project's own bucket: a Deleting
+// one is BucketDeleting (S3 OperationAborted), and only a name the project
+// does not hold stays ALREADY_EXISTS (S3 BucketAlreadyExists) (#321).
 func (c storageClient) CreateBucket(ctx context.Context, s backend.Scope, name resource.BucketName) (resource.Bucket, error) {
-	switch _, err := c.GetBucket(ctx, s, name); {
+	projectID := project(s.Account)
+	switch held, err := c.ownBucket(ctx, projectID, name); {
 	case err == nil:
-		return resource.Bucket{}, resource.BucketAlreadyOwned(name.String())
+		return resource.Bucket{}, held
 	case resource.CodeOf(err) != resource.CodeNotFound:
 		return resource.Bucket{}, err
 	}
-	projectID := project(s.Account)
 	nonce, err := newNonce()
 	if err != nil {
 		return resource.Bucket{}, err
@@ -482,6 +489,18 @@ func (c storageClient) CreateBucket(ctx context.Context, s backend.Scope, name r
 		},
 	})
 	if err := rpcErr(op, err); err != nil {
+		if resource.CodeOf(err) != resource.CodeAlreadyExists {
+			return resource.Bucket{}, err
+		}
+		// The first read missed a bucket the project holds, or the name is
+		// another project's. Read again to tell them apart.
+		held, readErr := c.ownBucket(ctx, projectID, name)
+		if readErr == nil {
+			return resource.Bucket{}, held
+		}
+		if resource.CodeOf(readErr) != resource.CodeNotFound {
+			return resource.Bucket{}, readErr
+		}
 		return resource.Bucket{}, err
 	}
 	other, err := operationRequestID(op)
@@ -498,6 +517,22 @@ func (c storageClient) CreateBucket(ctx context.Context, s backend.Scope, name r
 		return bucket, nil
 	}
 	return c.GetBucket(ctx, s, name)
+}
+
+// ownBucket reads the project's own bucket of that name and returns the
+// refusal a create for it gets: BucketDeleting while vws-storage deletes it,
+// BucketAlreadyOwned otherwise. A read error comes back as the second value.
+func (c storageClient) ownBucket(
+	ctx context.Context, projectID string, name resource.BucketName,
+) (*resource.Error, error) {
+	out, err := c.buckets.GetBucket(ctx, &storagev1.GetBucketRequest{Name: bucketName(projectID, name.String())})
+	if err != nil {
+		return nil, fromRPC(err)
+	}
+	if out.GetStatus().GetObserved().GetState() == commonv1.ReconciliationState_RECONCILIATION_STATE_DELETING {
+		return resource.BucketDeleting(name.String()), nil
+	}
+	return resource.BucketAlreadyOwned(name.String()), nil
 }
 
 func (c storageClient) GetBucket(ctx context.Context, s backend.Scope, name resource.BucketName) (resource.Bucket, error) {

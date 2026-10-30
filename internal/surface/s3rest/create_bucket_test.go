@@ -83,3 +83,22 @@ func TestOwnedCreateRegionRule(t *testing.T) {
 		t.Errorf("owned code %s", got)
 	}
 }
+
+// TestBucketDeletingIsOperationAborted pins #321: a create while the caller's
+// own bucket is still being deleted is 409 OperationAborted with S3's text,
+// not BucketAlreadyExists (another account) or BucketAlreadyOwnedByYou.
+func TestBucketDeletingIsOperationAborted(t *testing.T) {
+	e := resource.AsError(resource.BucketDeleting("b"))
+	if got := s3Code(e); got != "OperationAborted" {
+		t.Errorf("code %s, want OperationAborted", got)
+	}
+	if got := statusOf(e); got != 409 {
+		t.Errorf("status %d, want 409", got)
+	}
+	if e.Message != resource.BucketDeletingMessage {
+		t.Errorf("message %q", e.Message)
+	}
+	if got := s3Code(resource.AsError(resource.Conflict(resource.KindBucket, "b", "not empty"))); got != "BucketNotEmpty" {
+		t.Errorf("plain conflict code %s, want BucketNotEmpty", got)
+	}
+}
