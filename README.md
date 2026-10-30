@@ -253,7 +253,7 @@ response, and this listener answers `RequestLimitExceeded` as 503. S3
 ## Resource API module
 
 The gRPC client imports `github.com/popododo0720/vws-proto` at a release tag
-(`go.mod` pins it; today `v0.7.0`). The repo is public, so `go mod download`
+(`go.mod` pins it; today `v0.8.0`). The repo is public, so `go mod download`
 fetches it through the default module proxy with no token or `GOPRIVATE`. To
 take a new proto release, run `go get github.com/popododo0720/vws-proto@vX.Y.Z`
 and `go mod tidy`. Never copy or `replace` the module.
