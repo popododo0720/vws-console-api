@@ -73,7 +73,6 @@ func mutate[R resource.Request[R], T resource.Owned](
 	}
 	s.audit.LogAttrs(ctx, slog.LevelInfo, "mutation accepted",
 		slog.String("action", req.Action().String()),
-		slog.String("account", c.Account.String()),
 		slog.String("subject", c.Subject),
 		slog.String("operation", acc.Operation.ID.String()))
 	return acc, nil

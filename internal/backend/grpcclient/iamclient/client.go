@@ -20,10 +20,13 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/popododo0720/vws-lib/obs/grpcobs"
+
 	iamv1 "github.com/popododo0720/vws-proto/gen/go/vws/iam/v1"
 
 	"github.com/popododo0720/vws-console-api/internal/iam"
 	"github.com/popododo0720/vws-console-api/internal/resource"
+	"github.com/popododo0720/vws-console-api/internal/service"
 	"github.com/popododo0720/vws-console-api/internal/sigv4"
 )
 
@@ -78,7 +81,9 @@ func (c *Client) logger() *slog.Logger {
 // dials. Transport security is the cluster network's, as for the other
 // backends.
 func Dial(target string) (*Client, error) {
-	conn, err := grpc.NewClient(target, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	opts := append([]grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
+		grpcobs.ClientOptions(service.Name, "iam")...)
+	conn, err := grpc.NewClient(target, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("dial vws-iam %s: %w", target, err)
 	}

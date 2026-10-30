@@ -4,8 +4,6 @@ package server
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -14,6 +12,12 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/popododo0720/vws-lib/obs"
+	"github.com/popododo0720/vws-lib/obs/httpobs"
+	"github.com/popododo0720/vws-lib/obs/report"
+
+	"github.com/popododo0720/vws-console-api/internal/service"
 )
 
 // Surface is one protocol on its own address.
@@ -50,7 +54,8 @@ func Serve(ctx context.Context, opts Options) error {
 	}
 	listeners := make([]listener, 0, len(opts.Surfaces)+1)
 	for _, sf := range opts.Surfaces {
-		listeners = append(listeners, listener{sf.Name, instrument(metrics, sf.Name, wrap(logger, sf.Name, sf.Handler)), sf.Addr})
+		handler := httpobs.Middleware(service.Name, routePattern(sf.Handler))(wrap(logger, sf.Name, sf.Handler))
+		listeners = append(listeners, listener{sf.Name, instrument(metrics, sf.Name, handler), sf.Addr})
 	}
 	if opts.OpsAddr != "" {
 		listeners = append(listeners, listener{"ops", opsHandler(metrics, &ready), opts.OpsAddr})
@@ -98,23 +103,22 @@ func newHTTPServer(addr string, handler http.Handler) *http.Server {
 }
 
 func wrap(logger *slog.Logger, name string, next http.Handler) http.Handler {
+	route := routePattern(next)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		id := r.Header.Get("X-Request-Id")
+		id := obs.RequestID(r.Context())
 		if id == "" {
-			var raw [8]byte
-			_, _ = rand.Read(raw[:])
-			id = hex.EncodeToString(raw[:])
-			r.Header.Set("X-Request-Id", id)
+			id = obs.NewRequestID()
+			r = r.WithContext(obs.WithRequestID(r.Context(), id))
 		}
-		w.Header().Set("X-Request-Id", id)
+		r.Header.Set(httpobs.RequestIDHeader, id)
+		w.Header().Set(httpobs.RequestIDHeader, id)
 		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
-		defer recoverPanic(logger, rec, r, name, id)
+		defer recoverPanic(rec, r)
 		next.ServeHTTP(rec, r)
 		attrs := []slog.Attr{
 			slog.String("surface", name),
-			slog.String("request_id", id),
 			slog.String("method", r.Method),
-			slog.String("path", r.URL.Path),
+			slog.String("path", route(r)),
 			slog.Int("status", rec.status),
 		}
 		switch {
@@ -126,22 +130,35 @@ func wrap(logger *slog.Logger, name string, next http.Handler) http.Handler {
 		case rec.failure != nil:
 			logger.LogAttrs(r.Context(), slog.LevelWarn, "response failed", append(attrs, slog.Any("err", rec.failure))...)
 		}
-		logger.LogAttrs(r.Context(), slog.LevelInfo, "request", attrs[:5]...)
+		logger.LogAttrs(r.Context(), slog.LevelInfo, "request", attrs...)
 	})
 }
 
-// recoverPanic turns a handler panic into a bare 500. The panic value is
-// logged and never written to the client.
-func recoverPanic(logger *slog.Logger, w http.ResponseWriter, r *http.Request, name, id string) {
+// routePattern is the handler's route template, never the raw path. A
+// console handler names its mux pattern; every other surface answers "/",
+// because its action is in the body or its bucket and key must not become a
+// log field or a metric label.
+func routePattern(h http.Handler) func(*http.Request) string {
+	return func(r *http.Request) string {
+		if p, ok := h.(interface{ RoutePattern(*http.Request) string }); ok {
+			if pattern := p.RoutePattern(r); pattern != "" {
+				return pattern
+			}
+		}
+		return "/"
+	}
+}
+
+// recoverPanic turns a handler panic into a bare 500. report.Panic records it
+// once and returns the Internal error the client would see; the panic value
+// stays out of the response.
+func recoverPanic(w http.ResponseWriter, r *http.Request) {
 	recovered := recover()
 	if recovered == nil {
 		return
 	}
-	logger.LogAttrs(r.Context(), slog.LevelError, "panic",
-		slog.String("surface", name),
-		slog.String("request_id", id),
-		slog.Any("panic", recovered))
-	http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+	report.Panic(r.Context(), recovered) //nolint:errcheck // the client gets a fixed 500, not the error
+	http.Error(w, "internal error", http.StatusInternalServerError)
 }
 
 // RecordFailure keeps err for the access log. Surfaces call it when the

@@ -13,6 +13,8 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/popododo0720/vws-lib/obs"
+
 	"github.com/popododo0720/vws-console-api/internal/backend"
 	"github.com/popododo0720/vws-console-api/internal/backend/fake"
 	"github.com/popododo0720/vws-console-api/internal/backend/grpcclient"
@@ -21,6 +23,7 @@ import (
 	"github.com/popododo0720/vws-console-api/internal/iam"
 	"github.com/popododo0720/vws-console-api/internal/resource"
 	"github.com/popododo0720/vws-console-api/internal/server"
+	"github.com/popododo0720/vws-console-api/internal/service"
 	"github.com/popododo0720/vws-console-api/internal/sigv4"
 	"github.com/popododo0720/vws-console-api/internal/surface/console"
 	"github.com/popododo0720/vws-console-api/internal/surface/ec2query"
@@ -33,10 +36,25 @@ func stopSignals() []os.Signal {
 }
 
 func main() {
-	if err := run(context.Background(), os.Args[1:]); err != nil {
+	if err := serve(context.Background(), os.Args[1:]); err != nil {
 		fmt.Fprintf(os.Stderr, "vws-console-api: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+// serve sets up observability once, then runs the process. main defers the
+// shutdown through this function so os.Exit does not skip it.
+func serve(ctx context.Context, args []string) (err error) {
+	shutdown, err := obs.Setup(ctx, obs.ForService(service.Name))
+	if err != nil {
+		return fmt.Errorf("observability: %w", err)
+	}
+	defer func() {
+		if serr := shutdown(context.WithoutCancel(ctx)); serr != nil {
+			err = errors.Join(err, fmt.Errorf("observability shutdown: %w", serr))
+		}
+	}()
+	return run(ctx, args)
 }
 
 func run(ctx context.Context, args []string) (err error) {
@@ -66,7 +84,7 @@ func run(ctx context.Context, args []string) (err error) {
 		return fmt.Errorf("flags: %w", err)
 	}
 
-	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	logger := slog.Default()
 	creds, err := resolveCredentials(ctx, fs, osCredentialEnv(), logger, consoleToken, accessKey, secret)
 	if err != nil {
 		return err
