@@ -1035,6 +1035,9 @@ func (f *Fake) CreatePolicy(_ context.Context, a resource.AccountID, name, path,
 	if err != nil {
 		return ManagedPolicy{}, err
 	}
+	if err := ValidatePolicyDescription(description); err != nil {
+		return ManagedPolicy{}, err
+	}
 	parsed, err := parsePolicy(document, false)
 	if err != nil {
 		return ManagedPolicy{}, err

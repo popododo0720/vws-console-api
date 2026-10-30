@@ -141,6 +141,35 @@ func TestPolicyDocumentsAreURLEncoded(t *testing.T) {
 	has(t, res, http.StatusOK, `<Document>`+strings.ReplaceAll(url.QueryEscape(doc), "+", "%20")+`</Document>`, `<IsDefaultVersion>true</IsDefaultVersion>`)
 }
 
+func TestCreatePolicyDescription(t *testing.T) {
+	h, f, _, root := harness(t)
+	ctx := t.Context()
+	doc := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"ec2:Describe*","Resource":"*"}]}`
+
+	res := call(t, h, root, sigv4.ServiceIAM, url.Values{
+		"Action": {"CreatePolicy"}, "PolicyName": {"empty"}, "PolicyDocument": {doc}, "Description": {""},
+	})
+	has(t, res, http.StatusOK, `<CreatePolicyResponse>`, `<PolicyName>empty</PolicyName>`)
+	if p, err := f.GetPolicy(
+		ctx, root.Account, "arn:vws:iam::123456789012:policy/empty",
+	); err != nil || p.Description != "" {
+		t.Errorf("empty description stored as %q: %v", p.Description, err)
+	}
+
+	wide := strings.Repeat("\u00ff", 1000)
+	res = call(t, h, root, sigv4.ServiceIAM, url.Values{
+		"Action": {"CreatePolicy"}, "PolicyName": {"wide"}, "PolicyDocument": {doc}, "Description": {wide},
+	})
+	has(t, res, http.StatusOK, `<PolicyName>wide</PolicyName>`, "<Description>"+wide+"</Description>")
+
+	res = call(t, h, root, sigv4.ServiceIAM, url.Values{
+		"Action": {"CreatePolicy"}, "PolicyName": {"long"}, "PolicyDocument": {doc}, "Description": {wide + "x"},
+	})
+	has(t, res, http.StatusBadRequest, `<Code>ValidationError</Code>`,
+		`<Message>1 validation error detected: Value at &#39;description&#39; failed to satisfy constraint: `+
+			`Member must have length less than or equal to 1000</Message>`)
+}
+
 func TestUpdateGroup(t *testing.T) {
 	h, f, rec, root := harness(t)
 	ctx := t.Context()
@@ -1147,7 +1176,15 @@ func TestUpdateRole(t *testing.T) {
 	res = call(t, h, root, sigv4.ServiceIAM, url.Values{
 		"Action": {"UpdateRole"}, "RoleName": {"ops"}, "Description": {long},
 	})
-	has(t, res, http.StatusBadRequest, `<Code>ValidationError</Code>`)
+	has(t, res, http.StatusBadRequest, `<Code>ValidationError</Code>`,
+		`<Message>1 validation error detected: Value at &#39;description&#39; failed to satisfy constraint: `+
+			`Member must have length less than or equal to 1000</Message>`)
+	res = call(t, h, root, sigv4.ServiceIAM, url.Values{
+		"Action": {"UpdateRole"}, "RoleName": {"ops"}, "Description": {"\u0080"},
+	})
+	has(t, res, http.StatusBadRequest, `<Code>ValidationError</Code>`,
+		`<Message>1 validation error detected: Value at &#39;description&#39; failed to satisfy constraint: `+
+			`Member must satisfy regular expression pattern: [\u0009\u000A\u000D\u0020-\u007E\u00A1-\u00FF]*</Message>`)
 	if role, _ = f.GetRole(
 		ctx,
 		root.Account,
@@ -1155,6 +1192,20 @@ func TestUpdateRole(t *testing.T) {
 		backendtest.RoleGrant(ctx, t, f, root.Account, "ops"),
 	); role.Description != "" || role.MaxSessionDuration != 43200 {
 		t.Errorf("a rejected update changed the role: %+v", role)
+	}
+
+	wide := strings.Repeat("\u00ff", iam.MaxRoleDescription)
+	res = call(t, h, root, sigv4.ServiceIAM, url.Values{
+		"Action": {"UpdateRole"}, "RoleName": {"ops"}, "Description": {wide},
+	})
+	has(t, res, http.StatusOK, `<UpdateRoleResponse>`)
+	if role, _ = f.GetRole(
+		ctx,
+		root.Account,
+		"ops",
+		backendtest.RoleGrant(ctx, t, f, root.Account, "ops"),
+	); role.Description != wide {
+		t.Errorf("1000-character description stored as %q", role.Description)
 	}
 
 	if _, err := f.CreateRole(ctx, root.Account, iam.RoleInput{

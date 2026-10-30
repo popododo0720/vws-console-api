@@ -2,6 +2,7 @@ package iam
 
 import (
 	"context"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -61,16 +62,17 @@ type RoleUpdate struct {
 // MaxRoleDescription is AWS's limit on a role description.
 const MaxRoleDescription = 1000
 
+// MaxPolicyDescription is AWS's limit on a managed policy description.
+const MaxPolicyDescription = 1000
+
 // ServiceLinkedRolePath is the path AWS reserves for service-linked roles.
 const ServiceLinkedRolePath = "/aws-service-role/"
 
 // ValidateRoleDescription reports a description AWS rejects: longer than 1000
 // characters, or outside the documented character set.
 func ValidateRoleDescription(description string) error {
-	if utf8.RuneCountInString(description) > MaxRoleDescription {
-		return resource.Invalid("description",
-			"1 validation error detected: Value at 'description' failed to satisfy constraint: "+
-				"Member must have length less than or equal to 1000")
+	if err := validateDescriptionLength(description, MaxRoleDescription); err != nil {
+		return err
 	}
 	for _, r := range description {
 		if r == '\t' || r == '\n' || r == '\r' ||
@@ -80,6 +82,20 @@ func ValidateRoleDescription(description string) error {
 		return resource.Invalid("description",
 			"1 validation error detected: Value at 'description' failed to satisfy constraint: "+
 				`Member must satisfy regular expression pattern: [\u0009\u000A\u000D\u0020-\u007E\u00A1-\u00FF]*`)
+	}
+	return nil
+}
+
+// ValidatePolicyDescription reports a description over the AWS limit.
+func ValidatePolicyDescription(description string) error {
+	return validateDescriptionLength(description, MaxPolicyDescription)
+}
+
+func validateDescriptionLength(description string, max int) error {
+	if utf8.RuneCountInString(description) > max {
+		return resource.Invalid("description",
+			"1 validation error detected: Value at 'description' failed to satisfy constraint: "+
+				"Member must have length less than or equal to "+strconv.Itoa(max))
 	}
 	return nil
 }
