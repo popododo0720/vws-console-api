@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/xml"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -198,14 +199,15 @@ func (h *handler) runInstances(w http.ResponseWriter, r *http.Request, c resourc
 		writeErr(w, r, err)
 		return
 	}
-	rootType, err := rootVolumeType(r)
+	root, err := rootVolume(r)
 	if err != nil {
 		writeErr(w, r, err)
 		return
 	}
 	acc, err := h.svc.RunInstances(r.Context(), c, token, resource.RunInstancesRequest{
 		ImageID: img, InstanceType: r.Form.Get("InstanceType"), SubnetID: sub, Count: count, Tags: tags,
-		KeyName: r.Form.Get("KeyName"), UserData: userData, RootVolumeType: rootType,
+		KeyName: r.Form.Get("KeyName"), UserData: userData,
+		RootVolumeType: root.typ, RootIops: root.iops, RootThroughput: root.throughput,
 	})
 	if err != nil {
 		writeErr(w, r, err)
@@ -435,34 +437,67 @@ func tagSpecificationsFor(r *http.Request, kind string) (map[string]string, erro
 // maxBlockDeviceMappings caps the BlockDeviceMapping.N index this surface reads.
 const maxBlockDeviceMappings = 100
 
-// rootVolumeType reads the RunInstances block device mapping. VWS creates
-// only the root volume, so the one mapping it takes names the root device
-// and may set Ebs.VolumeType; Normalize checks the type. A mapping for any
-// other device would add a volume, which VWS does not support yet (#323
-// follow-up), so it is refused rather than ignored. The other mapping fields
-// are refused by allowRun.
-func rootVolumeType(r *http.Request) (resource.VolumeType, error) {
-	var typ resource.VolumeType
+// rootMapping is what the RunInstances block device mapping sets on the
+// root volume.
+type rootMapping struct {
+	typ              resource.VolumeType
+	iops, throughput int64
+}
+
+// rootDeviceFields are the BlockDeviceMapping.N fields rootVolume reads.
+func rootDeviceFields() []string {
+	return []string{"DeviceName", "Ebs.VolumeType", "Ebs.Iops", "Ebs.Throughput"}
+}
+
+// rootVolume reads the RunInstances block device mapping. VWS creates only
+// the root volume, so the one mapping it takes names the root device and
+// may set Ebs.VolumeType, Ebs.Iops and Ebs.Throughput; Normalize checks them
+// with the CreateVolume rules. A mapping for any other device would add a
+// volume, which VWS does not support yet (#323 follow-up), so it is refused
+// rather than ignored. The other mapping fields are refused by allowRun.
+func rootVolume(r *http.Request) (rootMapping, error) {
+	var root rootMapping
 	mapped := false
 	for i := 1; i <= maxBlockDeviceMappings; i++ {
 		prefix := "BlockDeviceMapping." + strconv.Itoa(i) + "."
-		if !r.Form.Has(prefix+"DeviceName") && !r.Form.Has(prefix+"Ebs.VolumeType") {
+		if !slices.ContainsFunc(rootDeviceFields(), func(f string) bool { return r.Form.Has(prefix + f) }) {
 			continue
 		}
 		device := r.Form.Get(prefix + "DeviceName")
 		switch {
 		case device == "":
-			return "", resource.Invalid("blockDeviceMapping", prefix+"DeviceName is required")
+			return rootMapping{}, resource.Invalid("blockDeviceMapping", prefix+"DeviceName is required")
 		case device != resource.RootDeviceName:
-			return "", resource.Invalid(prefix+"DeviceName",
+			return rootMapping{}, resource.Invalid(prefix+"DeviceName",
 				"unsupported: only the root device "+resource.RootDeviceName+" can be mapped")
 		case mapped:
-			return "", resource.Invalid("blockDeviceMapping", "the root device is mapped more than once")
+			return rootMapping{}, resource.Invalid("blockDeviceMapping", "the root device is mapped more than once")
 		}
 		mapped = true
-		typ = resource.VolumeType(r.Form.Get(prefix + "Ebs.VolumeType"))
+		root.typ = resource.VolumeType(r.Form.Get(prefix + "Ebs.VolumeType"))
+		var err error
+		if root.iops, err = mappingInt(r, prefix+"Ebs.Iops", "iops"); err != nil {
+			return rootMapping{}, err
+		}
+		if root.throughput, err = mappingInt(r, prefix+"Ebs.Throughput", "throughput"); err != nil {
+			return rootMapping{}, err
+		}
 	}
-	return typ, nil
+	return root, nil
+}
+
+// mappingInt reads an optional positive integer mapping field, refused with
+// the CreateVolume message for param.
+func mappingInt(r *http.Request, key, param string) (int64, error) {
+	if !r.Form.Has(key) {
+		return 0, nil
+	}
+	raw := r.Form.Get(key)
+	n, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || n < 1 {
+		return 0, resource.Invalid(param, "Value ("+raw+") for parameter "+param+" is invalid.")
+	}
+	return n, nil
 }
 
 func instanceQuery(r *http.Request) (resource.InstanceQuery, error) {
@@ -652,14 +687,14 @@ func allowRun(key string) bool {
 	}
 }
 
-// blockDeviceField is a BlockDeviceMapping.N field rootVolumeType reads.
+// blockDeviceField is a BlockDeviceMapping.N field rootVolume reads.
 func blockDeviceField(key string) bool {
 	rest, ok := strings.CutPrefix(key, "BlockDeviceMapping.")
 	if !ok {
 		return false
 	}
 	n, field, ok := strings.Cut(rest, ".")
-	return ok && inRange(n, maxBlockDeviceMappings) && (field == "DeviceName" || field == "Ebs.VolumeType")
+	return ok && inRange(n, maxBlockDeviceMappings) && slices.Contains(rootDeviceFields(), field)
 }
 
 func allowStop(key string) bool {

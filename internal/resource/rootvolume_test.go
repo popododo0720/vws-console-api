@@ -42,8 +42,25 @@ func TestRunInstancesRootVolumeType(t *testing.T) {
 			t.Fatalf("%q: root performance %d IOPS %d MiB/s, want %v", typ, iops, miBps, want)
 		}
 	}
-	// io1 and io2 need Ebs.Iops, which the mapping does not carry, so EC2
-	// answers MissingParameter as CreateVolume does without Iops.
+	// #324: the mapping's Iops and Throughput are kept, and an io1 or io2
+	// root with Ebs.Iops is accepted.
+	for _, req := range []RunInstancesRequest{
+		{RootVolumeType: VolumeGP3, RootIops: 4000, RootThroughput: 250},
+		{RootVolumeType: VolumeIO1, RootIops: 400},
+		{RootVolumeType: VolumeIO2, RootIops: 8000},
+	} {
+		req.ImageID, req.InstanceType, req.SubnetID = img, "vws.small", sub
+		got, err := req.Normalize()
+		if err != nil {
+			t.Fatalf("%s %d: %v", req.RootVolumeType, req.RootIops, err)
+		}
+		if iops, miBps := got.RootPerformance(); iops != req.RootIops || miBps != req.RootThroughput {
+			t.Fatalf("%s: root performance %d IOPS %d MiB/s, want %d and %d",
+				req.RootVolumeType, iops, miBps, req.RootIops, req.RootThroughput)
+		}
+	}
+	// io1 and io2 without Ebs.Iops are MissingParameter, as CreateVolume
+	// answers without Iops.
 	for _, typ := range []VolumeType{VolumeIO1, VolumeIO2} {
 		req := base
 		req.RootVolumeType = typ
