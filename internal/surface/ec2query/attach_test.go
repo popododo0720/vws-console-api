@@ -142,3 +142,37 @@ func TestInstanceBlockDeviceStatus(t *testing.T) {
 		})
 	}
 }
+
+// TestInstanceBlockDeviceListsDetaching pins #298 on the instance view: a
+// volume the instance is still letting go stays in blockDeviceMapping with
+// ebs status detaching until the detach completes, after the spec devices.
+func TestInstanceBlockDeviceListsDetaching(t *testing.T) {
+	root, err := resource.Parse[resource.VolumeID]("vol-0fedcba9876543210")
+	if err != nil {
+		t.Fatal(err)
+	}
+	vol, err := resource.Parse[resource.VolumeID]("vol-0123456789abcdef0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	set := blockSetOf(resource.Instance{
+		BlockDevices: []resource.BlockDevice{
+			{Device: resource.RootDeviceName, VolumeID: root, DeleteOnTermination: true, Status: resource.AttachmentAttached},
+		},
+		DetachingDevices: []resource.BlockDevice{{Device: "/dev/sdf", VolumeID: vol}},
+	})
+	if set == nil || len(set.Items) != 2 {
+		t.Fatalf("block set %+v, want the root and the detaching volume", set)
+	}
+	if got := set.Items[0]; got.Device != resource.RootDeviceName || got.EBS.Status != "attached" {
+		t.Fatalf("root %+v", got)
+	}
+	if got := set.Items[1]; got.Device != "/dev/sdf" || got.EBS.VolumeID != vol.String() ||
+		got.EBS.Status != "detaching" || got.EBS.DeleteOnTermination {
+		t.Fatalf("detaching %+v, want /dev/sdf %s detaching", got, vol)
+	}
+	only := blockSetOf(resource.Instance{DetachingDevices: []resource.BlockDevice{{Device: "/dev/sdf", VolumeID: vol}}})
+	if only == nil || len(only.Items) != 1 || only.Items[0].EBS.Status != "detaching" {
+		t.Fatalf("an instance whose only data volume is detaching: %+v", only)
+	}
+}

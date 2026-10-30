@@ -70,7 +70,7 @@ type blockItem struct {
 }
 
 func blockSetOf(inst resource.Instance) *blockSet {
-	if len(inst.BlockDevices) == 0 {
+	if len(inst.BlockDevices) == 0 && len(inst.DetachingDevices) == 0 {
 		return nil
 	}
 	out := &blockSet{}
@@ -87,6 +87,13 @@ func blockSetOf(inst resource.Instance) *blockSet {
 		item.EBS.VolumeID, item.EBS.Status = b.VolumeID.String(), string(status)
 		item.EBS.DeleteOnTermination = b.DeleteOnTermination
 		// No backend records an attach time; the root volume is attached at launch.
+		item.EBS.AttachTime = awsTime(inst.LaunchTime)
+		out.Items = append(out.Items, item)
+	}
+	for _, b := range inst.DetachingDevices {
+		item := blockItem{Device: b.Device}
+		item.EBS.VolumeID, item.EBS.Status = b.VolumeID.String(), string(resource.AttachmentDetaching)
+		item.EBS.DeleteOnTermination = b.DeleteOnTermination
 		item.EBS.AttachTime = awsTime(inst.LaunchTime)
 		out.Items = append(out.Items, item)
 	}

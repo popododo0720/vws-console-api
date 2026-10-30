@@ -136,6 +136,67 @@ func AttachLifecycle(t *testing.T, newSet AttachHarness) {
 			}
 		})
 	}
+	detachLifecycle(ctx, t, set, scope, mut, settle, inst, vol)
+}
+
+// detachLifecycle is the detach half of the table (#298): from the accept
+// until the operation settles, the volume is in-use and detaching on its
+// instance, and the instance lists it as detaching with no bind. After it,
+// the volume is available with no attachment.
+func detachLifecycle(
+	ctx context.Context, t *testing.T, set backend.Set, scope backend.Scope,
+	mut func(string) backend.Mutation, settle func(*testing.T, resource.OperationID),
+	inst resource.InstanceID, vol resource.VolumeID,
+) {
+	t.Helper()
+	acc, err := set.Compute.DetachVolume(ctx, mut("detach"), resource.DetachVolumeRequest{VolumeID: vol})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := acc.Items[0]; got.Status != resource.AttachmentDetaching || got.InstanceID != inst ||
+		got.Device != "/dev/sdf" {
+		t.Fatalf("detach accept: want detaching on %s /dev/sdf, got %+v", inst, got)
+	}
+	instanceView := func(t *testing.T) resource.Instance {
+		t.Helper()
+		page, err := set.Compute.DescribeInstances(ctx, scope, resource.InstanceQuery{
+			IDs: []resource.InstanceID{inst}, Page: resource.PageRequest{Size: 50},
+		})
+		if err != nil || len(page.Items) != 1 {
+			t.Fatalf("describe instance: %v %+v", err, page.Items)
+		}
+		return page.Items[0]
+	}
+	for _, listed := range []bool{false, true} {
+		v := describeVolumes(ctx, t, set, scope, listed, vol)[vol]
+		if v.State != resource.VolumeInUse || v.InstanceID != inst || v.Device != "/dev/sdf" ||
+			v.AttachState != resource.AttachmentDetaching {
+			t.Fatalf("volume during detach (listed %t): want in-use, detaching on %s /dev/sdf, got %+v", listed, inst, v)
+		}
+	}
+	during := instanceView(t)
+	if _, ok := backend.BindOf(during, vol); ok {
+		t.Fatalf("instance still binds %s during detach: %+v", vol, during.BlockDevices)
+	}
+	if len(during.DetachingDevices) != 1 || during.DetachingDevices[0].VolumeID != vol ||
+		during.DetachingDevices[0].Device != "/dev/sdf" || during.DetachingDevices[0].Status != resource.AttachmentDetaching {
+		t.Fatalf("instance detaching devices: want %s /dev/sdf detaching, got %+v", vol, during.DetachingDevices)
+	}
+	// EC2 refuses to delete a volume that is still detaching.
+	_, err = set.Compute.DeleteVolume(ctx, mut("delete-detaching"), resource.DeleteVolumeRequest{ID: vol})
+	if err == nil || resource.CodeOf(err) != resource.CodeOf(resource.VolumeAttached(vol)) {
+		t.Fatalf("delete during detach: %v, want %v", err, resource.VolumeAttached(vol))
+	}
+	settle(t, acc.Operation.ID)
+	for _, listed := range []bool{false, true} {
+		v := describeVolumes(ctx, t, set, scope, listed, vol)[vol]
+		if v.State != resource.VolumeAvailable || !v.InstanceID.IsZero() || v.Device != "" || v.AttachState != "" {
+			t.Fatalf("volume after detach (listed %t): want available with no attachment, got %+v", listed, v)
+		}
+	}
+	if after := instanceView(t); len(after.DetachingDevices) != 0 {
+		t.Fatalf("instance after detach still lists %+v", after.DetachingDevices)
+	}
 }
 
 // describeVolumes reads ids by id, or lists every volume and keeps ids.
