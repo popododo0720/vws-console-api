@@ -332,15 +332,17 @@ func TestS3ObjectRoundTrip(t *testing.T) {
 	cred := sigv4.Credential{AccessKey: "AKIDEXAMPLE", Secret: "secret", Account: account}
 	s3 := s3rest.New(s3rest.Config{Service: svc, Authorizer: iam.NewStatic(cred.AccessKey, cred.Secret, cred.Account), Verifier: verifier(cred, sigv4.ServiceS3, now)})
 
-	bucketRes := serveSigned(t, s3, cred, sigv4.ServiceS3, now, http.MethodPut, "http://127.0.0.1:8082/build-logs", "")
+	bucket := "build-logs.example.com"
+	bucketRes := serveSigned(t, s3, cred, sigv4.ServiceS3, now, http.MethodPut, "http://127.0.0.1:8082/"+bucket, "")
 	if bucketRes.Code != http.StatusOK {
 		t.Fatalf("bucket %d %s", bucketRes.Code, bucketRes.Body)
 	}
-	putRes := serveSigned(t, s3, cred, sigv4.ServiceS3, now, http.MethodPut, "http://127.0.0.1:8082/build-logs/a.txt", "hello")
+	putRes := serveSigned(t, s3, cred, sigv4.ServiceS3, now, http.MethodPut,
+		"http://127.0.0.1:8082/"+bucket+"/a.txt", "hello")
 	if putRes.Code != http.StatusOK {
 		t.Fatalf("put %d %s", putRes.Code, putRes.Body)
 	}
-	getRes := serveSigned(t, s3, cred, sigv4.ServiceS3, now, http.MethodGet, "http://127.0.0.1:8082/build-logs/a.txt", "")
+	getRes := serveSigned(t, s3, cred, sigv4.ServiceS3, now, http.MethodGet, "http://127.0.0.1:8082/"+bucket+"/a.txt", "")
 	if getRes.Code != http.StatusOK || getRes.Body.String() != "hello" {
 		t.Fatalf("get %d %s", getRes.Code, getRes.Body)
 	}
@@ -351,10 +353,12 @@ func TestS3ObjectRoundTrip(t *testing.T) {
 		Auth:    console.BearerTokens{"tok-console": {Account: account, Subject: "console", Principal: iam.RootARN(account), Root: true}},
 	})
 	listed := call(t, ui, http.MethodGet, "/api/v1/buckets", "", map[string]string{"Authorization": "Bearer tok-console"})
-	if listed.Code != http.StatusOK || !strings.Contains(listed.Body.String(), "build-logs") {
+	if listed.Code != http.StatusOK || !strings.Contains(listed.Body.String(), bucket) {
 		t.Fatalf("console list %d %s", listed.Code, listed.Body)
 	}
-	object := call(t, ui, http.MethodGet, "/api/v1/buckets/build-logs/objects/a.txt", "", map[string]string{"Authorization": "Bearer tok-console"})
+	object := call(t, ui, http.MethodGet, "/api/v1/buckets/"+bucket+"/objects/a.txt", "", map[string]string{
+		"Authorization": "Bearer tok-console",
+	})
 	if object.Code != http.StatusOK || !strings.Contains(object.Body.String(), "aGVsbG8=") {
 		t.Fatalf("console object %d %s", object.Code, object.Body)
 	}
