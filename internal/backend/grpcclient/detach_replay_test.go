@@ -2,6 +2,7 @@ package grpcclient
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -204,6 +205,25 @@ func TestDetachOpTokenRules(t *testing.T) {
 	for _, row := range rows {
 		if got := row.rec.opMatch(row.fp); got != row.match {
 			t.Errorf("%s: got %d, want %d", row.name, got, row.match)
+		}
+	}
+	// The token is 16 hex digits (#304). Both value forms fit one 63-byte
+	// label value for the longest operation id operationLocal accepts.
+	for _, tok := range []string{detachFPToken(reqA, "fp"), legacyFPToken("fp")} {
+		if len(tok) != 16 || !isHexString(tok, 16) {
+			t.Errorf("token %q is not 16 hex digits", tok)
+		}
+	}
+	longest := strings.Repeat("f", 40)
+	if !operationHexWidth(len(longest)) || operationHexWidth(len(longest)+1) {
+		t.Fatalf("the longest operation id is no longer 40 hex digits; recheck the token width")
+	}
+	for _, value := range []string{
+		longest + " " + detachFPToken(reqA, "fp"),
+		detachOpPending + " " + detachFPToken(reqA, "fp"),
+	} {
+		if len(value) > 63 {
+			t.Errorf("label value %q is %d bytes, over 63", value, len(value))
 		}
 	}
 }
