@@ -87,6 +87,17 @@ func filtersMatch(filters []queryFilter, values func(string) []string) bool {
 	return true
 }
 
+// filterRows keeps the rows that match every filter, in their existing order.
+func filterRows[T any](rows []T, filters []queryFilter, values func(T, string) []string) []T {
+	out := make([]T, 0, len(rows))
+	for _, row := range rows {
+		if filtersMatch(filters, func(name string) []string { return values(row, name) }) {
+			out = append(out, row)
+		}
+	}
+	return out
+}
+
 // wildcardMatch applies EC2's * and ? filter wildcards. A pattern without
 // either character is an exact match.
 func wildcardMatch(pattern, value string) bool {
@@ -190,6 +201,57 @@ func (h *handler) allSubnets(ctx context.Context, c resource.Caller) ([]resource
 	return collectPages(ctx, c, func(page resource.PageRequest) resource.SubnetQuery {
 		return resource.SubnetQuery{Page: page}
 	}, h.svc.DescribeSubnets)
+}
+
+// tagFilterValue returns the value of tag:<key> for one tag set. The second
+// result reports whether name is a tag filter at all.
+func tagFilterValue(tags map[string]string, name string) ([]string, bool) {
+	key, ok := strings.CutPrefix(name, "tag:")
+	if !ok {
+		return nil, false
+	}
+	value, ok := tags[key]
+	if !ok {
+		return nil, true
+	}
+	return []string{value}, true
+}
+
+func vpcFilterValue(v resource.Vpc, name string) []string {
+	values, _ := tagFilterValue(v.Tags, name)
+	return values
+}
+
+func subnetFilterValue(s resource.Subnet, name string) []string {
+	if values, ok := tagFilterValue(s.Tags, name); ok {
+		return values
+	}
+	switch name {
+	case "vpc-id":
+		return []string{s.VpcID.String()}
+	default:
+		return nil
+	}
+}
+
+func volumeFilterValue(v resource.Volume, name string) []string {
+	if name == "attachment.instance-id" && !v.InstanceID.IsZero() {
+		return []string{v.InstanceID.String()}
+	}
+	return nil
+}
+
+func instanceFilterValue(i resource.Instance, name string) []string {
+	switch name {
+	case "instance-id":
+		return []string{i.ID.String()}
+	case "instance-state-name":
+		return []string{i.State.String()}
+	case "vpc-id":
+		return []string{i.VpcID.String()}
+	default:
+		return nil
+	}
 }
 
 func (h *handler) describeInstanceStatus(w http.ResponseWriter, r *http.Request, c resource.Caller) {

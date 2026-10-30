@@ -20,8 +20,8 @@ func TestUnsupportedFilterIsRejected(t *testing.T) {
 	form := url.Values{}
 	form.Set("Action", "DescribeInstances")
 	form.Set("Version", Version)
-	form.Set("Filter.1.Name", "vpc-id")
-	form.Set("Filter.1.Value.1", "vpc-1")
+	form.Set("Filter.1.Name", "instance-state-code")
+	form.Set("Filter.1.Value.1", "16")
 	res := signed(t, h, cred, now, form.Encode())
 	if res.Code != http.StatusBadRequest || !strings.Contains(res.Body.String(), "InvalidParameterValue") {
 		t.Fatalf("%d %s", res.Code, res.Body)

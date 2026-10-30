@@ -4,6 +4,7 @@
 package ec2query
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/xml"
 	"net/http"
@@ -291,12 +292,17 @@ func (h *handler) createSubnet(w http.ResponseWriter, r *http.Request, c resourc
 }
 
 func (h *handler) describeInstances(w http.ResponseWriter, r *http.Request, c resource.Caller) {
-	q, err := instanceQuery(r)
+	q, filters, err := instanceQuery(r)
 	if err != nil {
 		writeErr(w, r, err)
 		return
 	}
-	page, err := h.svc.DescribeInstances(r.Context(), c, q)
+	var page resource.Page[resource.Instance]
+	if len(filters) == 0 {
+		page, err = h.svc.DescribeInstances(r.Context(), c, q)
+	} else {
+		page, err = h.filteredInstances(r.Context(), c, q, filters)
+	}
 	if err != nil {
 		writeErr(w, r, err)
 		return
@@ -321,27 +327,74 @@ func (h *handler) describeInstances(w http.ResponseWriter, r *http.Request, c re
 	}{Items: items}})
 }
 
+// filteredInstances applies the codec filters over every instance the query
+// selects, then pages the result.
+func (h *handler) filteredInstances(
+	ctx context.Context, c resource.Caller, q resource.InstanceQuery, filters []queryFilter,
+) (resource.Page[resource.Instance], error) {
+	rows, err := collectPages(ctx, c, func(page resource.PageRequest) resource.InstanceQuery {
+		return resource.InstanceQuery{IDs: q.IDs, States: q.States, Page: page}
+	}, h.svc.DescribeInstances)
+	if err != nil {
+		return resource.Page[resource.Instance]{}, err
+	}
+	rows = filterRows(rows, filters, instanceFilterValue)
+	items, next, err := pageRows(rows, q.Page, func(inst resource.Instance) string { return inst.ID.String() })
+	if err != nil {
+		return resource.Page[resource.Instance]{}, err
+	}
+	return resource.Page[resource.Instance]{Items: items, NextToken: next}, nil
+}
+
 func (h *handler) describeSubnets(w http.ResponseWriter, r *http.Request, c resource.Caller) {
 	ids, err := indexedIDs[resource.SubnetID](r, "SubnetId")
 	if err != nil {
 		writeErr(w, r, err)
 		return
 	}
-	pageReq, err := pageForm(r)
+	filters, err := queryFilters(r)
 	if err != nil {
 		writeErr(w, r, err)
 		return
 	}
-	page, err := h.svc.DescribeSubnets(r.Context(), c, resource.SubnetQuery{IDs: ids, Page: pageReq})
+	if err := checkTagFilterNames(filters, "vpc-id"); err != nil {
+		writeErr(w, r, err)
+		return
+	}
+	page, err := pageForm(r)
 	if err != nil {
 		writeErr(w, r, err)
 		return
+	}
+	var rows []resource.Subnet
+	next := ""
+	if len(filters) == 0 {
+		out, err := h.svc.DescribeSubnets(r.Context(), c, resource.SubnetQuery{IDs: ids, Page: page})
+		if err != nil {
+			writeErr(w, r, err)
+			return
+		}
+		rows, next = out.Items, out.NextToken
+	} else {
+		rows, err = collectPages(r.Context(), c, func(p resource.PageRequest) resource.SubnetQuery {
+			return resource.SubnetQuery{IDs: ids, Page: p}
+		}, h.svc.DescribeSubnets)
+		if err != nil {
+			writeErr(w, r, err)
+			return
+		}
+		rows = filterRows(rows, filters, subnetFilterValue)
+		rows, next, err = pageRows(rows, page, func(s resource.Subnet) string { return s.ID.String() })
+		if err != nil {
+			writeErr(w, r, err)
+			return
+		}
 	}
 	var items []subnetItem
-	for _, sub := range page.Items {
+	for _, sub := range rows {
 		items = append(items, subnetXML(sub))
 	}
-	writeXML(w, describeSubnetsXML{RequestID: requestID(r), NextToken: page.NextToken, Subnets: struct {
+	writeXML(w, describeSubnetsXML{RequestID: requestID(r), NextToken: next, Subnets: struct {
 		Items []subnetItem `xml:"item"`
 	}{Items: items}})
 }
@@ -514,45 +567,46 @@ func mappingInt(r *http.Request, key, param string) (int64, error) {
 	return n, nil
 }
 
-func instanceQuery(r *http.Request) (resource.InstanceQuery, error) {
+func instanceQuery(r *http.Request) (resource.InstanceQuery, []queryFilter, error) {
 	ids, err := indexedIDs[resource.InstanceID](r, "InstanceId")
 	if err != nil {
-		return resource.InstanceQuery{}, err
+		return resource.InstanceQuery{}, nil, err
+	}
+	filters, err := queryFilters(r)
+	if err != nil {
+		return resource.InstanceQuery{}, nil, err
+	}
+	if err := checkFilterNames(filters, "instance-id", "instance-state-name", "vpc-id"); err != nil {
+		return resource.InstanceQuery{}, nil, err
 	}
 	var states []resource.InstanceState
-	for i := 1; i <= 20; i++ {
-		name := r.Form.Get("Filter." + strconv.Itoa(i) + ".Name")
-		if name == "" {
-			continue
-		}
-		values := indexedStrings(r, "Filter."+strconv.Itoa(i)+".Value")
+	for _, f := range filters {
+		values := f.values
 		if len(values) == 0 {
 			values = []string{""}
 		}
 		for _, value := range values {
-			switch name {
+			switch f.name {
 			case "instance-id":
 				id, err := resource.Parse[resource.InstanceID](value)
 				if err != nil {
-					return resource.InstanceQuery{}, err
+					return resource.InstanceQuery{}, nil, err
 				}
 				ids = append(ids, id)
 			case "instance-state-name":
 				st, ok := resource.ParseInstanceState(value)
 				if !ok {
-					return resource.InstanceQuery{}, resource.Invalid("Filter", "unknown state")
+					return resource.InstanceQuery{}, nil, resource.Invalid("Filter", "unknown state")
 				}
 				states = append(states, st)
-			default:
-				return resource.InstanceQuery{}, resource.Invalid("Filter", "unsupported")
 			}
 		}
 	}
 	page, err := pageForm(r)
 	if err != nil {
-		return resource.InstanceQuery{}, err
+		return resource.InstanceQuery{}, nil, err
 	}
-	return resource.InstanceQuery{IDs: ids, States: states, Page: page}, nil
+	return resource.InstanceQuery{IDs: ids, States: states, Page: page}, filters, nil
 }
 
 func pageForm(r *http.Request) (resource.PageRequest, error) {
@@ -949,8 +1003,9 @@ func rejectDryRun(r *http.Request) error {
 // Every other describe rejects a filter rather than ignoring it.
 func describeTakesFilters(action string) bool {
 	switch action {
-	case "DescribeInstances", "DescribeInstanceStatus", "DescribeInstanceTypes", "DescribeTags",
-		"DescribeVolumesModifications", "DescribeAvailabilityZones", "DescribeRegions", "DescribeRouteTables":
+	case "DescribeInstances", "DescribeInstanceStatus", "DescribeInstanceTypes", "DescribeSubnets",
+		"DescribeTags", "DescribeVolumes", "DescribeVolumesModifications", "DescribeVpcs",
+		"DescribeAvailabilityZones", "DescribeRegions", "DescribeRouteTables":
 		return true
 	default:
 		return false

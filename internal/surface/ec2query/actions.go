@@ -42,21 +42,49 @@ func (h *handler) describeVpcs(w http.ResponseWriter, r *http.Request, c resourc
 		writeErr(w, r, err)
 		return
 	}
-	pageReq, err := pageForm(r)
+	filters, err := queryFilters(r)
 	if err != nil {
 		writeErr(w, r, err)
 		return
 	}
-	page, err := h.svc.DescribeVpcs(r.Context(), c, resource.VpcQuery{IDs: ids, Page: pageReq})
+	if err := checkTagFilterNames(filters); err != nil {
+		writeErr(w, r, err)
+		return
+	}
+	page, err := pageForm(r)
 	if err != nil {
 		writeErr(w, r, err)
 		return
+	}
+	var rows []resource.Vpc
+	next := ""
+	if len(filters) == 0 {
+		out, err := h.svc.DescribeVpcs(r.Context(), c, resource.VpcQuery{IDs: ids, Page: page})
+		if err != nil {
+			writeErr(w, r, err)
+			return
+		}
+		rows, next = out.Items, out.NextToken
+	} else {
+		rows, err = collectPages(r.Context(), c, func(p resource.PageRequest) resource.VpcQuery {
+			return resource.VpcQuery{IDs: ids, Page: p}
+		}, h.svc.DescribeVpcs)
+		if err != nil {
+			writeErr(w, r, err)
+			return
+		}
+		rows = filterRows(rows, filters, vpcFilterValue)
+		rows, next, err = pageRows(rows, page, func(v resource.Vpc) string { return v.ID.String() })
+		if err != nil {
+			writeErr(w, r, err)
+			return
+		}
 	}
 	var items []vpcItem
-	for _, vpc := range page.Items {
+	for _, vpc := range rows {
 		items = append(items, vpcXML(vpc))
 	}
-	writeXML(w, describeVpcsXML{RequestID: requestID(r), NextToken: page.NextToken, Vpcs: struct {
+	writeXML(w, describeVpcsXML{RequestID: requestID(r), NextToken: next, Vpcs: struct {
 		Items []vpcItem `xml:"item"`
 	}{Items: items}})
 }
@@ -140,21 +168,49 @@ func (h *handler) describeVolumes(w http.ResponseWriter, r *http.Request, c reso
 		writeErr(w, r, err)
 		return
 	}
-	pageReq, err := pageForm(r)
+	filters, err := queryFilters(r)
 	if err != nil {
 		writeErr(w, r, err)
 		return
 	}
-	page, err := h.svc.DescribeVolumes(r.Context(), c, resource.VolumeQuery{IDs: ids, Page: pageReq})
+	if err := checkFilterNames(filters, "attachment.instance-id"); err != nil {
+		writeErr(w, r, err)
+		return
+	}
+	page, err := pageForm(r)
 	if err != nil {
 		writeErr(w, r, err)
 		return
+	}
+	var rows []resource.Volume
+	next := ""
+	if len(filters) == 0 {
+		out, err := h.svc.DescribeVolumes(r.Context(), c, resource.VolumeQuery{IDs: ids, Page: page})
+		if err != nil {
+			writeErr(w, r, err)
+			return
+		}
+		rows, next = out.Items, out.NextToken
+	} else {
+		rows, err = collectPages(r.Context(), c, func(p resource.PageRequest) resource.VolumeQuery {
+			return resource.VolumeQuery{IDs: ids, Page: p}
+		}, h.svc.DescribeVolumes)
+		if err != nil {
+			writeErr(w, r, err)
+			return
+		}
+		rows = filterRows(rows, filters, volumeFilterValue)
+		rows, next, err = pageRows(rows, page, func(v resource.Volume) string { return v.ID.String() })
+		if err != nil {
+			writeErr(w, r, err)
+			return
+		}
 	}
 	var items []volumeItem
-	for _, vol := range page.Items {
+	for _, vol := range rows {
 		items = append(items, volumeXML(vol))
 	}
-	writeXML(w, describeVolumesXML{RequestID: requestID(r), NextToken: page.NextToken, Volumes: struct {
+	writeXML(w, describeVolumesXML{RequestID: requestID(r), NextToken: next, Volumes: struct {
 		Items []volumeItem `xml:"item"`
 	}{Items: items}})
 }
