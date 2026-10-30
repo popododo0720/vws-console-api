@@ -1280,10 +1280,7 @@ func (f *Fake) DeletePolicyVersion(_ context.Context, a resource.AccountID, arn,
 // fails and stores nothing when a tag is invalid or the policy would keep
 // more than 50 tags.
 func (f *Fake) TagPolicy(_ context.Context, a resource.AccountID, arn string, tags []Tag) error {
-	if len(tags) < 1 || len(tags) > MaxTags {
-		return validationError("tags", "Member must have length between 1 and 50")
-	}
-	if err := ValidateTags(tags); err != nil {
+	if err := ValidateTagList(tags); err != nil {
 		return err
 	}
 	f.mu.Lock()
@@ -1308,13 +1305,8 @@ func (f *Fake) TagPolicy(_ context.Context, a resource.AccountID, arn string, ta
 
 // UntagPolicy implements Admin. A key that is not attached is ignored.
 func (f *Fake) UntagPolicy(_ context.Context, a resource.AccountID, arn string, keys []string) error {
-	if len(keys) < 1 || len(keys) > MaxTags {
-		return validationError("tagKeys", "Member must have length between 1 and 50")
-	}
-	for _, key := range keys {
-		if err := ValidateTagKey(key); err != nil {
-			return err
-		}
+	if err := ValidateTagKeyList(keys); err != nil {
+		return err
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -1459,10 +1451,7 @@ func (*Fake) GetMFADevice(context.Context, resource.AccountID, string) (MFADevic
 // fails and stores nothing when a tag is invalid or the device would keep more
 // than 50 tags.
 func (f *Fake) TagMFADevice(_ context.Context, a resource.AccountID, serial string, tags []Tag) error {
-	if len(tags) < 1 || len(tags) > MaxTags {
-		return validationError("tags", "Member must have length between 1 and 50")
-	}
-	if err := ValidateTags(tags); err != nil {
+	if err := ValidateTagList(tags); err != nil {
 		return err
 	}
 	f.mu.Lock()
@@ -1487,13 +1476,8 @@ func (f *Fake) TagMFADevice(_ context.Context, a resource.AccountID, serial stri
 
 // UntagMFADevice implements Admin. A key that is not attached is ignored.
 func (f *Fake) UntagMFADevice(_ context.Context, a resource.AccountID, serial string, keys []string) error {
-	if len(keys) < 1 || len(keys) > MaxTags {
-		return validationError("tagKeys", "Member must have length between 1 and 50")
-	}
-	for _, key := range keys {
-		if err := ValidateTagKey(key); err != nil {
-			return err
-		}
+	if err := ValidateTagKeyList(keys); err != nil {
+		return err
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()

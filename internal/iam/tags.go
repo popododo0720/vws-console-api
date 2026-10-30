@@ -82,8 +82,32 @@ func ValidateTags(tags []Tag) error {
 	return nil
 }
 
+// ValidateTagList reports an invalid Tags request: 1 to MaxTags tags, each
+// valid. The AWS Query surface checks each member as it reads the request,
+// while a backend call checks the list as a whole.
+func ValidateTagList(tags []Tag) error {
+	if len(tags) < 1 || len(tags) > MaxTags {
+		return validationError("tags", "Member must have length between 1 and "+strconv.Itoa(MaxTags))
+	}
+	return ValidateTags(tags)
+}
+
 // ValidateTagKey reports an invalid tag key outside a request.
 func ValidateTagKey(key string) error { return validateTagKey(key, "tagKeys.member") }
+
+// ValidateTagKeyList reports an invalid TagKeys request: 1 to MaxTags keys,
+// each valid.
+func ValidateTagKeyList(keys []string) error {
+	if len(keys) < 1 || len(keys) > MaxTags {
+		return validationError("tagKeys", "Member must have length between 1 and "+strconv.Itoa(MaxTags))
+	}
+	for _, key := range keys {
+		if err := ValidateTagKey(key); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
 // ValidateTagKeyAt reports an invalid tag key at the one-based index of the
 // request's TagKeys list.
