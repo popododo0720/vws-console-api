@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/popododo0720/vws-console-api/internal/backend/backendtest"
 	"github.com/popododo0720/vws-console-api/internal/backend/fake"
 	"github.com/popododo0720/vws-console-api/internal/cloud"
 	"github.com/popododo0720/vws-console-api/internal/iam"
@@ -482,4 +483,68 @@ func mustParse[T any, PT interface {
 		t.Fatal(err)
 	}
 	return v
+}
+
+// An object a cookie session uploads in the console keeps its Content-Type,
+// and S3 GetObject and HeadObject answer it (#224).
+func TestCookieUploadContentTypeOnS3(t *testing.T) {
+	now := time.Date(2026, 10, 9, 10, 0, 0, 0, time.UTC)
+	account := mustParse[resource.AccountID](t, "123456789012")
+	svc := cloud.New(cloud.Config{Backends: fake.New(fake.Options{Now: func() time.Time { return now }}).Set()})
+	cred := sigv4.Credential{AccessKey: "AKIDEXAMPLE", Secret: "secret", Account: account}
+	root := iam.NewStatic(cred.AccessKey, cred.Secret, account)
+	s3 := s3rest.New(s3rest.Config{Service: svc, Authorizer: root, Verifier: verifier(cred, sigv4.ServiceS3, now)})
+	rec := serveSigned(t, s3, cred, sigv4.ServiceS3, now, http.MethodPut, "http://127.0.0.1:8082/b224", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("bucket %d %s", rec.Code, rec.Body)
+	}
+
+	users := iam.NewFake()
+	ctx := t.Context()
+	if _, err := users.CreateUser(ctx, account, "bob", "/"); err != nil {
+		t.Fatal(err)
+	}
+	grant := backendtest.UserGrant(ctx, t, users, account, "bob")
+	if _, err := users.CreateLoginProfile(ctx, account, "bob", "correct horse 1", grant); err != nil {
+		t.Fatal(err)
+	}
+	if err := users.PutInlinePolicy(ctx, account, iam.EntityUser, "bob", "put",
+		`{"Statement":[{"Effect":"Allow","Action":"s3:PutObject","Resource":"*"}]}`,
+		backendtest.EntityGrant(ctx, t, users, account, iam.EntityUser, "bob"),
+	); err != nil {
+		t.Fatal(err)
+	}
+	ui := console.New(console.Config{Service: svc, IAM: iam.WithRoot(root, users)})
+	const origin = "http://127.0.0.1:8080"
+	login := httptest.NewRequestWithContext(ctx, http.MethodPost, origin+"/api/v1/auth/login",
+		strings.NewReader(`{"account":"123456789012","userName":"bob","password":"correct horse 1"}`))
+	login.Header.Set("Content-Type", "application/json")
+	login.Header.Set("Origin", origin)
+	signedIn := httptest.NewRecorder()
+	ui.ServeHTTP(signedIn, login)
+	if signedIn.Code != http.StatusOK {
+		t.Fatalf("login %d %s", signedIn.Code, signedIn.Body)
+	}
+	put := httptest.NewRequestWithContext(ctx, http.MethodPut, origin+"/api/v1/buckets/b224/objects/logo.png",
+		strings.NewReader("\x89PNG"))
+	put.Header.Set("Content-Type", "image/png")
+	put.Header.Set("Origin", origin)
+	for _, c := range signedIn.Result().Cookies() {
+		put.AddCookie(c)
+		if c.Name == console.CSRFCookie {
+			put.Header.Set(console.CSRFHeader, c.Value)
+		}
+	}
+	uploaded := httptest.NewRecorder()
+	ui.ServeHTTP(uploaded, put)
+	if uploaded.Code != http.StatusOK {
+		t.Fatalf("cookie upload %d %s", uploaded.Code, uploaded.Body)
+	}
+
+	for _, method := range []string{http.MethodGet, http.MethodHead} {
+		rec := serveSigned(t, s3, cred, sigv4.ServiceS3, now, method, "http://127.0.0.1:8082/b224/logo.png", "")
+		if rec.Code != http.StatusOK || rec.Header().Get("Content-Type") != "image/png" {
+			t.Errorf("%s %d Content-Type %q", method, rec.Code, rec.Header().Get("Content-Type"))
+		}
+	}
 }

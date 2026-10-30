@@ -37,6 +37,9 @@ const (
 	routeLogin   = "POST /api/v1/auth/login"
 	routeLogout  = "POST /api/v1/auth/logout"
 	routeSession = "GET /api/v1/auth/session"
+	// routePutObject is the one cookie write whose body is not JSON: the
+	// request Content-Type is the object's, as in S3 PutObject (#224).
+	routePutObject = "PUT /api/v1/buckets/{name}/objects/{key...}"
 )
 
 // csrfToken derives the CSRF token from the session token. It needs no
@@ -102,7 +105,7 @@ func routeAction(pattern string) (authorization, bool) {
 		"PUT /api/v1/buckets/{name}":                     s3Bucket("CreateBucket"),
 		"GET /api/v1/buckets/{name}":                     s3Bucket("ListBucket"),
 		"DELETE /api/v1/buckets/{name}":                  s3Bucket("DeleteBucket"),
-		"PUT /api/v1/buckets/{name}/objects/{key...}":    s3Object("PutObject"),
+		routePutObject:                                   s3Object("PutObject"),
 		"GET /api/v1/buckets/{name}/objects/{key...}":    s3Object("GetObject"),
 		"DELETE /api/v1/buckets/{name}/objects/{key...}": s3Object("DeleteObject"),
 		routeLogin:   nil,
@@ -137,7 +140,7 @@ func (h *handler) gate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Header.Get("Authorization") == "" && r.Method != http.MethodGet && r.Method != http.MethodHead {
-		if _, err := r.Cookie(SessionCookie); err == nil && !h.browserWriteOK(w, r) {
+		if _, err := r.Cookie(SessionCookie); err == nil && !h.browserWriteOK(w, r, pattern != routePutObject) {
 			return
 		}
 	}
@@ -239,7 +242,7 @@ func (h *handler) login(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, r, resource.Unimplemented("console sign-in is not configured"))
 		return
 	}
-	if !h.browserWriteOK(w, r) {
+	if !h.browserWriteOK(w, r, true) {
 		return
 	}
 	ip := h.clientIP(r)
