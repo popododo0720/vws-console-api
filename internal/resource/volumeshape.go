@@ -120,6 +120,15 @@ func checkVolumeSize(t VolumeType, sizeGiB int64) error {
 // sizeGiB with its type, Iops and Throughput kept: no shrink, and the size
 // range of v's type. Growing only lowers the Iops-per-GiB ratio, so the
 // ratios CheckVolumeShape enforces cannot be broken by it.
+//
+// A volume stored above its type's maximum (#427: a standard volume grown
+// past 1,024 GiB under the old flat 16,384 GiB cap) has no target size at or
+// above its own inside the range, so every explicit Size is refused, even the
+// current size. EC2 requires the target size to be at least the existing
+// size and a size change to stay within the limits of the current volume
+// type. A no-op leaves Size out, which this API requires.
+// https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_ModifyVolume.html
+// https://docs.aws.amazon.com/ebs/latest/userguide/ebs-modify-volume.html
 func (v Volume) CheckGrow(sizeGiB int64) error {
 	if sizeGiB < v.SizeGiB {
 		return Invalid("size", "a volume cannot shrink")
