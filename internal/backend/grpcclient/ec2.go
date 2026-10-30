@@ -1624,15 +1624,9 @@ func addAttachViews(out map[resource.VolumeID]attachView, in *computev1.Instance
 	if model.State == resource.InstanceTerminated {
 		return nil
 	}
-	observed := map[resource.VolumeID]resource.AttachmentStatus{}
-	devices := map[resource.VolumeID]string{}
-	for _, o := range in.GetStatus().GetVolumes() {
-		id, err := resource.Parse[resource.VolumeID](lastSegment(o.GetVolume()))
-		if err != nil {
-			return resource.Internal(&badRecordNameError{err})
-		}
-		observed[id] = attachStateOf(o.GetState())
-		devices[id] = o.GetDeviceName()
+	observed, err := observedVolumes(in)
+	if err != nil {
+		return err
 	}
 	staged := map[resource.VolumeID]attachView{}
 	for _, block := range model.BlockDevices {
@@ -1640,19 +1634,15 @@ func addAttachViews(out map[resource.VolumeID]attachView, in *computev1.Instance
 		if !ok {
 			continue
 		}
-		state, ok := observed[block.VolumeID]
-		if !ok {
-			state = resource.AttachmentAttaching
-		}
-		staged[block.VolumeID] = attachView{bind: bind, inSpec: true, state: state}
+		staged[block.VolumeID] = attachView{bind: bind, inSpec: true, state: block.Status}
 	}
-	for id, state := range observed {
+	for id, o := range observed {
 		if _, ok := staged[id]; ok {
 			continue
 		}
 		staged[id] = attachView{
-			bind:  backend.VolumeBind{VolumeID: id, InstanceID: model.ID, Device: devices[id]},
-			state: state,
+			bind:  backend.VolumeBind{VolumeID: id, InstanceID: model.ID, Device: o.GetDeviceName()},
+			state: attachStateOf(o.GetState()),
 		}
 	}
 	for id, view := range staged {
