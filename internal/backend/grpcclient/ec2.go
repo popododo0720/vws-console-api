@@ -390,7 +390,7 @@ func (c computeClient) attachOnce(
 	return resource.Accepted[resource.Volume]{Operation: op, Items: []resource.Volume{vol}}, nil
 }
 
-// etagMismatchError is a stale instance etag. DetachVolume rereads and tries again.
+// etagMismatchError is a stale resource etag. The caller rereads and tries again.
 type etagMismatchError struct{}
 
 func (etagMismatchError) Error() string { return "etag mismatch" }
@@ -1951,15 +1951,44 @@ func (c networkClient) CreateSecurityGroup(ctx context.Context, m backend.Mutati
 	return resource.Accepted[resource.SecurityGroup]{Operation: op, Items: []resource.SecurityGroup{group}}, nil
 }
 
+// authorizeAttempts bounds the reread after a stale security group etag.
+const authorizeAttempts = 10
+
 func (c networkClient) AuthorizeSecurityGroupIngress(ctx context.Context, m backend.Mutation, req resource.AuthorizeSecurityGroupIngressRequest) (resource.Accepted[resource.SecurityGroup], error) {
 	projectID := project(m.Account)
+	for attempt := 0; attempt < authorizeAttempts; attempt++ {
+		if attempt > 0 {
+			timer := time.NewTimer(time.Duration(attempt) * 5 * time.Millisecond)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return resource.Accepted[resource.SecurityGroup]{}, ctx.Err()
+			case <-timer.C:
+			}
+		}
+		acc, err := c.authorizeIngressOnce(ctx, m, projectID, req)
+		if !errors.Is(err, etagMismatchError{}) {
+			return acc, err
+		}
+	}
+	return resource.Accepted[resource.SecurityGroup]{},
+		resource.Conflict(resource.KindSecurityGroup, req.ID.String(), "security group changed")
+}
+
+// authorizeIngressOnce reads the group, adds the rule and writes the whole
+// rule list with the etag from that read. A stale etag is etagMismatchError so
+// the caller rereads and tries again.
+func (c networkClient) authorizeIngressOnce(
+	ctx context.Context, m backend.Mutation, projectID string, req resource.AuthorizeSecurityGroupIngressRequest,
+) (resource.Accepted[resource.SecurityGroup], error) {
+	var zero resource.Accepted[resource.SecurityGroup]
 	current, err := c.findGroup(ctx, projectID, req.ID.String())
 	if err != nil {
-		return resource.Accepted[resource.SecurityGroup]{}, err
+		return zero, err
 	}
 	for _, have := range current.Rules {
 		if have == req.Rule {
-			return resource.Accepted[resource.SecurityGroup]{}, resource.AlreadyExists(resource.KindSecurityGroup, current.ID.String())
+			return zero, resource.DuplicatePermission(current.ID.String())
 		}
 	}
 	rules := append(append([]resource.IngressRule{}, current.Rules...), req.Rule)
@@ -1967,28 +1996,32 @@ func (c networkClient) AuthorizeSecurityGroupIngress(ctx context.Context, m back
 	for i, rule := range rules {
 		protoRule, err := ruleProto(rule, derivedID("r", m.Key, "rule", hex.EncodeToString([]byte{byte(i)})))
 		if err != nil {
-			return resource.Accepted[resource.SecurityGroup]{}, err
+			return zero, err
 		}
 		protoRules = append(protoRules, protoRule)
 	}
-	updated, err := c.groups.UpdateSecurityGroup(ctx, &networkv1.UpdateSecurityGroupRequest{
+	updated, callErr := c.groups.UpdateSecurityGroup(ctx, &networkv1.UpdateSecurityGroupRequest{
 		RequestId:  requestUUID(m.Key, "ingress"),
 		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.rules"}},
 		SecurityGroup: &networkv1.SecurityGroup{
 			Name: securityGroupName(projectID, current.VpcID.String(), current.ID.String()),
+			Etag: current.Etag,
 			Spec: &networkv1.SecurityGroupSpec{Rules: protoRules},
 		},
 	})
-	if err := rpcErr(updated, err); err != nil {
-		return resource.Accepted[resource.SecurityGroup]{}, err
+	if etagMismatch(callErr) {
+		return zero, etagMismatchError{}
+	}
+	if err := rpcErr(updated, callErr); err != nil {
+		return zero, err
 	}
 	op, err := operationFrom(updated, resource.ServiceNetwork)
 	if err != nil {
-		return resource.Accepted[resource.SecurityGroup]{}, err
+		return zero, err
 	}
 	got, err := c.findGroup(ctx, projectID, req.ID.String())
 	if err != nil {
-		return resource.Accepted[resource.SecurityGroup]{}, err
+		return zero, err
 	}
 	op.Action = resource.ActionAuthorizeSecurityGroupIngress
 	op.Targets = []resource.Ref{got.ID.Ref()}
@@ -2333,7 +2366,8 @@ func groupModel(in *networkv1.SecurityGroup) (resource.SecurityGroup, error) {
 		})
 	}
 	return resource.SecurityGroup{
-		ID: id, OwnerID: owner, Name: in.GetSpec().GetDescription(), VpcID: vpcID, Rules: rules,
+		ID: id, OwnerID: owner, Name: in.GetSpec().GetDescription(), VpcID: vpcID,
+		Etag: in.GetEtag(), Rules: rules,
 	}, nil
 }
 

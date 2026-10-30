@@ -367,7 +367,10 @@ type SecurityGroup struct {
 	OwnerID AccountID       `json:"ownerId"`
 	Name    string          `json:"groupName"`
 	VpcID   VpcID           `json:"vpcId"`
-	Rules   []IngressRule   `json:"ipPermissions,omitempty"`
+	// Etag is the compare-and-swap token the network service returns with the
+	// group. It is not part of the console or EC2 shape.
+	Etag  string        `json:"-"`
+	Rules []IngressRule `json:"ipPermissions,omitempty"`
 }
 
 // Owner returns the account that owns the group.

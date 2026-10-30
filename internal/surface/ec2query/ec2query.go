@@ -996,6 +996,11 @@ func ec2Code(e *resource.Error) string {
 		}
 		return "InvalidParameterValue"
 	case resource.CodeAlreadyExists:
+		// A duplicate security group rule is InvalidPermission.Duplicate,
+		// not the InvalidGroup.Duplicate a duplicate group name gets (#272).
+		if resource.IsDuplicatePermission(e) {
+			return "InvalidPermission.Duplicate"
+		}
 		return alreadyExistsCode(e.Kind)
 	case resource.CodeConflict:
 		// EC2 refuses DeleteVolume on an attached volume with VolumeInUse.

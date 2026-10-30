@@ -81,6 +81,9 @@ type Error struct {
 	// owned marks a bucket create refused because the caller already owns
 	// the name, as opposed to a name another account holds (#315).
 	owned bool
+	// duplicate marks a security group rule that already exists, which EC2
+	// answers as InvalidPermission.Duplicate (#272).
+	duplicate bool
 }
 
 func (e *Error) Error() string {
@@ -167,6 +170,25 @@ func NotFound(kind Kind, id string) *Error {
 // AlreadyExists reports a resource the caller cannot create again.
 func AlreadyExists(kind Kind, id string) *Error {
 	return &Error{Code: CodeAlreadyExists, Kind: kind, ID: id, Message: "already exists"}
+}
+
+// DuplicatePermission reports a security group rule that is already present.
+// The message is EC2's own, from the errors page of the API Reference.
+// https://docs.aws.amazon.com/AWSEC2/latest/APIReference/errors-overview.html
+func DuplicatePermission(id string) *Error {
+	return &Error{
+		Code:      CodeAlreadyExists,
+		Kind:      KindSecurityGroup,
+		ID:        id,
+		Message:   "The specified inbound or outbound rule already exists for that security group.",
+		duplicate: true,
+	}
+}
+
+// IsDuplicatePermission reports whether err is a duplicate security group rule.
+func IsDuplicatePermission(err error) bool {
+	var e *Error
+	return errors.As(err, &e) && e.duplicate
 }
 
 // BucketOwnedMessage is the text S3 sends with BucketAlreadyOwnedByYou, from
