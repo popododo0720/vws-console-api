@@ -889,11 +889,13 @@ func allowDescribeSubnets(key string) bool {
 
 func allowDescribeInstanceStatus(key string) bool {
 	return allowDescribeBase(key) || indexed(key, "InstanceId", 100) ||
-		key == "IncludeAllInstances" || key == "includeAllInstances"
+		key == "IncludeAllInstances" || key == "includeAllInstances" ||
+		key == "IncludeManagedResources" || key == "includeManagedResources"
 }
 
 func allowDescribeInstanceTypes(key string) bool {
-	return allowDescribeBase(key) || indexed(key, "InstanceType", 100)
+	return allowDescribeBase(key) || indexed(key, "InstanceType", 100) ||
+		key == "IncludeUnsupportedInRegion" || key == "includeUnsupportedInRegion"
 }
 
 func allowDescribeTags(key string) bool {
@@ -901,7 +903,8 @@ func allowDescribeTags(key string) bool {
 }
 
 func allowDescribeVolumesModifications(key string) bool {
-	return allowDescribeBase(key) || indexed(key, "VolumeId", 100)
+	return allowDescribeBase(key) || indexed(key, "VolumeId", 100) ||
+		key == "IncludeManagedResources" || key == "includeManagedResources"
 }
 
 // allowDescribeSimple is the describe shape without pagination.
@@ -1145,6 +1148,11 @@ func statusOf(c resource.Code) int {
 func ec2Code(e *resource.Error) string {
 	switch e.Code {
 	case resource.CodeNotFound:
+		// A missing route table gets the code from the errors page, because
+		// VWS has no route table model to name it from.
+		if e.Field == "routeTableId" {
+			return "InvalidRouteTableID.NotFound"
+		}
 		// A missing security group rule is InvalidPermission.NotFound, not
 		// the InvalidGroup.NotFound a missing group gets (#272).
 		if resource.IsPermissionNotFound(e) {
@@ -1158,6 +1166,10 @@ func ec2Code(e *resource.Error) string {
 		}
 		return notFoundCode(e.Kind)
 	case resource.CodeInvalidArgument:
+		// A route table id VWS cannot parse has its own EC2 code.
+		if e.Field == "routeTableId" {
+			return "InvalidRouteTableID.Malformed"
+		}
 		// EC2 reports a public key it cannot read as InvalidKey.Format.
 		if strings.EqualFold(e.Field, "publicKeyMaterial") {
 			if e.Message == "required" {

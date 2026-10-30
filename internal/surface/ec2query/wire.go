@@ -632,6 +632,7 @@ type availabilityZoneItem struct {
 	RegionName         string `xml:"regionName"`
 	OptInStatus        string `xml:"optInStatus"`
 	GroupName          string `xml:"groupName,omitempty"`
+	GroupLongName      string `xml:"groupLongName,omitempty"`
 	NetworkBorderGroup string `xml:"networkBorderGroup,omitempty"`
 	ZoneType           string `xml:"zoneType,omitempty"`
 }

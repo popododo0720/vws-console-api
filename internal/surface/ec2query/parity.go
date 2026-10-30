@@ -39,14 +39,29 @@ func queryFilters(r *http.Request) ([]queryFilter, error) {
 }
 
 func checkFilterNames(filters []queryFilter, allowed ...string) error {
+	return checkFilterNameList(filters, false, allowed)
+}
+
+// checkTagFilterNames is checkFilterNames plus EC2's tag:<key> form.
+func checkTagFilterNames(filters []queryFilter, allowed ...string) error {
+	return checkFilterNameList(filters, true, allowed)
+}
+
+func checkFilterNameList(filters []queryFilter, allowTag bool, allowed []string) error {
 	names := make(map[string]struct{}, len(allowed))
 	for _, name := range allowed {
 		names[name] = struct{}{}
 	}
 	for _, f := range filters {
-		if _, ok := names[f.name]; !ok {
-			return resource.Invalid("Filter", "unsupported")
+		if _, ok := names[f.name]; ok {
+			continue
 		}
+		if allowTag {
+			if key, ok := strings.CutPrefix(f.name, "tag:"); ok && key != "" {
+				continue
+			}
+		}
+		return resource.Invalid("Filter", "unsupported")
 	}
 	return nil
 }
@@ -56,7 +71,7 @@ func filtersMatch(filters []queryFilter, values func(string) []string) bool {
 		matched := false
 		for _, want := range f.values {
 			for _, got := range values(f.name) {
-				if got == want {
+				if wildcardMatch(want, got) {
 					matched = true
 					break
 				}
@@ -70,6 +85,37 @@ func filtersMatch(filters []queryFilter, values func(string) []string) bool {
 		}
 	}
 	return true
+}
+
+// wildcardMatch applies EC2's * and ? filter wildcards. A pattern without
+// either character is an exact match.
+func wildcardMatch(pattern, value string) bool {
+	if !strings.ContainsAny(pattern, "*?") {
+		return pattern == value
+	}
+	p, v := []rune(pattern), []rune(value)
+	pi, vi := 0, 0
+	star, mark := -1, 0
+	for vi < len(v) {
+		switch {
+		case pi < len(p) && (p[pi] == '?' || p[pi] == v[vi]):
+			pi++
+			vi++
+		case pi < len(p) && p[pi] == '*':
+			star, mark = pi, vi
+			pi++
+		case star >= 0:
+			pi = star + 1
+			mark++
+			vi = mark
+		default:
+			return false
+		}
+	}
+	for pi < len(p) && p[pi] == '*' {
+		pi++
+	}
+	return pi == len(p)
 }
 
 // pageRows slices rows after filtering them in the codec. The token is the
@@ -158,17 +204,23 @@ func (h *handler) describeInstanceStatus(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	if err := checkFilterNames(filters,
-		"availability-zone", "event.code", "event.description", "event.instance-event-id",
-		"event.not-after", "event.not-before", "event.not-before-deadline",
-		"instance-id", "instance-state-code", "instance-state-name",
-		"instance-status.reachability", "instance-status.status",
-		"system-status.reachability", "system-status.status",
+		"application-status.status", "attached-ebs-status.status",
+		"availability-zone", "availability-zone-id", "event.code", "event.description",
+		"event.instance-event-id", "event.not-after", "event.not-before",
+		"event.not-before-deadline", "instance-id", "instance-state-code",
+		"instance-state-name", "instance-status.reachability", "instance-status.status",
+		"operator.managed", "operator.principal", "system-status.reachability",
+		"system-status.status",
 	); err != nil {
 		writeErr(w, r, err)
 		return
 	}
 	includeAll, err := boolForm(r, "IncludeAllInstances")
 	if err != nil {
+		writeErr(w, r, err)
+		return
+	}
+	if _, err := boolForm(r, "IncludeManagedResources"); err != nil {
 		writeErr(w, r, err)
 		return
 	}
@@ -256,8 +308,12 @@ func (s statusCheckXML) reachability() string {
 
 func (i instanceStatusItem) filterValue(name string) []string {
 	switch name {
+	case "application-status.status", "attached-ebs-status.status":
+		return []string{"not-applicable"}
 	case "availability-zone":
 		return []string{i.AvailabilityZone}
+	case "availability-zone-id":
+		return []string{zoneID}
 	case "instance-id":
 		return []string{i.InstanceID}
 	case "instance-state-code":
@@ -268,6 +324,10 @@ func (i instanceStatusItem) filterValue(name string) []string {
 		return []string{i.InstanceStatus.reachability()}
 	case "instance-status.status":
 		return []string{i.InstanceStatus.Status}
+	case "operator.managed":
+		return []string{"false"}
+	case "operator.principal":
+		return nil
 	case "system-status.reachability":
 		return []string{i.SystemStatus.reachability()}
 	case "system-status.status":
@@ -288,6 +348,7 @@ func (h *handler) describeInstanceTypes(w http.ResponseWriter, r *http.Request, 
 	}
 	if err := checkFilterNames(filters,
 		"auto-recovery-supported", "bare-metal", "burstable-performance-supported", "current-generation",
+		"dedicated-hosts-supported", "ebs-info.attachment-limit-type", "ebs-info.maximum-ebs-attachments",
 		"ebs-info.ebs-optimized-info.baseline-bandwidth-in-mbps", "ebs-info.ebs-optimized-info.baseline-iops",
 		"ebs-info.ebs-optimized-info.baseline-throughput-in-mbps",
 		"ebs-info.ebs-optimized-info.maximum-bandwidth-in-mbps", "ebs-info.ebs-optimized-info.maximum-iops",
@@ -297,17 +358,23 @@ func (h *handler) describeInstanceTypes(w http.ResponseWriter, r *http.Request, 
 		"instance-storage-info.disk.type", "instance-storage-info.encryption-support",
 		"instance-storage-info.nvme-support", "instance-storage-info.total-size-in-gb",
 		"instance-storage-supported", "instance-type", "memory-info.size-in-mib",
-		"network-info.efa-info.maximum-efa-interfaces", "network-info.efa-supported", "network-info.ena-support",
-		"network-info.encryption-in-transit-supported", "network-info.ipv4-addresses-per-interface",
-		"network-info.ipv6-addresses-per-interface", "network-info.ipv6-supported",
-		"network-info.maximum-network-cards", "network-info.maximum-network-interfaces",
-		"network-info.network-performance", "nitro-enclaves-support", "nitro-tpm-support",
-		"nitro-tpm-info.supported-versions", "processor-info.supported-architecture",
-		"processor-info.sustained-clock-speed-in-ghz", "processor-info.supported-features",
-		"supported-boot-mode", "supported-root-device-type", "supported-usage-class",
-		"supported-virtualization-type", "vcpu-info.default-cores", "vcpu-info.default-threads-per-core",
-		"vcpu-info.default-vcpus",
+		"network-info.bandwidth-weightings", "network-info.efa-info.maximum-efa-interfaces",
+		"network-info.efa-supported", "network-info.ena-support",
+		"network-info.flexible-ena-queues-support", "network-info.encryption-in-transit-supported",
+		"network-info.ipv4-addresses-per-interface", "network-info.ipv6-addresses-per-interface",
+		"network-info.ipv6-supported", "network-info.maximum-network-cards",
+		"network-info.maximum-network-interfaces", "network-info.network-performance",
+		"nitro-enclaves-support", "nitro-tpm-support", "nitro-tpm-info.supported-versions",
+		"processor-info.supported-architecture", "processor-info.sustained-clock-speed-in-ghz",
+		"processor-info.supported-features", "reboot-migration-support", "supported-boot-mode",
+		"supported-root-device-type", "supported-usage-class", "supported-virtualization-type",
+		"vcpu-info.default-cores", "vcpu-info.default-threads-per-core", "vcpu-info.default-vcpus",
+		"vcpu-info.valid-cores", "vcpu-info.valid-threads-per-core",
 	); err != nil {
+		writeErr(w, r, err)
+		return
+	}
+	if _, err := boolForm(r, "IncludeUnsupportedInRegion"); err != nil {
 		writeErr(w, r, err)
 		return
 	}
@@ -367,9 +434,9 @@ func instanceTypeOf(typ resource.InstanceType) instanceTypeItem {
 
 func (i instanceTypeItem) filterValue(name string) []string {
 	switch name {
-	case "auto-recovery-supported", "burstable-performance-supported", "hibernation-supported",
-		"instance-storage-supported", "network-info.efa-supported", "network-info.encryption-in-transit-supported",
-		"network-info.ipv6-supported":
+	case "auto-recovery-supported", "burstable-performance-supported", "dedicated-hosts-supported",
+		"hibernation-supported", "instance-storage-supported", "network-info.efa-supported",
+		"network-info.encryption-in-transit-supported", "network-info.ipv6-supported":
 		return []string{"false"}
 	case "bare-metal":
 		return []string{strconv.FormatBool(i.BareMetal)}
@@ -387,14 +454,20 @@ func (i instanceTypeItem) filterValue(name string) []string {
 		return i.SupportedUsageClasses.Items
 	case "supported-virtualization-type":
 		return i.SupportedVirtualizationTypes.Items
-	case "vcpu-info.default-cores":
+	case "vcpu-info.default-cores", "vcpu-info.valid-cores":
 		return []string{strconv.Itoa(i.VCpuInfo.DefaultCores)}
-	case "vcpu-info.default-threads-per-core":
+	case "vcpu-info.default-threads-per-core", "vcpu-info.valid-threads-per-core":
 		return []string{strconv.Itoa(i.VCpuInfo.DefaultThreadsPerCore)}
 	case "vcpu-info.default-vcpus":
 		return []string{strconv.Itoa(i.VCpuInfo.DefaultVCpus)}
 	case "processor-info.supported-architecture":
 		return i.ProcessorInfo.SupportedArchitectures.Items
+	case "ebs-info.attachment-limit-type":
+		return []string{"shared"}
+	case "network-info.bandwidth-weightings":
+		return []string{"default"}
+	case "network-info.flexible-ena-queues-support", "reboot-migration-support":
+		return []string{"unsupported"}
 	case "ebs-info.ebs-optimized-info.baseline-bandwidth-in-mbps",
 		"ebs-info.ebs-optimized-info.baseline-iops",
 		"ebs-info.ebs-optimized-info.baseline-throughput-in-mbps",
@@ -402,6 +475,7 @@ func (i instanceTypeItem) filterValue(name string) []string {
 		"ebs-info.ebs-optimized-info.maximum-iops",
 		"ebs-info.ebs-optimized-info.maximum-throughput-in-mbps",
 		"ebs-info.ebs-optimized-support", "ebs-info.encryption-support", "ebs-info.nvme-support",
+		"ebs-info.maximum-ebs-attachments",
 		"hypervisor", "instance-storage-info.disk.count", "instance-storage-info.disk.size-in-gb",
 		"instance-storage-info.disk.type", "instance-storage-info.encryption-support",
 		"instance-storage-info.nvme-support", "instance-storage-info.total-size-in-gb",
@@ -424,7 +498,7 @@ func (h *handler) describeTags(w http.ResponseWriter, r *http.Request, c resourc
 		writeErr(w, r, err)
 		return
 	}
-	if err := checkFilterNames(filters, "key", "resource-id", "resource-type", "value"); err != nil {
+	if err := checkTagFilterNames(filters, "key", "resource-id", "resource-type", "value"); err != nil {
 		writeErr(w, r, err)
 		return
 	}
@@ -489,6 +563,12 @@ func (t tagDescriptionItem) identity() string {
 }
 
 func (t tagDescriptionItem) filterValue(name string) []string {
+	if key, ok := strings.CutPrefix(name, "tag:"); ok {
+		if key == t.Key {
+			return []string{t.Value}
+		}
+		return nil
+	}
 	switch name {
 	case "key":
 		return []string{t.Key}
@@ -526,6 +606,10 @@ func (h *handler) describeVolumesModifications(w http.ResponseWriter, r *http.Re
 		writeErr(w, r, err)
 		return
 	}
+	if _, err := boolForm(r, "IncludeManagedResources"); err != nil {
+		writeErr(w, r, err)
+		return
+	}
 	for _, f := range filters {
 		if f.name != "volume-id" {
 			continue
@@ -552,6 +636,7 @@ func (h *handler) describeVolumesModifications(w http.ResponseWriter, r *http.Re
 		writeErr(w, r, err)
 		return
 	}
+	// VWS has no modification history to return; vws-storage#157 tracks it.
 	writeXML(w, describeVolumesModificationsXML{
 		VolumesModifications: volumeModificationSetXML{Items: []volumeModificationItem{}},
 		RequestID:            requestID(r),
@@ -637,8 +722,8 @@ func (h *handler) describeAvailabilityZones(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	if err := checkFilterNames(filters,
-		"group-name", "message", "opt-in-status", "parent-zone-id", "parent-zone-name",
-		"region-name", "state", "zone-id", "zone-name", "zone-type",
+		"group-long-name", "group-name", "message", "opt-in-status", "parent-zone-id",
+		"parent-zone-name", "region-name", "state", "zone-id", "zone-name", "zone-type",
 	); err != nil {
 		writeErr(w, r, err)
 		return
@@ -656,6 +741,7 @@ func (h *handler) describeAvailabilityZones(w http.ResponseWriter, r *http.Reque
 		RegionName:         resource.RegionName,
 		OptInStatus:        "opt-in-not-required",
 		GroupName:          resource.RegionName,
+		GroupLongName:      "VWS " + resource.RegionName,
 		NetworkBorderGroup: resource.RegionName,
 		ZoneType:           "availability-zone",
 	}}
@@ -683,6 +769,8 @@ func (h *handler) describeAvailabilityZones(w http.ResponseWriter, r *http.Reque
 
 func (z availabilityZoneItem) filterValue(name string) []string {
 	switch name {
+	case "group-long-name":
+		return []string{z.GroupLongName}
 	case "group-name":
 		return []string{z.GroupName}
 	case "message":
@@ -760,16 +848,25 @@ func (h *handler) describeRouteTables(w http.ResponseWriter, r *http.Request, c 
 		writeErr(w, r, err)
 		return
 	}
-	if err := checkFilterNames(filters,
+	if err := checkTagFilterNames(filters,
 		"association.gateway-id", "association.route-table-association-id",
 		"association.route-table-id", "association.subnet-id", "association.main",
 		"owner-id", "route-table-id", "route.destination-cidr-block",
 		"route.destination-ipv6-cidr-block", "route.destination-prefix-list-id",
 		"route.egress-only-internet-gateway-id", "route.gateway-id", "route.instance-id",
 		"route.nat-gateway-id", "route.transit-gateway-id", "route.origin", "route.state",
-		"route.vpc-peering-connection-id", "tag-key", "vpc-id",
+		"route.vpc-peering-connection-id", "tag", "tag-key", "vpc-id",
 	); err != nil {
 		writeErr(w, r, err)
+		return
+	}
+	if ids := indexedStrings(r, "RouteTableId"); len(ids) > 0 {
+		raw := ids[0]
+		if !validRouteTableID(raw) {
+			writeErr(w, r, resource.Invalid("routeTableId", "malformed"))
+			return
+		}
+		writeErr(w, r, routeTableNotFound(raw))
 		return
 	}
 	page, err := pageForm(r)
@@ -781,9 +878,33 @@ func (h *handler) describeRouteTables(w http.ResponseWriter, r *http.Request, c 
 		writeErr(w, r, resource.Invalid("NextToken", "unknown"))
 		return
 	}
+	// VWS has no route table model, so every VPC's main route table is absent.
+	// popododo0720/vws-console-api#206 and #207 track the model.
 	writeXML(w, describeRouteTablesXML{
 		RouteTables: routeTableSetXML{Items: []routeTableItem{}}, RequestID: requestID(r),
 	})
+}
+
+// routeTableNotFound reports a route table id VWS cannot serve. VWS has no
+// route table model; the EC2 code is InvalidRouteTableID.NotFound.
+func routeTableNotFound(id string) *resource.Error {
+	return &resource.Error{
+		Code: resource.CodeNotFound, Field: "routeTableId", ID: id,
+		Message: "The routeTable ID '" + id + "' does not exist.",
+	}
+}
+
+func validRouteTableID(id string) bool {
+	rest, ok := strings.CutPrefix(id, "rtb-")
+	if !ok || len(rest) < 8 || len(rest) > 17 {
+		return false
+	}
+	for _, r := range rest {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 // boolForm reads an EC2 boolean parameter. Left out is false. boto3 sends
