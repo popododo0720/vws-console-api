@@ -1989,15 +1989,16 @@ func (c networkClient) authorizeIngressOnce(
 	}
 	for _, have := range current.Rules {
 		if have == req.Rule {
-			if sameIngressRequest(current, m, resource.ActionAuthorizeSecurityGroupIngress, "ingress") {
-				return c.writeGroupRules(ctx, m, projectID, current, current.Rules, "ingress",
+			if etag, ok := sameIngressRequest(current, m, resource.ActionAuthorizeSecurityGroupIngress, "ingress"); ok {
+				return c.writeGroupRules(ctx, m, projectID, current, current.Rules, etag, "ingress",
 					resource.ActionAuthorizeSecurityGroupIngress)
 			}
 			return resource.Accepted[resource.SecurityGroup]{}, resource.DuplicatePermission(current.ID.String())
 		}
 	}
 	rules := append(append([]resource.IngressRule{}, current.Rules...), req.Rule)
-	return c.writeGroupRules(ctx, m, projectID, current, rules, "ingress", resource.ActionAuthorizeSecurityGroupIngress)
+	return c.writeGroupRules(ctx, m, projectID, current, rules, current.Etag, "ingress",
+		resource.ActionAuthorizeSecurityGroupIngress)
 }
 
 func (c networkClient) RevokeSecurityGroupIngress(
@@ -2041,8 +2042,8 @@ func (c networkClient) revokeIngressOnce(
 		}
 	}
 	if index < 0 {
-		if sameIngressRequest(current, m, resource.ActionRevokeSecurityGroupIngress, "revoke") {
-			return c.writeGroupRules(ctx, m, projectID, current, current.Rules, "revoke",
+		if etag, ok := sameIngressRequest(current, m, resource.ActionRevokeSecurityGroupIngress, "revoke"); ok {
+			return c.writeGroupRules(ctx, m, projectID, current, current.Rules, etag, "revoke",
 				resource.ActionRevokeSecurityGroupIngress)
 		}
 		return resource.Accepted[resource.SecurityGroup]{}, resource.PermissionNotFound(current.ID.String())
@@ -2050,24 +2051,29 @@ func (c networkClient) revokeIngressOnce(
 	rules := make([]resource.IngressRule, 0, len(current.Rules)-1)
 	rules = append(rules, current.Rules[:index]...)
 	rules = append(rules, current.Rules[index+1:]...)
-	return c.writeGroupRules(ctx, m, projectID, current, rules, "revoke", resource.ActionRevokeSecurityGroupIngress)
+	return c.writeGroupRules(ctx, m, projectID, current, rules, current.Etag, "revoke",
+		resource.ActionRevokeSecurityGroupIngress)
 }
 
 // sameIngressRequest reports whether the group's labels name this exact
-// request. The write that already applied it left them there, so a retry
-// resubmits the same request id and the network service replays it.
+// request and returns the etag that request used. A retry resubmits the same
+// request id, etag and labels, so the network service replays it. The reread
+// etag is not that etag, so reusing it would be an idempotency conflict.
 func sameIngressRequest(
 	current resource.SecurityGroup, m backend.Mutation, action resource.Action, suffix string,
-) bool {
-	return current.Labels[labelAction] == action.String() &&
-		current.Labels[labelRequest] == requestUUID(m.Key, suffix)
+) (string, bool) {
+	if current.Labels[labelAction] != action.String() ||
+		current.Labels[labelRequest] != requestUUID(m.Key, suffix) || current.Labels[labelEtag] == "" {
+		return "", false
+	}
+	return current.Labels[labelEtag], true
 }
 
 // writeGroupRules replaces the rule list with the etag from the read. A stale
 // etag is etagMismatchError so the caller rereads and tries again.
 func (c networkClient) writeGroupRules(
 	ctx context.Context, m backend.Mutation, projectID string, current resource.SecurityGroup,
-	rules []resource.IngressRule, requestSuffix string, action resource.Action,
+	rules []resource.IngressRule, etag, requestSuffix string, action resource.Action,
 ) (resource.Accepted[resource.SecurityGroup], error) {
 	var zero resource.Accepted[resource.SecurityGroup]
 	protoRules := make([]*networkv1.SecurityGroupRule, 0, len(rules))
@@ -2084,12 +2090,13 @@ func (c networkClient) writeGroupRules(
 	}
 	labels[labelAction] = action.String()
 	labels[labelRequest] = requestUUID(m.Key, requestSuffix)
+	labels[labelEtag] = etag
 	updated, callErr := c.groups.UpdateSecurityGroup(ctx, &networkv1.UpdateSecurityGroupRequest{
 		RequestId:  requestUUID(m.Key, requestSuffix),
 		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.rules", "labels"}},
 		SecurityGroup: &networkv1.SecurityGroup{
 			Name:   securityGroupName(projectID, current.VpcID.String(), current.ID.String()),
-			Etag:   current.Etag,
+			Etag:   etag,
 			Labels: labels,
 			Spec:   &networkv1.SecurityGroupSpec{Rules: protoRules},
 		},

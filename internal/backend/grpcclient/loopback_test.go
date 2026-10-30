@@ -170,6 +170,7 @@ type loopWorld struct {
 	sub       map[string]subSnap
 	groups    map[string]resource.SecurityGroup
 	groupOps  map[string]resource.Operation
+	groupReqs map[string]groupReplay
 	etagN     int
 	keyLine   map[string]string
 	keySHA1   map[string]string
@@ -199,14 +200,15 @@ func newLoopWorld(set backend.Set, now time.Time) *loopWorld {
 		idem: map[string]string{}, exists: map[string]struct{}{},
 		vpcCIDR: map[string]string{}, subnetVPC: map[string]string{},
 		inst: map[string]instSnap{}, sub: map[string]subSnap{},
-		groups:   map[string]resource.SecurityGroup{},
-		groupOps: map[string]resource.Operation{},
-		keyLine:  map[string]string{},
-		keySHA1:  map[string]string{},
-		opLaunch: map[string]string{},
-		actions:  map[string]string{},
-		detach:   map[string]map[string]string{},
-		boots:    map[string]*storagev1.Volume{},
+		groups:    map[string]resource.SecurityGroup{},
+		groupOps:  map[string]resource.Operation{},
+		groupReqs: map[string]groupReplay{},
+		keyLine:   map[string]string{},
+		keySHA1:   map[string]string{},
+		opLaunch:  map[string]string{},
+		actions:   map[string]string{},
+		detach:    map[string]map[string]string{},
+		boots:     map[string]*storagev1.Volume{},
 	}
 }
 

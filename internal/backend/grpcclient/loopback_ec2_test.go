@@ -162,6 +162,11 @@ type groupSrv struct {
 	w *loopWorld
 }
 
+type groupReplay struct {
+	fingerprint string
+	op          resource.Operation
+}
+
 func (s *groupSrv) CreateSecurityGroup(ctx context.Context, req *networkv1.CreateSecurityGroupRequest) (*longrunningpb.Operation, error) {
 	if !s.w.has(req.GetParent()) {
 		return nil, toStatus(resource.NotFound(resource.KindVpc, "vpc"))
@@ -222,6 +227,20 @@ func (s *groupSrv) UpdateSecurityGroup(ctx context.Context, req *networkv1.Updat
 	if err != nil {
 		return nil, toStatus(err)
 	}
+	fp, err := protoFingerprint(req)
+	if err != nil {
+		return nil, toStatus(err)
+	}
+	s.w.mu.Lock()
+	replay, replayed := s.w.groupReqs[req.GetRequestId()]
+	s.w.mu.Unlock()
+	if replayed {
+		if replay.fingerprint != fp {
+			return nil, vwsStatus(codes.Aborted, "IDEMPOTENCY_CONFLICT", "idempotency conflict")
+		}
+		return runningOp(projectID, replay.op, req.GetSecurityGroup().GetName(),
+			commonv1.OperationVerb_OPERATION_VERB_UPDATE, s.w.now)
+	}
 	rules := req.GetSecurityGroup().GetSpec().GetRules()
 	if err := ctx.Err(); err != nil {
 		return nil, toStatus(err)
@@ -258,6 +277,7 @@ func (s *groupSrv) UpdateSecurityGroup(ctx context.Context, req *networkv1.Updat
 	}
 	s.w.mu.Lock()
 	s.w.groupOps[opID.String()] = op
+	s.w.groupReqs[req.GetRequestId()] = groupReplay{fingerprint: fp, op: op}
 	s.w.mu.Unlock()
 	return runningOp(projectID, op, req.GetSecurityGroup().GetName(),
 		commonv1.OperationVerb_OPERATION_VERB_UPDATE, s.w.now)
