@@ -108,7 +108,7 @@ func (g *guard) fail(ctx context.Context, req LoginRequest, now time.Time) {
 	if d := lockFor(l.failures); d > 0 {
 		l.until = now.Add(d)
 		g.log.LogAttrs(ctx, slog.LevelWarn, "console sign-in locked out",
-			slog.String("account", req.Account.String()), slog.String("user", req.UserName),
+			slog.String("user", req.UserName),
 			slog.String("source_ip", req.SourceIP), slog.Int("failures", l.failures), slog.Time("until", l.until))
 	}
 }

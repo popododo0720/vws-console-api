@@ -128,7 +128,7 @@ func (a STSAdmin) observeKey(
 		}
 		level := slog.LevelInfo
 		logAttrs := []slog.Attr{
-			slog.String("action", action), slog.String("account", account.String()),
+			slog.String("action", action),
 			slog.String("user_name", user), slog.String("group_name", group),
 			slog.String("outcome", outcome), slog.Duration("elapsed", time.Since(start)),
 		}

@@ -625,7 +625,6 @@ func (k KeyPair) GoString() string {
 func (k KeyPair) LogValue() slog.Value {
 	return slog.GroupValue(
 		slog.String("id", k.ID.String()),
-		slog.String("owner_id", k.OwnerID.String()),
 		slog.String("name", k.Name),
 		slog.String("fingerprint", k.Fingerprint),
 		slog.String("type", string(k.Type)),

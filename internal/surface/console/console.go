@@ -74,7 +74,18 @@ func New(cfg Config) http.Handler {
 	}
 	h := &handler{svc: cfg.Service, auth: cfg.Auth, iam: cfg.IAM, log: log, mux: http.NewServeMux(), origins: cfg.Origins, trusted: cfg.TrustedProxies, now: now, logins: newLimiter(), loginOff: cfg.LoginDisabled}
 	h.routes(h.mux)
-	return http.HandlerFunc(h.gate)
+	return h
+}
+
+// ServeHTTP authenticates and authorizes the route before it runs.
+func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) { h.gate(w, r) }
+
+// RoutePattern returns the mux pattern that serves r, such as
+// "GET /api/v1/instances/{id}". Logs and metric labels use it instead of the
+// raw path.
+func (h *handler) RoutePattern(r *http.Request) string {
+	_, pattern := h.mux.Handler(r)
+	return pattern
 }
 
 func (h *handler) routes(mux *http.ServeMux) {

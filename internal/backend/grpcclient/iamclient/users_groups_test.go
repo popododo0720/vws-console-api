@@ -326,9 +326,11 @@ func TestUserAndGroupCallsAreTracedAndLogged(t *testing.T) {
 	if err := json.Unmarshal([]byte(lines[0]), &first); err != nil {
 		t.Fatal(err)
 	}
-	if first["action"] != "CreateUser" || first["user_name"] != "carol" || first["outcome"] != "ok" ||
-		first["account"] != "123456789012" {
+	if first["action"] != "CreateUser" || first["user_name"] != "carol" || first["outcome"] != "ok" {
 		t.Errorf("log record %v", first)
+	}
+	if first["account"] != nil {
+		t.Errorf("an account id reached the log: %v", first)
 	}
 	if !strings.Contains(lines[1], `"outcome":"AlreadyExists"`) {
 		t.Errorf("log record %s", lines[1])

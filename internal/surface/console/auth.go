@@ -262,7 +262,7 @@ func (h *handler) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s, err := h.iam.Login(r.Context(), iam.LoginRequest{Account: account, UserName: in.UserName, Password: in.Password, MFACode: in.MFACode, SourceIP: ip})
-	log := h.log.With(slog.String("account", account.String()), slog.String("user", in.UserName), slog.String("source_ip", ip))
+	log := h.log.With(slog.String("user", in.UserName), slog.String("source_ip", ip))
 	if err != nil {
 		log.WarnContext(r.Context(), "console sign-in failed", slog.String("code", resource.CodeOf(err).String()))
 		if iam.IsBusy(err) {
@@ -271,7 +271,7 @@ func (h *handler) login(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, r, sessionErr(err))
 		return
 	}
-	log.InfoContext(r.Context(), "console sign-in", slog.String("principal", s.Principal.ARN))
+	log.InfoContext(r.Context(), "console sign-in")
 	maxAge := int(time.Until(s.Expires).Seconds())
 	csrf := csrfToken(s.Token)
 	http.SetCookie(w, &http.Cookie{Name: SessionCookie, Value: s.Token, Path: "/", MaxAge: maxAge, HttpOnly: true, Secure: true, SameSite: http.SameSiteStrictMode})
