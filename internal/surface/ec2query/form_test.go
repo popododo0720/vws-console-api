@@ -177,6 +177,42 @@ func TestDescribeSecurityGroupReturnsRules(t *testing.T) {
 	}
 }
 
+// #272: revoke reads the group, removes the rule and answers a second revoke
+// as InvalidPermission.NotFound.
+func TestRevokeSecurityGroupIngressRemovesTheRule(t *testing.T) {
+	h, cred, now := harness(t)
+	vpc := signed(t, h, cred, now, url.Values{
+		"Action": {"CreateVpc"}, "Version": {Version}, "CidrBlock": {"10.7.0.0/16"},
+	}.Encode())
+	group := signed(t, h, cred, now, url.Values{
+		"Action": {"CreateSecurityGroup"}, "Version": {Version},
+		"GroupName": {"web"}, "GroupDescription": {"web"}, "VpcId": {xmlText(t, vpc.Body.String(), "vpcId")},
+	}.Encode())
+	id := xmlText(t, group.Body.String(), "groupId")
+	rule := url.Values{
+		"Action": {"AuthorizeSecurityGroupIngress"}, "Version": {Version}, "GroupId": {id},
+		"IpProtocol": {"tcp"}, "FromPort": {"22"}, "ToPort": {"22"}, "CidrIp": {"10.0.0.0/16"},
+	}
+	if opened := signed(t, h, cred, now, rule.Encode()); opened.Code != http.StatusOK {
+		t.Fatalf("authorize %d %s", opened.Code, opened.Body)
+	}
+	rule.Set("Action", "RevokeSecurityGroupIngress")
+	revoked := signed(t, h, cred, now, rule.Encode())
+	if revoked.Code != http.StatusOK || !strings.Contains(revoked.Body.String(), "<return>true</return>") {
+		t.Fatalf("revoke %d %s", revoked.Code, revoked.Body)
+	}
+	described := signed(t, h, cred, now, url.Values{
+		"Action": {"DescribeSecurityGroups"}, "Version": {Version}, "GroupId.1": {id},
+	}.Encode())
+	if strings.Contains(described.Body.String(), "<cidrIp>10.0.0.0/16</cidrIp>") {
+		t.Fatalf("rule survived %d %s", described.Code, described.Body)
+	}
+	again := signed(t, h, cred, now, rule.Encode())
+	if again.Code != http.StatusBadRequest || !strings.Contains(again.Body.String(), "InvalidPermission.NotFound") {
+		t.Fatalf("second revoke %d %s", again.Code, again.Body)
+	}
+}
+
 func subnetIDOf(t *testing.T, body string) string {
 	t.Helper()
 	return xmlText(t, body, "subnetId")

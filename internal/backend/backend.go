@@ -137,6 +137,9 @@ type Network interface {
 	DeleteSecurityGroup(ctx context.Context, m Mutation, req resource.DeleteSecurityGroupRequest) (resource.Accepted[resource.SecurityGroup], error)
 	DescribeSecurityGroups(ctx context.Context, s Scope, q resource.SecurityGroupQuery) (resource.Page[resource.SecurityGroup], error)
 	AuthorizeSecurityGroupIngress(ctx context.Context, m Mutation, req resource.AuthorizeSecurityGroupIngressRequest) (resource.Accepted[resource.SecurityGroup], error)
+	RevokeSecurityGroupIngress(
+		ctx context.Context, m Mutation, req resource.RevokeSecurityGroupIngressRequest,
+	) (resource.Accepted[resource.SecurityGroup], error)
 	DeleteSubnet(ctx context.Context, m Mutation, req resource.DeleteSubnetRequest) (resource.Accepted[resource.Subnet], error)
 	AllocateAddress(ctx context.Context, m Mutation, req resource.AllocateAddressRequest) (resource.Accepted[resource.Address], error)
 	ReleaseAddress(ctx context.Context, m Mutation, req resource.ReleaseAddressRequest) (resource.Accepted[resource.Address], error)

@@ -229,6 +229,33 @@ func (h *handler) authorizeIngress(w http.ResponseWriter, r *http.Request) {
 	writeAccepted(w, acc)
 }
 
+func (h *handler) revokeIngress(w http.ResponseWriter, r *http.Request) {
+	c, token, ok := h.begin(w, r)
+	if !ok {
+		return
+	}
+	id, err := resource.Parse[resource.SecurityGroupID](r.PathValue("id"))
+	if err != nil {
+		writeErr(w, r, err)
+		return
+	}
+	var body struct {
+		Rule resource.IngressRule `json:"ipPermissions"`
+	}
+	if err := decode(w, r, &body); err != nil {
+		writeErr(w, r, err)
+		return
+	}
+	acc, err := h.svc.RevokeSecurityGroupIngress(r.Context(), c, token, resource.RevokeSecurityGroupIngressRequest{
+		ID: id, Rule: body.Rule,
+	})
+	if err != nil {
+		writeErr(w, r, err)
+		return
+	}
+	writeAccepted(w, acc)
+}
+
 func (h *handler) startInstance(w http.ResponseWriter, r *http.Request) {
 	c, token, ok := h.begin(w, r)
 	if !ok {

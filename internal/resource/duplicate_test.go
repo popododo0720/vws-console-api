@@ -17,3 +17,19 @@ func TestDuplicatePermissionIsAlreadyExists(t *testing.T) {
 		t.Fatal("a duplicate group name is a duplicate permission")
 	}
 }
+
+// TestPermissionNotFoundIsNotFound pins the code and the marker that keeps a
+// missing rule apart from a missing group (#272).
+func TestPermissionNotFoundIsNotFound(t *testing.T) {
+	const id = "sg-0123456789abcdef0"
+	err := PermissionNotFound(id)
+	if err.Code != CodeNotFound || err.Kind != KindSecurityGroup || err.ID != id {
+		t.Fatalf("permission not found = %+v", err)
+	}
+	if !IsPermissionNotFound(err) {
+		t.Fatal("PermissionNotFound is not a missing permission")
+	}
+	if IsPermissionNotFound(NotFound(KindSecurityGroup, id)) {
+		t.Fatal("a missing group is a missing permission")
+	}
+}

@@ -114,6 +114,8 @@ func (h *handler) serve(w http.ResponseWriter, r *http.Request) {
 		h.createSecurityGroup(w, r, caller)
 	case resource.ActionAuthorizeSecurityGroupIngress.String():
 		h.authorizeIngress(w, r, caller)
+	case resource.ActionRevokeSecurityGroupIngress.String():
+		h.revokeIngress(w, r, caller)
 	case resource.ActionStartInstances.String():
 		h.startInstances(w, r, caller)
 	case resource.ActionTerminateInstances.String():
@@ -540,7 +542,7 @@ func rejectUnknown(r *http.Request, action string) error {
 		allow = allowCreateTags
 	case resource.ActionCreateSecurityGroup.String():
 		allow = allowCreateGroup
-	case resource.ActionAuthorizeSecurityGroupIngress.String():
+	case resource.ActionAuthorizeSecurityGroupIngress.String(), resource.ActionRevokeSecurityGroupIngress.String():
 		allow = allowAuthorize
 	case resource.ActionStartInstances.String():
 		allow = allowStop
@@ -975,6 +977,11 @@ func statusOf(c resource.Code) int {
 func ec2Code(e *resource.Error) string {
 	switch e.Code {
 	case resource.CodeNotFound:
+		// A missing security group rule is InvalidPermission.NotFound, not
+		// the InvalidGroup.NotFound a missing group gets (#272).
+		if resource.IsPermissionNotFound(e) {
+			return "InvalidPermission.NotFound"
+		}
 		if resource.IsAssociationNotFound(e) {
 			return "InvalidAssociationID.NotFound"
 		}

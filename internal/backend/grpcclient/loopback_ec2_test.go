@@ -223,9 +223,6 @@ func (s *groupSrv) UpdateSecurityGroup(ctx context.Context, req *networkv1.Updat
 		return nil, toStatus(err)
 	}
 	rules := req.GetSecurityGroup().GetSpec().GetRules()
-	if len(rules) == 0 {
-		return nil, toStatus(resource.Invalid("ipProtocol", "required"))
-	}
 	if err := ctx.Err(); err != nil {
 		return nil, toStatus(err)
 	}
@@ -238,13 +235,32 @@ func (s *groupSrv) UpdateSecurityGroup(ctx context.Context, req *networkv1.Updat
 			Cidr:     rule.GetCidr(),
 		})
 	}
-	if _, err := s.w.updateGroup(id.String(), account, req.GetSecurityGroup().GetEtag(), decoded); err != nil {
+	group, err := s.w.updateGroup(id.String(), account, req.GetSecurityGroup().GetEtag(), decoded,
+		req.GetSecurityGroup().GetLabels())
+	if err != nil {
 		if errors.Is(err, etagMismatchError{}) {
 			return nil, vwsStatus(codes.Aborted, "ETAG_MISMATCH", "etag mismatch")
 		}
 		return nil, toStatus(err)
 	}
-	return runningNamed(projectID, req.GetRequestId(), req.GetSecurityGroup().GetName(), commonv1.OperationVerb_OPERATION_VERB_UPDATE, s.w.now)
+	local := strings.ReplaceAll(req.GetRequestId(), "-", "")
+	opID, err := resource.NewOperationID(resource.ServiceNetwork, local)
+	if err != nil {
+		return nil, toStatus(err)
+	}
+	action := resource.ActionAuthorizeSecurityGroupIngress
+	if parsed, ok := resource.ParseAction(req.GetSecurityGroup().GetLabels()[labelAction]); ok {
+		action = parsed
+	}
+	op := resource.Operation{
+		ID: opID, Action: action, State: resource.OperationSucceeded, OwnerID: account,
+		Targets: []resource.Ref{group.ID.Ref()}, CreateTime: s.w.now,
+	}
+	s.w.mu.Lock()
+	s.w.groupOps[opID.String()] = op
+	s.w.mu.Unlock()
+	return runningOp(projectID, op, req.GetSecurityGroup().GetName(),
+		commonv1.OperationVerb_OPERATION_VERB_UPDATE, s.w.now)
 }
 
 type keySrv struct {
@@ -297,7 +313,7 @@ func (w *loopWorld) saveGroup(group resource.SecurityGroup) {
 // updateGroup replaces the rules only while etag still matches and rotates the
 // etag, like the network service's compare-and-swap.
 func (w *loopWorld) updateGroup(
-	id string, owner resource.AccountID, etag string, rules []resource.IngressRule,
+	id string, owner resource.AccountID, etag string, rules []resource.IngressRule, labels map[string]string,
 ) (resource.SecurityGroup, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -311,6 +327,7 @@ func (w *loopWorld) updateGroup(
 	w.etagN++
 	group.Etag = strconv.Itoa(w.etagN)
 	group.Rules = rules
+	group.Labels = labels
 	w.groups[id] = group
 	return group, nil
 }
@@ -339,9 +356,10 @@ func groupProto(group resource.SecurityGroup, projectID string) *networkv1.Secur
 		})
 	}
 	return &networkv1.SecurityGroup{
-		Name: securityGroupName(projectID, group.VpcID.String(), group.ID.String()),
-		Etag: group.Etag,
-		Spec: &networkv1.SecurityGroupSpec{Description: group.Name, Rules: rules},
+		Name:   securityGroupName(projectID, group.VpcID.String(), group.ID.String()),
+		Etag:   group.Etag,
+		Labels: group.Labels,
+		Spec:   &networkv1.SecurityGroupSpec{Description: group.Name, Rules: rules},
 		Status: &networkv1.SecurityGroupStatus{Observed: &commonv1.ObservedState{
 			State: commonv1.ReconciliationState_RECONCILIATION_STATE_READY,
 		}},

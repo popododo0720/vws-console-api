@@ -176,3 +176,16 @@ func TestDuplicatePermissionCode(t *testing.T) {
 		t.Fatalf("duplicate group = %+v", got)
 	}
 }
+
+// #272: a missing security group rule is InvalidPermission.NotFound. A
+// missing group keeps InvalidGroup.NotFound.
+func TestPermissionNotFoundCode(t *testing.T) {
+	const id = "sg-0123456789abcdef0"
+	if got := ec2Wire(t, resource.PermissionNotFound(id)); got != (wireErr{400, "InvalidPermission.NotFound"}) {
+		t.Fatalf("missing rule = %+v", got)
+	}
+	group := resource.NotFound(resource.KindSecurityGroup, id)
+	if got := ec2Wire(t, group); got != (wireErr{400, "InvalidGroup.NotFound"}) {
+		t.Fatalf("missing group = %+v", got)
+	}
+}

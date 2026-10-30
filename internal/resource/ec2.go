@@ -369,8 +369,11 @@ type SecurityGroup struct {
 	VpcID   VpcID           `json:"vpcId"`
 	// Etag is the compare-and-swap token the network service returns with the
 	// group. It is not part of the console or EC2 shape.
-	Etag  string        `json:"-"`
-	Rules []IngressRule `json:"ipPermissions,omitempty"`
+	Etag string `json:"-"`
+	// Labels holds the network service's labels. The client keeps the action
+	// and request id there so a retry and a polled operation name the action.
+	Labels map[string]string `json:"-"`
+	Rules  []IngressRule     `json:"ipPermissions,omitempty"`
 }
 
 // Owner returns the account that owns the group.
@@ -420,28 +423,56 @@ func (AuthorizeSecurityGroupIngressRequest) Action() Action {
 
 // Normalize checks the group and the rule.
 func (r AuthorizeSecurityGroupIngressRequest) Normalize() (AuthorizeSecurityGroupIngressRequest, error) {
-	if r.ID.IsZero() {
-		return AuthorizeSecurityGroupIngressRequest{}, Invalid("groupId", "required")
-	}
-	protocol, err := canonicalProtocol(r.Rule.Protocol)
+	id, rule, err := normalizeIngressRule(r.ID, r.Rule)
 	if err != nil {
 		return AuthorizeSecurityGroupIngressRequest{}, err
 	}
-	r.Rule.Protocol = protocol
-	cidr, err := normalizeCIDR(r.Rule.Cidr)
+	return AuthorizeSecurityGroupIngressRequest{ID: id, Rule: rule}, nil
+}
+
+// RevokeSecurityGroupIngressRequest removes one inbound rule.
+type RevokeSecurityGroupIngressRequest struct {
+	ID   SecurityGroupID `json:"groupId"`
+	Rule IngressRule     `json:"ipPermissions"`
+}
+
+// Action returns RevokeSecurityGroupIngress.
+func (RevokeSecurityGroupIngressRequest) Action() Action {
+	return ActionRevokeSecurityGroupIngress
+}
+
+// Normalize checks the group and the rule.
+func (r RevokeSecurityGroupIngressRequest) Normalize() (RevokeSecurityGroupIngressRequest, error) {
+	id, rule, err := normalizeIngressRule(r.ID, r.Rule)
 	if err != nil {
-		return AuthorizeSecurityGroupIngressRequest{}, err
+		return RevokeSecurityGroupIngressRequest{}, err
 	}
-	r.Rule.Cidr = cidr
+	return RevokeSecurityGroupIngressRequest{ID: id, Rule: rule}, nil
+}
+
+func normalizeIngressRule(id SecurityGroupID, rule IngressRule) (SecurityGroupID, IngressRule, error) {
+	if id.IsZero() {
+		return SecurityGroupID{}, IngressRule{}, Invalid("groupId", "required")
+	}
+	protocol, err := canonicalProtocol(rule.Protocol)
+	if err != nil {
+		return SecurityGroupID{}, IngressRule{}, err
+	}
+	rule.Protocol = protocol
+	cidr, err := normalizeCIDR(rule.Cidr)
+	if err != nil {
+		return SecurityGroupID{}, IngressRule{}, err
+	}
+	rule.Cidr = cidr
 	if protocol == "-1" {
-		r.Rule.FromPort = 0
-		r.Rule.ToPort = 0
-		return r, nil
+		rule.FromPort = 0
+		rule.ToPort = 0
+		return id, rule, nil
 	}
-	if r.Rule.FromPort < 0 || r.Rule.ToPort > 65535 || r.Rule.ToPort < 0 || r.Rule.FromPort > r.Rule.ToPort {
-		return AuthorizeSecurityGroupIngressRequest{}, Invalid("fromPort", "malformed")
+	if rule.FromPort < 0 || rule.ToPort > 65535 || rule.ToPort < 0 || rule.FromPort > rule.ToPort {
+		return SecurityGroupID{}, IngressRule{}, Invalid("fromPort", "malformed")
 	}
-	return r, nil
+	return id, rule, nil
 }
 
 // canonicalProtocol accepts the names and protocol numbers a query client sends.
