@@ -96,7 +96,7 @@ func (c computeClient) RunInstances(ctx context.Context, m backend.Mutation, req
 			Parent:    volumeParent(projectID),
 			VolumeId:  volID,
 			RequestId: requestUUID(m.Key, "vol", strconv.Itoa(i)),
-			Volume:    bootVolume(projectID, m.Fingerprint, req.ImageID, instID),
+			Volume:    bootVolume(projectID, m.Fingerprint, req.ImageID, req.RootType(), instID),
 		})
 		if err := rpcErr(volOp, err); err != nil {
 			return resource.Accepted[resource.Instance]{}, unsupportedVolumeType(err)
@@ -176,16 +176,19 @@ func (c computeClient) requireImage(ctx context.Context, account resource.Accoun
 }
 
 // bootVolume is the disk RunInstances creates from the machine image.
-// It is gp2, the CreateVolume default, because a VWS image carries no block
-// device mapping and RunInstances takes none yet (#323 gaps).
+// typ is the request's root volume type, or gp2 when the request names none:
+// a VWS image carries no block device mapping, and gp2 is the CreateVolume
+// default (#323).
 // volume.proto sources a volume from a compute image. InstanceSpec has no
 // image field; the instance attaches this volume and marks it boot.
-func bootVolume(projectID, fingerprint string, image resource.ImageID, instance string) *storagev1.Volume {
+func bootVolume(
+	projectID, fingerprint string, image resource.ImageID, typ resource.VolumeType, instance string,
+) *storagev1.Volume {
 	return &storagev1.Volume{
 		Labels: map[string]string{labelFingerprint: clip(fingerprint, 63), labelInstance: instance},
 		Spec: &storagev1.VolumeSpec{
 			SizeGib: 8,
-			Type:    storagev1.VolumeType_VOLUME_TYPE_GP2,
+			Type:    storageType(typ),
 			Source:  &storagev1.VolumeSpec_Image{Image: imageName(projectID, image.String())},
 		},
 	}
