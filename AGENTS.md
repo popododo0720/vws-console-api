@@ -65,7 +65,7 @@ change both files together.
 | Key pair keys come from `crypto/rand`, are never stored, and names stay unique. | `TestCreatedKeyIsNotDerivedFromTheRequest`, `TestConcurrentCreatesOfOneNameMakeOneKeyPair` |
 | A missing resource is `NotFound` of its own kind. | `TestMissingResourceKeepsItsKind` |
 | A malformed instance ID is `InvalidInstanceID.Malformed` on every EC2 action that takes one. | `TestMalformedInstanceIDIsInvalidInstanceIDMalformed` |
-| A `DetachVolume` retry returns the first detach, within the label budget. | `backendtest.DetachReplay`, `backendtest.DetachWindow` |
+| A `DetachVolume` retry returns the first detach, within the label budget. Its four known limits wait on vws-proto#57, for the reasons in `docs/rules.md` (#317). | `backendtest.DetachReplay`, `backendtest.DetachWindow` |
 | The detach recovery path matches `docs/formal/detach.tla` (pstack `create-formal-verification-skill` 0.15.30). | CI workflow `tla` (job `detach`) |
 | Volume types map one to one; an unknown type is refused. | `TestVolumeTypeRefusesUnknown` |
 | RunInstances creates the root volume with the root device mapping's type (gp2 when omitted), Ebs.Iops and Ebs.Throughput under the CreateVolume per-type rules on the 8 GiB root, with the gp3 defaults when omitted; any other device mapping is refused. | `TestRunInstancesRootVolumeTypeRoundTrips`, `TestRunInstancesRootIopsAndThroughput`, `exerciseRootVolumeType` |
