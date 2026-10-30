@@ -6,11 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -19,15 +17,8 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.opentelemetry.io/otel/trace"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
-	"google.golang.org/grpc/health"
-	healthpb "google.golang.org/grpc/health/grpc_health_v1"
-	"google.golang.org/grpc/metadata"
-	"google.golang.org/grpc/test/bufconn"
 
 	"github.com/popododo0720/vws-lib/obs"
-	"github.com/popododo0720/vws-lib/obs/grpcobs"
 	"github.com/popododo0720/vws-lib/obs/httpobs"
 	"github.com/popododo0720/vws-lib/obs/report"
 
@@ -151,8 +142,9 @@ func TestWriteFailureIsLogged(t *testing.T) {
 
 // TestHTTPMiddlewareStartsAServerSpan sends an EC2 Query request through the
 // chain Serve builds for a surface. The handler must run inside a server span
-// that continues the caller's traceparent, and a gRPC call made from that
-// handler must carry the same trace id to the backend.
+// that continues the caller's traceparent, so the traceparent an outbound
+// call injects from the handler context carries the caller's trace id.
+// grpcclient's TestClientPropagatesTraceparent covers the gRPC hop.
 func TestHTTPMiddlewareStartsAServerSpan(t *testing.T) {
 	previous := otel.GetTracerProvider()
 	previousPropagator := otel.GetTextMapPropagator()
@@ -166,13 +158,11 @@ func TestHTTPMiddlewareStartsAServerSpan(t *testing.T) {
 		_ = tp.Shutdown(context.Background())
 	})
 
-	backend := newTraceBackend(t)
 	var got trace.SpanContext
+	outbound := http.Header{}
 	ec2 := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		got = trace.SpanContextFromContext(r.Context())
-		if _, err := healthpb.NewHealthClient(backend.conn).Check(r.Context(), &healthpb.HealthCheckRequest{}); err != nil {
-			t.Errorf("backend call: %v", err)
-		}
+		otel.GetTextMapPropagator().Inject(r.Context(), propagation.HeaderCarrier(outbound))
 		w.WriteHeader(http.StatusOK)
 	})
 	h := surfaceHandler(slog.New(slog.DiscardHandler), NewMetrics(), Surface{Name: "ec2", Handler: ec2})
@@ -202,52 +192,8 @@ func TestHTTPMiddlewareStartsAServerSpan(t *testing.T) {
 	if !server {
 		t.Fatal("no ended server-kind span matches the handler span")
 	}
-	if tp := backend.traceparent(); !strings.Contains(tp, inboundTrace) {
-		t.Fatalf("backend traceparent %q does not carry trace id %s", tp, inboundTrace)
+	parent := outbound.Get("traceparent")
+	if !strings.Contains(parent, inboundTrace) || !strings.Contains(parent, got.SpanID().String()) {
+		t.Fatalf("outbound traceparent %q does not carry trace id %s and span %s", parent, inboundTrace, got.SpanID())
 	}
-}
-
-type traceBackend struct {
-	conn     *grpc.ClientConn
-	mu       sync.Mutex
-	received metadata.MD
-}
-
-// newTraceBackend is a fake gRPC backend that records the metadata of the
-// last call. The client uses the same vws-lib dial options as grpcclient.
-func newTraceBackend(t *testing.T) *traceBackend {
-	t.Helper()
-	b := &traceBackend{}
-	lis := bufconn.Listen(1 << 20)
-	record := func(ctx context.Context, req any, _ *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
-		md, _ := metadata.FromIncomingContext(ctx)
-		b.mu.Lock()
-		b.received = md.Copy()
-		b.mu.Unlock()
-		return handler(ctx, req)
-	}
-	srv := grpc.NewServer(grpc.UnaryInterceptor(record))
-	healthpb.RegisterHealthServer(srv, health.NewServer())
-	go func() { _ = srv.Serve(lis) }()
-	t.Cleanup(srv.Stop)
-	opts := append([]grpc.DialOption{
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
-		grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) { return lis.DialContext(ctx) }),
-	}, grpcobs.ClientOptions(service.Name, "compute")...)
-	conn, err := grpc.NewClient("passthrough:///trace-backend", opts...)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = conn.Close() })
-	b.conn = conn
-	return b
-}
-
-func (b *traceBackend) traceparent() string {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if v := b.received.Get("traceparent"); len(v) > 0 {
-		return v[0]
-	}
-	return ""
 }
