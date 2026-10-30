@@ -1394,8 +1394,8 @@ func (c computeClient) ModifyVolume(ctx context.Context, m backend.Mutation, req
 	if err != nil {
 		return resource.Accepted[resource.Volume]{}, err
 	}
-	if req.SizeGiB < vol.SizeGiB {
-		return resource.Accepted[resource.Volume]{}, resource.Invalid("size", "a volume cannot shrink")
+	if err := vol.CheckGrow(req.SizeGiB); err != nil {
+		return resource.Accepted[resource.Volume]{}, err
 	}
 	updated, err := c.volumes.UpdateVolume(ctx, &storagev1.UpdateVolumeRequest{
 		Volume: &storagev1.Volume{

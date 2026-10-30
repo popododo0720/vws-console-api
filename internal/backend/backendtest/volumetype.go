@@ -44,6 +44,10 @@ func exerciseVolumeTypes(ctx context.Context, t *testing.T, set backend.Set, acc
 		}
 		return n
 	}
+	maxGiB := map[resource.VolumeType]int64{
+		resource.VolumeStandard: 1024, resource.VolumeGP2: 16384, resource.VolumeGP3: 65536,
+		resource.VolumeIO1: 16384, resource.VolumeIO2: 65536, resource.VolumeST1: 16384, resource.VolumeSC1: 16384,
+	}
 	before := live()
 	for _, typ := range []resource.VolumeType{
 		resource.VolumeStandard, resource.VolumeGP2, resource.VolumeGP3,
@@ -68,6 +72,14 @@ func exerciseVolumeTypes(ctx context.Context, t *testing.T, set backend.Set, acc
 		}
 		if got := describe(id); len(got) != 1 || got[0].Type != typ {
 			t.Fatalf("%s after modify: %+v", typ, got)
+		}
+		// #324 AC1: ModifyVolume Size stops at the type's EC2 maximum.
+		over := resource.ModifyVolumeRequest{ID: id, SizeGiB: maxGiB[typ] + 1}
+		if _, err := set.Compute.ModifyVolume(ctx, mut("modify-over", typ), over); resource.CodeOf(err) != resource.CodeInvalidArgument {
+			t.Fatalf("modify %s to %d GiB: %v, want InvalidArgument", typ, over.SizeGiB, err)
+		}
+		if got := describe(id); len(got) != 1 || got[0].SizeGiB != 126 {
+			t.Fatalf("%s after a refused grow: %+v", typ, got)
 		}
 		if _, err := set.Compute.DeleteVolume(ctx, mut("delete", typ), resource.DeleteVolumeRequest{ID: id}); err != nil {
 			t.Fatalf("delete %s: %v", typ, err)

@@ -367,13 +367,15 @@ type ModifyVolumeRequest struct {
 // Action returns ModifyVolume.
 func (ModifyVolumeRequest) Action() Action { return ActionModifyVolume }
 
-// Normalize checks the id and the target size.
+// Normalize checks the id and that a target size is given. The size range
+// depends on the volume's type, so the backend checks it with
+// Volume.CheckGrow once it has read the volume.
 func (r ModifyVolumeRequest) Normalize() (ModifyVolumeRequest, error) {
 	if r.ID.IsZero() {
 		return ModifyVolumeRequest{}, Invalid("volumeId", "required")
 	}
-	if r.SizeGiB < 1 || r.SizeGiB > 16384 {
-		return ModifyVolumeRequest{}, Invalid("size", "must be from 1 to 16384")
+	if r.SizeGiB < 1 {
+		return ModifyVolumeRequest{}, Invalid("size", fmt.Sprintf("Value (%d) for parameter size is invalid.", r.SizeGiB))
 	}
 	return r, nil
 }

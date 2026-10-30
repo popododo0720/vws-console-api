@@ -80,12 +80,11 @@ func CheckVolumeShape(t VolumeType, sizeGiB, iops, miBps int64) error {
 	if err := checkVolumePerformance(t, iops, miBps); err != nil {
 		return err
 	}
+	if err := checkVolumeSize(t, sizeGiB); err != nil {
+		return err
+	}
 	l := limitsOf(t)
 	switch {
-	case sizeGiB < l.minGiB:
-		return Invalid("size", fmt.Sprintf("Volume of %dGiB is too small; minimum is %dGiB.", sizeGiB, l.minGiB))
-	case sizeGiB > l.maxGiB:
-		return Invalid("size", fmt.Sprintf("Volume of %dGiB is too large; maximum is %dGiB.", sizeGiB, l.maxGiB))
 	case l.maxIops != 0 && iops < l.minIops:
 		return Invalid("iops", fmt.Sprintf("Volume iops of %d is too low; minimum is %d.", iops, l.minIops))
 	case l.maxIops != 0 && iops > l.maxIops:
@@ -103,6 +102,29 @@ func CheckVolumeShape(t VolumeType, sizeGiB, iops, miBps int64) error {
 			float64(miBps)/float64(iops), float64(l.miBpsPerIopsNum)/float64(l.miBpsPerIopsDen)))
 	}
 	return nil
+}
+
+// checkVolumeSize enforces the size range of type t.
+func checkVolumeSize(t VolumeType, sizeGiB int64) error {
+	l := limitsOf(t)
+	switch {
+	case sizeGiB < l.minGiB:
+		return Invalid("size", fmt.Sprintf("Volume of %dGiB is too small; minimum is %dGiB.", sizeGiB, l.minGiB))
+	case sizeGiB > l.maxGiB:
+		return Invalid("size", fmt.Sprintf("Volume of %dGiB is too large; maximum is %dGiB.", sizeGiB, l.maxGiB))
+	}
+	return nil
+}
+
+// CheckGrow enforces the EC2 ModifyVolume Size rules on growing v to
+// sizeGiB with its type, Iops and Throughput kept: no shrink, and the size
+// range of v's type. Growing only lowers the Iops-per-GiB ratio, so the
+// ratios CheckVolumeShape enforces cannot be broken by it.
+func (v Volume) CheckGrow(sizeGiB int64) error {
+	if sizeGiB < v.SizeGiB {
+		return Invalid("size", "a volume cannot shrink")
+	}
+	return checkVolumeSize(v.Type, sizeGiB)
 }
 
 // gp2Baseline is the IOPS EC2 reports for a gp2 volume: 3 per GiB, at least
