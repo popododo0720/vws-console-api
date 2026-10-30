@@ -790,6 +790,11 @@ func ImageNotFound(id ImageID) *Error {
 	return &Error{
 		Code:    CodeNotFound,
 		Kind:    KindImage,
-		Message: "The image id '[" + id.String() + "]' does not exist",
+		Message: imageNotFoundMessage(id.String()),
 	}
+}
+
+// imageNotFoundMessage is the text EC2 sends with InvalidAMIID.NotFound.
+func imageNotFoundMessage(id string) string {
+	return "The image id '[" + id + "]' does not exist"
 }
