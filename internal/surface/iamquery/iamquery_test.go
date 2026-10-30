@@ -939,10 +939,11 @@ func TestLimitedUserAndSTS(t *testing.T) {
 	has(t, call(t, h, bob, sigv4.ServiceIAM, url.Values{"Action": {"ListUsers"}}), http.StatusForbidden, `<Code>AccessDenied</Code>`)
 	has(t, call(t, h, bob, sigv4.ServiceSTS, url.Values{"Action": {"GetCallerIdentity"}}), http.StatusOK,
 		`<GetCallerIdentityResponse><GetCallerIdentityResult>`,
-		`<Arn>`+u.ARN+`</Arn>`, `<UserId>`+u.ID+`</UserId>`, `<Account>123456789012</Account>`)
+		`<Arn>arn:aws:iam::123456789012:user/bob</Arn>`, `<UserId>`+u.ID+`</UserId>`, `<Account>123456789012</Account>`)
 	// GetUser without UserName names the caller, as in AWS.
 	has(t, call(t, h, bob, sigv4.ServiceIAM, url.Values{"Action": {"GetUser"}}), http.StatusOK, `<UserName>bob</UserName>`)
-	has(t, call(t, h, root, sigv4.ServiceSTS, url.Values{"Action": {"GetCallerIdentity"}}), http.StatusOK, `<Arn>arn:vws:iam::123456789012:root</Arn>`)
+	has(t, call(t, h, root, sigv4.ServiceSTS, url.Values{"Action": {"GetCallerIdentity"}}), http.StatusOK,
+		`<Arn>arn:aws:iam::123456789012:root</Arn>`)
 
 	trust := `{"Statement":[{"Effect":"Allow","Action":"sts:AssumeRole","Principal":{"AWS":"` + u.ARN + `"}}]}`
 	has(t, call(t, h, root, sigv4.ServiceIAM, url.Values{"Action": {"CreateRole"}, "RoleName": {"ops"}, "AssumeRolePolicyDocument": {trust}}),
@@ -964,12 +965,55 @@ func TestLimitedUserAndSTS(t *testing.T) {
 	}
 }
 
+// GetCallerIdentity answers the caller ARN in the aws partition for root, an
+// IAM user and an assumed role, as SDKs parsing the partition expect (#247).
+func TestGetCallerIdentityReturnsAWSARNs(t *testing.T) {
+	h, f, _, root := harness(t)
+	ctx := t.Context()
+	u, err := f.CreateUser(ctx, root.Account, "bob", "/eng/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	k, err := f.CreateAccessKey(ctx, root.Account, "bob", backendtest.UserGrant(ctx, t, f, root.Account, "bob"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	trust := `{"Statement":[{"Effect":"Allow","Action":"sts:AssumeRole","Principal":{"AWS":"*"}}]}`
+	if _, err := f.CreateRole(ctx, root.Account, iam.RoleInput{Name: "ops", Path: "/", TrustPolicy: trust}); err != nil {
+		t.Fatal(err)
+	}
+	assumed, err := f.AssumeRole(ctx, iam.Principal{Account: root.Account, ARN: u.ARN},
+		"arn:vws:iam::123456789012:role/ops", "s1", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assumedCred := sigv4.Credential{
+		AccessKey: assumed.Key.AccessKey, Secret: assumed.Key.Secret, SessionToken: assumed.Key.SessionToken,
+	}
+	for _, tc := range []struct {
+		name string
+		cred sigv4.Credential
+		want string
+	}{
+		{"root", root, "arn:aws:iam::123456789012:root"},
+		{"IAM user", sigv4.Credential{AccessKey: k.AccessKeyID, Secret: k.Secret}, "arn:aws:iam::123456789012:user/eng/bob"},
+		{"assumed role", assumedCred, "arn:aws:sts::123456789012:assumed-role/ops/s1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			res := call(t, h, tc.cred, sigv4.ServiceSTS, url.Values{"Action": {"GetCallerIdentity"}})
+			has(t, res, http.StatusOK, `<Arn>`+tc.want+`</Arn>`)
+			if strings.Contains(res.Body.String(), "arn:vws") {
+				t.Errorf("response carries the vws partition: %s", res.Body)
+			}
+		})
+	}
+}
+
 // GetCallerIdentity needs no permission, as in AWS, but still needs a valid
 // signature.
 func TestGetCallerIdentitySkipsAuthorizeButNotAuthentication(t *testing.T) {
 	h, f, rec, root := harness(t)
-	u, err := f.CreateUser(t.Context(), root.Account, "nobody", "/")
-	if err != nil {
+	if _, err := f.CreateUser(t.Context(), root.Account, "nobody", "/"); err != nil {
 		t.Fatal(err)
 	}
 	k, err := f.CreateAccessKey(
@@ -979,7 +1023,8 @@ func TestGetCallerIdentitySkipsAuthorizeButNotAuthentication(t *testing.T) {
 		t.Fatal(err)
 	}
 	bare := sigv4.Credential{AccessKey: k.AccessKeyID, Secret: k.Secret}
-	has(t, call(t, h, bare, sigv4.ServiceSTS, url.Values{"Action": {"GetCallerIdentity"}}), http.StatusOK, `<Arn>`+u.ARN+`</Arn>`)
+	has(t, call(t, h, bare, sigv4.ServiceSTS, url.Values{"Action": {"GetCallerIdentity"}}), http.StatusOK,
+		`<Arn>arn:aws:iam::123456789012:user/nobody</Arn>`)
 	for _, s := range rec.seen {
 		if strings.HasPrefix(s, "sts:GetCallerIdentity") {
 			t.Errorf("GetCallerIdentity went through Authorize: %v", rec.seen)

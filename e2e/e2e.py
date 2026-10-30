@@ -673,7 +673,7 @@ def identity():
     if not me:
         return
     account = me["Account"]
-    step("STS GetCallerIdentity is the account root", lambda: check(me["Arn"] == f"arn:vws:iam::{account}:root", me["Arn"]))
+    step("STS GetCallerIdentity is the account root", lambda: check(me["Arn"] == f"arn:aws:iam::{account}:root", me["Arn"]))
     describe = json.dumps({"Version": "2012-10-17", "Statement": [
         {"Effect": "Allow", "Action": ["ec2:Describe*", "sts:AssumeRole"], "Resource": "*"}]})
     step("IAM CreateUser", lambda: check(
@@ -861,7 +861,7 @@ def identity():
     step("IAM UpdateAccessKey reactivates the key", lambda: iam.update_access_key(
         UserName="e2e-bob", AccessKeyId=key["AccessKeyId"], Status="Active"))
     step("reactivated key: STS GetCallerIdentity", lambda: check(
-        bob_sts.get_caller_identity()["Arn"] == f"arn:vws:iam::{account}:user/e2e/e2e-bob", "bob arn"))
+        bob_sts.get_caller_identity()["Arn"] == f"arn:aws:iam::{account}:user/e2e/e2e-bob", "bob arn"))
     step("new user key: allowed EC2 DescribeVpcs", lambda: bob_ec2.describe_vpcs())
     step("new user key: EC2 CreateVpc is UnauthorizedOperation", lambda: aws_error(
         "UnauthorizedOperation", lambda: bob_ec2.create_vpc(CidrBlock="10.42.0.0/16")))
@@ -869,7 +869,7 @@ def identity():
         "UnauthorizedOperation", lambda: bob_ec2.describe_volumes()))
     step("new user key: IAM ListUsers is AccessDenied", lambda: aws_error("AccessDenied", lambda: bob_iam.list_users()))
     step("new user key: STS GetCallerIdentity needs no policy", lambda: check(
-        bob_sts.get_caller_identity()["Arn"] == f"arn:vws:iam::{account}:user/e2e/e2e-bob", "bob arn"))
+        bob_sts.get_caller_identity()["Arn"] == f"arn:aws:iam::{account}:user/e2e/e2e-bob", "bob arn"))
     step("IAM GetAccessKeyLastUsed names the key owner", lambda: check(
         iam.get_access_key_last_used(AccessKeyId=key["AccessKeyId"])["UserName"] == "e2e-bob", "owner"))
     step("GetCallerIdentity with a wrong secret is SignatureDoesNotMatch", lambda: aws_error(
@@ -890,7 +890,7 @@ def identity():
         role_ec2 = client("ec2", creds["AccessKeyId"], creds["SecretAccessKey"], creds["SessionToken"], url=EC2_URL)
         role_sts = client("sts", creds["AccessKeyId"], creds["SecretAccessKey"], creds["SessionToken"])
         step("assumed role: STS GetCallerIdentity", lambda: check(
-            role_sts.get_caller_identity()["Arn"] == f"arn:vws:sts::{account}:assumed-role/e2e-ops/e2e", "role arn"))
+            role_sts.get_caller_identity()["Arn"] == f"arn:aws:sts::{account}:assumed-role/e2e-ops/e2e", "role arn"))
 
         def role_vpc():
             vpc = role_ec2.create_vpc(CidrBlock="10.42.0.0/16")["Vpc"]["VpcId"]
