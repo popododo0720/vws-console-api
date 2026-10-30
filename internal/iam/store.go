@@ -174,16 +174,31 @@ func randSecret(n int) string {
 	return base64.StdEncoding.EncodeToString(b)
 }
 
+func newStore() *store {
+	return &store{
+		users: map[string]*userRec{}, groups: map[string]*groupRec{}, roles: map[string]*roleRec{},
+		policies: map[string]*policyRec{}, mfa: map[string]*mfaDeviceRec{},
+	}
+}
+
+// account returns a's store, creating it when needed. The caller holds f.mu
+// for writing.
 func (f *Fake) account(a resource.AccountID) *store {
 	st := f.accounts[a]
 	if st == nil {
-		st = &store{
-			users: map[string]*userRec{}, groups: map[string]*groupRec{}, roles: map[string]*roleRec{},
-			policies: map[string]*policyRec{}, mfa: map[string]*mfaDeviceRec{},
-		}
+		st = newStore()
 		f.accounts[a] = st
 	}
 	return st
+}
+
+// readAccount returns a's store without creating it, so a reader can hold
+// f.mu for reading. A missing account reads as empty.
+func (f *Fake) readAccount(a resource.AccountID) *store {
+	if st := f.accounts[a]; st != nil {
+		return st
+	}
+	return newStore()
 }
 
 // AddMfaDevice registers an unassigned virtual MFA device so it can be listed
@@ -299,7 +314,7 @@ func (f *Fake) GetUser(_ context.Context, a resource.AccountID, name string, wan
 	}
 	f.mu.RLock()
 	defer f.mu.RUnlock()
-	u := f.account(a).users[name]
+	u := f.readAccount(a).users[name]
 	if u == nil {
 		return User{}, notFound("user", name)
 	}
@@ -313,7 +328,7 @@ func (f *Fake) GetUser(_ context.Context, a resource.AccountID, name string, wan
 func (f *Fake) ResolveUser(_ context.Context, a resource.AccountID, name string) (Ref, error) {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
-	u := f.account(a).users[name]
+	u := f.readAccount(a).users[name]
 	if u == nil {
 		return Ref{}, notFound("user", name)
 	}
@@ -325,7 +340,7 @@ func (f *Fake) ListUsers(_ context.Context, a resource.AccountID, prefix string)
 	f.mu.RLock()
 	defer f.mu.RUnlock()
 	out := []User{}
-	for _, u := range f.account(a).users {
+	for _, u := range f.readAccount(a).users {
 		if strings.HasPrefix(u.Path, prefixOr(prefix)) {
 			out = append(out, u.User)
 		}
@@ -493,7 +508,7 @@ func (f *Fake) ListAccessKeys(
 	}
 	f.mu.RLock()
 	defer f.mu.RUnlock()
-	u := f.account(a).users[user]
+	u := f.readAccount(a).users[user]
 	if u == nil {
 		return nil, notFound("user", user)
 	}
@@ -622,7 +637,7 @@ func (f *Fake) GetGroup(
 	}
 	f.mu.RLock()
 	defer f.mu.RUnlock()
-	st := f.account(a)
+	st := f.readAccount(a)
 	g := st.groups[name]
 	if g == nil {
 		return Group{}, nil, notFound("group", name)
@@ -642,7 +657,7 @@ func (f *Fake) GetGroup(
 func (f *Fake) ResolveGroup(_ context.Context, a resource.AccountID, name string) (Ref, error) {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
-	g := f.account(a).groups[name]
+	g := f.readAccount(a).groups[name]
 	if g == nil {
 		return Ref{}, notFound("group", name)
 	}
@@ -654,7 +669,7 @@ func (f *Fake) ListGroups(_ context.Context, a resource.AccountID, prefix string
 	f.mu.RLock()
 	defer f.mu.RUnlock()
 	out := []Group{}
-	for _, g := range f.account(a).groups {
+	for _, g := range f.readAccount(a).groups {
 		if strings.HasPrefix(g.Path, prefixOr(prefix)) {
 			out = append(out, g.Group)
 		}
@@ -804,7 +819,7 @@ func (f *Fake) ListGroupsForUser(
 	}
 	f.mu.RLock()
 	defer f.mu.RUnlock()
-	st := f.account(a)
+	st := f.readAccount(a)
 	u := st.users[user]
 	if u == nil {
 		return nil, notFound("user", user)
@@ -863,7 +878,7 @@ func (f *Fake) GetRole(_ context.Context, a resource.AccountID, name string, wan
 	}
 	f.mu.RLock()
 	defer f.mu.RUnlock()
-	r := f.account(a).roles[name]
+	r := f.readAccount(a).roles[name]
 	if r == nil {
 		return Role{}, notFound("role", name)
 	}
@@ -877,7 +892,7 @@ func (f *Fake) GetRole(_ context.Context, a resource.AccountID, name string, wan
 func (f *Fake) ResolveRole(_ context.Context, a resource.AccountID, name string) (Ref, error) {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
-	r := f.account(a).roles[name]
+	r := f.readAccount(a).roles[name]
 	if r == nil {
 		return Ref{}, notFound("role", name)
 	}
@@ -953,7 +968,7 @@ func (f *Fake) ListRoles(_ context.Context, a resource.AccountID, prefix string)
 	f.mu.RLock()
 	defer f.mu.RUnlock()
 	out := []Role{}
-	for _, r := range f.account(a).roles {
+	for _, r := range f.readAccount(a).roles {
 		if strings.HasPrefix(r.Path, prefixOr(prefix)) {
 			out = append(out, r.Role)
 		}
@@ -1062,7 +1077,7 @@ func (st *store) policy(arn string) (*policyRec, error) {
 func (f *Fake) GetPolicy(_ context.Context, a resource.AccountID, arn string) (ManagedPolicy, error) {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
-	p, err := f.account(a).policy(arn)
+	p, err := f.readAccount(a).policy(arn)
 	if err != nil {
 		return ManagedPolicy{}, err
 	}
@@ -1081,7 +1096,7 @@ func (f *Fake) ListPolicyVersions(
 	}
 	f.mu.RLock()
 	defer f.mu.RUnlock()
-	p, err := f.account(a).policy(arn)
+	p, err := f.readAccount(a).policy(arn)
 	if err != nil {
 		return PolicyVersionPage{}, err
 	}
@@ -1144,7 +1159,7 @@ func (f *Fake) GetPolicyVersion(
 ) (PolicyVersion, error) {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
-	p, err := f.account(a).policy(arn)
+	p, err := f.readAccount(a).policy(arn)
 	if err != nil {
 		return PolicyVersion{}, err
 	}
@@ -1165,7 +1180,7 @@ func (f *Fake) ListPolicies(_ context.Context, a resource.AccountID, prefix stri
 	f.mu.RLock()
 	defer f.mu.RUnlock()
 	out := []ManagedPolicy{}
-	for _, p := range f.account(a).policies {
+	for _, p := range f.readAccount(a).policies {
 		if strings.HasPrefix(p.Path, prefixOr(prefix)) {
 			out = append(out, p.ManagedPolicy)
 		}
@@ -1308,7 +1323,7 @@ func (f *Fake) ListPolicyTags(
 	}
 	f.mu.RLock()
 	defer f.mu.RUnlock()
-	p, err := f.account(a).policy(arn)
+	p, err := f.readAccount(a).policy(arn)
 	if err != nil {
 		return TagPage{}, err
 	}
@@ -1351,7 +1366,7 @@ func (f *Fake) ListVirtualMFADevices(
 ) (VirtualMFADevicePage, error) {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
-	st := f.account(a)
+	st := f.readAccount(a)
 	devices := make([]VirtualMFADevice, 0, len(st.mfa))
 	for serial, d := range st.mfa {
 		v := VirtualMFADevice{SerialNumber: serial}
@@ -1381,7 +1396,7 @@ func (f *Fake) ListMFADevices(
 	}
 	f.mu.RLock()
 	defer f.mu.RUnlock()
-	st := f.account(a)
+	st := f.readAccount(a)
 	u := st.users[user]
 	if u == nil {
 		return MFADevicePage{}, notFound("user", user)
@@ -1617,7 +1632,7 @@ func (f *Fake) ListAttachedPolicies(
 ) ([]ManagedPolicy, error) {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
-	st := f.account(a)
+	st := f.readAccount(a)
 	h, err := st.boundHolder(kind, name, want)
 	if err != nil {
 		return nil, err
@@ -1667,7 +1682,7 @@ func (f *Fake) GetInlinePolicy(
 ) (string, error) {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
-	h, err := f.account(a).boundHolder(kind, name, want)
+	h, err := f.readAccount(a).boundHolder(kind, name, want)
 	if err != nil {
 		return "", err
 	}
@@ -1702,7 +1717,7 @@ func (f *Fake) ListInlinePolicies(
 ) ([]string, error) {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
-	h, err := f.account(a).boundHolder(kind, name, want)
+	h, err := f.readAccount(a).boundHolder(kind, name, want)
 	if err != nil {
 		return nil, err
 	}
