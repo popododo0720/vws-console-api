@@ -106,9 +106,18 @@ func (s *imageBoot) GetInstance(_ context.Context, req *computev1.GetInstanceReq
 func TestBootVolumeSourcesTheImage(t *testing.T) {
 	const imageID = "ami-0123456789abcdef0"
 	projectID := project(mustAccount(t))
-	vol := bootVolume(projectID, "fp", mustImage(t, imageID), "i-0123456789abcdef0")
+	vol := bootVolume(projectID, "fp", resource.RunInstancesRequest{
+		ImageID: mustImage(t, imageID), RootVolumeType: resource.VolumeGP3,
+	}, "i-0123456789abcdef0")
 	if vol.GetSpec().GetImage() != imageName(projectID, imageID) || vol.GetSpec().GetSnapshot() != "" {
 		t.Fatalf("spec %+v", vol.GetSpec())
+	}
+	// #323: the root volume type reaches vws-storage as the same type.
+	if got := vol.GetSpec().GetType(); got != storagev1.VolumeType_VOLUME_TYPE_GP3 {
+		t.Fatalf("boot volume type %v, want GP3", got)
+	}
+	if s := vol.GetSpec(); s.GetIops() != 3000 || s.GetThroughputMibps() != 125 {
+		t.Fatalf("boot volume %d IOPS %d MiB/s, want the gp3 defaults", s.GetIops(), s.GetThroughputMibps())
 	}
 
 	lis := bufconn.Listen(MaxMessageBytes())

@@ -336,6 +336,22 @@ def key_launch():
             SubnetId=S["subnet"], ClientToken="tok-nokey", KeyName="e2e-missing")), "vm")
         step("TerminateInstances keyed instance", lambda: ec2.terminate_instances(InstanceIds=[iid]), "vm")
 
+    def root_gp3():
+        """#323: the root mapping's VolumeType, and the gp3 defaults, read back from DescribeVolumes."""
+        inst = ec2.run_instances(
+            ImageId="ami-0123456789abcdef0", InstanceType="t3.micro", MinCount=1, MaxCount=1,
+            SubnetId=S["subnet"], ClientToken="tok-root-gp3",
+            BlockDeviceMappings=[{"DeviceName": "/dev/xvda", "Ebs": {"VolumeType": "gp3"}}],
+        )["Instances"][0]
+        got = ec2.describe_instances(InstanceIds=[inst["InstanceId"]])["Reservations"][0]["Instances"][0]
+        vid = got["BlockDeviceMappings"][0]["Ebs"]["VolumeId"]
+        vol = ec2.describe_volumes(VolumeIds=[vid])["Volumes"][0]
+        ec2.terminate_instances(InstanceIds=[inst["InstanceId"]])
+        check(vol["VolumeType"] == "gp3", f"root volume type {vol['VolumeType']}")
+        check(vol.get("Iops") == 3000 and vol.get("Throughput") == 125,
+              f"root gp3 performance {vol.get('Iops')} {vol.get('Throughput')}")
+    step("RunInstances root BlockDeviceMapping VolumeType=gp3 reads back as gp3", root_gp3, "vm")
+
     def delete_key(name):
         deadline = time.monotonic() + WAIT_TIMEOUT
         while True:

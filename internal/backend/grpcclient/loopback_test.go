@@ -258,6 +258,13 @@ func (w *loopWorld) putBoot(vol *storagev1.Volume) {
 	w.boots[vol.GetName()] = vol
 }
 
+// boot returns the boot volume stored under name, or nil.
+func (w *loopWorld) boot(name string) *storagev1.Volume {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.boots[name]
+}
+
 func (w *loopWorld) bootsFor(projectID string) []*storagev1.Volume {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -546,11 +553,29 @@ func (s *instanceSrv) CreateInstance(ctx context.Context, req *computev1.CreateI
 		}
 		keyName = keys.Items[0].Name
 	}
+	var rootType resource.VolumeType
+	if boot := s.w.boot(spec.GetVolumes()[0].GetVolume()); boot != nil {
+		rootType = volumeTypeOf(boot.GetSpec().GetType())
+		if rootType == "" {
+			return nil, toStatus(resource.Invalid("volumeType", "unsupported"))
+		}
+		// The fake fills Iops and Throughput from the type, so the stub
+		// refuses a boot volume whose own values differ: a client that
+		// drops them fails the contract.
+		iops, miBps := resource.RunInstancesRequest{RootVolumeType: rootType}.RootPerformance()
+		if boot.GetSpec().GetIops() != iops || boot.GetSpec().GetThroughputMibps() != miBps {
+			return nil, toStatus(resource.Invalid("iops", "boot volume performance does not match its type"))
+		}
+	}
 	acc, err := s.w.set.Compute.RunInstances(ctx, backend.Mutation{
 		Scope: backend.Scope{Account: account}, Key: req.GetRequestId(), Fingerprint: fp,
 	}, resource.RunInstancesRequest{
 		ImageID: img, InstanceType: spec.GetMachineType(), SubnetID: subID, Count: 1,
 		Tags: userTags(req.GetInstance().GetLabels()), KeyName: keyName, UserData: spec.GetUserData(),
+		// The fake creates the root volume itself. It takes the type of the
+		// boot volume the client created, so a type the client drops or
+		// changes on the way to vws-storage shows in the contract (#323).
+		RootVolumeType: rootType,
 	})
 	if err != nil {
 		return nil, toStatus(err)

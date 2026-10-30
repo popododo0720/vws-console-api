@@ -180,6 +180,28 @@ type RunInstancesRequest struct {
 	KeyName      string            `json:"keyName,omitempty"`
 	// UserData is the decoded text handed to the guest on boot.
 	UserData string `json:"userData,omitempty"`
+	// RootVolumeType is the EBS type of the root volume, from the request's
+	// block device mapping for the root device. Empty means the image
+	// default; see RootType.
+	RootVolumeType VolumeType `json:"rootVolumeType,omitempty"`
+}
+
+// RootType is the EBS type RunInstances gives the root volume. A VWS image
+// carries no block device mapping, so an omitted type is gp2, the EC2
+// CreateVolume default. Normalize keeps an omitted type empty so that the
+// idempotency fingerprint of a request without one does not change.
+func (r RunInstancesRequest) RootType() VolumeType {
+	if r.RootVolumeType == "" {
+		return VolumeGP2
+	}
+	return r.RootVolumeType
+}
+
+// RootPerformance is the Iops and Throughput (MiB/s) RunInstances gives the
+// root volume. The mapping carries neither, so they are what EC2 fills in
+// for RootType: 3,000 IOPS and 125 MiB/s for gp3, none for the other types.
+func (r RunInstancesRequest) RootPerformance() (iops, miBps int64) {
+	return withDefaultPerformance(r.RootType(), 0, 0)
 }
 
 // MaxUserDataBytes is the EC2 limit on decoded user data.
@@ -218,6 +240,18 @@ func (r RunInstancesRequest) Normalize() (RunInstancesRequest, error) {
 	}
 	if !utf8.ValidString(r.UserData) {
 		return RunInstancesRequest{}, Invalid("userData", "must be UTF-8 text")
+	}
+	switch r.RootVolumeType {
+	case "", VolumeStandard, VolumeGP2, VolumeGP3:
+	case VolumeST1, VolumeSC1:
+		// EC2 CreateVolume: st1 and sc1 volumes can't be used as boot volumes.
+		return RunInstancesRequest{}, Invalid("volumeType", "st1 and sc1 cannot be boot volumes")
+	case VolumeIO1, VolumeIO2:
+		// io1 and io2 need Iops, and the mapping does not carry Ebs.Iops yet.
+		// EC2 answers MissingParameter, as CreateVolume does without Iops.
+		return RunInstancesRequest{}, checkVolumePerformance(r.RootVolumeType, 0, 0)
+	default:
+		return RunInstancesRequest{}, Invalid("volumeType", "unsupported")
 	}
 	return r, nil
 }

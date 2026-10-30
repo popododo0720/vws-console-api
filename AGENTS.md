@@ -66,6 +66,7 @@ change both files together.
 | A `DetachVolume` retry returns the first detach, within the label budget. | `backendtest.DetachReplay`, `backendtest.DetachWindow` |
 | The detach recovery path matches `docs/formal/detach.tla` (pstack `create-formal-verification-skill` 0.15.30). | CI workflow `tla` (job `detach`) |
 | Volume types map one to one; an unknown type is refused. | `TestVolumeTypeRefusesUnknown` |
+| RunInstances creates the root volume with the root device mapping's type, gp2 when omitted, with the gp3 Iops and Throughput defaults; io1 and io2 are MissingParameter until the mapping carries Ebs.Iops; any other device mapping is refused. | `TestRunInstancesRootVolumeTypeRoundTrips`, `exerciseRootVolumeType` |
 | SigV4 runs before the body is trusted; each S3 failure has its own code. | `TestUnsignedPayloadAndUnreadBody`, `TestSigV4FailuresUseS3ErrorCodes` |
 | A resource is the same on every surface. | `internal/surface/interop` |
 | Console JSON field names are camelCase. | `tagliatelle` |

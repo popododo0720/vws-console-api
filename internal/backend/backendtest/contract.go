@@ -309,6 +309,7 @@ func Run(t *testing.T, newSet Harness) {
 	exerciseKeyLaunch(ctx, t, set, account, created.Items[0].ID, img)
 	exerciseKeyRetry(ctx, t, set, account)
 	exerciseRootDevice(ctx, t, set, account, created.Items[0].ID, img)
+	exerciseRootVolumeType(ctx, t, set, account, created.Items[0].ID, img)
 	exerciseVolumeTypes(ctx, t, set, account)
 }
 
