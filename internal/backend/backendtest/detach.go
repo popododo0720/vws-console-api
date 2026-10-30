@@ -135,6 +135,30 @@ func DetachReplay(t *testing.T, newSet Harness) {
 		replays(t, "older token", mOld, reqOld, old)
 	})
 
+	t.Run("a volume-only retry after a move elsewhere returns the first detach", func(t *testing.T) {
+		// The volume now sits on the first instance, which has no record of
+		// the token. The retry must find the second instance's record, not
+		// detach from the first (#307). The token's record goes on the second
+		// instance, so the first keeps its record budget for the next row.
+		vol := newVol(t, "vol-moved")
+		attach(t, "att-moved-1", vol, second, "/dev/sdj")
+		m := mut("det-moved")
+		req := resource.DetachVolumeRequest{VolumeID: vol}
+		orig := detach(t, m, req)
+		if orig.Items[0].InstanceID != second {
+			t.Fatalf("detach %+v, want from %s", orig.Items[0], second)
+		}
+		attach(t, "att-moved-2", vol, first, "/dev/sdj")
+		replays(t, "volume only, attached elsewhere", m, req, orig)
+		page, err := set.Compute.DescribeVolumes(ctx, scope, resource.VolumeQuery{
+			IDs: []resource.VolumeID{vol}, Page: resource.PageRequest{Size: 50},
+		})
+		if err != nil || len(page.Items) != 1 || page.Items[0].State != resource.VolumeInUse ||
+			page.Items[0].InstanceID != first {
+			t.Fatalf("the retry must leave the volume on %s: %v %+v", first, err, page.Items)
+		}
+	})
+
 	t.Run("a retry after a reattach returns the first detach", func(t *testing.T) {
 		vol := newVol(t, "vol-again")
 		attach(t, "att-again-1", vol, first, "/dev/sdi")

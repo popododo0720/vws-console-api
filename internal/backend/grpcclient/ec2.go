@@ -462,6 +462,16 @@ func (c computeClient) detachOnce(
 			}
 		}
 	}
+	// A volume-only retry of a detach from another instance is that detach,
+	// even though the volume is attached here now (#307). The holder has no
+	// record of this request, so the record, if any, is on another instance.
+	// A minted token is never sent again, so it has no record to find.
+	if bound && req.InstanceID.IsZero() && !m.MintedToken {
+		acc, ok, err := c.replayDetachElsewhere(ctx, m, projectID, vol, requestHex)
+		if err != nil || ok {
+			return acc, err
+		}
+	}
 	if bound {
 		if !req.InstanceID.IsZero() && req.InstanceID != bind.InstanceID {
 			return zero, resource.AttachmentNotFound(vol.ID)
@@ -503,6 +513,32 @@ func (c computeClient) detachOnce(
 	return c.writeDetach(ctx, m, vol, holder, holderModel, backend.VolumeBind{
 		InstanceID: rec.instanceID, Device: rec.device,
 	}, false)
+}
+
+// replayDetachElsewhere answers a volume-only retry from the record another
+// instance keeps of request requestHex. ok is false when no instance has it.
+// A record the update never saved resends that update to the record's
+// instance, by its request id, and leaves the volume where it is now.
+func (c computeClient) replayDetachElsewhere(
+	ctx context.Context, m backend.Mutation, projectID string, vol resource.Volume, requestHex string,
+) (resource.Accepted[resource.VolumeAttachment], bool, error) {
+	var zero resource.Accepted[resource.VolumeAttachment]
+	holder, holderModel, rec, ok, err := c.findDetachReplay(ctx, projectID, vol.ID, requestHex, resource.InstanceID{}, nil)
+	if err != nil || !ok {
+		return zero, false, err
+	}
+	var acc resource.Accepted[resource.VolumeAttachment]
+	switch rec.opMatch(m.Fingerprint) {
+	case opSaved:
+		acc, err = c.acceptDetachReplay(ctx, m.Account, vol, holderModel, rec)
+	case opOtherParams:
+		err = resource.IdempotencyMismatch()
+	case opUnknown:
+		acc, err = c.writeDetach(ctx, m, vol, holder, holderModel, backend.VolumeBind{
+			InstanceID: rec.instanceID, Device: rec.device,
+		}, false)
+	}
+	return acc, true, err
 }
 
 // detachBind finds the instance spec that names the volume.
