@@ -1287,6 +1287,10 @@ func detachFPToken(requestHex, fingerprint string) string {
 
 // legacyFPToken is the token written before #213, bound to the fingerprint
 // only. Such a record may pair an older detach's operation with this request.
+// Only builds from e6b01b5 up to c09cba3 wrote it. It is not migrated: only
+// compute's 24-hour request id replay could confirm the operation is the
+// request's own, and every such record is older (#306). It goes when #454's
+// removal condition is met.
 func legacyFPToken(fingerprint string) string {
 	sum := sha256.Sum256([]byte(fingerprint))
 	return hex.EncodeToString(sum[:8])
