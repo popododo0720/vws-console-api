@@ -968,6 +968,39 @@ func TestUpdateRoleDescription(t *testing.T) {
 	}
 }
 
+func TestCreatePolicyDescription(t *testing.T) {
+	ctx := t.Context()
+	a := account(t)
+	f := NewFake()
+
+	for _, tc := range []struct {
+		name        string
+		description string
+	}{
+		{"empty", ""},
+		{"at-the-limit", strings.Repeat("\u00ff", 1000)},
+		// policyDescriptionType has only a length limit; the character
+		// pattern belongs to roleDescriptionType.
+		{"outside-the-role-pattern", "\u0080"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p, err := f.CreatePolicy(ctx, a, "ok-"+tc.name, "/", describeOnly, tc.description)
+			if err != nil || p.Description != tc.description {
+				t.Errorf("description %q stored as %q: %v", tc.description, p.Description, err)
+			}
+		})
+	}
+
+	_, err := f.CreatePolicy(ctx, a, "too-long", "/", describeOnly, strings.Repeat("\u00ff", 1001))
+	var e *resource.Error
+	if !errors.As(err, &e) || e.Code != resource.CodeInvalidArgument ||
+		e.Field != "description" ||
+		e.Message != "1 validation error detected: Value at 'description' failed to satisfy constraint: "+
+			"Member must have length less than or equal to 1000" {
+		t.Errorf("1001-character description rejected with %+v", err)
+	}
+}
+
 func TestUpdateRole(t *testing.T) {
 	ctx := t.Context()
 	a := account(t)
