@@ -68,6 +68,38 @@ func TestMFADeviceTagActions(t *testing.T) {
 	}
 }
 
+// A key repeated within one TagMFADevice request is last-wins, whether it
+// repeats as two members or as a field sent twice. The member limit still
+// counts the request, not the distinct keys.
+func TestMFADeviceTagRepeatedKeyLastWins(t *testing.T) {
+	h, f, _, root := harness(t)
+	serial := seedMfaDevice(t, f, root, "repeated-phone")
+	list := url.Values{"Action": {"ListMFADeviceTags"}, "SerialNumber": {serial}}
+	has(t, call(t, h, root, sigv4.ServiceIAM, url.Values{
+		"Action": {"TagMFADevice"}, "SerialNumber": {serial},
+		"Tags.member.1.Key": {"Dup"}, "Tags.member.1.Value": {"first"},
+		"Tags.member.2.Key": {"Dup"}, "Tags.member.2.Value": {"second"},
+	}), http.StatusOK, `<TagMFADeviceResponse>`)
+	has(t, call(t, h, root, sigv4.ServiceIAM, list), http.StatusOK,
+		`<Tags><member><Key>Dup</Key><Value>second</Value></member></Tags>`)
+	has(t, call(t, h, root, sigv4.ServiceIAM, url.Values{
+		"Action": {"TagMFADevice"}, "SerialNumber": {serial},
+		"Tags.member.1.Key": {"Dup", "Dup"}, "Tags.member.1.Value": {"second", "last"},
+	}), http.StatusOK, `<TagMFADeviceResponse>`)
+	has(t, call(t, h, root, sigv4.ServiceIAM, list), http.StatusOK,
+		`<Tags><member><Key>Dup</Key><Value>last</Value></member></Tags>`)
+	many := url.Values{"Action": {"TagMFADevice"}, "SerialNumber": {serial}}
+	for i := 1; i <= iam.MaxTags+1; i++ {
+		many.Set("Tags.member."+strconv.Itoa(i)+".Key", "Dup")
+		many.Set("Tags.member."+strconv.Itoa(i)+".Value", strconv.Itoa(i))
+	}
+	has(t, call(t, h, root, sigv4.ServiceIAM, many), http.StatusBadRequest,
+		`<Code>ValidationError</Code>`, "less than or equal to 50")
+	// The refused request stored nothing.
+	has(t, call(t, h, root, sigv4.ServiceIAM, list), http.StatusOK,
+		`<Tags><member><Key>Dup</Key><Value>last</Value></member></Tags>`)
+}
+
 func TestMFADeviceTagPaging(t *testing.T) {
 	h, f, _, root := harness(t)
 	serial := seedMfaDevice(t, f, root, "paged-phone")
