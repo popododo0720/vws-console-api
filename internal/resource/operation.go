@@ -37,6 +37,7 @@ const (
 	ActionModifyVolume
 	ActionCreateTags
 	ActionDetachVolume
+	ActionRevokeSecurityGroupIngress
 )
 
 // String returns the wire name. An unknown action returns "".
@@ -92,6 +93,8 @@ func (a Action) String() string {
 		return "CreateTags"
 	case ActionDetachVolume:
 		return "DetachVolume"
+	case ActionRevokeSecurityGroupIngress:
+		return "RevokeSecurityGroupIngress"
 	case actionNone:
 		return ""
 	default:

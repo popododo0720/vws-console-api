@@ -699,6 +699,50 @@ func (n network) AuthorizeSecurityGroupIngress(ctx context.Context, m backend.Mu
 	return acc, nil
 }
 
+func (n network) RevokeSecurityGroupIngress(
+	ctx context.Context, m backend.Mutation, req resource.RevokeSecurityGroupIngressRequest,
+) (resource.Accepted[resource.SecurityGroup], error) {
+	if err := ctx.Err(); err != nil {
+		return resource.Accepted[resource.SecurityGroup]{}, err
+	}
+	n.w.mu.Lock()
+	defer n.w.mu.Unlock()
+	n.w.settle(n.w.now())
+	if acc, ok, err := replay[resource.Accepted[resource.SecurityGroup]](n.w, m.Key, m.Fingerprint); err != nil || ok {
+		return acc, err
+	}
+	group, ok := n.w.sg[req.ID]
+	if !ok || group.OwnerID != m.Account {
+		return resource.Accepted[resource.SecurityGroup]{}, resource.NotFound(resource.KindSecurityGroup, req.ID.String())
+	}
+	index := -1
+	for i, rule := range group.Rules {
+		if rule == req.Rule {
+			index = i
+			break
+		}
+	}
+	if index < 0 {
+		return resource.Accepted[resource.SecurityGroup]{}, resource.PermissionNotFound(req.ID.String())
+	}
+	previous := group.Rules
+	rules := make([]resource.IngressRule, 0, len(previous)-1)
+	rules = append(rules, previous[:index]...)
+	rules = append(rules, previous[index+1:]...)
+	group.Rules = rules
+	op, err := n.w.newOp(m.Account, resource.ServiceNetwork, resource.ActionRevokeSecurityGroupIngress,
+		[]resource.Ref{group.ID.Ref()}, func(time.Time) {})
+	if err != nil {
+		group.Rules = previous
+		return resource.Accepted[resource.SecurityGroup]{}, err
+	}
+	item := *group
+	item.Rules = append([]resource.IngressRule(nil), group.Rules...)
+	acc := resource.Accepted[resource.SecurityGroup]{Operation: op, Items: []resource.SecurityGroup{item}}
+	n.w.finish(m.Key, m.Fingerprint, acc)
+	return acc, nil
+}
+
 func (w *World) vpcInUse(id resource.VpcID) bool {
 	for _, sub := range w.sub {
 		if sub.VpcID == id {

@@ -389,6 +389,37 @@ func exerciseEC2(ctx context.Context, t *testing.T, set backend.Set, account res
 	if err != nil || len(openedMore.Items[0].Rules) != 2 {
 		t.Fatalf("second rule: %v %+v", err, openedMore.Items)
 	}
+	revoked, err := set.Network.RevokeSecurityGroupIngress(ctx, backend.Mutation{
+		Scope: scope, Key: "k-revoke", Fingerprint: "fp-revoke",
+	}, resource.RevokeSecurityGroupIngressRequest{
+		ID: group.Items[0].ID, Rule: resource.IngressRule{Protocol: "udp", FromPort: 53, ToPort: 53, Cidr: "10.0.0.0/16"},
+	})
+	if err != nil || len(revoked.Items[0].Rules) != 1 ||
+		revoked.Operation.Action != resource.ActionRevokeSecurityGroupIngress {
+		t.Fatalf("revoke: %v %+v", err, revoked)
+	}
+	last := backend.Mutation{Scope: scope, Key: "k-revoke-last", Fingerprint: "fp-revoke-last"}
+	lastRule := resource.RevokeSecurityGroupIngressRequest{
+		ID: group.Items[0].ID, Rule: resource.IngressRule{Protocol: "tcp", FromPort: 22, ToPort: 22, Cidr: "10.0.0.0/16"},
+	}
+	empty, err := set.Network.RevokeSecurityGroupIngress(ctx, last, lastRule)
+	if err != nil || len(empty.Items[0].Rules) != 0 ||
+		empty.Operation.Action != resource.ActionRevokeSecurityGroupIngress {
+		t.Fatalf("revoke last rule: %v %+v", err, empty)
+	}
+	polled, err := set.Network.GetOperation(ctx, scope, empty.Operation.ID)
+	if err != nil || polled.Action != resource.ActionRevokeSecurityGroupIngress {
+		t.Fatalf("polled revoke: %v %s", err, polled.Action)
+	}
+	retried, err := set.Network.RevokeSecurityGroupIngress(ctx, last, lastRule)
+	if err != nil || retried.Operation.ID != empty.Operation.ID || len(retried.Items[0].Rules) != 0 {
+		t.Fatalf("revoke retry: %v %+v", err, retried)
+	}
+	if _, err := set.Network.RevokeSecurityGroupIngress(ctx, backend.Mutation{
+		Scope: scope, Key: "k-revoke-missing", Fingerprint: "fp-revoke-missing",
+	}, lastRule); !resource.IsPermissionNotFound(err) {
+		t.Fatalf("missing rule: %v", err)
+	}
 
 	keyM := backend.Mutation{Scope: scope, Key: "k-key", Fingerprint: "fp-key"}
 	key, err := set.Compute.CreateKeyPair(ctx, keyM, resource.CreateKeyPairRequest{Name: "admin", Type: resource.KeyTypeEd25519})
@@ -481,7 +512,7 @@ func exerciseEC2(ctx context.Context, t *testing.T, set backend.Set, account res
 	groups, err := set.Network.DescribeSecurityGroups(ctx, scope, resource.SecurityGroupQuery{
 		Names: []string{"web"}, Page: resource.PageRequest{Size: 50},
 	})
-	if err != nil || len(groups.Items) != 1 || groups.Items[0].ID != group.Items[0].ID || len(groups.Items[0].Rules) != 2 {
+	if err != nil || len(groups.Items) != 1 || groups.Items[0].ID != group.Items[0].ID || len(groups.Items[0].Rules) != 0 {
 		t.Fatalf("describe groups: %v %+v", err, groups.Items)
 	}
 	deletedGroup, err := set.Network.DeleteSecurityGroup(ctx, backend.Mutation{Scope: scope, Key: "k-del-sg", Fingerprint: "fp-del-sg"}, resource.DeleteSecurityGroupRequest{ID: group.Items[0].ID})

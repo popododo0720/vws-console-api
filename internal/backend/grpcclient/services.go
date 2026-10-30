@@ -942,6 +942,29 @@ func (c networkClient) GetOperation(ctx context.Context, s backend.Scope, id res
 	if op.ID != id {
 		return resource.Operation{}, resource.Internal(errors.New("backend returned a different operation"))
 	}
+	return c.actionFromSecurityGroup(ctx, s, op)
+}
+
+// actionFromSecurityGroup replaces the verb-derived action of a security
+// group update with the action its last write recorded. Authorize and revoke
+// are both an UPDATE on a security group, so the verb alone cannot name one.
+func (c networkClient) actionFromSecurityGroup(
+	ctx context.Context, s backend.Scope, op resource.Operation,
+) (resource.Operation, error) {
+	if op.Action != resource.ActionAuthorizeSecurityGroupIngress ||
+		len(op.Targets) != 1 || op.Targets[0].Kind() != resource.KindSecurityGroup {
+		return op, nil
+	}
+	group, err := c.findGroup(ctx, project(s.Account), op.Targets[0].ID())
+	if resource.CodeOf(err) == resource.CodeNotFound {
+		return op, nil
+	}
+	if err != nil {
+		return resource.Operation{}, err
+	}
+	if parsed, ok := resource.ParseAction(group.Labels[labelAction]); ok {
+		op.Action = parsed
+	}
 	return op, nil
 }
 

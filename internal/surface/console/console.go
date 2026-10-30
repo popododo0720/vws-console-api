@@ -156,6 +156,8 @@ func (h *handler) mutation(action resource.Action) (string, string, http.Handler
 		return http.MethodPost, "/api/v1/security-groups", h.createSecurityGroup
 	case resource.ActionAuthorizeSecurityGroupIngress:
 		return http.MethodPost, "/api/v1/security-groups/{id}/authorize-ingress", h.authorizeIngress
+	case resource.ActionRevokeSecurityGroupIngress:
+		return http.MethodPost, "/api/v1/security-groups/{id}/revoke-ingress", h.revokeIngress
 	case resource.ActionStartInstances:
 		return http.MethodPost, "/api/v1/instances/{id}/start", h.startInstance
 	case resource.ActionTerminateInstances:

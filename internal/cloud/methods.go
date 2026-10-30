@@ -371,6 +371,17 @@ func (s *Service) AuthorizeSecurityGroupIngress(ctx context.Context, c resource.
 	return mutate(ctx, s, c, token, req, s.backends.Network.AuthorizeSecurityGroupIngress)
 }
 
+// RevokeSecurityGroupIngress removes one inbound rule and returns the operation.
+func (s *Service) RevokeSecurityGroupIngress(
+	ctx context.Context, c resource.Caller, token resource.ClientToken, req resource.RevokeSecurityGroupIngressRequest,
+) (resource.Accepted[resource.SecurityGroup], error) {
+	token, err := fillToken(token)
+	if err != nil {
+		return resource.Accepted[resource.SecurityGroup]{}, err
+	}
+	return mutate(ctx, s, c, token, req, s.backends.Network.RevokeSecurityGroupIngress)
+}
+
 // fillToken mints a token only for actions whose AWS shape omits ClientToken.
 func fillToken(token resource.ClientToken) (resource.ClientToken, error) {
 	if !token.IsZero() {

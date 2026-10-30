@@ -188,7 +188,7 @@ func TestVolumeErrorMessages(t *testing.T) {
 
 func TestActionsAreDerived(t *testing.T) {
 	got := Actions()
-	if len(got) != 25 {
+	if len(got) != 26 {
 		t.Fatalf("actions: %v", got)
 	}
 	for _, a := range got {
@@ -312,6 +312,13 @@ func TestIngressProtocolIsCanonical(t *testing.T) {
 	}).Normalize()
 	if CodeOf(err) != CodeInvalidArgument {
 		t.Fatalf("sctp: %v", err)
+	}
+	revoked, err := (RevokeSecurityGroupIngressRequest{
+		ID:   id,
+		Rule: IngressRule{Protocol: "17", FromPort: 53, ToPort: 53, Cidr: "10.0.0.0/16"},
+	}).Normalize()
+	if err != nil || revoked.Rule.Protocol != "udp" {
+		t.Fatalf("%v %+v", err, revoked.Rule)
 	}
 }
 

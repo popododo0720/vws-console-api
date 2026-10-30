@@ -1953,12 +1953,12 @@ func (c networkClient) CreateSecurityGroup(ctx context.Context, m backend.Mutati
 	return resource.Accepted[resource.SecurityGroup]{Operation: op, Items: []resource.SecurityGroup{group}}, nil
 }
 
-// authorizeAttempts bounds the reread after a stale security group etag.
-const authorizeAttempts = 10
+// ingressAttempts bounds the reread after a stale security group etag.
+const ingressAttempts = 10
 
 func (c networkClient) AuthorizeSecurityGroupIngress(ctx context.Context, m backend.Mutation, req resource.AuthorizeSecurityGroupIngressRequest) (resource.Accepted[resource.SecurityGroup], error) {
 	projectID := project(m.Account)
-	for attempt := 0; attempt < authorizeAttempts; attempt++ {
+	for attempt := 0; attempt < ingressAttempts; attempt++ {
 		if attempt > 0 {
 			timer := time.NewTimer(time.Duration(attempt) * 5 * time.Millisecond)
 			select {
@@ -1983,17 +1983,99 @@ func (c networkClient) AuthorizeSecurityGroupIngress(ctx context.Context, m back
 func (c networkClient) authorizeIngressOnce(
 	ctx context.Context, m backend.Mutation, projectID string, req resource.AuthorizeSecurityGroupIngressRequest,
 ) (resource.Accepted[resource.SecurityGroup], error) {
-	var zero resource.Accepted[resource.SecurityGroup]
 	current, err := c.findGroup(ctx, projectID, req.ID.String())
 	if err != nil {
-		return zero, err
+		return resource.Accepted[resource.SecurityGroup]{}, err
 	}
 	for _, have := range current.Rules {
 		if have == req.Rule {
-			return zero, resource.DuplicatePermission(current.ID.String())
+			if etag, ok := sameIngressRequest(current, m, resource.ActionAuthorizeSecurityGroupIngress, "ingress"); ok {
+				return c.writeGroupRules(ctx, m, projectID, current, current.Rules, etag, "ingress",
+					resource.ActionAuthorizeSecurityGroupIngress)
+			}
+			return resource.Accepted[resource.SecurityGroup]{}, resource.DuplicatePermission(current.ID.String())
 		}
 	}
 	rules := append(append([]resource.IngressRule{}, current.Rules...), req.Rule)
+	return c.writeGroupRules(ctx, m, projectID, current, rules, current.Etag, "ingress",
+		resource.ActionAuthorizeSecurityGroupIngress)
+}
+
+func (c networkClient) RevokeSecurityGroupIngress(
+	ctx context.Context, m backend.Mutation, req resource.RevokeSecurityGroupIngressRequest,
+) (resource.Accepted[resource.SecurityGroup], error) {
+	projectID := project(m.Account)
+	for attempt := 0; attempt < ingressAttempts; attempt++ {
+		if attempt > 0 {
+			timer := time.NewTimer(time.Duration(attempt) * 5 * time.Millisecond)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return resource.Accepted[resource.SecurityGroup]{}, ctx.Err()
+			case <-timer.C:
+			}
+		}
+		acc, err := c.revokeIngressOnce(ctx, m, projectID, req)
+		if !errors.Is(err, etagMismatchError{}) {
+			return acc, err
+		}
+	}
+	return resource.Accepted[resource.SecurityGroup]{},
+		resource.Conflict(resource.KindSecurityGroup, req.ID.String(), "security group changed")
+}
+
+// revokeIngressOnce reads the group, removes the rule and writes the whole
+// rule list with the etag from that read. A stale etag is etagMismatchError so
+// the caller rereads and tries again.
+func (c networkClient) revokeIngressOnce(
+	ctx context.Context, m backend.Mutation, projectID string, req resource.RevokeSecurityGroupIngressRequest,
+) (resource.Accepted[resource.SecurityGroup], error) {
+	current, err := c.findGroup(ctx, projectID, req.ID.String())
+	if err != nil {
+		return resource.Accepted[resource.SecurityGroup]{}, err
+	}
+	index := -1
+	for i, have := range current.Rules {
+		if have == req.Rule {
+			index = i
+			break
+		}
+	}
+	if index < 0 {
+		if etag, ok := sameIngressRequest(current, m, resource.ActionRevokeSecurityGroupIngress, "revoke"); ok {
+			return c.writeGroupRules(ctx, m, projectID, current, current.Rules, etag, "revoke",
+				resource.ActionRevokeSecurityGroupIngress)
+		}
+		return resource.Accepted[resource.SecurityGroup]{}, resource.PermissionNotFound(current.ID.String())
+	}
+	rules := make([]resource.IngressRule, 0, len(current.Rules)-1)
+	rules = append(rules, current.Rules[:index]...)
+	rules = append(rules, current.Rules[index+1:]...)
+	return c.writeGroupRules(ctx, m, projectID, current, rules, current.Etag, "revoke",
+		resource.ActionRevokeSecurityGroupIngress)
+}
+
+// sameIngressRequest reports whether the group's labels name this exact
+// request and returns the etag that request used. A retry resubmits the same
+// request id, etag and labels, so the network service replays it. The reread
+// etag is not that etag, so reusing it would be an idempotency conflict.
+func sameIngressRequest(
+	current resource.SecurityGroup, m backend.Mutation, action resource.Action, suffix string,
+) (string, bool) {
+	if current.Labels[labelAction] != action.String() ||
+		current.Labels[labelRequest] != requestUUID(m.Key, suffix) || current.Labels[labelEtag] == "" {
+		return "", false
+	}
+	return current.Labels[labelEtag], true
+}
+
+// writeGroupRules replaces the rule list with the etag from the read. A stale
+// etag is etagMismatchError so the caller rereads and tries again.
+func (c networkClient) writeGroupRules(
+	ctx context.Context, m backend.Mutation, projectID string, current resource.SecurityGroup,
+	rules []resource.IngressRule, etag, requestSuffix string, action resource.Action,
+) (resource.Accepted[resource.SecurityGroup], error) {
+	var zero resource.Accepted[resource.SecurityGroup]
 	protoRules := make([]*networkv1.SecurityGroupRule, 0, len(rules))
 	for i, rule := range rules {
 		protoRule, err := ruleProto(rule, derivedID("r", m.Key, "rule", hex.EncodeToString([]byte{byte(i)})))
@@ -2002,13 +2084,21 @@ func (c networkClient) authorizeIngressOnce(
 		}
 		protoRules = append(protoRules, protoRule)
 	}
+	labels := maps.Clone(current.Labels)
+	if labels == nil {
+		labels = map[string]string{}
+	}
+	labels[labelAction] = action.String()
+	labels[labelRequest] = requestUUID(m.Key, requestSuffix)
+	labels[labelEtag] = etag
 	updated, callErr := c.groups.UpdateSecurityGroup(ctx, &networkv1.UpdateSecurityGroupRequest{
-		RequestId:  requestUUID(m.Key, "ingress"),
-		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.rules"}},
+		RequestId:  requestUUID(m.Key, requestSuffix),
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.rules", "labels"}},
 		SecurityGroup: &networkv1.SecurityGroup{
-			Name: securityGroupName(projectID, current.VpcID.String(), current.ID.String()),
-			Etag: current.Etag,
-			Spec: &networkv1.SecurityGroupSpec{Rules: protoRules},
+			Name:   securityGroupName(projectID, current.VpcID.String(), current.ID.String()),
+			Etag:   etag,
+			Labels: labels,
+			Spec:   &networkv1.SecurityGroupSpec{Rules: protoRules},
 		},
 	})
 	if etagMismatch(callErr) {
@@ -2021,11 +2111,11 @@ func (c networkClient) authorizeIngressOnce(
 	if err != nil {
 		return zero, err
 	}
-	got, err := c.findGroup(ctx, projectID, req.ID.String())
+	got, err := c.findGroup(ctx, projectID, current.ID.String())
 	if err != nil {
 		return zero, err
 	}
-	op.Action = resource.ActionAuthorizeSecurityGroupIngress
+	op.Action = action
 	op.Targets = []resource.Ref{got.ID.Ref()}
 	return resource.Accepted[resource.SecurityGroup]{Operation: op, Items: []resource.SecurityGroup{got}}, nil
 }
@@ -2376,7 +2466,7 @@ func groupModel(in *networkv1.SecurityGroup) (resource.SecurityGroup, error) {
 	}
 	return resource.SecurityGroup{
 		ID: id, OwnerID: owner, Name: in.GetSpec().GetDescription(), VpcID: vpcID,
-		Etag: in.GetEtag(), Rules: rules,
+		Etag: in.GetEtag(), Labels: maps.Clone(in.GetLabels()), Rules: rules,
 	}, nil
 }
 
