@@ -431,6 +431,17 @@ type detachReplay struct {
 	// pendingBound: no id is saved yet, and fingerprint is the binding the
 	// first write left in the reserved label (detachOpPending).
 	pendingBound bool
+	// at is the record's stamp, when stamped.
+	at      time.Time
+	stamped bool
+}
+
+// resendable reports whether a retry with no trusted operation id may resend
+// the original update by request id at now: compute still remembers it
+// (backend.ClientTokenReplayable). A record with no stamp has an unknown
+// age and keeps the resend it had before #305.
+func (r detachReplay) resendable(now time.Time) bool {
+	return !r.stamped || backend.ClientTokenReplayable(r.at, now)
 }
 
 func (c computeClient) detachOnce(
@@ -454,7 +465,11 @@ func (c computeClient) detachOnce(
 			case opOtherParams:
 				return zero, resource.IdempotencyMismatch()
 			case opUnknown:
-				if !bound {
+				// Past compute's request id window the resend would be a
+				// new update; the volume is not attached here, so the
+				// retry is answered below as a detach that finds no
+				// attachment (#305).
+				if !bound && rec.resendable(c.clock()) {
 					return c.writeDetach(ctx, m, vol, got, model, backend.VolumeBind{
 						InstanceID: rec.instanceID, Device: rec.device,
 					}, false)
@@ -509,6 +524,12 @@ func (c computeClient) detachOnce(
 	case opOtherParams:
 		return zero, resource.IdempotencyMismatch()
 	case opUnknown:
+		if !rec.resendable(c.clock()) {
+			// compute no longer remembers the request id, and no spec
+			// names the volume: a resend could only return a new update
+			// as this detach (#305).
+			return zero, resource.VolumeNotInUse(vol.ID)
+		}
 	}
 	return c.writeDetach(ctx, m, vol, holder, holderModel, backend.VolumeBind{
 		InstanceID: rec.instanceID, Device: rec.device,
@@ -1378,11 +1399,11 @@ func detachReplayFrom(labels map[string]string, volID string) (detachReplay, boo
 	if !ok {
 		return detachReplay{}, false
 	}
-	requestHex, device, _, _, ok := parseDetachRecord(raw)
+	requestHex, device, at, stamped, ok := parseDetachRecord(raw)
 	if !ok {
 		return detachReplay{}, false
 	}
-	rec := detachReplay{requestHex: requestHex, device: device}
+	rec := detachReplay{requestHex: requestHex, device: device, at: at, stamped: stamped}
 	if opLocal, fp, cut := strings.Cut(labels[labelDetachOpPrefix+volID], " "); cut && opLocal == detachOpPending {
 		rec.fingerprint = fp
 		rec.pendingBound = fp != ""
