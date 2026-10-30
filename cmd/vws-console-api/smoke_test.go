@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -41,14 +40,16 @@ func TestFakeProcessSmoke(t *testing.T) {
 		})
 	}()
 	t.Cleanup(func() {
+		// The test client can leave an idle connection it opened but never
+		// used. http.Server.Shutdown leaves a connection in StateNew alone
+		// until it is five seconds old, so the drain deadline expired and
+		// run returned context.DeadlineExceeded (issue #416). Close the
+		// client's idle connections first; any error after that is real.
+		http.DefaultClient.CloseIdleConnections()
 		cancel()
 		select {
 		case err := <-errc:
-			// The server drains in-flight requests for five seconds. A probe
-			// connection that never sent a request can make that drain expire
-			// on a loaded machine, but the process still stops, which is what
-			// this test asserts (issue #234). Any other error is a failure.
-			if err != nil && !errors.Is(err, context.DeadlineExceeded) {
+			if err != nil {
 				t.Errorf("process: %v", err)
 			}
 		case <-time.After(smokeTimeout):
