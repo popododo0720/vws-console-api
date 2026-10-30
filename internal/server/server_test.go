@@ -6,18 +6,28 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.opentelemetry.io/otel/trace"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/health"
+	healthpb "google.golang.org/grpc/health/grpc_health_v1"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/test/bufconn"
 
 	"github.com/popododo0720/vws-lib/obs"
+	"github.com/popododo0720/vws-lib/obs/grpcobs"
 	"github.com/popododo0720/vws-lib/obs/httpobs"
 	"github.com/popododo0720/vws-lib/obs/report"
 
@@ -139,10 +149,15 @@ func TestWriteFailureIsLogged(t *testing.T) {
 	}
 }
 
+// TestHTTPMiddlewareStartsAServerSpan sends an EC2 Query request through the
+// chain Serve builds for a surface. The handler must run inside a server span
+// that continues the caller's traceparent, and a gRPC call made from that
+// handler must carry the same trace id to the backend.
 func TestHTTPMiddlewareStartsAServerSpan(t *testing.T) {
 	previous := otel.GetTracerProvider()
 	previousPropagator := otel.GetTextMapPropagator()
-	tp := sdktrace.NewTracerProvider(sdktrace.WithSampler(sdktrace.AlwaysSample()))
+	spans := tracetest.NewSpanRecorder()
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSampler(sdktrace.AlwaysSample()), sdktrace.WithSpanProcessor(spans))
 	otel.SetTracerProvider(tp)
 	otel.SetTextMapPropagator(propagation.TraceContext{})
 	t.Cleanup(func() {
@@ -151,13 +166,86 @@ func TestHTTPMiddlewareStartsAServerSpan(t *testing.T) {
 		_ = tp.Shutdown(context.Background())
 	})
 
+	backend := newTraceBackend(t)
 	var got trace.SpanContext
-	h := httpobs.Middleware(service.Name, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ec2 := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		got = trace.SpanContextFromContext(r.Context())
-		w.WriteHeader(http.StatusNoContent)
-	}))
-	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil))
-	if !got.IsValid() {
-		t.Fatal("the handler ran without a server span")
+		if _, err := healthpb.NewHealthClient(backend.conn).Check(r.Context(), &healthpb.HealthCheckRequest{}); err != nil {
+			t.Errorf("backend call: %v", err)
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+	h := surfaceHandler(slog.New(slog.DiscardHandler), NewMetrics(), Surface{Name: "ec2", Handler: ec2})
+
+	const inboundTrace = "4bf92f3577b34da6a3ce929d0e0e4736"
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/", strings.NewReader("Action=DescribeInstances&Version=2016-11-15"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("traceparent", "00-"+inboundTrace+"-00f067aa0ba902b7-01")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d", rec.Code)
 	}
+	if !got.IsValid() || got.IsRemote() {
+		t.Fatalf("the handler ran without a local server span: %+v", got)
+	}
+	if got.TraceID().String() != inboundTrace {
+		t.Fatalf("server span trace id %s, inbound %s", got.TraceID(), inboundTrace)
+	}
+	var server bool
+	for _, s := range spans.Ended() {
+		if s.SpanContext().SpanID() == got.SpanID() && s.SpanKind() == trace.SpanKindServer {
+			server = true
+		}
+	}
+	if !server {
+		t.Fatal("no ended server-kind span matches the handler span")
+	}
+	if tp := backend.traceparent(); !strings.Contains(tp, inboundTrace) {
+		t.Fatalf("backend traceparent %q does not carry trace id %s", tp, inboundTrace)
+	}
+}
+
+type traceBackend struct {
+	conn     *grpc.ClientConn
+	mu       sync.Mutex
+	received metadata.MD
+}
+
+// newTraceBackend is a fake gRPC backend that records the metadata of the
+// last call. The client uses the same vws-lib dial options as grpcclient.
+func newTraceBackend(t *testing.T) *traceBackend {
+	t.Helper()
+	b := &traceBackend{}
+	lis := bufconn.Listen(1 << 20)
+	srv := grpc.NewServer(grpc.UnaryInterceptor(func(ctx context.Context, req any, _ *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+		md, _ := metadata.FromIncomingContext(ctx)
+		b.mu.Lock()
+		b.received = md.Copy()
+		b.mu.Unlock()
+		return handler(ctx, req)
+	}))
+	healthpb.RegisterHealthServer(srv, health.NewServer())
+	go func() { _ = srv.Serve(lis) }()
+	t.Cleanup(srv.Stop)
+	opts := append([]grpc.DialOption{
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) { return lis.DialContext(ctx) }),
+	}, grpcobs.ClientOptions(service.Name, "compute")...)
+	conn, err := grpc.NewClient("passthrough:///trace-backend", opts...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	b.conn = conn
+	return b
+}
+
+func (b *traceBackend) traceparent() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if v := b.received.Get("traceparent"); len(v) > 0 {
+		return v[0]
+	}
+	return ""
 }

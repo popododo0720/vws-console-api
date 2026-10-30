@@ -54,8 +54,7 @@ func Serve(ctx context.Context, opts Options) error {
 	}
 	listeners := make([]listener, 0, len(opts.Surfaces)+1)
 	for _, sf := range opts.Surfaces {
-		handler := httpobs.Middleware(service.Name, routePattern(sf.Handler))(wrap(logger, sf.Name, sf.Handler))
-		listeners = append(listeners, listener{sf.Name, instrument(metrics, sf.Name, handler), sf.Addr})
+		listeners = append(listeners, listener{sf.Name, surfaceHandler(logger, metrics, sf), sf.Addr})
 	}
 	if opts.OpsAddr != "" {
 		listeners = append(listeners, listener{"ops", opsHandler(metrics, &ready), opts.OpsAddr})
@@ -89,6 +88,14 @@ func Serve(ctx context.Context, opts Options) error {
 	}
 	wg.Wait()
 	return runErr
+}
+
+// surfaceHandler is the chain every surface request runs through: the
+// per-surface counters, the OpenTelemetry server span and vws.http.server.*
+// metrics, then the request id, access log, and panic recovery.
+func surfaceHandler(logger *slog.Logger, metrics *Metrics, sf Surface) http.Handler {
+	handler := httpobs.Middleware(service.Name, routePattern(sf.Handler))(wrap(logger, sf.Name, sf.Handler))
+	return instrument(metrics, sf.Name, handler)
 }
 
 func newHTTPServer(addr string, handler http.Handler) *http.Server {

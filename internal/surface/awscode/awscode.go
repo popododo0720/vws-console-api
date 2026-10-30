@@ -3,7 +3,7 @@
 // The tables are policy: which AWS error code and HTTP status a resource.Code
 // and resource.Kind become on EC2 Query and S3 REST. errs defines the shape
 // and the lookup. A combination missing from a table answers InternalFailure
-// and the surface counts the miss (docs/rules.md).
+// and counts as vws.aws.errors with aws_code InternalFailure (docs/rules.md).
 package awscode
 
 import (
