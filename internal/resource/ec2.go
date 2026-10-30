@@ -2,6 +2,7 @@ package resource
 
 import (
 	"fmt"
+	"log/slog"
 	"net"
 	"strings"
 	"time"
@@ -517,6 +518,36 @@ type KeyPair struct {
 	Fingerprint string    `json:"keyFingerprint"`
 	Material    string    `json:"keyMaterial,omitempty"`
 	Type        KeyType   `json:"keyType,omitempty"`
+}
+
+// redactedKeyMaterial is what formatting and logging show in place of the
+// private key. It is a fixed marker so a redacted value never varies.
+const redactedKeyMaterial = "<redacted>"
+
+// String returns the key pair without its private key.
+func (k KeyPair) String() string {
+	return fmt.Sprintf("KeyPair{ID: %s, OwnerID: %s, Name: %s, Fingerprint: %s, Type: %s, Material: %s}",
+		k.ID, k.OwnerID, k.Name, k.Fingerprint, k.Type, redactedKeyMaterial)
+}
+
+// GoString returns the Go syntax of the key pair without its private key.
+// fmt reaches for GoString on %#v, where String is not consulted.
+func (k KeyPair) GoString() string {
+	return fmt.Sprintf("resource.KeyPair{ID: %q, OwnerID: %q, Name: %q, Fingerprint: %q, Type: %q, Material: %q}",
+		k.ID.String(), k.OwnerID.String(), k.Name, k.Fingerprint, k.Type, redactedKeyMaterial)
+}
+
+// LogValue returns the key pair as structured attributes without its private
+// key. The keys use snake case, like the kernel audit records.
+func (k KeyPair) LogValue() slog.Value {
+	return slog.GroupValue(
+		slog.String("id", k.ID.String()),
+		slog.String("owner_id", k.OwnerID.String()),
+		slog.String("name", k.Name),
+		slog.String("fingerprint", k.Fingerprint),
+		slog.String("type", string(k.Type)),
+		slog.String("material", redactedKeyMaterial),
+	)
 }
 
 // Owner returns the account that owns the key pair.
