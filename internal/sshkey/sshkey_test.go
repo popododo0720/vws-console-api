@@ -36,6 +36,9 @@ func TestRSAIsPKCS1PEM(t *testing.T) {
 	if err != nil || key.N.BitLen() != 2048 {
 		t.Fatalf("pkcs1: %v", err)
 	}
+	if err := key.Validate(); err != nil {
+		t.Fatalf("validate: %v", err)
+	}
 	if !strings.HasPrefix(pair.Public, "ssh-rsa ") {
 		t.Fatalf("public %q", pair.Public)
 	}
@@ -53,19 +56,33 @@ func TestEd25519IsOpenSSH(t *testing.T) {
 	sshKeygenAgrees(t, pair)
 }
 
-func TestGenerateIsDeterministic(t *testing.T) {
-	for _, typ := range []resource.KeyType{resource.KeyTypeRSA, resource.KeyTypeEd25519} {
-		a, err := Generate(typ, stream("same"))
-		if err != nil {
-			t.Fatal(err)
-		}
-		b, err := Generate(typ, stream("same"))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if a != b {
-			t.Fatalf("%v differs", typ)
-		}
+func TestEd25519GenerateIsDeterministic(t *testing.T) {
+	a, err := Generate(resource.KeyTypeEd25519, stream("same"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := Generate(resource.KeyTypeEd25519, stream("same"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a != b {
+		t.Fatal("ed25519 differs")
+	}
+}
+
+// crypto/rsa ignores the reader it is given, so an RSA key cannot be fixed by
+// a stream. The same stream must give unrelated keys.
+func TestRSAKeyIsNotAFunctionOfTheReader(t *testing.T) {
+	a, err := Generate(resource.KeyTypeRSA, stream("same"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := Generate(resource.KeyTypeRSA, stream("same"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a == b {
+		t.Fatal("the same stream gave the same RSA key")
 	}
 }
 

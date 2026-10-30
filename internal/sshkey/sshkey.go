@@ -7,6 +7,7 @@ package sshkey
 
 import (
 	"crypto/ed25519"
+	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/x509"
@@ -51,13 +52,13 @@ type Public struct {
 	AWSFingerprint string
 }
 
-// Generate makes a key of typ from r. The key is a function of r alone, so a
-// caller that serves a user passes crypto/rand.Reader. Tests pass a fixed
-// stream to get a fixed key.
+// Generate makes a key of typ. An RSA key comes from crypto/rand, because
+// crypto/rsa ignores the reader it is given. An ed25519 key comes from r, so
+// tests pass a fixed stream to get a fixed key.
 func Generate(typ resource.KeyType, r io.Reader) (Pair, error) {
 	switch typ {
 	case resource.KeyTypeRSA:
-		return generateRSA(r)
+		return generateRSA()
 	case resource.KeyTypeEd25519:
 		return generateEd25519(r)
 	default:
@@ -65,70 +66,24 @@ func Generate(typ resource.KeyType, r io.Reader) (Pair, error) {
 	}
 }
 
-func generateRSA(r io.Reader) (Pair, error) {
-	// crypto/rsa ignores its reader since Go 1.26, so the primes are drawn here
-	// from r. That keeps test keys fixed under a fixed stream.
-	e := big.NewInt(65537)
-	one := big.NewInt(1)
-	for {
-		p, err := prime(r, rsaBits/2)
-		if err != nil {
-			return Pair{}, err
-		}
-		q, err := prime(r, rsaBits/2)
-		if err != nil {
-			return Pair{}, err
-		}
-		if p.Cmp(q) == 0 {
-			continue
-		}
-		phi := new(big.Int).Mul(new(big.Int).Sub(p, one), new(big.Int).Sub(q, one))
-		d := new(big.Int).ModInverse(e, phi)
-		if d == nil {
-			continue
-		}
-		key := &rsa.PrivateKey{
-			PublicKey: rsa.PublicKey{N: new(big.Int).Mul(p, q), E: int(e.Int64())},
-			D:         d,
-			Primes:    []*big.Int{p, q},
-		}
-		if key.N.BitLen() != rsaBits {
-			continue
-		}
-		key.Precompute()
-		if err := key.Validate(); err != nil {
-			return Pair{}, fmt.Errorf("rsa key: %w", err)
-		}
-		blob := sshString("ssh-rsa") + sshString(string(mpint(e))) + sshString(string(mpint(key.N)))
-		private := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)})
-		out := pair(string(private), "ssh-rsa", blob)
-		pkcs8, err := x509.MarshalPKCS8PrivateKey(key)
-		if err != nil {
-			return Pair{}, fmt.Errorf("rsa pkcs8: %w", err)
-		}
-		out.AWSFingerprint = ColonHex(sha1Hex(pkcs8))
-		iqmp := new(big.Int).ModInverse(q, p)
-		out.ppkPrivate = sshString(string(mpint(d))) + sshString(string(mpint(key.Primes[0]))) +
-			sshString(string(mpint(key.Primes[1]))) + sshString(string(mpint(iqmp)))
-		return out, nil
+func generateRSA() (Pair, error) {
+	key, err := rsa.GenerateKey(rand.Reader, rsaBits)
+	if err != nil {
+		return Pair{}, fmt.Errorf("rsa key: %w", err)
 	}
-}
-
-// prime returns a bits-long prime with the top two bits set, so the product
-// of two of them is exactly twice as long.
-func prime(r io.Reader, bits int) (*big.Int, error) {
-	buf := make([]byte, bits/8)
-	for {
-		if _, err := io.ReadFull(r, buf); err != nil {
-			return nil, fmt.Errorf("read prime candidate: %w", err)
-		}
-		buf[0] |= 0xc0
-		buf[len(buf)-1] |= 1
-		p := new(big.Int).SetBytes(buf)
-		if p.ProbablyPrime(20) {
-			return p, nil
-		}
+	e := big.NewInt(int64(key.E))
+	blob := sshString("ssh-rsa") + sshString(string(mpint(e))) + sshString(string(mpint(key.N)))
+	private := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)})
+	out := pair(string(private), "ssh-rsa", blob)
+	pkcs8, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		return Pair{}, fmt.Errorf("rsa pkcs8: %w", err)
 	}
+	out.AWSFingerprint = ColonHex(sha1Hex(pkcs8))
+	iqmp := new(big.Int).ModInverse(key.Primes[1], key.Primes[0])
+	out.ppkPrivate = sshString(string(mpint(key.D))) + sshString(string(mpint(key.Primes[0]))) +
+		sshString(string(mpint(key.Primes[1]))) + sshString(string(mpint(iqmp)))
+	return out, nil
 }
 
 func generateEd25519(r io.Reader) (Pair, error) {
