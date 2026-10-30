@@ -10,6 +10,7 @@ import (
 
 	"github.com/popododo0720/vws-console-api/internal/backend/backendtest"
 	"github.com/popododo0720/vws-console-api/internal/iam"
+	"github.com/popododo0720/vws-console-api/internal/resource"
 )
 
 // #331: a user that moves to a denied path while the device pages are read
@@ -120,5 +121,36 @@ func TestListAccessKeysDetectsAMoveAndMoveBackOverGRPC(t *testing.T) {
 	ks, err = a.ListAccessKeys(ctx, account314, "bob", backendtest.UserGrant(ctx, t, a, account314, "bob"))
 	if err != nil || len(ks) != 2 {
 		t.Fatalf("an unchanged user: %v, %v", ks, err)
+	}
+}
+
+// #331: a user read without an etag cannot show that it did not change, so
+// the list fails closed: an internal error with no device and no key.
+func TestListsFailClosedOnAUserWithoutAnEtagOverGRPC(t *testing.T) {
+	const (
+		bob    = "projects/123456789012/users/bob"
+		bobARN = "arn:vws:iam::123456789012:user/bob"
+	)
+	c, s := harness(t)
+	s.noUserEtag = true
+	s.getUserRes = map[string]*iamv1.User{bob: {Name: bob, Status: &iamv1.UserStatus{Arn: bobARN}}}
+	s.listMfaDevicesRes = &iamv1.ListMfaDevicesResponse{MfaDevices: []*iamv1.MfaDevice{{Status: &iamv1.MfaDeviceStatus{
+		SerialNumber: "arn:vws:iam::123456789012:mfa/bob-phone", User: bob,
+		EnableTime: timestamppb.New(time.Date(2026, 10, 9, 10, 0, 0, 0, time.UTC)),
+	}}}}
+	page, err := (STSAdmin{Client: c}).ListMFADevices(
+		t.Context(), accountID(t), "bob", "", 0, backendtest.Grant(t.Context(), t, bobARN),
+	)
+	if resource.CodeOf(err) != resource.CodeInternal || len(page.Devices) != 0 {
+		t.Fatalf("ListMFADevices of a user without an etag: %+v, %v", page, err)
+	}
+	if len(s.listMfaDevices) != 0 {
+		t.Fatalf("listed devices of a user without an etag: %v", s.listMfaDevices)
+	}
+	ks, err := (STSAdmin{Client: c}).ListAccessKeys(
+		t.Context(), accountID(t), "bob", backendtest.Grant(t.Context(), t, bobARN),
+	)
+	if resource.CodeOf(err) != resource.CodeInternal || len(ks) != 0 {
+		t.Fatalf("ListAccessKeys of a user without an etag: %v, %v", ks, err)
 	}
 }
