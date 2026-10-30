@@ -1311,7 +1311,8 @@ func detachRequestHex(key string) string {
 
 // detachFPToken binds a saved operation id to the request and its
 // fingerprint, so it can only replay for that request. The label value stays
-// "<op> <16 hex>" and fits in 63 bytes for any operation id length.
+// "<op> <16 hex>" and fits in 63 bytes for any operation id length. The
+// 64-bit width is deliberate; AGENTS.md says why it is not widened (#304).
 func detachFPToken(requestHex, fingerprint string) string {
 	sum := sha256.Sum256([]byte(requestHex + "\x00" + fingerprint))
 	return hex.EncodeToString(sum[:8])
