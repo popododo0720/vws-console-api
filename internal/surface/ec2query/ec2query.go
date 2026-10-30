@@ -12,11 +12,16 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/popododo0720/vws-lib/errs"
+	"github.com/popododo0720/vws-lib/obs"
+
 	"github.com/popododo0720/vws-console-api/internal/cloud"
 	"github.com/popododo0720/vws-console-api/internal/iam"
 	"github.com/popododo0720/vws-console-api/internal/resource"
 	"github.com/popododo0720/vws-console-api/internal/server"
+	"github.com/popododo0720/vws-console-api/internal/service"
 	"github.com/popododo0720/vws-console-api/internal/sigv4"
+	"github.com/popododo0720/vws-console-api/internal/surface/awscode"
 )
 
 // Version is the query version this entry point accepts.
@@ -1167,182 +1172,113 @@ func writeXML(w http.ResponseWriter, v any) {
 
 func writeErr(w http.ResponseWriter, r *http.Request, err error) {
 	e := resource.AsError(err)
-	if statusOf(e.Code) >= http.StatusInternalServerError {
+	entry := ec2Entry(e)
+	if entry.HTTP >= http.StatusInternalServerError {
 		server.RecordFailure(w, err)
 	}
+	obs.M().AWSError(r.Context(), service.Name, ec2Action(r), entry.Code)
 	w.Header().Set("Content-Type", "text/xml; charset=utf-8")
-	w.WriteHeader(statusOf(e.Code))
+	w.WriteHeader(entry.HTTP)
 	_, werr := w.Write([]byte(xml.Header))
 	if werr == nil {
 		werr = xml.NewEncoder(w).Encode(errorXML{
-			Code: ec2Code(e), Message: e.Message, RequestID: requestID(r),
+			Code: entry.Code, Message: e.Message, RequestID: requestID(r),
 		})
 	}
 	server.RecordFailure(w, werr)
 }
 
-func statusOf(c resource.Code) int {
-	switch c {
-	case resource.CodeUnauthenticated:
-		return http.StatusUnauthorized
-	case resource.CodePermissionDenied:
-		return http.StatusForbidden
-	case resource.CodeUnavailable, resource.CodeResourceExhausted:
-		return http.StatusServiceUnavailable
-	case resource.CodeInternal, resource.CodeUnspecified:
-		return http.StatusInternalServerError
-	case resource.CodeInvalidArgument, resource.CodeNotFound, resource.CodeAlreadyExists,
-		resource.CodeConflict, resource.CodeIdempotencyMismatch, resource.CodePayloadTooLarge,
-		resource.CodeUnimplemented:
-		return http.StatusBadRequest
-	default:
-		return http.StatusInternalServerError
+// ec2Action is the metric label for an EC2 Query action. The form may not be
+// parsed when authentication fails, so it falls back to the query string.
+func ec2Action(r *http.Request) string {
+	if a := r.Form.Get("Action"); a != "" {
+		return a
 	}
+	if a := r.URL.Query().Get("Action"); a != "" {
+		return a
+	}
+	return "unknown"
 }
 
-func ec2Code(e *resource.Error) string {
+// ec2Entry returns the EC2 wire answer for e. The table owns the Code-and-Kind
+// policy. ec2Refinement answers the cases only a field or a flag can name.
+func ec2Entry(e *resource.Error) errs.AWSEntry {
+	if entry, ok := ec2Refinement(e); ok {
+		return entry
+	}
+	entry, found := awscode.EC2(e.Code, e.Kind)
+	if !found {
+		return errs.InternalFailure
+	}
+	return entry
+}
+
+func ec2Refinement(e *resource.Error) (errs.AWSEntry, bool) {
+	badRequest := func(code string) (errs.AWSEntry, bool) {
+		return errs.AWSEntry{HTTP: http.StatusBadRequest, Code: code}, true
+	}
 	switch e.Code {
 	case resource.CodeNotFound:
 		// A missing route table gets the code from the errors page, because
 		// VWS has no route table model to name it from.
 		if e.Field == "routeTableId" {
-			return "InvalidRouteTableID.NotFound"
+			return badRequest("InvalidRouteTableID.NotFound")
 		}
 		// A missing security group rule is InvalidPermission.NotFound, not
 		// the InvalidGroup.NotFound a missing group gets (#272).
 		if resource.IsPermissionNotFound(e) {
-			return "InvalidPermission.NotFound"
+			return badRequest("InvalidPermission.NotFound")
 		}
 		if resource.IsAssociationNotFound(e) {
-			return "InvalidAssociationID.NotFound"
+			return badRequest("InvalidAssociationID.NotFound")
 		}
 		if resource.IsAttachmentNotFound(e) {
-			return "InvalidAttachment.NotFound"
+			return badRequest("InvalidAttachment.NotFound")
 		}
-		return notFoundCode(e.Kind)
 	case resource.CodeInvalidArgument:
 		// A route table id VWS cannot parse has its own EC2 code.
 		if e.Field == "routeTableId" {
-			return "InvalidRouteTableID.Malformed"
+			return badRequest("InvalidRouteTableID.Malformed")
 		}
 		// EC2 reports a public key it cannot read as InvalidKey.Format.
 		if strings.EqualFold(e.Field, "publicKeyMaterial") {
 			if e.Message == "required" {
-				return "MissingParameter"
+				return badRequest("MissingParameter")
 			}
-			return "InvalidKey.Format"
+			return badRequest("InvalidKey.Format")
 		}
 		if resource.IsMissingParameter(e) {
-			return "MissingParameter"
+			return badRequest("MissingParameter")
 		}
 		if resource.IsInvalidCombination(e) {
-			return "InvalidParameterCombination"
+			return badRequest("InvalidParameterCombination")
 		}
 		// EC2 names a malformed instance ID separately (#246).
 		if e.Kind == resource.KindInstance {
-			return "InvalidInstanceID.Malformed"
+			return badRequest("InvalidInstanceID.Malformed")
 		}
 		// EC2 reports a block device mapping it cannot read as
 		// InvalidBlockDeviceMapping.
 		if e.Field == "blockDeviceMapping" {
-			return "InvalidBlockDeviceMapping"
+			return badRequest("InvalidBlockDeviceMapping")
 		}
 		// EC2 reports a volume type it does not support as UnknownVolumeType.
 		if strings.EqualFold(e.Field, "volumeType") {
-			return "UnknownVolumeType"
+			return badRequest("UnknownVolumeType")
 		}
-		return "InvalidParameterValue"
 	case resource.CodeAlreadyExists:
 		// A duplicate security group rule is InvalidPermission.Duplicate,
 		// not the InvalidGroup.Duplicate a duplicate group name gets (#272).
 		if resource.IsDuplicatePermission(e) {
-			return "InvalidPermission.Duplicate"
+			return badRequest("InvalidPermission.Duplicate")
 		}
-		return alreadyExistsCode(e.Kind)
 	case resource.CodeConflict:
 		// EC2 refuses DeleteVolume on an attached volume with VolumeInUse.
 		if resource.IsVolumeAttached(e) {
-			return "VolumeInUse"
+			return badRequest("VolumeInUse")
 		}
-		return conflictCode(e.Kind)
-	case resource.CodeIdempotencyMismatch:
-		return "IdempotentParameterMismatch"
-	case resource.CodeUnauthenticated:
-		return "AuthFailure"
-	case resource.CodePermissionDenied:
-		return "UnauthorizedOperation"
-	case resource.CodeResourceExhausted:
-		return "RequestLimitExceeded"
-	case resource.CodePayloadTooLarge:
-		return "InvalidParameterValue"
-	case resource.CodeUnavailable:
-		return "Unavailable"
-	case resource.CodeUnimplemented:
-		return "InvalidAction"
-	case resource.CodeInternal, resource.CodeUnspecified:
-		return "InternalError"
-	default:
-		return "InternalError"
 	}
-}
-
-func notFoundCode(k resource.Kind) string {
-	switch k {
-	case resource.KindInstance:
-		return "InvalidInstanceID.NotFound"
-	case resource.KindSubnet:
-		return "InvalidSubnetID.NotFound"
-	case resource.KindImage:
-		return "InvalidAMIID.NotFound"
-	case resource.KindVpc:
-		return "InvalidVpcID.NotFound"
-	case resource.KindVolume:
-		return "InvalidVolume.NotFound"
-	case resource.KindSecurityGroup:
-		return "InvalidGroup.NotFound"
-	case resource.KindKeyPair:
-		return "InvalidKeyPair.NotFound"
-	case resource.KindAddress:
-		return "InvalidAllocationID.NotFound"
-	case resource.KindSnapshot:
-		return "InvalidSnapshot.NotFound"
-	case resource.KindReservation, resource.KindBucket, resource.KindObject, resource.KindOperation, resource.KindUnspecified:
-		return "InvalidParameterValue"
-	default:
-		return "InvalidParameterValue"
-	}
-}
-
-func conflictCode(k resource.Kind) string {
-	switch k {
-	case resource.KindVolume, resource.KindKeyPair:
-		// A key pair is not an instance: EC2's IncorrectState is the
-		// resource-neutral state error (#291).
-		return "IncorrectState"
-	case resource.KindVpc, resource.KindSubnet:
-		return "DependencyViolation"
-	case resource.KindInstance, resource.KindImage, resource.KindReservation,
-		resource.KindBucket, resource.KindObject, resource.KindOperation, resource.KindSecurityGroup,
-		resource.KindAddress, resource.KindSnapshot, resource.KindUnspecified:
-		return "IncorrectInstanceState"
-	default:
-		return "IncorrectInstanceState"
-	}
-}
-
-func alreadyExistsCode(k resource.Kind) string {
-	switch k {
-	case resource.KindSecurityGroup:
-		return "InvalidGroup.Duplicate"
-	case resource.KindKeyPair:
-		return "InvalidKeyPair.Duplicate"
-	case resource.KindInstance, resource.KindImage, resource.KindReservation, resource.KindSubnet,
-		resource.KindBucket, resource.KindObject, resource.KindOperation, resource.KindVpc,
-		resource.KindVolume, resource.KindAddress, resource.KindSnapshot, resource.KindUnspecified:
-		return "InvalidParameterValue"
-	default:
-		return "InvalidParameterValue"
-	}
+	return errs.AWSEntry{}, false
 }
 
 // blob decodes a base64 query field, which is how EC2 carries UserData and

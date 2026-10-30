@@ -18,11 +18,16 @@ import (
 	"strings"
 	"time"
 
+	"github.com/popododo0720/vws-lib/errs"
+	"github.com/popododo0720/vws-lib/obs"
+
 	"github.com/popododo0720/vws-console-api/internal/cloud"
 	"github.com/popododo0720/vws-console-api/internal/iam"
 	"github.com/popododo0720/vws-console-api/internal/resource"
 	"github.com/popododo0720/vws-console-api/internal/server"
+	"github.com/popododo0720/vws-console-api/internal/service"
 	"github.com/popododo0720/vws-console-api/internal/sigv4"
+	"github.com/popododo0720/vws-console-api/internal/surface/awscode"
 )
 
 // Config wires the object surface.
@@ -615,17 +620,21 @@ func writeXML(w http.ResponseWriter, status int, v any) {
 }
 
 func writeErr(w http.ResponseWriter, r *http.Request, err error, resourceName string) {
+	action := s3ActionOf(r)
 	if rej, ok := sigv4.RejectionOf(err); ok {
 		status, body := authError(rej, r.Header.Get("X-Request-Id"))
+		obs.M().AWSError(r.Context(), service.Name, action, body.Code)
 		writeXML(w, status, body)
 		return
 	}
 	e := resource.AsError(err)
-	if statusOf(e) >= http.StatusInternalServerError {
+	entry := s3Entry(e)
+	if entry.HTTP >= http.StatusInternalServerError {
 		server.RecordFailure(w, err)
 	}
+	obs.M().AWSError(r.Context(), service.Name, action, entry.Code)
 	out := errorXML{
-		Code: s3Code(e), Message: e.Message, Resource: resourceName, RequestID: r.Header.Get("X-Request-Id"),
+		Code: entry.Code, Message: e.Message, Resource: resourceName, RequestID: r.Header.Get("X-Request-Id"),
 	}
 	if e.Code == resource.CodeAlreadyExists && e.Kind == resource.KindBucket {
 		// S3 names the bucket in both create conflicts, with its own text.
@@ -634,7 +643,7 @@ func writeErr(w http.ResponseWriter, r *http.Request, err error, resourceName st
 			out.Message = takenBucketMessage
 		}
 	}
-	writeXML(w, statusOf(e), out)
+	writeXML(w, entry.HTTP, out)
 }
 
 // authError is S3's answer to a SigV4 failure: the code and status from the
@@ -685,79 +694,53 @@ func authError(rej *sigv4.RejectionError, requestID string) (int, errorXML) {
 	return status, out
 }
 
-func statusOf(e *resource.Error) int {
-	switch e.Code {
-	case resource.CodeInvalidArgument, resource.CodePayloadTooLarge:
-		return http.StatusBadRequest
-	case resource.CodeNotFound:
-		return http.StatusNotFound
-	case resource.CodeAlreadyExists:
-		if e.Kind == resource.KindObject {
-			// Only a conditional put refuses an existing object.
-			return http.StatusPreconditionFailed
-		}
-		return http.StatusConflict
-	case resource.CodeConflict, resource.CodeIdempotencyMismatch:
-		return http.StatusConflict
-	case resource.CodeUnauthenticated, resource.CodePermissionDenied:
-		return http.StatusForbidden
-	case resource.CodeResourceExhausted:
-		return http.StatusServiceUnavailable
-	case resource.CodeUnavailable:
-		return http.StatusServiceUnavailable
-	case resource.CodeUnimplemented:
-		return http.StatusNotImplemented
-	case resource.CodeInternal, resource.CodeUnspecified:
-		return http.StatusInternalServerError
-	default:
-		return http.StatusInternalServerError
+// s3Entry returns the S3 wire answer for e. The table owns the Code-and-Kind
+// policy. s3Refinement answers the cases only a field, a flag, or the bucket
+// name can tell apart.
+func s3Entry(e *resource.Error) errs.AWSEntry {
+	if entry, ok := s3Refinement(e); ok {
+		return entry
 	}
+	entry, found := awscode.S3(e.Code, e.Kind)
+	if !found {
+		return errs.InternalFailure
+	}
+	return entry
 }
 
-func s3Code(e *resource.Error) string {
+func s3Refinement(e *resource.Error) (errs.AWSEntry, bool) {
 	switch e.Code {
-	case resource.CodeNotFound:
-		if e.Kind == resource.KindObject {
-			return "NoSuchKey"
-		}
-		return "NoSuchBucket"
 	case resource.CodeAlreadyExists:
-		if e.Kind == resource.KindObject {
-			return "PreconditionFailed"
+		// A bucket create the caller already owns has its own code. The
+		// table cannot see the owner.
+		if resource.OwnedByCaller(e) && e.Kind != resource.KindObject {
+			return errs.AWSEntry{HTTP: http.StatusConflict, Code: "BucketAlreadyOwnedByYou"}, true
 		}
-		if resource.OwnedByCaller(e) {
-			return "BucketAlreadyOwnedByYou"
-		}
-		return "BucketAlreadyExists"
 	case resource.CodeConflict:
+		// A delete during the bucket's own deletion is OperationAborted.
 		if resource.IsBucketDeleting(e) {
-			return "OperationAborted"
+			return errs.AWSEntry{HTTP: http.StatusConflict, Code: "OperationAborted"}, true
 		}
-		return "BucketNotEmpty"
-	case resource.CodeInvalidArgument:
-		return "InvalidArgument"
 	case resource.CodeUnauthenticated:
+		// A bad access key name is InvalidAccessKeyId, not AccessDenied.
 		if e.Field == "AccessKeyId" {
-			return "InvalidAccessKeyId"
+			return errs.AWSEntry{HTTP: http.StatusForbidden, Code: "InvalidAccessKeyId"}, true
 		}
-		return "AccessDenied"
-	case resource.CodePermissionDenied:
-		return "AccessDenied"
-	case resource.CodeResourceExhausted:
-		return "SlowDown"
-	case resource.CodePayloadTooLarge:
-		return "EntityTooLarge"
-	case resource.CodeUnimplemented:
-		return "NotImplemented"
-	case resource.CodeUnavailable:
-		return "ServiceUnavailable"
-	case resource.CodeIdempotencyMismatch:
-		return "OperationAborted"
-	case resource.CodeInternal, resource.CodeUnspecified:
-		return "InternalError"
-	default:
-		return "InternalError"
 	}
+	return errs.AWSEntry{}, false
+}
+
+func statusOf(e *resource.Error) int { return s3Entry(e).HTTP }
+
+func s3Code(e *resource.Error) string { return s3Entry(e).Code }
+
+// s3ActionOf is the metric label for an S3 request. A path the router cannot
+// name is "unknown".
+func s3ActionOf(r *http.Request) string {
+	if action, _, ok := s3Action(r.Method, r.URL.Path); ok {
+		return action
+	}
+	return "unknown"
 }
 
 type callerKey struct{}
