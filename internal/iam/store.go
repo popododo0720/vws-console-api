@@ -1106,9 +1106,14 @@ func (f *Fake) ListPolicyVersions(
 		v.Document = "" // AWS ListPolicyVersions leaves out the document.
 		versions[i] = v.PolicyVersion
 	}
+	sort.Slice(versions, func(i, j int) bool {
+		return policyVersionNumber(versions[i].ID) < policyVersionNumber(versions[j].ID)
+	})
 	start := 0
 	if marker != "" {
-		start = sort.Search(len(versions), func(i int) bool { return versions[i].ID > marker })
+		start = sort.Search(len(versions), func(i int) bool {
+			return policyVersionNumber(versions[i].ID) > policyVersionNumber(marker)
+		})
 	}
 	end := min(start+maxItems, len(versions))
 	page := PolicyVersionPage{Versions: versions[start:end]}
@@ -1117,6 +1122,16 @@ func (f *Fake) ListPolicyVersions(
 		page.Marker = versions[end-1].ID
 	}
 	return page, nil
+}
+
+// policyVersionNumber is the numeric part of a version id, so v10 pages after
+// v9 rather than sorting before it. An id without a number is zero.
+func policyVersionNumber(id string) int {
+	n, err := strconv.Atoi(strings.TrimPrefix(id, "v"))
+	if err != nil {
+		return 0
+	}
+	return n
 }
 
 // CreatePolicyVersion implements Admin. It stores the document as the next
