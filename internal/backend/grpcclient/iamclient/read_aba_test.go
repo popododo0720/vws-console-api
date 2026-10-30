@@ -88,7 +88,8 @@ func TestListAccessKeysDetectsAMoveAndMoveBackOverGRPC(t *testing.T) {
 		t.Fatal(err)
 	}
 	for range 2 {
-		if _, err := a.CreateAccessKey(ctx, account314, "bob", backendtest.UserGrant(ctx, t, a, account314, "bob")); err != nil {
+		grant := backendtest.UserGrant(ctx, t, a, account314, "bob")
+		if _, err := a.CreateAccessKey(ctx, account314, "bob", grant); err != nil {
 			t.Fatal(err)
 		}
 	}
