@@ -431,6 +431,17 @@ type detachReplay struct {
 	// pendingBound: no id is saved yet, and fingerprint is the binding the
 	// first write left in the reserved label (detachOpPending).
 	pendingBound bool
+	// at is the record's stamp, when stamped.
+	at      time.Time
+	stamped bool
+}
+
+// resendable reports whether a retry with no trusted operation id may resend
+// the original update by request id at now: compute still remembers it
+// (backend.ClientTokenReplayable). A record with no stamp has an unknown
+// age and keeps the resend it had before #305.
+func (r detachReplay) resendable(now time.Time) bool {
+	return !r.stamped || backend.ClientTokenReplayable(r.at, now)
 }
 
 func (c computeClient) detachOnce(
@@ -454,7 +465,16 @@ func (c computeClient) detachOnce(
 			case opOtherParams:
 				return zero, resource.IdempotencyMismatch()
 			case opUnknown:
-				if !bound {
+				// Past compute's request id window a write would be a new
+				// update. Attached here again, it would detach the new
+				// attachment, so the retry is refused while the record
+				// lingers; not attached here, it is answered below as a
+				// detach that finds no attachment (#305).
+				resendable := rec.resendable(c.clock())
+				if bound && !resendable {
+					return zero, resource.DetachTokenExpired(vol.ID)
+				}
+				if !bound && resendable {
 					return c.writeDetach(ctx, m, vol, got, model, backend.VolumeBind{
 						InstanceID: rec.instanceID, Device: rec.device,
 					}, false)
@@ -509,6 +529,12 @@ func (c computeClient) detachOnce(
 	case opOtherParams:
 		return zero, resource.IdempotencyMismatch()
 	case opUnknown:
+		if !rec.resendable(c.clock()) {
+			// compute no longer remembers the request id, and no spec
+			// names the volume: a resend could only return a new update
+			// as this detach (#305).
+			return zero, resource.VolumeNotInUse(vol.ID)
+		}
 	}
 	return c.writeDetach(ctx, m, vol, holder, holderModel, backend.VolumeBind{
 		InstanceID: rec.instanceID, Device: rec.device,
@@ -518,7 +544,8 @@ func (c computeClient) detachOnce(
 // replayDetachElsewhere answers a volume-only retry from the record another
 // instance keeps of request requestHex. ok is false when no instance has it.
 // A record the update never saved resends that update to the record's
-// instance, by its request id, and leaves the volume where it is now.
+// instance, by its request id, and leaves the volume where it is now; past
+// compute's request id window it is refused instead (#305).
 func (c computeClient) replayDetachElsewhere(
 	ctx context.Context, m backend.Mutation, projectID string, vol resource.Volume, requestHex string,
 ) (resource.Accepted[resource.VolumeAttachment], bool, error) {
@@ -534,6 +561,11 @@ func (c computeClient) replayDetachElsewhere(
 	case opOtherParams:
 		err = resource.IdempotencyMismatch()
 	case opUnknown:
+		if !rec.resendable(c.clock()) {
+			// compute no longer remembers the request id: a resend would
+			// return a new update as the detach (#305).
+			return zero, true, resource.DetachTokenExpired(vol.ID)
+		}
 		acc, err = c.writeDetach(ctx, m, vol, holder, holderModel, backend.VolumeBind{
 			InstanceID: rec.instanceID, Device: rec.device,
 		}, false)
@@ -1378,11 +1410,11 @@ func detachReplayFrom(labels map[string]string, volID string) (detachReplay, boo
 	if !ok {
 		return detachReplay{}, false
 	}
-	requestHex, device, _, _, ok := parseDetachRecord(raw)
+	requestHex, device, at, stamped, ok := parseDetachRecord(raw)
 	if !ok {
 		return detachReplay{}, false
 	}
-	rec := detachReplay{requestHex: requestHex, device: device}
+	rec := detachReplay{requestHex: requestHex, device: device, at: at, stamped: stamped}
 	if opLocal, fp, cut := strings.Cut(labels[labelDetachOpPrefix+volID], " "); cut && opLocal == detachOpPending {
 		rec.fingerprint = fp
 		rec.pendingBound = fp != ""

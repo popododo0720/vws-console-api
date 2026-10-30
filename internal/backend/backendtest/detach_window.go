@@ -142,8 +142,10 @@ func DetachWindow(t *testing.T, newSet ClockHarness) {
 		orig := detach(t, w, m, req)
 		w.advance(backend.ClientTokenWindow + time.Minute)
 		tag(t, w, "past")
-		// Past the window the token may be forgotten (#305 pins the answer).
-		// Either way nothing is detached again and no other detach is returned.
+		// Past the window the token may be forgotten. Either way nothing is
+		// detached again and no other detach is returned. A retry whose
+		// operation id was never saved is pinned over gRPC by
+		// TestRetryPastTheRequestIDWindowIsNotResent (#305).
 		again, err := w.set.Compute.DetachVolume(ctx, m, req)
 		switch {
 		case err == nil:

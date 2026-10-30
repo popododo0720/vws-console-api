@@ -42,8 +42,8 @@ type Mutation struct {
 // is the vws-compute request_id window (vws-proto operation.proto, "A
 // request_id is remembered for 24 hours"), so a record console-api keeps
 // for a retry, such as a DetachVolume record, never outlives the request id
-// compute would replay. This is the one definition; #305 states and tests
-// what a retry after the window answers.
+// compute would replay. This is the one definition; ClientTokenReplayable
+// bounds a resend by request id inside it (#305).
 const ClientTokenWindow = 24 * time.Hour
 
 // ClientTokenGrace is how much longer than ClientTokenWindow a record is
@@ -57,6 +57,16 @@ const ClientTokenGrace = time.Minute
 // passed. A stamp ahead of now is clock skew and has not expired.
 func ClientTokenExpired(at, now time.Time) bool {
 	return now.Sub(at) > ClientTokenWindow+ClientTokenGrace
+}
+
+// ClientTokenReplayable reports whether compute still remembers the request
+// id of a record stamped at, so a resend by that request id replays the
+// original request: less than ClientTokenWindow less ClientTokenGrace has
+// passed. The stamp is rounded up to the second and read on console-api's
+// clock, so the grace covers that rounding and clock skew with compute.
+// Past it a resend would be a new request answered as the original (#305).
+func ClientTokenReplayable(at, now time.Time) bool {
+	return now.Sub(at) < ClientTokenWindow-ClientTokenGrace
 }
 
 // MaxDetachReplays is how many DetachVolume requests with a client token
