@@ -947,6 +947,11 @@ func TestUpdateRoleDescription(t *testing.T) {
 			t.Errorf("description %q inside the AWS pattern: %v", valid, err)
 		}
 	}
+	if got, err := f.UpdateRoleDescription(
+		ctx, a, "ops", "", testRoleGrant(ctx, t, f, a, "ops"),
+	); err != nil || got.Description != "" {
+		t.Errorf("empty description: %+v %v", got, err)
+	}
 	wide := strings.Repeat("\u00ff", MaxRoleDescription)
 	if got, err := f.UpdateRoleDescription(
 		ctx, a, "ops", wide, testRoleGrant(ctx, t, f, a, "ops"),
