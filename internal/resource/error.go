@@ -198,13 +198,43 @@ func Malformed(kind Kind, id string) *Error {
 }
 
 // NotFound reports a missing resource. Callers in another account get the same code.
-// EC2 names a missing volume in its own sentence (#212, #243).
+// The message is AWS's sentence for the kind, which names the id where AWS does
+// (#212, #243).
 func NotFound(kind Kind, id string) *Error {
-	message := "not found"
-	if kind == KindVolume {
-		message = "The volume '" + id + "' does not exist."
+	return &Error{Code: CodeNotFound, Kind: kind, ID: id, Message: notFoundMessage(kind, id)}
+}
+
+// notFoundMessage is the text AWS sends for a missing resource. The ids are
+// part of the text.
+// https://docs.aws.amazon.com/AWSEC2/latest/APIReference/errors-overview.html
+// https://docs.aws.amazon.com/AmazonS3/latest/API/ErrorResponses.html
+func notFoundMessage(kind Kind, id string) string {
+	switch kind {
+	case KindInstance:
+		return "The instance ID '" + id + "' does not exist"
+	case KindImage:
+		return imageNotFoundMessage(id)
+	case KindBucket:
+		return "The specified bucket does not exist"
+	case KindVpc:
+		return "The vpc ID '" + id + "' does not exist"
+	case KindSubnet:
+		return "The subnet ID '" + id + "' does not exist"
+	case KindVolume:
+		return "The volume '" + id + "' does not exist."
+	case KindSecurityGroup:
+		return "The security group '" + id + "' does not exist"
+	case KindKeyPair:
+		return "The key pair '" + id + "' does not exist"
+	case KindAddress:
+		return "The allocation ID '" + id + "' does not exist"
+	case KindSnapshot:
+		return "The snapshot '" + id + "' does not exist."
+	case KindReservation, KindObject, KindOperation, KindUnspecified:
+		return "not found"
 	}
-	return &Error{Code: CodeNotFound, Kind: kind, ID: id, Message: message}
+	// Exhaustive requires every kind as a case; Go requires this return.
+	return "not found"
 }
 
 // AlreadyExists reports a resource the caller cannot create again.
