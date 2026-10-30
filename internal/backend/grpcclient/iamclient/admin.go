@@ -710,9 +710,10 @@ func (a STSAdmin) ListVirtualMFADevices(
 // vws-iam pages every device of the account before the user filter, so this
 // reads every page and then filters and pages to keep AWS's MaxItems and
 // Marker semantics. want must be the user's ARN when the
-// user is read before the device pages and again after them, so a user that
-// moved since the caller was authorized, or while the pages were read, is a
-// ConcurrentModification with no device.
+// user is read before the device pages and again after them, and the two
+// reads must return the same etag, so a user that moved since the caller was
+// authorized, or while the pages were read (even away and back), is a
+// ConcurrentModification with no device (#331).
 func (a STSAdmin) ListMFADevices(
 	ctx context.Context, account resource.AccountID, user, marker string, maxItems int, want iam.AuthorizedPrincipal,
 ) (iam.MFADevicePage, error) {
@@ -720,7 +721,8 @@ func (a STSAdmin) ListMFADevices(
 		return iam.MFADevicePage{}, err
 	}
 	resourceName := "projects/" + account.String() + "/users/" + user
-	if err := a.userAt(ctx, account, user, want); err != nil {
+	_, etag, err := a.boundUser(ctx, account, user, want)
+	if err != nil {
 		return iam.MFADevicePage{}, err
 	}
 	var devices []iam.MFADevice
@@ -765,19 +767,55 @@ func (a STSAdmin) ListMFADevices(
 			break
 		}
 	}
-	if err := a.userAt(ctx, account, user, want); err != nil {
+	if err := a.unchangedUser(ctx, account, user, want, etag); err != nil {
 		return iam.MFADevicePage{}, err
 	}
 	return iam.PageMFADevices(devices, marker, maxItems), nil
 }
 
-// userAt reads the user and checks that want is its ARN: a user that moved
-// since the caller was authorized is Changed(UserChanged).
-func (a STSAdmin) userAt(
+// boundUser reads the user, checks that want is its ARN and returns the
+// user with its etag. A user that moved since the caller was authorized is
+// Changed(UserChanged). vws-iam changes the etag (the store version) on
+// every write of the user, so a read of several calls compares the etag of
+// its first and last user reads with unchangedUser: a user that moved to
+// another path and back in between passes both ARN checks but not the etag
+// (#331). A user without an etag cannot show that and is an internal error.
+func (a STSAdmin) boundUser(
 	ctx context.Context, account resource.AccountID, user string, want iam.AuthorizedPrincipal,
+) (iam.User, string, error) {
+	if err := want.Require(); err != nil {
+		return iam.User{}, "", err
+	}
+	if !entityName(user) {
+		return iam.User{}, "", entityNotFound("user", user)
+	}
+	raw, u, err := a.rawUser(ctx, account, user)
+	if err != nil {
+		return iam.User{}, "", err
+	}
+	if err := want.Bind(u.ARN, iam.UserChanged); err != nil {
+		return iam.User{}, "", err
+	}
+	if raw.GetEtag() == "" {
+		return iam.User{}, "", resource.Internal(errors.New("vws-iam GetUser returned a user with no etag"))
+	}
+	return u, raw.GetEtag(), nil
+}
+
+// unchangedUser reads the user again after a read of several calls: it must
+// still be at want and at the etag the first read returned, or the read is
+// Changed(UserChanged) and its data is dropped.
+func (a STSAdmin) unchangedUser(
+	ctx context.Context, account resource.AccountID, user string, want iam.AuthorizedPrincipal, etag string,
 ) error {
-	_, err := a.GetUser(ctx, account, user, want)
-	return err
+	_, now, err := a.boundUser(ctx, account, user, want)
+	if err != nil {
+		return err
+	}
+	if now != etag {
+		return iam.Changed(iam.UserChanged)
+	}
+	return nil
 }
 
 // virtualMFADevice maps one vws-iam device to an AWS row. A device with a user

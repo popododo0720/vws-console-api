@@ -66,7 +66,8 @@ func (a STSAdmin) CreateAccessKey(
 
 // ListAccessKeys implements iam.Admin over AccessKeyService.ListAccessKeys,
 // every page, sorted by key id. want must be the user's ARN when the user is
-// read before the pages and again after them.
+// read before the pages and again after them, and the user's etag must not
+// change in between (#331).
 func (a STSAdmin) ListAccessKeys(
 	ctx context.Context, account resource.AccountID, user string, want iam.AuthorizedPrincipal,
 ) (out []iam.AccessKeyMeta, err error) {
@@ -78,7 +79,7 @@ func (a STSAdmin) ListAccessKeys(
 	if !entityName(user) {
 		return nil, entityNotFound("user", user)
 	}
-	u, err := a.keyUser(ctx, account, user, want)
+	u, etag, err := a.boundUser(ctx, account, user, want)
 	if err != nil {
 		return nil, err
 	}
@@ -103,7 +104,7 @@ func (a STSAdmin) ListAccessKeys(
 			break
 		}
 	}
-	if _, err := a.keyUser(ctx, account, user, want); err != nil {
+	if err := a.unchangedUser(ctx, account, user, want, etag); err != nil {
 		return nil, err
 	}
 	slices.SortFunc(out, func(x, y iam.AccessKeyMeta) int { return strings.Compare(x.AccessKeyID, y.AccessKeyID) })

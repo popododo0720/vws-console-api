@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -107,6 +108,10 @@ type server struct {
 	// records its request and before it answers, so a test can change what
 	// vws-iam holds between two calls (a concurrent UpdateUser).
 	onCall func(method string)
+	// userEtags are the etags stampUserEtag gave getUserRes values.
+	userEtags map[*iamv1.User]string
+	// noUserEtag answers GetUser fixtures without an etag as they are.
+	noUserEtag bool
 	// Group calls. A name missing from getGroupRes is NotFound.
 	getGroup    []*iamv1.GetGroupRequest
 	getGroupRes map[string]*iamv1.Group
@@ -389,7 +394,27 @@ func (s *server) GetUser(ctx context.Context, req *iamv1.GetUserRequest) (*iamv1
 	if !ok {
 		return nil, awsErr(codes.NotFound, "NOT_FOUND", "NoSuchEntity")
 	}
+	if u.GetEtag() == "" && !s.noUserEtag {
+		u = s.stampUserEtag(u)
+	}
 	return u, nil
+}
+
+// stampUserEtag gives a fixture without an etag one, as vws-iam always sends:
+// the same fixture value keeps its etag, and a value put in getUserRes later
+// (a test's concurrent UpdateUser) gets a new one. The caller holds s.mu.
+func (s *server) stampUserEtag(u *iamv1.User) *iamv1.User {
+	if s.userEtags == nil {
+		s.userEtags = map[*iamv1.User]string{}
+	}
+	etag, ok := s.userEtags[u]
+	if !ok {
+		etag = "fixture-" + strconv.Itoa(len(s.userEtags)+1)
+		s.userEtags[u] = etag
+	}
+	out := proto.Clone(u).(*iamv1.User)
+	out.Etag = etag
+	return out
 }
 
 func (s *server) GetGroup(ctx context.Context, req *iamv1.GetGroupRequest) (*iamv1.Group, error) {

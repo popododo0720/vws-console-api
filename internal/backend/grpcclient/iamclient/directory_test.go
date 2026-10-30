@@ -82,6 +82,9 @@ type directory struct {
 	// onGetPolicy, when set, runs under d.mu in each GetPolicy, as another
 	// writer acting while a list reads the attached policies.
 	onGetPolicy func(d *directory)
+	// onListAccessKeys, when set, runs under d.mu in each ListAccessKeys, as
+	// another writer acting while a list reads the key pages.
+	onListAccessKeys func(d *directory)
 }
 
 type dirKey struct {
@@ -690,6 +693,9 @@ func (d *directory) ListAccessKeys(
 	defer d.mu.Unlock()
 	if err := d.enter("ListAccessKeys", req); err != nil {
 		return nil, err
+	}
+	if d.onListAccessKeys != nil {
+		d.onListAccessKeys(d)
 	}
 	if _, _, err := split(req.GetParent(), "users"); err != nil {
 		return nil, err
