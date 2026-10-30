@@ -465,11 +465,16 @@ func (c computeClient) detachOnce(
 			case opOtherParams:
 				return zero, resource.IdempotencyMismatch()
 			case opUnknown:
-				// Past compute's request id window the resend would be a
-				// new update; the volume is not attached here, so the
-				// retry is answered below as a detach that finds no
-				// attachment (#305).
-				if !bound && rec.resendable(c.clock()) {
+				// Past compute's request id window a write would be a new
+				// update. Attached here again, it would detach the new
+				// attachment, so the retry is refused while the record
+				// lingers; not attached here, it is answered below as a
+				// detach that finds no attachment (#305).
+				resendable := rec.resendable(c.clock())
+				if bound && !resendable {
+					return zero, resource.DetachTokenExpired(vol.ID)
+				}
+				if !bound && resendable {
 					return c.writeDetach(ctx, m, vol, got, model, backend.VolumeBind{
 						InstanceID: rec.instanceID, Device: rec.device,
 					}, false)
@@ -539,7 +544,8 @@ func (c computeClient) detachOnce(
 // replayDetachElsewhere answers a volume-only retry from the record another
 // instance keeps of request requestHex. ok is false when no instance has it.
 // A record the update never saved resends that update to the record's
-// instance, by its request id, and leaves the volume where it is now.
+// instance, by its request id, and leaves the volume where it is now; past
+// compute's request id window it is refused instead (#305).
 func (c computeClient) replayDetachElsewhere(
 	ctx context.Context, m backend.Mutation, projectID string, vol resource.Volume, requestHex string,
 ) (resource.Accepted[resource.VolumeAttachment], bool, error) {
@@ -555,6 +561,11 @@ func (c computeClient) replayDetachElsewhere(
 	case opOtherParams:
 		err = resource.IdempotencyMismatch()
 	case opUnknown:
+		if !rec.resendable(c.clock()) {
+			// compute no longer remembers the request id: a resend would
+			// return a new update as the detach (#305).
+			return zero, true, resource.DetachTokenExpired(vol.ID)
+		}
 		acc, err = c.writeDetach(ctx, m, vol, holder, holderModel, backend.VolumeBind{
 			InstanceID: rec.instanceID, Device: rec.device,
 		}, false)
