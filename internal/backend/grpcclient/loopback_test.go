@@ -559,6 +559,13 @@ func (s *instanceSrv) CreateInstance(ctx context.Context, req *computev1.CreateI
 		if rootType == "" {
 			return nil, toStatus(resource.Invalid("volumeType", "unsupported"))
 		}
+		// The fake fills Iops and Throughput from the type, so the stub
+		// refuses a boot volume whose own values differ: a client that
+		// drops them fails the contract.
+		iops, miBps := resource.RunInstancesRequest{RootVolumeType: rootType}.RootPerformance()
+		if boot.GetSpec().GetIops() != iops || boot.GetSpec().GetThroughputMibps() != miBps {
+			return nil, toStatus(resource.Invalid("iops", "boot volume performance does not match its type"))
+		}
 	}
 	acc, err := s.w.set.Compute.RunInstances(ctx, backend.Mutation{
 		Scope: backend.Scope{Account: account}, Key: req.GetRequestId(), Fingerprint: fp,

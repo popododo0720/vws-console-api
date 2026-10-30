@@ -92,6 +92,7 @@ func (c compute) RunInstances(ctx context.Context, m backend.Mutation, req resou
 			return resource.Accepted[resource.Instance]{}, resource.Internal(errors.New("identifier collision"))
 		}
 		launched := c.w.now().UTC()
+		iops, miBps := req.RootPerformance()
 		inst.LaunchTime = launched
 		inst.RootDeviceName = resource.RootDeviceName
 		inst.BlockDevices = []resource.BlockDevice{{Device: resource.RootDeviceName, VolumeID: volID, DeleteOnTermination: true}}
@@ -99,7 +100,7 @@ func (c compute) RunInstances(ctx context.Context, m backend.Mutation, req resou
 			ID: volID, OwnerID: m.Account, SizeGiB: 8, Zone: resource.ZoneName, Type: req.RootType(),
 			State: resource.VolumeInUse, InstanceID: id, Device: resource.RootDeviceName,
 			CreateTime: launched, AttachTime: launched, DeleteOnTermination: true,
-			AttachState: resource.AttachmentAttached,
+			AttachState: resource.AttachmentAttached, Iops: iops, Throughput: miBps,
 		})
 		items = append(items, inst)
 		targets = append(targets, id.Ref())

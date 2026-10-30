@@ -197,6 +197,13 @@ func (r RunInstancesRequest) RootType() VolumeType {
 	return r.RootVolumeType
 }
 
+// RootPerformance is the Iops and Throughput (MiB/s) RunInstances gives the
+// root volume. The mapping carries neither, so they are what EC2 fills in
+// for RootType: 3,000 IOPS and 125 MiB/s for gp3, none for the other types.
+func (r RunInstancesRequest) RootPerformance() (iops, miBps int64) {
+	return withDefaultPerformance(r.RootType(), 0, 0)
+}
+
 // MaxUserDataBytes is the EC2 limit on decoded user data.
 const MaxUserDataBytes = 16384
 
@@ -240,8 +247,9 @@ func (r RunInstancesRequest) Normalize() (RunInstancesRequest, error) {
 		// EC2 CreateVolume: st1 and sc1 volumes can't be used as boot volumes.
 		return RunInstancesRequest{}, Invalid("volumeType", "st1 and sc1 cannot be boot volumes")
 	case VolumeIO1, VolumeIO2:
-		// io1 and io2 need Iops first (#324), as on CreateVolume.
-		return RunInstancesRequest{}, Invalid("volumeType", "unsupported")
+		// io1 and io2 need Iops, and the mapping does not carry Ebs.Iops yet.
+		// EC2 answers MissingParameter, as CreateVolume does without Iops.
+		return RunInstancesRequest{}, checkVolumePerformance(r.RootVolumeType, 0, 0)
 	default:
 		return RunInstancesRequest{}, Invalid("volumeType", "unsupported")
 	}

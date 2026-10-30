@@ -54,6 +54,10 @@ func TestRunInstancesRootVolumeTypeRoundTrips(t *testing.T) {
 		if !strings.Contains(vols, "<volumeType>"+want+"</volumeType>") {
 			t.Fatalf("root %s: %s", want, vols)
 		}
+		gp3 := strings.Contains(vols, "<iops>3000</iops>") && strings.Contains(vols, "<throughput>125</throughput>")
+		if gp3 != (want == "gp3") {
+			t.Fatalf("root %s performance: %s", want, vols)
+		}
 	}
 	// A mapping that names only the root device keeps the default.
 	run := send(launchForm(subnet, "root-name-only", url.Values{"BlockDeviceMapping.1.DeviceName": {"/dev/xvda"}}))
@@ -87,7 +91,7 @@ func TestRunInstancesBlockDeviceMappingRefusals(t *testing.T) {
 		extra url.Values
 		code  string
 	}{
-		{"io1 root needs Iops (#324)", root("Ebs.VolumeType", "io1"), "UnknownVolumeType"},
+		{"io1 root needs Ebs.Iops", root("Ebs.VolumeType", "io1"), "MissingParameter"},
 		{"st1 cannot boot", root("Ebs.VolumeType", "st1"), "UnknownVolumeType"},
 		{"no such type", root("Ebs.VolumeType", "io3"), "UnknownVolumeType"},
 		{"no device name", url.Values{"BlockDeviceMapping.1.Ebs.VolumeType": {"gp3"}}, "InvalidBlockDeviceMapping"},

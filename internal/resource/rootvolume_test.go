@@ -35,7 +35,25 @@ func TestRunInstancesRootVolumeType(t *testing.T) {
 			t.Fatalf("%q: root type %q, want %q", typ, got.RootType(), want)
 		}
 	}
-	for _, typ := range []VolumeType{VolumeIO1, VolumeIO2, VolumeST1, VolumeSC1, "GP3", "ssd", "io3"} {
+	// A gp3 root volume gets the gp3 defaults, as CreateVolume gives (#418).
+	for typ, want := range map[VolumeType][2]int64{"": {}, VolumeStandard: {}, VolumeGP2: {}, VolumeGP3: {3000, 125}} {
+		iops, miBps := RunInstancesRequest{RootVolumeType: typ}.RootPerformance()
+		if iops != want[0] || miBps != want[1] {
+			t.Fatalf("%q: root performance %d IOPS %d MiB/s, want %v", typ, iops, miBps, want)
+		}
+	}
+	// io1 and io2 need Ebs.Iops, which the mapping does not carry, so EC2
+	// answers MissingParameter as CreateVolume does without Iops.
+	for _, typ := range []VolumeType{VolumeIO1, VolumeIO2} {
+		req := base
+		req.RootVolumeType = typ
+		_, err := req.Normalize()
+		var e *Error
+		if !errors.As(err, &e) || !IsMissingParameter(e) || e.Field != "iops" {
+			t.Fatalf("%q: %v, want a missing iops", typ, err)
+		}
+	}
+	for _, typ := range []VolumeType{VolumeST1, VolumeSC1, "GP3", "ssd", "io3"} {
 		req := base
 		req.RootVolumeType = typ
 		_, err := req.Normalize()

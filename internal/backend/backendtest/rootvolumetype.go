@@ -10,7 +10,8 @@ import (
 
 // exerciseRootVolumeType covers #323: RunInstances creates the root volume
 // with the requested type, and DescribeVolumes reads the same type back.
-// An omitted type is gp2.
+// An omitted type is gp2, and a gp3 root volume gets the gp3 Iops and
+// Throughput defaults.
 func exerciseRootVolumeType(
 	ctx context.Context, t *testing.T, set backend.Set,
 	account resource.AccountID, subnet resource.SubnetID, img resource.ImageID,
@@ -48,6 +49,15 @@ func exerciseRootVolumeType(
 		}
 		if vols.Items[0].Type != want {
 			t.Fatalf("root type %q reads back as %q, want %q", typ, vols.Items[0].Type, want)
+		}
+		// gp3 gets 3,000 IOPS and 125 MiB/s, as on CreateVolume.
+		var iops, miBps int64
+		if want == resource.VolumeGP3 {
+			iops, miBps = 3000, 125
+		}
+		if vols.Items[0].Iops != iops || vols.Items[0].Throughput != miBps {
+			t.Fatalf("root type %q: %d IOPS %d MiB/s, want %d and %d",
+				typ, vols.Items[0].Iops, vols.Items[0].Throughput, iops, miBps)
 		}
 	}
 }
