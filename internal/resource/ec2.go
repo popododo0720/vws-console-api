@@ -120,6 +120,11 @@ type Volume struct {
 	AttachState AttachmentStatus `json:"attachState,omitempty"`
 	// DeleteOnTermination is set on a root volume, which goes with its instance.
 	DeleteOnTermination bool `json:"deleteOnTermination,omitempty"`
+	// Iops and Throughput (MiB/s) are the provisioned performance of gp3,
+	// io1 and io2. They are zero for every other type. ReportedIops is what
+	// EC2 returns.
+	Iops       int64 `json:"iops,omitempty"`
+	Throughput int64 `json:"throughput,omitempty"`
 }
 
 // Owner returns the account that owns the volume.
@@ -132,8 +137,7 @@ func (v Volume) Identity() string { return v.ID.String() }
 type VolumeType string
 
 // The EBS volume types (EC2 VolumeType). CreateVolumeRequest.Normalize
-// accepts standard, gp2 and gp3 today; io1, io2, st1 and sc1 need their
-// Iops and size rules first (#324). Backends store and return all seven.
+// accepts all seven with the per-type rules of CheckVolumeShape.
 const (
 	VolumeStandard VolumeType = "standard"
 	VolumeGP2      VolumeType = "gp2"
@@ -153,30 +157,48 @@ func (t VolumeType) Valid() bool {
 	return false
 }
 
-// CreateVolumeRequest allocates a volume.
+// CreateVolumeRequest allocates a volume. Iops and Throughput (MiB/s) are
+// EC2's provisioned performance; zero means left out.
 type CreateVolumeRequest struct {
 	SizeGiB    int64      `json:"size"`
 	Zone       string     `json:"availabilityZone"`
 	Type       VolumeType `json:"volumeType,omitempty"`
 	SnapshotID SnapshotID `json:"snapshotId,omitzero"`
+	Iops       int64      `json:"iops,omitempty"`
+	Throughput int64      `json:"throughput,omitempty"`
 }
 
 // Action returns CreateVolume.
 func (CreateVolumeRequest) Action() Action { return ActionCreateVolume }
 
-// Normalize checks the size, zone, and type. The type defaults to gp2.
-// A volume restored from a snapshot may leave the size 0, which is the
-// snapshot size.
+// Normalize checks the type, size, zone, Iops and Throughput. The type
+// defaults to gp2, and gp3 Iops and Throughput to 3000 and 125. A volume
+// restored from a snapshot may leave the size 0, which is the snapshot size;
+// WithSize checks it once the backend knows it.
 func (r CreateVolumeRequest) Normalize() (CreateVolumeRequest, error) {
-	switch r.Type {
-	case "":
+	if r.Type == "" {
 		r.Type = VolumeGP2
-	case VolumeStandard, VolumeGP2, VolumeGP3:
-	default:
+	}
+	if !r.Type.Valid() {
 		return CreateVolumeRequest{}, Invalid("volumeType", "unsupported")
 	}
-	if (r.SizeGiB < 1 && (r.SizeGiB != 0 || r.SnapshotID.IsZero())) || r.SizeGiB > 16384 {
-		return CreateVolumeRequest{}, Invalid("size", "must be from 1 to 16384")
+	if r.Iops < 0 {
+		return CreateVolumeRequest{}, Invalid("iops", fmt.Sprintf("Value (%d) for parameter iops is invalid.", r.Iops))
+	}
+	if r.Throughput < 0 {
+		return CreateVolumeRequest{}, Invalid("throughput", fmt.Sprintf("Value (%d) for parameter throughput is invalid.", r.Throughput))
+	}
+	if err := checkVolumePerformance(r.Type, r.Iops, r.Throughput); err != nil {
+		return CreateVolumeRequest{}, err
+	}
+	r.Iops, r.Throughput = withDefaultPerformance(r.Type, r.Iops, r.Throughput)
+	if r.SizeGiB < 0 || (r.SizeGiB == 0 && r.SnapshotID.IsZero()) {
+		return CreateVolumeRequest{}, Invalid("size", fmt.Sprintf("Value (%d) for parameter size is invalid.", r.SizeGiB))
+	}
+	if r.SizeGiB != 0 {
+		if err := CheckVolumeShape(r.Type, r.SizeGiB, r.Iops, r.Throughput); err != nil {
+			return CreateVolumeRequest{}, err
+		}
 	}
 	if r.Zone == "" {
 		r.Zone = ZoneName
@@ -184,6 +206,16 @@ func (r CreateVolumeRequest) Normalize() (CreateVolumeRequest, error) {
 	if r.Zone != ZoneName {
 		return CreateVolumeRequest{}, Invalid("availabilityZone", "unsupported")
 	}
+	return r, nil
+}
+
+// WithSize sets the size of a volume restored from a snapshot with no size,
+// and checks it against the type's rules.
+func (r CreateVolumeRequest) WithSize(sizeGiB int64) (CreateVolumeRequest, error) {
+	if err := CheckVolumeShape(r.Type, sizeGiB, r.Iops, r.Throughput); err != nil {
+		return CreateVolumeRequest{}, err
+	}
+	r.SizeGiB = sizeGiB
 	return r, nil
 }
 
