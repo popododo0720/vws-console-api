@@ -11,11 +11,14 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
+	"github.com/popododo0720/vws-lib/obs/grpcobs"
+
 	computev1 "github.com/popododo0720/vws-proto/gen/go/vws/compute/v1"
 	networkv1 "github.com/popododo0720/vws-proto/gen/go/vws/network/v1"
 	storagev1 "github.com/popododo0720/vws-proto/gen/go/vws/storage/v1"
 
 	"github.com/popododo0720/vws-console-api/internal/backend"
+	"github.com/popododo0720/vws-console-api/internal/service"
 )
 
 // Addrs are the internal service endpoints.
@@ -37,15 +40,15 @@ func Dial(ctx context.Context, addrs Addrs) (*Client, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	computeConn, err := grpc.NewClient(addrs.Compute, dialOptions()...)
+	computeConn, err := grpc.NewClient(addrs.Compute, dialOptionsFor(service.Name, "compute")...)
 	if err != nil {
 		return nil, fmt.Errorf("dial compute: %w", err)
 	}
-	storageConn, err := grpc.NewClient(addrs.Storage, dialOptions()...)
+	storageConn, err := grpc.NewClient(addrs.Storage, dialOptionsFor(service.Name, "storage")...)
 	if err != nil {
 		return nil, errors.Join(fmt.Errorf("dial storage: %w", err), computeConn.Close())
 	}
-	networkConn, err := grpc.NewClient(addrs.Network, dialOptions()...)
+	networkConn, err := grpc.NewClient(addrs.Network, dialOptionsFor(service.Name, "network")...)
 	if err != nil {
 		return nil, errors.Join(fmt.Errorf("dial network: %w", err), computeConn.Close(), storageConn.Close())
 	}
@@ -92,15 +95,18 @@ func (a *api) logger() *slog.Logger {
 // fits in one message.
 func MaxMessageBytes() int { return 8 << 20 }
 
-func dialOptions() []grpc.DialOption {
-	return []grpc.DialOption{
+func dialOptions() []grpc.DialOption { return dialOptionsFor(service.Name, "compute") }
+
+func dialOptionsFor(serviceName, peer string) []grpc.DialOption {
+	opts := []grpc.DialOption{
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithDefaultCallOptions(
 			grpc.MaxCallRecvMsgSize(MaxMessageBytes()),
 			grpc.MaxCallSendMsgSize(MaxMessageBytes()),
 		),
-		grpc.WithUnaryInterceptor(withDeadline),
+		grpc.WithChainUnaryInterceptor(withDeadline),
 	}
+	return append(opts, grpcobs.ClientOptions(serviceName, peer)...)
 }
 
 func withDeadline(ctx context.Context, method string, req, reply any, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {

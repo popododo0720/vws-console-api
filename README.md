@@ -51,6 +51,36 @@ series is prefixed `vws_console_api_`: `http_requests_total{surface,code}` and
 `http_request_duration_seconds_sum`/`_count{surface}`. These live on their own
 listener so no path collides with a bucket name or a console route.
 
+### Observability
+
+The process calls `obs.Setup` from vws-lib once at start and defers its
+shutdown. With `OTEL_EXPORTER_OTLP_ENDPOINT` empty (the default) it exports
+nothing and keeps the JSON log on stdout. Every inbound HTTP request gets a
+server span, and every compute, storage, network, and IAM gRPC call carries
+the W3C `traceparent` and the `x-request-id` metadata. Errors go through
+`report.Error` and `report.Panic` only; the service does not import Sentry.
+
+| Variable | Meaning | Default |
+| --- | --- | --- |
+| `OTEL_SERVICE_NAME` | Service name in traces and metrics | `console-api` |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP collector; empty exports nothing | empty |
+| `OTEL_EXPORTER_OTLP_PROTOCOL` | `grpc` or `http/protobuf` | `grpc` |
+| `OTEL_EXPORTER_OTLP_HEADERS` | Auth headers for the collector | none |
+| `OTEL_TRACES_SAMPLER`, `OTEL_TRACES_SAMPLER_ARG` | Sampling and ratio | `parentbased_traceidratio`, `0.1` |
+| `OTEL_RESOURCE_ATTRIBUTES` | Extra resource attributes | none |
+| `OTEL_TRACES_EXPORTER`, `OTEL_METRICS_EXPORTER`, `OTEL_LOGS_EXPORTER` | `otlp` or `none` | `otlp` when an endpoint is set |
+| `SENTRY_DSN` | Sends errors to Sentry when set | empty |
+| `SENTRY_ENVIRONMENT`, `SENTRY_RELEASE`, `SENTRY_SAMPLE_RATE` | Sentry tags and sample rate | derived, `1.0` |
+| `VWS_LOG_LEVEL` | `debug`, `info`, `warn`, or `error` | `info` |
+| `VWS_LOG_FORMAT` | `json` or `text` | `json` |
+| `VWS_HEALTH_ADDR` | Serves `GET /healthz` and `GET /readyz` | empty, off |
+
+`VWS_HEALTH_ADDR` is separate from `-ops-addr`; the chart sets it. Its
+`/healthz` checks no dependency, and `/readyz` fails after SIGTERM. Neither
+probe checks the telemetry backend. The metrics `vws.http.server.*`,
+`vws.aws.errors{action,aws_code}`, and `vws.rpc.client.duration` go to the
+OTLP exporter; `-ops-addr` keeps serving the process's Prometheus text series.
+
 IAM and STS Query share `-iam-addr` (default `127.0.0.1:8084`). The service in
 the signature's credential scope (`iam` or `sts`, region `vws-1`) picks the API:
 IAM `2010-05-08`, STS `2011-06-15`, with AWS's XML and error codes. Every

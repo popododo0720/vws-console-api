@@ -88,9 +88,9 @@ func (a STSAdmin) observePolicy(
 		}
 		level := slog.LevelInfo
 		logAttrs := []slog.Attr{
-			slog.String("action", action), slog.String("account", account.String()),
+			slog.String("action", action),
 			slog.String("user_name", user), slog.String("group_name", group),
-			slog.String("policy_name", policyName), slog.String("policy_arn", policyARN),
+			slog.String("policy_name", policyName),
 			slog.String("outcome", outcome), slog.Duration("elapsed", time.Since(start)),
 		}
 		if c := resource.CodeOf(err); c == resource.CodeUnavailable || c == resource.CodeInternal {

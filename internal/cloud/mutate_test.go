@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -318,4 +320,20 @@ func runReq(t *testing.T) resource.RunInstancesRequest {
 func fixedRequest(t *testing.T) (resource.Caller, resource.ClientToken, resource.RunInstancesRequest) {
 	t.Helper()
 	return caller(t), token(t, "launch-web-1"), runReq(t)
+}
+
+func TestAuditLogCarriesNoAccountID(t *testing.T) {
+	var buf bytes.Buffer
+	svc := New(Config{Backends: world(t).Set(), Audit: slog.New(slog.NewJSONHandler(&buf, nil))})
+	_, err := svc.CreateSubnet(context.Background(), caller(t), token(t, "subnet-audit-1"),
+		resource.CreateSubnetRequest{Cidr: "10.9.0.0/24"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(buf.String(), `"msg":"mutation accepted"`) {
+		t.Fatalf("no audit line: %s", buf.String())
+	}
+	if strings.Contains(buf.String(), "123456789012") {
+		t.Fatalf("audit line carries the account id: %s", buf.String())
+	}
 }

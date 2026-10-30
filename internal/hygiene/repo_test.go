@@ -6,6 +6,7 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -52,6 +53,11 @@ func TestRepositoryRules(t *testing.T) {
 		switch ext {
 		case ".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico", ".webp":
 			failures = append(failures, "image file "+rel)
+		}
+		if ext == ".go" {
+			if msg := forbiddenImport(path); msg != "" {
+				failures = append(failures, rel+": "+msg)
+			}
 		}
 		if ext == ".go" && !strings.HasSuffix(base, "_test.go") && !strings.HasPrefix(filepath.ToSlash(rel), "internal/backend/") {
 			if msg := mintCall(path); msg != "" {
@@ -202,4 +208,27 @@ func TestProtoModuleRules(t *testing.T) {
 			}
 		})
 	}
+}
+
+// forbiddenImport reports an import the repository does not allow. Logs go
+// through log/slog and the vws-lib obs handler, and errors go through
+// vws-lib obs/report, so the standard log package and sentry-go stay out.
+func forbiddenImport(path string) string {
+	file, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.ImportsOnly)
+	if err != nil {
+		return ""
+	}
+	for _, imp := range file.Imports {
+		pkg, err := strconv.Unquote(imp.Path.Value)
+		if err != nil {
+			continue
+		}
+		switch {
+		case pkg == "log":
+			return "imports the standard log package; use log/slog through vws-lib obs"
+		case pkg == "github.com/getsentry/sentry-go", strings.HasPrefix(pkg, "github.com/getsentry/sentry-go/"):
+			return "imports sentry-go; errors go through vws-lib obs/report"
+		}
+	}
+	return ""
 }

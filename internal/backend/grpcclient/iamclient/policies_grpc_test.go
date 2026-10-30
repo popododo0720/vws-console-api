@@ -398,8 +398,11 @@ func TestEntityPolicyCallsAreTracedAndLoggedWithoutDocuments(t *testing.T) {
 		t.Fatal(lines)
 	}
 	if put["action"] != "PutUserPolicy" || put["user_name"] != "tracy" || put["policy_name"] != "s3" ||
-		put["outcome"] != "ok" || attach["action"] != "AttachUserPolicy" || attach["policy_arn"] != ops {
+		put["outcome"] != "ok" || attach["action"] != "AttachUserPolicy" {
 		t.Errorf("log records %v %v", put, attach)
+	}
+	if put["account"] != nil || attach["account"] != nil || attach["policy_arn"] != nil {
+		t.Errorf("an account id or policy ARN reached the log: %v %v", put, attach)
 	}
 	seen := map[string]bool{}
 	for _, s := range rec.Ended() {
