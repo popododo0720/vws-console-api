@@ -3,6 +3,7 @@ package backendtest
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/popododo0720/vws-console-api/internal/backend"
 	"github.com/popododo0720/vws-console-api/internal/resource"
@@ -81,6 +82,7 @@ func AttachLifecycle(t *testing.T, newSet AttachHarness) {
 		acc.Operation.Action != resource.ActionAttachVolume {
 		t.Fatalf("attach accept: want in-use, attaching on %s /dev/sdf, got %+v (%s)", inst, got, acc.Operation.Action)
 	}
+	attachTimes(ctx, t, set, scope, acc, inst, vol)
 
 	rows := []struct {
 		name    string
@@ -221,4 +223,42 @@ func describeVolumes(
 		}
 	}
 	return out
+}
+
+// attachTimes pins attachTime (#298), "when the attachment initiated": a
+// backend records it at the accept on the volume and on its block device
+// alike, and the root's at launch, or records none (gRPC until vws-proto#83).
+// With none, AttachVolume answers with the operation's create time.
+func attachTimes(
+	ctx context.Context, t *testing.T, set backend.Set, scope backend.Scope,
+	acc resource.Accepted[resource.Volume], inst resource.InstanceID, vol resource.VolumeID,
+) {
+	t.Helper()
+	recorded := acc.Items[0].AttachTime
+	if recorded.IsZero() && acc.Operation.CreateTime.IsZero() {
+		t.Fatal("attach accept has neither an attach time nor an operation create time")
+	}
+	for _, listed := range []bool{false, true} {
+		if v := describeVolumes(ctx, t, set, scope, listed, vol)[vol]; !v.AttachTime.Equal(recorded) {
+			t.Fatalf("volume attach time %v (listed %t), want the accept's %v", v.AttachTime, listed, recorded)
+		}
+	}
+	page, err := set.Compute.DescribeInstances(ctx, scope, resource.InstanceQuery{
+		IDs: []resource.InstanceID{inst}, Page: resource.PageRequest{Size: 50},
+	})
+	if err != nil || len(page.Items) != 1 {
+		t.Fatalf("describe instance: %v %+v", err, page.Items)
+	}
+	for _, block := range page.Items[0].BlockDevices {
+		want := page.Items[0].LaunchTime
+		if block.VolumeID == vol {
+			want = recorded
+		}
+		if recorded.IsZero() {
+			want = time.Time{}
+		}
+		if !block.AttachTime.Equal(want) {
+			t.Fatalf("instance block %s attach time %v, want %v", block.Device, block.AttachTime, want)
+		}
+	}
 }

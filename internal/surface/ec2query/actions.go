@@ -297,6 +297,9 @@ func (h *handler) attachVolume(w http.ResponseWriter, r *http.Request, c resourc
 	writeXML(w, attachVolumeXML{
 		RequestID: requestID(r), VolumeID: item.ID.String(), InstanceID: item.InstanceID.String(),
 		Device: item.Device, Status: string(status),
+		// The accept is when the attachment initiated, for a backend that
+		// records no attach time.
+		AttachTime: awsTime(attachTimeOr(item.AttachTime, acc.Operation.CreateTime)),
 	})
 }
 

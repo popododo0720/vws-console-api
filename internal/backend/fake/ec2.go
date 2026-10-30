@@ -220,7 +220,7 @@ func (c compute) AttachVolume(ctx context.Context, m backend.Mutation, req resou
 	vol.AttachTime = c.w.now().UTC()
 	vol.AttachState = resource.AttachmentAttaching
 	inst.BlockDevices = append(inst.BlockDevices, resource.BlockDevice{
-		Device: req.Device, VolumeID: req.VolumeID, Status: resource.AttachmentAttaching,
+		Device: req.Device, VolumeID: req.VolumeID, Status: resource.AttachmentAttaching, AttachTime: vol.AttachTime,
 	})
 	volID, instID, attachedAt := vol.ID, req.InstanceID, vol.AttachTime
 	targets := []resource.Ref{vol.ID.Ref()}

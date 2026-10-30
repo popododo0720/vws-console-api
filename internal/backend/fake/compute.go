@@ -97,6 +97,7 @@ func (c compute) RunInstances(ctx context.Context, m backend.Mutation, req resou
 		inst.RootDeviceName = resource.RootDeviceName
 		inst.BlockDevices = []resource.BlockDevice{{
 			Device: resource.RootDeviceName, VolumeID: volID, DeleteOnTermination: true, Status: resource.AttachmentAttached,
+			AttachTime: launched,
 		}}
 		roots = append(roots, resource.Volume{
 			ID: volID, OwnerID: m.Account, SizeGiB: resource.RootVolumeSizeGiB, Zone: resource.ZoneName, Type: req.RootType(),
