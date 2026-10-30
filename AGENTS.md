@@ -80,7 +80,7 @@ change both files together.
 | Every `resource.Code` has a status and wire code on each surface. | `TestEveryCodeHasAnEC2Error` |
 | `NotFound` has each surface's HTTP status. | `TestMissingResourceStatusIsPerSurface` |
 | A handler panic is a bare 500. | `TestPanicIsABare500` |
-| Ambiguous requests and bad names or sizes are refused before the backend. | `TestMalformedNamesAndBodies` |
+| Ambiguous requests and bad names or sizes are refused before the backend; a key repeated across IAM `Tags` members is last-wins, and a field sent twice is still refused. | `TestMalformedNamesAndBodies`, `TestPolicyTagRepeatedKeyLastWins`, `TestMFADeviceTagRepeatedKeyLastWins` |
 | No image assets, branding or vendor API hosts. | `internal/hygiene` |
 | No deployment manifests; `publish.yml` is the only release step. | CI job `hygiene` |
 | Never push to `main`. | `.githooks/pre-push` |

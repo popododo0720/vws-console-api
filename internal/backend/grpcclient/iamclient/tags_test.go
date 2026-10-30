@@ -44,6 +44,26 @@ func TestTagPolicyOverGRPC(t *testing.T) {
 	}
 }
 
+// vws-iam merges tags in request order, so a key repeated within one request
+// must reach it in that order, with the last value last.
+func TestTagPolicyRepeatedKeyLastWinsOverGRPC(t *testing.T) {
+	c, s := harness(t)
+	admin := STSAdmin{Client: c}
+	tags := []iam.Tag{{Key: "Dup", Value: "first"}, {Key: "Dup", Value: "second"}}
+	if err := admin.TagPolicy(t.Context(), accountID(t), policyARN, tags); err != nil {
+		t.Fatal(err)
+	}
+	sent := s.tagPolicy[0].GetTags()
+	if len(sent) != len(tags) {
+		t.Fatalf("sent %v", sent)
+	}
+	for i, want := range tags {
+		if sent[i].GetKey() != want.Key || sent[i].GetValue() != want.Value {
+			t.Fatalf("sent %v, want %v in request order", sent, tags)
+		}
+	}
+}
+
 func TestListPolicyTagsOverGRPC(t *testing.T) {
 	c, s := harness(t)
 	admin := STSAdmin{Client: c}
@@ -88,6 +108,10 @@ func TestPolicyTagErrorsOverGRPC(t *testing.T) {
 func TestPolicyTagValidationOverGRPC(t *testing.T) {
 	c, s := harness(t)
 	admin := STSAdmin{Client: c}
+	many := make([]iam.Tag, iam.MaxTags+1)
+	for i := range many {
+		many[i] = iam.Tag{Key: "Dup", Value: "v"}
+	}
 	for _, tc := range []struct {
 		name  string
 		tags  []iam.Tag
@@ -98,6 +122,7 @@ func TestPolicyTagValidationOverGRPC(t *testing.T) {
 		{"bad value character", []iam.Tag{{Key: "k", Value: "bad#value"}}, "tags.member.value"},
 		{"value too long", []iam.Tag{{Key: "k", Value: strings.Repeat("v", iam.MaxTagValueLen+1)}}, "tags.member.value"},
 		{"empty list", nil, "tags"},
+		{"51 members with one repeated key", many, "tags"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			err := admin.TagPolicy(t.Context(), accountID(t), policyARN, tc.tags)

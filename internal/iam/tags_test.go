@@ -97,6 +97,37 @@ func TestFakePolicyTags(t *testing.T) {
 	}
 }
 
+// A key repeated within one TagPolicy request is last-wins, and the request
+// member count still limits the call.
+func TestFakePolicyTagRepeatedKeyLastWins(t *testing.T) {
+	ctx := t.Context()
+	a := account(t)
+	f := NewFake()
+	p, err := f.CreatePolicy(ctx, a, "repeated", "/", describeOnly, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tags := []Tag{{Key: "Dup", Value: "first"}, {Key: "Dup", Value: "second"}}
+	if err := f.TagPolicy(ctx, a, p.ARN, tags); err != nil {
+		t.Fatal(err)
+	}
+	page, err := f.ListPolicyTags(ctx, a, p.ARN, "", 0)
+	if err != nil || len(page.Tags) != 1 || page.Tags[0] != (Tag{Key: "Dup", Value: "second"}) {
+		t.Fatalf("repeated key %+v %v", page, err)
+	}
+	many := make([]Tag, MaxTags+1)
+	for i := range many {
+		many[i] = Tag{Key: "Dup", Value: "v"}
+	}
+	if err := f.TagPolicy(ctx, a, p.ARN, many); resource.CodeOf(err) != resource.CodeInvalidArgument {
+		t.Fatalf("51 repeated-key members: %v", err)
+	}
+	if page, _ := f.ListPolicyTags(ctx, a, p.ARN, "", 0); len(page.Tags) != 1 ||
+		page.Tags[0] != (Tag{Key: "Dup", Value: "second"}) {
+		t.Fatalf("refused request changed the tags: %+v", page)
+	}
+}
+
 func TestFakePolicyTagErrors(t *testing.T) {
 	ctx := t.Context()
 	a := account(t)

@@ -65,6 +65,34 @@ func TestFakeMFADeviceTags(t *testing.T) {
 	}
 }
 
+// A key repeated within one TagMFADevice request is last-wins, and the
+// request member count still limits the call.
+func TestFakeMFADeviceTagRepeatedKeyLastWins(t *testing.T) {
+	ctx := t.Context()
+	a := account(t)
+	f := NewFake()
+	serial := f.AddMfaDevice(a, "repeated-phone")
+	tags := []Tag{{Key: "Dup", Value: "first"}, {Key: "Dup", Value: "second"}}
+	if err := f.TagMFADevice(ctx, a, serial, tags); err != nil {
+		t.Fatal(err)
+	}
+	page, err := f.ListMFADeviceTags(ctx, a, serial, "", 0)
+	if err != nil || len(page.Tags) != 1 || page.Tags[0] != (Tag{Key: "Dup", Value: "second"}) {
+		t.Fatalf("repeated key %+v %v", page, err)
+	}
+	many := make([]Tag, MaxTags+1)
+	for i := range many {
+		many[i] = Tag{Key: "Dup", Value: "v"}
+	}
+	if err := f.TagMFADevice(ctx, a, serial, many); resource.CodeOf(err) != resource.CodeInvalidArgument {
+		t.Fatalf("51 repeated-key members: %v", err)
+	}
+	if page, _ := f.ListMFADeviceTags(ctx, a, serial, "", 0); len(page.Tags) != 1 ||
+		page.Tags[0] != (Tag{Key: "Dup", Value: "second"}) {
+		t.Fatalf("refused request changed the tags: %+v", page)
+	}
+}
+
 func TestFakeMFADeviceTagErrors(t *testing.T) {
 	ctx := t.Context()
 	a := account(t)

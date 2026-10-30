@@ -65,7 +65,8 @@ func requirePolicyArn(c *exchange, h *handler, action string) error {
 
 // parseTagMembers reads Tags.member.N.Key/Value into request order. Key and
 // Value are required members: a missing one is a validation failure, while an
-// empty Value that is present is the AWS empty tag value.
+// empty Value that is present is the AWS empty tag value. Two members with one
+// key keep the later value, as overwriting a named key does.
 func parseTagMembers(c *exchange) ([]iam.Tag, error) {
 	type members struct{ key, value bool }
 	byIndex := map[int]*iam.Tag{}
