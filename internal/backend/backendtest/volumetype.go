@@ -75,7 +75,8 @@ func exerciseVolumeTypes(ctx context.Context, t *testing.T, set backend.Set, acc
 		}
 		// #324 AC1: ModifyVolume Size stops at the type's EC2 maximum.
 		over := resource.ModifyVolumeRequest{ID: id, SizeGiB: maxGiB[typ] + 1}
-		if _, err := set.Compute.ModifyVolume(ctx, mut("modify-over", typ), over); resource.CodeOf(err) != resource.CodeInvalidArgument {
+		_, err = set.Compute.ModifyVolume(ctx, mut("modify-over", typ), over)
+		if resource.CodeOf(err) != resource.CodeInvalidArgument {
 			t.Fatalf("modify %s to %d GiB: %v, want InvalidArgument", typ, over.SizeGiB, err)
 		}
 		if got := describe(id); len(got) != 1 || got[0].SizeGiB != 126 {
