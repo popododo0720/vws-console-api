@@ -163,3 +163,16 @@ func TestEC2ErrorByKind(t *testing.T) {
 		}
 	}
 }
+
+// #272: a duplicate security group rule is InvalidPermission.Duplicate. A
+// duplicate group name keeps InvalidGroup.Duplicate.
+func TestDuplicatePermissionCode(t *testing.T) {
+	const id = "sg-0123456789abcdef0"
+	if got := ec2Wire(t, resource.DuplicatePermission(id)); got != (wireErr{400, "InvalidPermission.Duplicate"}) {
+		t.Fatalf("duplicate rule = %+v", got)
+	}
+	group := resource.AlreadyExists(resource.KindSecurityGroup, id)
+	if got := ec2Wire(t, group); got != (wireErr{400, "InvalidGroup.Duplicate"}) {
+		t.Fatalf("duplicate group = %+v", got)
+	}
+}
