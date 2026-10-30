@@ -149,6 +149,9 @@ type BlockDevice struct {
 	Device              string   `json:"deviceName"`
 	VolumeID            VolumeID `json:"volumeId"`
 	DeleteOnTermination bool     `json:"deleteOnTermination"`
+	// Status is the attachment status (EC2 EbsInstanceBlockDevice.Status).
+	// It is attached only once the backend reports the disk on the machine.
+	Status AttachmentStatus `json:"status"`
 }
 
 // Owner returns the account that owns the instance.
