@@ -64,6 +64,7 @@ change both files together.
 | One bad backend record never fails a listing. | `TestErrorRecordDoesNotFailDescribe`, `TestInvalidResourceNameIsSkippedInList` |
 | Key pair keys come from `crypto/rand`, are never stored, and names stay unique. | `TestCreatedKeyIsNotDerivedFromTheRequest`, `TestConcurrentCreatesOfOneNameMakeOneKeyPair` |
 | A missing resource is `NotFound` of its own kind. | `TestMissingResourceKeepsItsKind` |
+| A malformed instance ID is `InvalidInstanceID.Malformed` on every EC2 action that takes one. | `TestMalformedInstanceIDIsInvalidInstanceIDMalformed` |
 | A `DetachVolume` retry returns the first detach, within the label budget. | `backendtest.DetachReplay`, `backendtest.DetachWindow` |
 | The detach recovery path matches `docs/formal/detach.tla` (pstack `create-formal-verification-skill` 0.15.30). | CI workflow `tla` (job `detach`) |
 | Volume types map one to one; an unknown type is refused. | `TestVolumeTypeRefusesUnknown` |
