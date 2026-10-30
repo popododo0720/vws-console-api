@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -13,6 +14,10 @@ import (
 	"github.com/popododo0720/vws-console-api/internal/resource"
 	"github.com/popododo0720/vws-console-api/internal/sigv4"
 )
+
+// smokeTimeout is how long the process may take to start or stop on a loaded
+// machine. It is not a latency assertion; the requests below are the test.
+const smokeTimeout = 30 * time.Second
 
 // TestFakeProcessSmoke starts the console-api process with every listener on
 // a free address. The compute, network, and storage repositories are not part
@@ -39,10 +44,14 @@ func TestFakeProcessSmoke(t *testing.T) {
 		cancel()
 		select {
 		case err := <-errc:
-			if err != nil {
+			// The server drains in-flight requests for five seconds. A probe
+			// connection that never sent a request can make that drain expire
+			// on a loaded machine, but the process still stops, which is what
+			// this test asserts (issue #234). Any other error is a failure.
+			if err != nil && !errors.Is(err, context.DeadlineExceeded) {
 				t.Errorf("process: %v", err)
 			}
-		case <-time.After(8 * time.Second):
+		case <-time.After(smokeTimeout):
 			t.Errorf("process did not stop")
 		}
 	})
@@ -125,7 +134,7 @@ func freeAddr(t *testing.T) string {
 
 func waitListen(t *testing.T, addr string) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(smokeTimeout)
 	for {
 		conn, err := (&net.Dialer{Timeout: 100 * time.Millisecond}).DialContext(t.Context(), "tcp", addr)
 		if err == nil {
