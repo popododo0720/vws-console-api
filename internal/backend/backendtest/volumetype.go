@@ -89,7 +89,8 @@ func exerciseVolumeTypes(ctx context.Context, t *testing.T, set backend.Set, acc
 		if got := describe(id); len(got) != 1 || got[0].Iops != want.Iops || got[0].Throughput != want.Throughput {
 			t.Fatalf("%s with iops reads back as %+v", want.Type, got)
 		}
-		if _, err := set.Compute.DeleteVolume(ctx, mut("perf-delete", want.Type), resource.DeleteVolumeRequest{ID: id}); err != nil {
+		del := resource.DeleteVolumeRequest{ID: id}
+		if _, err := set.Compute.DeleteVolume(ctx, mut("perf-delete", want.Type), del); err != nil {
 			t.Fatalf("delete %s: %v", want.Type, err)
 		}
 	}

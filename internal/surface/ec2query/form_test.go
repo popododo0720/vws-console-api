@@ -565,16 +565,19 @@ func TestCreateVolumeFromSnapshot(t *testing.T) {
 	// #324: a restore with no Size takes the snapshot size, which must fit
 	// the type's range (st1 starts at 125 GiB) and Iops ratio (io1: 50 per GiB).
 	code, body = call("Action", "CreateVolume", "AvailabilityZone", "vws-1a", "SnapshotId", snap, "VolumeType", "st1")
-	if code != http.StatusBadRequest || !strings.Contains(body, "<Message>Volume of 3GiB is too small; minimum is 125GiB.</Message>") {
+	tooSmall := "<Message>Volume of 3GiB is too small; minimum is 125GiB.</Message>"
+	if code != http.StatusBadRequest || !strings.Contains(body, tooSmall) {
 		t.Fatalf("st1 restore of a 3 GiB snapshot: %d %s", code, body)
 	}
-	code, body = call("Action", "CreateVolume", "AvailabilityZone", "vws-1a", "SnapshotId", snap, "VolumeType", "io1", "Iops", "200")
+	code, body = call("Action", "CreateVolume", "AvailabilityZone", "vws-1a", "SnapshotId", snap,
+		"VolumeType", "io1", "Iops", "200")
 	if code != http.StatusBadRequest || !strings.Contains(body, "<Code>InvalidParameterValue</Code>") {
 		t.Fatalf("io1 restore of a 3 GiB snapshot: %d %s", code, body)
 	}
 	code, body = call("Action", "CreateVolume", "AvailabilityZone", "vws-1a", "SnapshotId", snap,
 		"VolumeType", "gp3", "Throughput", "500")
-	if code != http.StatusOK || between(body, "<throughput>", "</throughput>") != "500" || between(body, "<size>", "</size>") != "3" {
+	if code != http.StatusOK || between(body, "<throughput>", "</throughput>") != "500" ||
+		between(body, "<size>", "</size>") != "3" {
 		t.Fatalf("gp3 restore with Iops: %d %s", code, body)
 	}
 	code, body = call("Action", "CreateVolume", "AvailabilityZone", "vws-1a", "SnapshotId", "snap-00000000000000000")

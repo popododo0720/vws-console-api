@@ -629,7 +629,12 @@ func allowDeleteVpc(key string) bool {
 }
 
 func allowCreateVolume(key string) bool {
-	return key == "Action" || key == "Version" || key == "ClientToken" || key == "Size" || key == "AvailabilityZone" || key == "VolumeType" || key == "SnapshotId" || key == "Iops" || key == "Throughput"
+	switch key {
+	case "Action", "Version", "ClientToken", "Size", "AvailabilityZone", "VolumeType", "SnapshotId", "Iops", "Throughput":
+		return true
+	default:
+		return false
+	}
 }
 
 func allowAttachVolume(key string) bool {

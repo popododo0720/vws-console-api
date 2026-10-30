@@ -2113,7 +2113,9 @@ func acceptedVolume(op *longrunningpb.Operation, req resource.CreateVolumeReques
 	if err != nil {
 		return resource.Accepted[resource.Volume]{}, err
 	}
-	vol := resource.Volume{ID: id, OwnerID: named, SizeGiB: req.SizeGiB, Zone: req.Zone, Type: req.Type, State: state, SnapshotID: req.SnapshotID, CreateTime: parsed.CreateTime,
+	vol := resource.Volume{
+		ID: id, OwnerID: named, SizeGiB: req.SizeGiB, Zone: req.Zone, Type: req.Type, State: state,
+		SnapshotID: req.SnapshotID, CreateTime: parsed.CreateTime,
 		Iops: req.Iops, Throughput: req.Throughput,
 	}
 	parsed.Action = resource.ActionCreateVolume

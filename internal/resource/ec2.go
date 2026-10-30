@@ -186,7 +186,8 @@ func (r CreateVolumeRequest) Normalize() (CreateVolumeRequest, error) {
 		return CreateVolumeRequest{}, Invalid("iops", fmt.Sprintf("Value (%d) for parameter iops is invalid.", r.Iops))
 	}
 	if r.Throughput < 0 {
-		return CreateVolumeRequest{}, Invalid("throughput", fmt.Sprintf("Value (%d) for parameter throughput is invalid.", r.Throughput))
+		return CreateVolumeRequest{}, Invalid("throughput",
+			fmt.Sprintf("Value (%d) for parameter throughput is invalid.", r.Throughput))
 	}
 	if err := checkVolumePerformance(r.Type, r.Iops, r.Throughput); err != nil {
 		return CreateVolumeRequest{}, err

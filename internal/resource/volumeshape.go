@@ -98,7 +98,8 @@ func CheckVolumeShape(t VolumeType, sizeGiB, iops, miBps int64) error {
 		return Invalid("iops", fmt.Sprintf("Iops to volume size ratio of %f is too high; maximum is %f",
 			float64(iops)/float64(sizeGiB), float64(l.iopsPerGiB)))
 	case l.miBpsPerIopsDen != 0 && miBps*l.miBpsPerIopsDen > iops*l.miBpsPerIopsNum:
-		return Invalid("throughput", fmt.Sprintf("Throughput (MiBps) to iops ratio of %f is too high; maximum is %f MiBps per iops.",
+		return Invalid("throughput", fmt.Sprintf(
+			"Throughput (MiBps) to iops ratio of %f is too high; maximum is %f MiBps per iops.",
 			float64(miBps)/float64(iops), float64(l.miBpsPerIopsNum)/float64(l.miBpsPerIopsDen)))
 	}
 	return nil
