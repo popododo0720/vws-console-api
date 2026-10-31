@@ -586,11 +586,7 @@ func instanceQuery(r *http.Request) (resource.InstanceQuery, []queryFilter, erro
 	}
 	var states []resource.InstanceState
 	for _, f := range filters {
-		values := f.values
-		if len(values) == 0 {
-			values = []string{""}
-		}
-		for _, value := range values {
+		for _, value := range f.values {
 			switch f.name {
 			case "instance-id":
 				id, err := resource.Parse[resource.InstanceID](value)
@@ -1236,6 +1232,10 @@ func ec2Refinement(e *resource.Error) (errs.AWSEntry, bool) {
 			return badRequest("InvalidAttachment.NotFound")
 		}
 	case resource.CodeInvalidArgument:
+		// EC2 answers a pagination token that names no row as InvalidNextToken.
+		if e.Field == "NextToken" {
+			return badRequest("InvalidNextToken")
+		}
 		// A route table id VWS cannot parse has its own EC2 code.
 		if e.Field == "routeTableId" {
 			return badRequest("InvalidRouteTableID.Malformed")
