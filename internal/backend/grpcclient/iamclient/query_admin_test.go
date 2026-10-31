@@ -337,3 +337,15 @@ func TestGetCallerIdentityNamesTheUserByItsUniqueIDOverGRPC(t *testing.T) {
 		t.Errorf("UserId is the access key id: %s", rec.Body)
 	}
 }
+
+// #496: vws-iam answers an access key id no project holds with
+// InvalidClientTokenId on gRPC NOT_FOUND (vws-iam#189). The AWS code decides
+// the HTTP status, so a signed Query request answers 403 with that code, not
+// 404 NoSuchEntity, and vws-iam's wording stays out of the body.
+func TestInvalidClientTokenIDIsHTTP403(t *testing.T) {
+	h, s := queryHarness(t)
+	s.authnErr = awsErr(codes.NotFound, "RESOURCE_NOT_FOUND", "InvalidClientTokenId")
+	expect(t, queryCall(t, h, url.Values{"Action": {"GetUser"}}), http.StatusForbidden,
+		"<Code>InvalidClientTokenId</Code>",
+		"<Message>The security token included in the request is invalid.</Message>")
+}

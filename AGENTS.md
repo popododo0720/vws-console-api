@@ -83,7 +83,7 @@ change both files together.
 | `//nolint` names one linter and a reason. | `nolintlint` |
 | No swallowed errors. | `errcheck`, `wrapcheck`, `errorlint` |
 | Every `resource.Code` has a status and wire code on each surface. | `TestEveryCodeHasAnEC2Error` |
-| `NotFound` has each surface's HTTP status. | `TestMissingResourceStatusIsPerSurface` |
+| `NotFound` has each surface's HTTP status; a vws-iam `InvalidClientTokenId` is HTTP 403 even on gRPC `NOT_FOUND`. | `TestMissingResourceStatusIsPerSurface`, `TestInvalidClientTokenIDIsHTTP403` |
 | A handler panic is a bare 500. | `TestPanicIsABare500` |
 | Ambiguous requests and bad names or sizes are refused before the backend; a key repeated across IAM `Tags` members is last-wins, and a field sent twice is still refused. | `TestMalformedNamesAndBodies`, `TestPolicyTagRepeatedKeyLastWins`, `TestMFADeviceTagRepeatedKeyLastWins` |
 | No image assets, branding or vendor API hosts. | `internal/hygiene` |
