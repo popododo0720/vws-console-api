@@ -293,6 +293,37 @@ func TestUpdateRoleDescription(t *testing.T) {
 	}
 }
 
+func TestUpdateRoleDescriptionEmpty(t *testing.T) {
+	c, s := harness(t)
+	admin := STSAdmin{Client: c}
+	role := &iamv1.Role{
+		Name:   "projects/123456789012/roles/ops",
+		Spec:   &iamv1.RoleSpec{Path: "/", Description: "old"},
+		Status: &iamv1.RoleStatus{Arn: "arn:vws:iam::123456789012:role/ops"},
+	}
+	s.getRoleRes = role
+	s.updateRoleRes = roleOperation(t, &iamv1.Role{
+		Name: "projects/123456789012/roles/ops",
+		Spec: &iamv1.RoleSpec{Path: "/"},
+	})
+	// Clearing a field is still an update, so its mask path must stay.
+	if _, err := admin.UpdateRoleDescription(
+		t.Context(), accountID(t), "ops", "", backendtest.RoleGrant(t.Context(), t, admin, accountID(t), "ops"),
+	); err != nil {
+		t.Fatal(err)
+	}
+	if len(s.updateRole) != 1 {
+		t.Fatalf("%d UpdateRole calls, want 1", len(s.updateRole))
+	}
+	req := s.updateRole[0]
+	if req.GetRole().GetSpec().GetDescription() != "" {
+		t.Errorf("description %q, want empty", req.GetRole().GetSpec().GetDescription())
+	}
+	if paths := req.GetUpdateMask().GetPaths(); len(paths) != 1 || paths[0] != "spec.description" {
+		t.Errorf("update mask %v, want [spec.description]", paths)
+	}
+}
+
 func TestUpdateRoleDescriptionRejectsServiceLinkedRole(t *testing.T) {
 	c, s := harness(t)
 	admin := STSAdmin{Client: c}
