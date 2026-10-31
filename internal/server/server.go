@@ -39,7 +39,9 @@ type Options struct {
 
 // Serve serves surfaces, plus an optional operations listener, until ctx is
 // cancelled or a listener fails. It then shuts the listeners down. In-flight
-// requests get five seconds.
+// requests get five seconds. A stop the caller asked for returns nil even when
+// that bound expires: the remaining connections are closed and the expiry is
+// logged.
 func Serve(ctx context.Context, opts Options) error {
 	logger := opts.Logger
 	if logger == nil {
@@ -84,7 +86,22 @@ func Serve(ctx context.Context, opts Options) error {
 	shutCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
 	for _, srv := range servers {
-		runErr = errors.Join(runErr, srv.Shutdown(shutCtx))
+		// Shutdown closes idle connections and waits for in-flight requests
+		// until shutCtx expires. A connection that accepted but never sent a
+		// request stays in StateNew for its whole five second window
+		// (https://go.dev/issue/22682), so the bound can expire with no request
+		// in flight. The caller asked to stop, so report the stop as clean and
+		// close what remains; a listener failure is already in runErr.
+		if err := srv.Shutdown(shutCtx); err != nil {
+			if errors.Is(err, context.DeadlineExceeded) {
+				logger.WarnContext(context.WithoutCancel(ctx), "shutdown drain bound expired", slog.Any("err", err))
+			} else {
+				runErr = errors.Join(runErr, err)
+			}
+			if cerr := srv.Close(); cerr != nil {
+				runErr = errors.Join(runErr, cerr)
+			}
+		}
 	}
 	wg.Wait()
 	return runErr
