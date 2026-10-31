@@ -32,6 +32,7 @@ func TestMalformedNamesAndBodies(t *testing.T) {
 		{"adjacent periods", http.MethodPut, "/edge..bucket", "", 400, "InvalidArgument"},
 		{"reserved prefix", http.MethodPut, "/xn--bucket", "", 400, "InvalidArgument"},
 		{"reserved suffix", http.MethodPut, "/edge-bucket--ol-s3", "", 400, "InvalidArgument"},
+		{"account-regional suffix", http.MethodPut, "/edge-bucket-an", "", 400, "InvalidArgument"},
 		{"long key", http.MethodPut, "/edge-bucket/" + strings.Repeat("k", 1025), "x", 400, "InvalidArgument"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
