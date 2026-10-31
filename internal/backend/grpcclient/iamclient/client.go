@@ -300,11 +300,22 @@ func authError(err error) error {
 			aws = info.GetMetadata()["aws_code"]
 		}
 	}
+	// The AWS code, when vws-iam sets one, decides before the transport code.
+	// An access key id vws-iam does not hold is InvalidClientTokenId, HTTP 403,
+	// even when it rides NOT_FOUND (vws-iam#189, #496); every other NOT_FOUND
+	// stays an IAM NoSuchEntity below.
+	if aws == "InvalidClientTokenId" {
+		if st.Code() == codes.Unauthenticated {
+			return sigv4.ErrUnknownKey
+		}
+		return sigv4.Reject(sigv4.FailureUnknownKey, &resource.Error{
+			Code: resource.CodeUnauthenticated, Field: "AccessKeyId",
+			Message: "The security token included in the request is invalid.",
+		})
+	}
 	switch st.Code() { //nolint:exhaustive // every other code is "unavailable" below.
 	case codes.Unauthenticated:
 		switch aws {
-		case "InvalidClientTokenId":
-			return sigv4.ErrUnknownKey
 		case "InvalidToken":
 			return sigv4.Reject(sigv4.FailureInvalidToken,
 				resource.Unauthenticated("the security token included in the request is invalid"))
