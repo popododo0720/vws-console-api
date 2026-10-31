@@ -7,6 +7,10 @@ Environment:
   VWS_E2E_IAM      IAM and STS Query endpoint (one listener). Default http://127.0.0.1:8084.
   VWS_E2E_CAPS     Comma list of capabilities the backend has: vm, eip.
                    Default is vm,eip for fake and none for grpc.
+  VWS_E2E_ACCESS_KEY, VWS_E2E_SECRET_KEY
+                   Root credentials for the SigV4 clients. The defaults are
+                   the public development values, which a grpc backend refuses,
+                   so a live run sets both.
 
   VWS_E2E_WAIT_TIMEOUT  Seconds to poll DescribeInstances for running/stopped
                    between power changes. Default 180.
@@ -33,7 +37,10 @@ from botocore.config import Config
 
 BACKEND = os.environ.get("VWS_E2E_BACKEND", "fake")
 CAPS = set(filter(None, os.environ.get("VWS_E2E_CAPS", "vm,eip" if BACKEND == "fake" else "").split(",")))
-KW = dict(aws_access_key_id="AKIDEXAMPLE", aws_secret_access_key="secret", region_name="vws-1")
+KW = dict(
+    aws_access_key_id=os.environ.get("VWS_E2E_ACCESS_KEY", "AKIDEXAMPLE"),
+    aws_secret_access_key=os.environ.get("VWS_E2E_SECRET_KEY", "secret"),
+    region_name="vws-1")
 ec2 = boto3.client(
     "ec2", endpoint_url=os.environ.get("VWS_E2E_EC2", "http://127.0.0.1:8081"),
     config=Config(retries={"total_max_attempts": 1}), **KW)

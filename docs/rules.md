@@ -110,15 +110,20 @@ it. When you add or change a rule, change its row here and its line in
 
 `e2e/e2e.py` drives the EC2 Query and S3 entry points with boto3.
 `VWS_E2E_BACKEND` is `fake` or `grpc`. `VWS_E2E_CAPS` lists what the backend
-can do (`vm`, `eip`). A step that needs a missing capability prints
-`skipped(reason)` and does not count as a pass. The run ends with a banner
-that lists every skip and `status=PASS|FAIL|INCOMPLETE`. `VWS_E2E_STRICT=1`
-makes a skip exit 3. CI sets it, so the fake run cannot lose a step silently.
+can do (`vm`, `eip`). `VWS_E2E_ACCESS_KEY` and `VWS_E2E_SECRET_KEY` are the
+root credentials the SigV4 clients sign with; they default to the public
+development values, which a grpc backend refuses, so a live run sets both. A
+step that needs a missing capability prints `skipped(reason)` and does not
+count as a pass. The run ends with a banner that lists every skip and
+`status=PASS|FAIL|INCOMPLETE`. `VWS_E2E_STRICT=1` makes a skip exit 3. CI sets
+it, so the fake run cannot lose a step silently.
 
 ```sh
 pip install -r e2e/requirements.txt
 e2e/run.sh                          # fake backend, started by the script
-VWS_E2E_BACKEND=grpc python3 e2e/e2e.py   # services already running
+VWS_E2E_BACKEND=grpc VWS_E2E_CAPS=vm,eip \
+  VWS_E2E_ACCESS_KEY="$VWS_ACCESS_KEY" VWS_E2E_SECRET_KEY="$VWS_SECRET_KEY" \
+  python3 e2e/e2e.py                # services already running
 e2e/local.sh                        # grpc stack kept up for manual runs (needs VWS_E2E_BIN, VWS_E2E_IMAGES)
 ```
 
