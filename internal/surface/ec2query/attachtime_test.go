@@ -1,6 +1,7 @@
 package ec2query
 
 import (
+	"context"
 	"encoding/xml"
 	"net/http"
 	"net/url"
@@ -8,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/popododo0720/vws-console-api/internal/backend"
 	"github.com/popododo0720/vws-console-api/internal/backend/fake"
 	"github.com/popododo0720/vws-console-api/internal/cloud"
 	"github.com/popododo0720/vws-console-api/internal/iam"
@@ -140,4 +142,70 @@ func TestAttachTimeStandsInWhenTheBackendRecordsNone(t *testing.T) {
 	if got := attachTimeOr(recorded, launched); !got.Equal(recorded) {
 		t.Fatalf("a recorded attach time %s lost to the stand-in: %s", recorded, got)
 	}
+}
+
+// TestAttachVolumeAttachTimeFallsBackToTheAccept pins #482 on the wire: a
+// backend that records no attach time leaves the AttachVolume response to
+// the accept operation's create time, the earliest the attachment can have
+// started.
+func TestAttachVolumeAttachTimeFallsBackToTheAccept(t *testing.T) {
+	accepted := time.Date(2026, 10, 9, 10, 2, 0, 0, time.UTC)
+	account, err := resource.Parse[resource.AccountID]("123456789012")
+	if err != nil {
+		t.Fatal(err)
+	}
+	vol, err := resource.Parse[resource.VolumeID]("vol-0123456789abcdef0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	inst, err := resource.Parse[resource.InstanceID]("i-0123456789abcdef0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	op, err := resource.NewOperationID(resource.ServiceCompute, "0123456789abcdef")
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc := cloud.New(cloud.Config{Backends: backend.Set{Compute: acceptWithoutAttachTime{
+		accepted: resource.Accepted[resource.Volume]{
+			Operation: resource.Operation{
+				ID: op, Action: resource.ActionAttachVolume, State: resource.OperationRunning,
+				OwnerID: account, Targets: []resource.Ref{vol.Ref()}, CreateTime: accepted,
+			},
+			Items: []resource.Volume{{
+				ID: vol, OwnerID: account, InstanceID: inst, Device: "/dev/sdf",
+				// AttachTime stays zero: this backend records none.
+				AttachState: resource.AttachmentAttaching,
+			}},
+		},
+	}}})
+	cred := sigv4.Credential{AccessKey: "AKIDEXAMPLE", Secret: "secret", Account: account}
+	static := iam.NewStatic(cred.AccessKey, cred.Secret, cred.Account)
+	h := New(Config{Service: svc, Authorizer: static, Verifier: sigv4.NewVerifier(sigv4.Verifier{
+		Service: sigv4.ServiceEC2, Region: resource.RegionName, Now: func() time.Time { return accepted },
+		Auth: iam.Authenticator(static),
+	})})
+	res := signed(t, h, cred, accepted, url.Values{
+		"Action": {"AttachVolume"}, "Version": {Version}, "VolumeId": {vol.String()},
+		"InstanceId": {inst.String()}, "Device": {"/dev/sdf"},
+	}.Encode())
+	if res.Code != http.StatusOK {
+		t.Fatalf("AttachVolume %d %s", res.Code, res.Body)
+	}
+	if got, want := xmlText(t, res.Body.String(), "attachTime"), "2026-10-09T10:02:00.000Z"; got != want {
+		t.Fatalf("AttachVolume attachTime %q, want the accept time %q", got, want)
+	}
+}
+
+// acceptWithoutAttachTime answers AttachVolume with a zero AttachTime, as a
+// backend without an attach timestamp does.
+type acceptWithoutAttachTime struct {
+	backend.Compute
+	accepted resource.Accepted[resource.Volume]
+}
+
+func (a acceptWithoutAttachTime) AttachVolume(
+	context.Context, backend.Mutation, resource.AttachVolumeRequest,
+) (resource.Accepted[resource.Volume], error) {
+	return a.accepted, nil
 }
