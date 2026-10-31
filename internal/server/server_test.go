@@ -6,11 +6,14 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"testing"
+	"time"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
@@ -195,5 +198,122 @@ func TestHTTPMiddlewareStartsAServerSpan(t *testing.T) {
 	parent := outbound.Get("traceparent")
 	if !strings.Contains(parent, inboundTrace) || !strings.Contains(parent, got.SpanID().String()) {
 		t.Fatalf("outbound traceparent %q does not carry trace id %s and span %s", parent, inboundTrace, got.SpanID())
+	}
+}
+
+// TestCleanStopReturnsNilWhenTheDrainBoundExpires proves a stop the caller
+// asked for is not reported as a deadline error when a connection outlives the
+// five second drain. An idle connection that never sends a request is the
+// common case: http.Server.Shutdown leaves it in StateNew for its whole five
+// second window (https://go.dev/issue/22682). The handler here holds the bound,
+// so the expiry is deterministic.
+func TestCleanStopReturnsNilWhenTheDrainBoundExpires(t *testing.T) {
+	const attempts = 5
+	var err error
+	for attempt := 1; attempt <= attempts; attempt++ {
+		if err = drainBoundExpires(t); !errors.Is(err, syscall.EADDRINUSE) {
+			break
+		}
+	}
+	if err != nil {
+		t.Fatalf("Serve: %v", err)
+	}
+}
+
+// drainBoundExpires starts Serve on a free address, holds one request until
+// the drain bound expires, and stops the server. The caller retries the case
+// when another process takes the address between listen and Serve.
+func drainBoundExpires(t *testing.T) error {
+	t.Helper()
+	const startTimeout = 10 * time.Second
+	var log bytes.Buffer
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	defer func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	}()
+	handler := http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		close(entered)
+		<-release
+	})
+	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		return err
+	}
+	addr := ln.Addr().String()
+	if err := ln.Close(); err != nil {
+		return err
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	errc := make(chan error, 1)
+	go func() {
+		errc <- Serve(ctx, Options{
+			Logger:   slog.New(slog.NewTextHandler(&log, nil)),
+			Surfaces: []Surface{{Name: "test", Addr: addr, Handler: handler}},
+		})
+	}()
+	clientDone := make(chan struct{})
+	go func() {
+		defer close(clientDone)
+		deadline := time.Now().Add(startTimeout)
+		for {
+			req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+addr, nil)
+			if err != nil {
+				return
+			}
+			resp, err := http.DefaultClient.Do(req)
+			if err == nil {
+				_ = resp.Body.Close()
+				return
+			}
+			select {
+			case <-entered:
+				return
+			default:
+			}
+			if ctx.Err() != nil || time.Now().After(deadline) {
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}()
+	select {
+	case <-entered:
+	case err := <-errc:
+		cancel()
+		if err == nil {
+			return errors.New("Serve stopped before the request ran")
+		}
+		return err
+	case <-time.After(startTimeout):
+		cancel()
+		return errors.New("handler did not start")
+	}
+	cancel()
+	select {
+	case err := <-errc:
+		if err != nil {
+			close(release)
+			<-clientDone
+			return err
+		}
+		// Read the warning before the handler returns and the request access
+		// log writes to the same buffer.
+		got := log.String()
+		close(release)
+		<-clientDone
+		if !strings.Contains(got, "shutdown drain bound expired") ||
+			!strings.Contains(got, "context deadline exceeded") {
+			return errors.New("the drain expiry was not logged")
+		}
+		return nil
+	case <-time.After(15 * time.Second):
+		close(release)
+		return errors.New("Serve did not return")
 	}
 }
