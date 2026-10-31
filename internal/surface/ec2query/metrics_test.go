@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -63,6 +64,57 @@ func TestAWSErrorMetricCarriesActionAndCode(t *testing.T) {
 					if _, ok := dp.Attributes.Value(attribute.Key(forbidden)); ok {
 						t.Fatalf("label %q is forbidden", forbidden)
 					}
+				}
+			}
+			return
+		}
+	}
+	t.Fatal("vws.aws.errors was not recorded")
+}
+
+// TestAWSErrorMetricHidesUnknownActions proves the action label is a dispatched
+// EC2 action or "unknown", so a caller cannot grow the label space (#478).
+func TestAWSErrorMetricHidesUnknownActions(t *testing.T) {
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
+	t.Setenv("VWS_HEALTH_ADDR", "")
+	reader := sdkmetric.NewManualReader()
+	shutdown, err := obs.Setup(t.Context(), obs.ForService(service.Name), obs.WithOverride(func(c *obs.Config) {
+		c.MetricReaders = []sdkmetric.Reader{reader}
+		c.LogOutput = io.Discard
+	}))
+	if err != nil {
+		t.Fatalf("obs.Setup: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := shutdown(context.WithoutCancel(t.Context())); err != nil {
+			t.Errorf("obs shutdown: %v", err)
+		}
+	})
+
+	h, cred, now := harness(t)
+	for _, action := range []string{"UnsupportedAction", "x-0123456789abcdef"} {
+		form := url.Values{"Action": {action}, "Version": {Version}}
+		if res := signed(t, h, cred, now, form.Encode()); res.Code != http.StatusBadRequest {
+			t.Fatalf("%s: %d %s", action, res.Code, res.Body)
+		}
+	}
+
+	var rm metricdata.ResourceMetrics
+	if err := reader.Collect(context.Background(), &rm); err != nil {
+		t.Fatal(err)
+	}
+	for _, sm := range rm.ScopeMetrics {
+		for _, m := range sm.Metrics {
+			if m.Name != "vws.aws.errors" {
+				continue
+			}
+			sum, ok := m.Data.(metricdata.Sum[int64])
+			if !ok || len(sum.DataPoints) == 0 {
+				t.Fatalf("%s has no data points", m.Name)
+			}
+			for _, dp := range sum.DataPoints {
+				if action, _ := dp.Attributes.Value("action"); action.AsString() != "unknown" {
+					t.Fatalf("action label %q", action.AsString())
 				}
 			}
 			return
