@@ -24,7 +24,7 @@ type loginEnv struct {
 	root    *iam.Static
 }
 
-func newLoginEnv(t *testing.T) loginEnv {
+func newLoginEnv(t *testing.T, opts ...fake.Options) loginEnv {
 	t.Helper()
 	account, err := resource.Parse[resource.AccountID]("123456789012")
 	if err != nil {
@@ -35,7 +35,11 @@ func newLoginEnv(t *testing.T) loginEnv {
 	f := iam.NewFake()
 	root := iam.NewStatic("AKIDEXAMPLE", "secret", account)
 	client := iam.WithRoot(root, f)
-	svc := cloud.New(cloud.Config{Backends: fake.New(fake.Options{}).Set()})
+	options := fake.Options{}
+	if len(opts) > 0 {
+		options = opts[0]
+	}
+	svc := cloud.New(cloud.Config{Backends: fake.New(options).Set()})
 	rootCaller := resource.Caller{Account: account, Subject: "console-token", Principal: iam.RootARN(account), Root: true}
 	h := New(Config{Service: svc, IAM: client, Auth: BearerTokens{"tok": rootCaller}, Now: func() time.Time { return *clock }})
 	ctx := t.Context()

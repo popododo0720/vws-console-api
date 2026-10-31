@@ -1601,7 +1601,7 @@ func bucketRef(name string) (string, resource.AccountID, resource.BucketName, er
 	if err != nil {
 		return "", resource.AccountID{}, resource.BucketName{}, err
 	}
-	bucket, err := resource.Parse[resource.BucketName](parts[3])
+	bucket, err := resource.ParseStoredBucketName(parts[3])
 	if err != nil {
 		return "", resource.AccountID{}, resource.BucketName{}, err
 	}
@@ -1617,7 +1617,7 @@ func objectRef(name string) (string, resource.AccountID, resource.BucketName, re
 	if err != nil {
 		return "", resource.AccountID{}, resource.BucketName{}, resource.ObjectKey{}, err
 	}
-	bucket, err := resource.Parse[resource.BucketName](parts[3])
+	bucket, err := resource.ParseStoredBucketName(parts[3])
 	if err != nil {
 		return "", resource.AccountID{}, resource.BucketName{}, resource.ObjectKey{}, err
 	}

@@ -397,7 +397,7 @@ func (h *handler) getBucket(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	name, err := resource.Parse[resource.BucketName](r.PathValue("name"))
+	name, err := resource.ParseStoredBucketName(r.PathValue("name"))
 	if err != nil {
 		writeErr(w, r, err)
 		return

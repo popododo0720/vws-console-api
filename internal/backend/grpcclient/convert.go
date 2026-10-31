@@ -711,7 +711,7 @@ func bucketModel(in *storagev1.Bucket) (resource.Bucket, error) {
 	if len(parts) != 4 || parts[2] != "buckets" {
 		return resource.Bucket{}, resource.Internal(errors.New("bad bucket name"))
 	}
-	name, err := resource.Parse[resource.BucketName](parts[3])
+	name, err := resource.ParseStoredBucketName(parts[3])
 	if err != nil {
 		return resource.Bucket{}, resource.Internal(err)
 	}
@@ -760,7 +760,7 @@ func objectModel(in *storagev1.Object) (resource.Object, error) {
 	if len(parts) != 6 || parts[2] != "buckets" || parts[4] != "objects" {
 		return resource.Object{}, resource.Internal(errors.New("bad object name"))
 	}
-	bucket, err := resource.Parse[resource.BucketName](parts[3])
+	bucket, err := resource.ParseStoredBucketName(parts[3])
 	if err != nil {
 		return resource.Object{}, resource.Internal(err)
 	}
