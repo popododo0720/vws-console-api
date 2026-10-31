@@ -76,6 +76,93 @@ func TestDescribeSubnetsFilterPagesTheMatches(t *testing.T) {
 	}
 }
 
+// wantNextTokenMessage is the sentence AWS returns with InvalidNextToken.
+const wantNextTokenMessage = "The specified next token is not valid."
+
+func TestFilteredDescribesRejectAStaleNextToken(t *testing.T) {
+	h, cred, now := harness(t)
+	vpc, first := createVpcAndSubnet(t, h, cred, now, "10.20.0.0/16", "10.20.1.0/24", nil)
+	second := subnetIDOf(t, callEC2(t, h, cred, now, url.Values{
+		"Action": {"CreateSubnet"}, "VpcId": {vpc}, "CidrBlock": {"10.20.2.0/24"},
+	}))
+	if first == second {
+		t.Fatalf("subnets share the id %s", first)
+	}
+	form := url.Values{
+		"Action": {"DescribeSubnets"}, "Filter.1.Name": {"vpc-id"}, "Filter.1.Value.1": {vpc},
+		"MaxResults": {"1"},
+	}
+	firstPage := callEC2(t, h, cred, now, form)
+	token := xmlText(t, firstPage, "nextToken")
+	if token == "" {
+		t.Fatalf("one-row page has no next token: %s", firstPage)
+	}
+	form.Set("Filter.1.Value.1", "vpc-00000000000000000")
+	form.Set("NextToken", token)
+	res := signed(t, h, cred, now, form.Encode())
+	if res.Code != http.StatusBadRequest {
+		t.Fatalf("stale token: %d %s", res.Code, res.Body)
+	}
+	body := ec2ErrorXML(t, res.Body.Bytes())
+	if body.Code != "InvalidNextToken" || body.Message != wantNextTokenMessage {
+		t.Fatalf("stale token: code %q message %q", body.Code, body.Message)
+	}
+}
+
+func TestFilteredDescribesRejectAnUnknownNextToken(t *testing.T) {
+	h, cred, now := harness(t)
+	cases := []struct {
+		action, name, value string
+	}{
+		{"DescribeVpcs", "tag:Name", "absent"},
+		{"DescribeVolumes", "attachment.instance-id", "i-00000000000000000"},
+		{"DescribeInstances", "vpc-id", "vpc-00000000000000000"},
+		{"DescribeSubnets", "vpc-id", "vpc-00000000000000000"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.action, func(t *testing.T) {
+			form := url.Values{
+				"Action": {tc.action}, "Version": {Version}, "NextToken": {"stale"},
+				"Filter.1.Name": {tc.name}, "Filter.1.Value.1": {tc.value},
+			}
+			res := signed(t, h, cred, now, form.Encode())
+			if res.Code != http.StatusBadRequest {
+				t.Fatalf("%s: %d %s", tc.action, res.Code, res.Body)
+			}
+			body := ec2ErrorXML(t, res.Body.Bytes())
+			if body.Code != "InvalidNextToken" || body.Message != wantNextTokenMessage {
+				t.Fatalf("%s: code %q message %q", tc.action, body.Code, body.Message)
+			}
+		})
+	}
+}
+
+func TestFilterWithNoValuesMatchesNothing(t *testing.T) {
+	h, cred, now := harness(t)
+	vpc := xmlText(t, callEC2(t, h, cred, now, url.Values{
+		"Action": {"CreateVpc"}, "CidrBlock": {"10.21.0.0/16"},
+		"TagSpecification.1.ResourceType": {"vpc"},
+		"TagSpecification.1.Tag.1.Key":    {"Name"},
+		"TagSpecification.1.Tag.1.Value":  {"web"},
+	}), "vpcId")
+	all := callEC2(t, h, cred, now, url.Values{"Action": {"DescribeVpcs"}})
+	if !strings.Contains(all, vpc) {
+		t.Fatalf("created vpc %s missing from the unfiltered listing: %s", vpc, all)
+	}
+	empty := callEC2(t, h, cred, now, url.Values{
+		"Action": {"DescribeVpcs"}, "Filter.1.Name": {"tag:Name"},
+	})
+	if strings.Contains(empty, "<vpcId>") {
+		t.Fatalf("a filter with no values matched a vpc: %s", empty)
+	}
+	matched := callEC2(t, h, cred, now, url.Values{
+		"Action": {"DescribeVpcs"}, "Filter.1.Name": {"tag:Name"}, "Filter.1.Value.1": {"web"},
+	})
+	if !strings.Contains(matched, vpc) {
+		t.Fatalf("tag:Name=web missed vpc %s: %s", vpc, matched)
+	}
+}
+
 func TestDescribeVpcsFiltersByTagName(t *testing.T) {
 	h, cred, now := harness(t)
 	web, _ := createVpcAndSubnet(t, h, cred, now, "10.15.0.0/16", "10.15.1.0/24", url.Values{
@@ -140,5 +227,28 @@ func TestDescribeInstancesFiltersByVpcID(t *testing.T) {
 	})
 	if !strings.Contains(body, inA) || strings.Contains(body, inB) {
 		t.Fatalf("instances %s and %s: %s", inA, inB, body)
+	}
+}
+
+func TestDescribeInstancesFilterWithNoValuesMatchesNothing(t *testing.T) {
+	h, cred, now := harness(t)
+	_, subnet := createVpcAndSubnet(t, h, cred, now, "10.22.0.0/16", "10.22.1.0/24", nil)
+	instance := xmlText(t, callEC2(t, h, cred, now, url.Values{
+		"Action": {"RunInstances"}, "ImageId": {"ami-0123456789abcdef0"}, "InstanceType": {"vws.small"},
+		"SubnetId": {subnet}, "MinCount": {"1"}, "MaxCount": {"1"}, "ClientToken": {"run-472-no-values"},
+	}), "instanceId")
+	for _, name := range []string{"instance-id", "instance-state-name"} {
+		body := callEC2(t, h, cred, now, url.Values{
+			"Action": {"DescribeInstances"}, "Filter.1.Name": {name},
+		})
+		if strings.Contains(body, "<instanceId>") {
+			t.Fatalf("%s with no values matched an instance: %s", name, body)
+		}
+	}
+	body := callEC2(t, h, cred, now, url.Values{
+		"Action": {"DescribeInstances"}, "Filter.1.Name": {"instance-id"}, "Filter.1.Value.1": {instance},
+	})
+	if !strings.Contains(body, instance) {
+		t.Fatalf("instance-id=%s missed the instance: %s", instance, body)
 	}
 }

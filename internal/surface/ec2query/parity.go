@@ -22,6 +22,9 @@ type queryFilter struct {
 	values []string
 }
 
+// A filter with a name and no values matches nothing: Value.N is the set of
+// values the name matches, and tag-key is EC2's way to ask for any value.
+// https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_Filter.html
 func queryFilters(r *http.Request) ([]queryFilter, error) {
 	var out []queryFilter
 	for i := 1; i <= 20; i++ {
@@ -129,6 +132,10 @@ func wildcardMatch(pattern, value string) bool {
 	return pi == len(p)
 }
 
+// invalidNextTokenMessage is AWS's sentence for a token that names no row.
+// https://docs.aws.amazon.com/ec2/latest/devguide/errors-overview.html
+const invalidNextTokenMessage = "The specified next token is not valid."
+
 // pageRows slices rows after filtering them in the codec. The token is the
 // identity of the last row on the previous page, the same cursor the backends
 // use.
@@ -148,7 +155,7 @@ func pageRows[T any](rows []T, page resource.PageRequest, identity func(T) strin
 			}
 		}
 		if !found {
-			return nil, "", resource.Invalid("NextToken", "unknown")
+			return nil, "", resource.Invalid("NextToken", invalidNextTokenMessage)
 		}
 	}
 	end := min(start+page.Size, len(rows))
@@ -691,7 +698,7 @@ func (h *handler) describeVolumesModifications(w http.ResponseWriter, r *http.Re
 		return
 	}
 	if page.Token != "" {
-		writeErr(w, r, resource.Invalid("NextToken", "unknown"))
+		writeErr(w, r, resource.Invalid("NextToken", invalidNextTokenMessage))
 		return
 	}
 	if err := h.checkVolumesExist(r.Context(), c, ids); err != nil {
@@ -937,7 +944,7 @@ func (h *handler) describeRouteTables(w http.ResponseWriter, r *http.Request, c 
 		return
 	}
 	if page.Token != "" {
-		writeErr(w, r, resource.Invalid("NextToken", "unknown"))
+		writeErr(w, r, resource.Invalid("NextToken", invalidNextTokenMessage))
 		return
 	}
 	// VWS has no route table model, so every VPC's main route table is absent.
