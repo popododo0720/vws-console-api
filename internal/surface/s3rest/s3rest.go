@@ -373,7 +373,7 @@ func (h *handler) putObject(w http.ResponseWriter, r *http.Request) {
 	}
 	if code, message := checkSHA256(r.Header.Get("X-Amz-Checksum-Sha256"), body); code != "" {
 		writeXML(w, http.StatusBadRequest, errorXML{
-			Code: code, Message: message, Resource: r.URL.Path, RequestID: r.Header.Get("X-Request-Id"),
+			Code: code, Message: message, Resource: r.URL.Path, RequestID: obs.RequestID(r.Context()),
 		})
 		return
 	}
@@ -622,7 +622,7 @@ func writeXML(w http.ResponseWriter, status int, v any) {
 func writeErr(w http.ResponseWriter, r *http.Request, err error, resourceName string) {
 	action := s3ActionOf(r)
 	if rej, ok := sigv4.RejectionOf(err); ok {
-		status, body := authError(rej, r.Header.Get("X-Request-Id"))
+		status, body := authError(rej, obs.RequestID(r.Context()))
 		obs.M().AWSError(r.Context(), service.Name, action, body.Code)
 		writeXML(w, status, body)
 		return
@@ -634,7 +634,7 @@ func writeErr(w http.ResponseWriter, r *http.Request, err error, resourceName st
 	}
 	obs.M().AWSError(r.Context(), service.Name, action, entry.Code)
 	out := errorXML{
-		Code: entry.Code, Message: e.Message, Resource: resourceName, RequestID: r.Header.Get("X-Request-Id"),
+		Code: entry.Code, Message: e.Message, Resource: resourceName, RequestID: obs.RequestID(r.Context()),
 	}
 	if e.Code == resource.CodeAlreadyExists && e.Kind == resource.KindBucket {
 		// S3 names the bucket in both create conflicts, with its own text.

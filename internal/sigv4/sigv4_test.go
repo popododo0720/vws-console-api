@@ -74,7 +74,7 @@ func TestQueryWithoutPayloadHeader(t *testing.T) {
 	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "http://127.0.0.1:8081/", strings.NewReader("Action=DescribeInstances&Version=2016-11-15"))
 	req.Host = req.URL.Host
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	if err := sign(req, c, ServiceEC2, resource.RegionName, now, false); err != nil {
+	if err := sign(req, c, ServiceEC2, resource.RegionName, now, false, nil); err != nil {
 		t.Fatal(err)
 	}
 	if req.Header.Get("X-Amz-Content-Sha256") != "" {

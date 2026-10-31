@@ -368,10 +368,21 @@ func mismatch(e *resource.Error, req AuthRequest, sent string) *resource.Error {
 // Sign sets the date, payload hash, and Authorization header on r.
 // It reads and restores the body. Tests and local clients use it.
 func Sign(r *http.Request, cred Credential, service Service, region string, now time.Time) error {
-	return sign(r, cred, service, region, now, true)
+	return sign(r, cred, service, region, now, true, nil)
 }
 
-func sign(r *http.Request, cred Credential, service Service, region string, now time.Time, payloadHeader bool) error {
+// SignHeaders is Sign with the named headers added to SignedHeaders. It lets a
+// test sign a header the server may rewrite, as an SDK that signs every header
+// does.
+func SignHeaders(
+	r *http.Request, cred Credential, service Service, region string, now time.Time, extra ...string,
+) error {
+	return sign(r, cred, service, region, now, true, extra)
+}
+
+func sign(
+	r *http.Request, cred Credential, service Service, region string, now time.Time, payloadHeader bool, extra []string,
+) error {
 	body, err := readBody(r.Body, resource.MaxObjectBytes)
 	if err != nil {
 		return err
@@ -396,6 +407,7 @@ func sign(r *http.Request, cred Credential, service Service, region string, now 
 	if r.Header.Get("Content-Type") != "" {
 		signed = append(signed, "content-type")
 	}
+	signed = append(signed, extra...)
 	sortStrings(signed)
 	scope := amzDate[:8] + "/" + region + "/" + string(service) + "/aws4_request"
 	canon := canonicalRequest(r, signed, payload)

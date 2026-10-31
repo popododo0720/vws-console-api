@@ -13,6 +13,8 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/popododo0720/vws-lib/obs"
+
 	"github.com/popododo0720/vws-console-api/internal/cloud"
 	"github.com/popododo0720/vws-console-api/internal/iam"
 	"github.com/popododo0720/vws-console-api/internal/resource"
@@ -603,7 +605,7 @@ func writeErr(w http.ResponseWriter, r *http.Request, err error) {
 	if statusOf(e.Code) >= http.StatusInternalServerError {
 		server.RecordFailure(w, err)
 	}
-	writeJSON(w, statusOf(e.Code), errorBody{Error: e, Request: r.Header.Get("X-Request-Id")})
+	writeJSON(w, statusOf(e.Code), errorBody{Error: e, Request: obs.RequestID(r.Context())})
 }
 
 func statusOf(c resource.Code) int {

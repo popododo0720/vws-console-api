@@ -27,6 +27,7 @@ import (
 
 	"github.com/popododo0720/vws-console-api/internal/resource"
 	"github.com/popododo0720/vws-console-api/internal/service"
+	"github.com/popododo0720/vws-console-api/internal/sigv4"
 )
 
 func TestInternalErrorIsLogged(t *testing.T) {
@@ -106,7 +107,7 @@ func TestRequestIDIsTheSameInLogAndResponse(t *testing.T) {
 
 	var seen string
 	h := wrap(slog.Default(), "ec2", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		seen = r.Header.Get(httpobs.RequestIDHeader)
+		seen = obs.RequestID(r.Context())
 		w.WriteHeader(http.StatusOK)
 	}))
 	rec := httptest.NewRecorder()
@@ -163,7 +164,7 @@ func TestClientRequestIDIsValidated(t *testing.T) {
 			start := logs.Len()
 			var seen string
 			ec2 := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				seen = r.Header.Get(httpobs.RequestIDHeader)
+				seen = obs.RequestID(r.Context())
 				w.WriteHeader(http.StatusOK)
 			})
 			h := surfaceHandler(slog.Default(), NewMetrics(), Surface{Name: "ec2", Handler: ec2})
@@ -241,10 +242,10 @@ func TestWriteFailureIsLogged(t *testing.T) {
 
 // TestHTTPMiddlewareStartsARootServerSpan sends an EC2 Query request through
 // the chain Serve builds for a surface. The handler must run inside a new root
-// server span: the inbound traceparent is dropped at the boundary, so the
-// traceparent an outbound call injects from the handler context carries the
-// local trace id, not the caller's, and a caller cannot force sampling through
-// the parent-based sampler. grpcclient's TestClientPropagatesTraceparent
+// server span: the inbound traceparent is hidden from the telemetry middleware,
+// so the traceparent an outbound call injects from the handler context carries
+// the local trace id, not the caller's, and a caller cannot force sampling
+// through the parent-based sampler. grpcclient's TestClientPropagatesTraceparent
 // covers the gRPC hop.
 func TestHTTPMiddlewareStartsARootServerSpan(t *testing.T) {
 	previous := otel.GetTracerProvider()
@@ -260,11 +261,9 @@ func TestHTTPMiddlewareStartsARootServerSpan(t *testing.T) {
 	})
 
 	var got trace.SpanContext
-	var inboundState string
 	outbound := http.Header{}
 	ec2 := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		got = trace.SpanContextFromContext(r.Context())
-		inboundState = r.Header.Get("tracestate")
 		otel.GetTextMapPropagator().Inject(r.Context(), propagation.HeaderCarrier(outbound))
 		w.WriteHeader(http.StatusOK)
 	})
@@ -280,9 +279,6 @@ func TestHTTPMiddlewareStartsARootServerSpan(t *testing.T) {
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status %d", rec.Code)
-	}
-	if inboundState != "" {
-		t.Fatalf("handler saw inbound tracestate %q", inboundState)
 	}
 	if !got.IsValid() || got.IsRemote() {
 		t.Fatalf("the handler ran without a local server span: %+v", got)
@@ -306,6 +302,133 @@ func TestHTTPMiddlewareStartsARootServerSpan(t *testing.T) {
 	}
 	if strings.Contains(parent, inboundTrace) {
 		t.Fatalf("outbound traceparent %q carries the inbound trace id %s", parent, inboundTrace)
+	}
+}
+
+// TestSigV4SignedClientHeadersSurviveInboundGuard proves a signature that
+// covers traceparent, tracestate and X-Request-Id still verifies. AWS SDKs sign
+// every header but a short ignore list, so a client that signs these is normal.
+// The telemetry middleware must not see them, and the response and log must
+// carry the generated id for an unsafe client id, or the client's id when it is
+// valid. The span stays a new root.
+func TestSigV4SignedClientHeadersSurviveInboundGuard(t *testing.T) {
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
+	t.Setenv("VWS_HEALTH_ADDR", "")
+	var logs bytes.Buffer
+	shutdown, err := obs.Setup(t.Context(), obs.ForService(service.Name),
+		obs.WithOverride(func(c *obs.Config) { c.LogOutput = &logs }))
+	if err != nil {
+		t.Fatalf("obs.Setup: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := shutdown(context.WithoutCancel(t.Context())); err != nil {
+			t.Errorf("obs shutdown: %v", err)
+		}
+	})
+
+	previous := otel.GetTracerProvider()
+	previousPropagator := otel.GetTextMapPropagator()
+	spans := tracetest.NewSpanRecorder()
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSampler(sdktrace.AlwaysSample()), sdktrace.WithSpanProcessor(spans))
+	otel.SetTracerProvider(tp)
+	otel.SetTextMapPropagator(propagation.TraceContext{})
+	t.Cleanup(func() {
+		otel.SetTracerProvider(previous)
+		otel.SetTextMapPropagator(previousPropagator)
+		_ = tp.Shutdown(context.Background())
+	})
+
+	now := time.Date(2026, 10, 9, 10, 0, 0, 0, time.UTC)
+	account, err := resource.Parse[resource.AccountID]("123456789012")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cred := sigv4.Credential{AccessKey: "AKIDEXAMPLE", Secret: "secret", Account: account}
+	const inboundTrace = "4bf92f3577b34da6a3ce929d0e0e4736"
+	const validID = "req-0123456789abcdef"
+
+	surfaces := []struct {
+		name    string
+		service sigv4.Service
+		method  string
+		target  string
+		body    string
+	}{
+		{
+			name: "ec2", service: sigv4.ServiceEC2, method: http.MethodPost,
+			target: "http://127.0.0.1:8081/", body: "Action=DescribeVpcs&Version=2016-11-15",
+		},
+		{
+			name: "s3", service: sigv4.ServiceS3, method: http.MethodPut,
+			target: "http://127.0.0.1:8082/build-logs/a.txt", body: "object",
+		},
+	}
+	for _, sf := range surfaces {
+		t.Run(sf.name, func(t *testing.T) {
+			verifier := sigv4.NewVerifier(sigv4.Verifier{
+				Service: sf.service,
+				Region:  resource.RegionName,
+				Now:     func() time.Time { return now },
+				Auth: sigv4.Lookup(func(_ context.Context, key string) (sigv4.Credential, bool) {
+					return cred, key == cred.AccessKey
+				}),
+			})
+			var verifyErr error
+			var span trace.SpanContext
+			h := surfaceHandler(slog.Default(), NewMetrics(), Surface{
+				Name: sf.name,
+				Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					if _, err := verifier.Verify(r); err != nil {
+						verifyErr = err
+						w.WriteHeader(http.StatusUnauthorized)
+						return
+					}
+					span = trace.SpanContextFromContext(r.Context())
+					w.WriteHeader(http.StatusOK)
+				}),
+			})
+
+			for _, tt := range []struct {
+				name string
+				id   string
+				keep bool
+			}{
+				{name: "valid id", id: validID, keep: true},
+				{name: "unsafe id", id: strings.Repeat("a", 65)},
+			} {
+				t.Run(tt.name, func(t *testing.T) {
+					start := logs.Len()
+					req := httptest.NewRequestWithContext(t.Context(), sf.method, sf.target, strings.NewReader(sf.body))
+					req.Host = req.URL.Host
+					req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+					req.Header.Set("traceparent", "00-"+inboundTrace+"-00f067aa0ba902b7-01")
+					req.Header.Set("tracestate", "vendor=value")
+					req.Header.Set(httpobs.RequestIDHeader, tt.id)
+					if err := sigv4.SignHeaders(req, cred, sf.service, resource.RegionName, now,
+						"traceparent", "tracestate", "x-request-id"); err != nil {
+						t.Fatal(err)
+					}
+					rec := httptest.NewRecorder()
+					h.ServeHTTP(rec, req)
+					if rec.Code != http.StatusOK {
+						t.Fatalf("status %d: a signature that covers the client headers must verify: %v", rec.Code, verifyErr)
+					}
+					id := rec.Header().Get(httpobs.RequestIDHeader)
+					switch {
+					case tt.keep && id != tt.id:
+						t.Fatalf("response request id %q, want the client id %q", id, tt.id)
+					case !tt.keep && (id == tt.id || !isGeneratedRequestID(id)):
+						t.Fatalf("response request id %q, want 16 generated hex characters", id)
+					}
+					if logged := requestLogID(t, logs.String()[start:]); logged != id {
+						t.Fatalf("log request_id %q, response header %q", logged, id)
+					}
+					if !span.IsValid() || span.IsRemote() || span.TraceID().String() == inboundTrace {
+						t.Fatalf("handler span %+v, want a new local root", span)
+					}
+				})
+			}
+		})
 	}
 }
 
