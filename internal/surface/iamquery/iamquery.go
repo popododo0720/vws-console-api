@@ -13,6 +13,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/popododo0720/vws-lib/obs"
+
 	"github.com/popododo0720/vws-console-api/internal/iam"
 	"github.com/popododo0720/vws-console-api/internal/resource"
 	"github.com/popododo0720/vws-console-api/internal/server"
@@ -167,7 +169,7 @@ func scopeService(auth string) sigv4.Service {
 }
 
 func requestID(r *http.Request) string {
-	if id := r.Header.Get("X-Request-Id"); id != "" {
+	if id := obs.RequestID(r.Context()); id != "" {
 		return id
 	}
 	return "00000000-0000-0000-0000-000000000000"

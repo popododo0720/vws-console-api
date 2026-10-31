@@ -62,8 +62,10 @@ the W3C `traceparent` and the `x-request-id` metadata. Errors go through
 
 A client `X-Request-Id` is kept only when it is non-empty, at most 64 bytes of
 `[A-Za-z0-9._:-]`; otherwise the request gets a generated 16-hex-character id.
-Public surfaces drop an inbound `traceparent`, because continuing it would let
-a caller force sampling.
+Public surfaces hide an inbound `traceparent` and `tracestate` from the
+telemetry middleware, because continuing one would let a caller force sampling.
+The client headers go back before the signature check, so a signature that
+covers them still verifies.
 
 | Variable | Meaning | Default |
 | --- | --- | --- |
