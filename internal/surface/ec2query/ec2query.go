@@ -1154,7 +1154,7 @@ func inRange(raw string, max int) bool {
 	return err == nil && n >= 1 && n <= max
 }
 
-func requestID(r *http.Request) string { return r.Header.Get("X-Request-Id") }
+func requestID(r *http.Request) string { return obs.RequestID(r.Context()) }
 
 func writeXML(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "text/xml; charset=utf-8")
