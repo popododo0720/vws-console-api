@@ -19,12 +19,14 @@ import (
 
 // Options configures a world. Zero values use the wall clock, no settle
 // delay, and crypto/rand. Images seeds the compute image store; the catalog
-// image is always present.
+// image is always present. Buckets seeds storage with records another path
+// wrote, including names the current create rule refuses (#511).
 type Options struct {
 	Now     func() time.Time
 	Latency time.Duration
 	Entropy io.Reader
 	Images  []resource.Image
+	Buckets []resource.Bucket
 }
 
 // World is one account-aware simulation of compute, storage, and network.
@@ -99,6 +101,9 @@ func New(opt Options) *World {
 	}
 	for _, img := range opt.Images {
 		world.img[img.ID] = &img
+	}
+	for _, bucket := range opt.Buckets {
+		world.buck[bucket.Name] = &bucket
 	}
 	return world
 }

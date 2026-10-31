@@ -270,12 +270,18 @@ func TestHeadObject(t *testing.T) {
 
 func harness(t *testing.T) (http.Handler, sigv4.Credential, time.Time) {
 	t.Helper()
+	return harnessWith(t, nil)
+}
+
+func harnessWith(t *testing.T, buckets []resource.Bucket) (http.Handler, sigv4.Credential, time.Time) {
+	t.Helper()
 	now := time.Date(2026, 10, 9, 10, 0, 0, 0, time.UTC)
 	account, err := resource.Parse[resource.AccountID]("123456789012")
 	if err != nil {
 		t.Fatal(err)
 	}
-	svc := cloud.New(cloud.Config{Backends: fake.New(fake.Options{Now: func() time.Time { return now }}).Set()})
+	world := fake.New(fake.Options{Now: func() time.Time { return now }, Buckets: buckets})
+	svc := cloud.New(cloud.Config{Backends: world.Set()})
 	cred := sigv4.Credential{AccessKey: "AKIDEXAMPLE", Secret: "secret", Account: account}
 	h := New(Config{Service: svc, Authorizer: iam.NewStatic(cred.AccessKey, cred.Secret, cred.Account), Verifier: sigv4.NewVerifier(sigv4.Verifier{
 		Service: sigv4.ServiceS3,

@@ -103,6 +103,55 @@ func TestBucketNameFollowsAWSNamingRules(t *testing.T) {
 	}
 }
 
+// TestParseStoredBucketNameAcceptsBackendNames pins the read side: a bucket
+// the backend already holds is read even when its name matches a create-time
+// reserved prefix or suffix, or is shorter than the create minimum (#511).
+func TestParseStoredBucketNameAcceptsBackendNames(t *testing.T) {
+	for _, name := range []string{
+		"a",
+		"ab",
+		"edge-bucket-an",
+		"xn--bucket",
+		"sthree-bucket",
+		"amzn-s3-demo-bucket",
+		"bucket-s3alias",
+		"bucket--ol-s3",
+		"bucket.mrap",
+		"bucket--x-s3",
+		"bucket--table-s3",
+	} {
+		stored, err := ParseStoredBucketName(name)
+		if err != nil {
+			t.Errorf("%q must be readable: %v", name, err)
+			continue
+		}
+		if stored.String() != name {
+			t.Errorf("stored %q, want %q", stored.String(), name)
+		}
+	}
+	for _, name := range []string{
+		"",
+		strings.Repeat("a", 64),
+		"Edge-Bucket",
+		".example.com",
+		"example.com.",
+		"example..com",
+		"192.168.5.4",
+		"example_com",
+		"-example.com",
+		"example.com-",
+	} {
+		if _, err := ParseStoredBucketName(name); err == nil {
+			t.Errorf("%q must be malformed", name)
+		}
+	}
+	for _, name := range []string{"edge-bucket-an", "xn--bucket", "ab"} {
+		if _, err := Parse[BucketName](name); err == nil {
+			t.Errorf("create must still refuse %q", name)
+		}
+	}
+}
+
 func TestJSONDecodesValidatedIDs(t *testing.T) {
 	var req RunInstancesRequest
 	body := []byte(`{"imageId":"ami-0123456789abcdef0","instanceType":"vws.small","subnetId":"subnet-0123456789abcdef0","count":1}`)

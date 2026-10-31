@@ -147,7 +147,16 @@ func isHex(r rune) bool {
 }
 
 func validBucketName(s string) bool {
-	if len(s) < 3 || len(s) > 63 || strings.Contains(s, "..") || ipv4Shaped(s) || reservedBucketName(s) {
+	return len(s) >= 3 && bucketNameShape(s) && !reservedBucketName(s)
+}
+
+// bucketNameShape reports whether s has the name shape this API or the
+// backend stores: 1 to 63 lowercase letters, numbers, periods and hyphens,
+// starting and ending with a letter or number, without two adjacent periods,
+// and not an IP address. The create-time minimum length and the reserved
+// prefix and suffix policy stay with the caller.
+func bucketNameShape(s string) bool {
+	if len(s) < 1 || len(s) > 63 || strings.Contains(s, "..") || ipv4Shaped(s) {
 		return false
 	}
 	for i, r := range s {
@@ -220,6 +229,18 @@ func Parse[T any, PT textValue[T]](s string) (T, error) {
 		return zero, err //nolint:wrapcheck // UnmarshalText already returns the caller-facing *Error.
 	}
 	return v, nil
+}
+
+// ParseStoredBucketName turns a bucket name read from the backend into a
+// BucketName. It enforces the shape this API or the backend stores but not
+// the create-time reserved prefix and suffix policy, so a bucket made before
+// #498 or #510 can still be listed and read. Create paths keep Parse, which
+// refuses those names.
+func ParseStoredBucketName(s string) (BucketName, error) {
+	if !bucketNameShape(s) {
+		return BucketName{}, Malformed(KindBucket, s)
+	}
+	return BucketName{v: s}, nil
 }
 
 type mintable[T any] interface {

@@ -169,7 +169,7 @@ func (h *handler) createBucket(w http.ResponseWriter, r *http.Request) {
 
 func (h *handler) listObjects(w http.ResponseWriter, r *http.Request) {
 	c := callerFrom(r)
-	bucket, err := resource.Parse[resource.BucketName](r.PathValue("bucket"))
+	bucket, err := resource.ParseStoredBucketName(r.PathValue("bucket"))
 	if err != nil {
 		writeErr(w, r, err, r.PathValue("bucket"))
 		return
@@ -327,7 +327,7 @@ func encodeS3(s string, urlEncode bool) string {
 
 func (h *handler) headBucket(w http.ResponseWriter, r *http.Request) {
 	c := callerFrom(r)
-	name, err := resource.Parse[resource.BucketName](r.PathValue("bucket"))
+	name, err := resource.ParseStoredBucketName(r.PathValue("bucket"))
 	if err != nil {
 		writeErr(w, r, err, r.PathValue("bucket"))
 		return
