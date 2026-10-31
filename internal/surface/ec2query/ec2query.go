@@ -1185,15 +1185,72 @@ func writeErr(w http.ResponseWriter, r *http.Request, err error) {
 }
 
 // ec2Action is the metric label for an EC2 Query action. The form may not be
-// parsed when authentication fails, so it falls back to the query string.
+// parsed when authentication fails, so it falls back to the query string. A
+// value the surface does not dispatch is "unknown", so a caller cannot grow
+// the label space.
 func ec2Action(r *http.Request) string {
-	if a := r.Form.Get("Action"); a != "" {
-		return a
+	action := r.Form.Get("Action")
+	if action == "" {
+		action = r.URL.Query().Get("Action")
 	}
-	if a := r.URL.Query().Get("Action"); a != "" {
-		return a
+	if !dispatchedAction(action) {
+		return "unknown"
 	}
-	return "unknown"
+	return action
+}
+
+// dispatchedAction reports whether serve dispatches action. It mirrors the
+// switch in serve; a new action belongs in both.
+func dispatchedAction(action string) bool {
+	switch action {
+	case resource.ActionRunInstances.String(),
+		resource.ActionStopInstances.String(),
+		resource.ActionCreateSubnet.String(),
+		resource.ActionCreateVpc.String(),
+		resource.ActionDeleteVpc.String(),
+		resource.ActionCreateVolume.String(),
+		resource.ActionAttachVolume.String(),
+		resource.ActionDetachVolume.String(),
+		resource.ActionDeleteVolume.String(),
+		resource.ActionModifyVolume.String(),
+		resource.ActionCreateTags.String(),
+		resource.ActionCreateSecurityGroup.String(),
+		resource.ActionAuthorizeSecurityGroupIngress.String(),
+		resource.ActionRevokeSecurityGroupIngress.String(),
+		resource.ActionStartInstances.String(),
+		resource.ActionTerminateInstances.String(),
+		resource.ActionCreateKeyPair.String(),
+		resource.ActionDeleteKeyPair.String(),
+		"ImportKeyPair",
+		resource.ActionDeleteSecurityGroup.String(),
+		resource.ActionDeleteSubnet.String(),
+		resource.ActionAllocateAddress.String(),
+		resource.ActionReleaseAddress.String(),
+		resource.ActionCreateSnapshot.String(),
+		resource.ActionDeleteSnapshot.String(),
+		resource.ActionAssociateAddress.String(),
+		resource.ActionDisassociateAddress.String(),
+		"DescribeInstances",
+		"DescribeSubnets",
+		"DescribeVpcs",
+		"DescribeVolumes",
+		"DescribeImages",
+		"DescribeKeyPairs",
+		"DescribeInstanceAttribute",
+		"DescribeSecurityGroups",
+		"DescribeAddresses",
+		"DescribeSnapshots",
+		"DescribeInstanceStatus",
+		"DescribeInstanceTypes",
+		"DescribeTags",
+		"DescribeVolumesModifications",
+		"DescribeAvailabilityZones",
+		"DescribeRegions",
+		"DescribeRouteTables":
+		return true
+	default:
+		return false
+	}
 }
 
 // ec2Entry returns the EC2 wire answer for e. The table owns the Code-and-Kind
