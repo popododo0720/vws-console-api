@@ -167,7 +167,9 @@ func validBucketName(s string) bool {
 // reservedBucketName reports whether s starts with a prefix or ends with a
 // suffix reserved by the AWS general purpose bucket naming rules. AWS reserves
 // the prefixes xn--, sthree- and amzn-s3-demo- and the suffixes -s3alias,
-// --ol-s3, .mrap, --x-s3 and --table-s3.
+// --ol-s3, .mrap, --x-s3, --table-s3 and -an. A name ends in -an only for a
+// bucket in an account-regional namespace, which this API does not create, so
+// the suffix is refused here (#500).
 // https://docs.aws.amazon.com/AmazonS3/latest/userguide/bucketnamingrules.html
 func reservedBucketName(s string) bool {
 	for _, prefix := range [...]string{"xn--", "sthree-", "amzn-s3-demo-"} {
@@ -175,7 +177,7 @@ func reservedBucketName(s string) bool {
 			return true
 		}
 	}
-	for _, suffix := range [...]string{"-s3alias", "--ol-s3", ".mrap", "--x-s3", "--table-s3"} {
+	for _, suffix := range [...]string{"-s3alias", "--ol-s3", ".mrap", "--x-s3", "--table-s3", "-an"} {
 		if strings.HasSuffix(s, suffix) {
 			return true
 		}

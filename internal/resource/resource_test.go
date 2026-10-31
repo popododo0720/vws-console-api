@@ -51,7 +51,8 @@ func TestParseRejectsRawShapes(t *testing.T) {
 // TestBucketNameFollowsAWSNamingRules pins the general purpose bucket rules:
 // dotted names and reserved words in the middle are valid, but a name may not
 // start or end with a period, contain two adjacent periods, match an IP
-// address, start with a reserved prefix or end with a reserved suffix.
+// address, start with a reserved prefix or end with a reserved suffix,
+// including -an, which AWS allows only in an account-regional namespace.
 // https://docs.aws.amazon.com/AmazonS3/latest/userguide/bucketnamingrules.html
 func TestBucketNameFollowsAWSNamingRules(t *testing.T) {
 	valid := []string{
@@ -64,6 +65,7 @@ func TestBucketNameFollowsAWSNamingRules(t *testing.T) {
 		"a-b.c-d",
 		"my-xn--bucket",
 		"my-s3alias-bucket",
+		"my-an-bucket",
 		"192.168.0.1.example",
 		strings.Repeat("a", 61) + ".b",
 	}
@@ -92,6 +94,7 @@ func TestBucketNameFollowsAWSNamingRules(t *testing.T) {
 		"bucket.mrap",
 		"bucket--x-s3",
 		"bucket--table-s3",
+		"edge-bucket-an",
 	}
 	for _, name := range invalid {
 		if _, err := Parse[BucketName](name); err == nil {
