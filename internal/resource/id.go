@@ -147,7 +147,7 @@ func isHex(r rune) bool {
 }
 
 func validBucketName(s string) bool {
-	if len(s) < 3 || len(s) > 63 || strings.Contains(s, "..") || ipv4Shaped(s) {
+	if len(s) < 3 || len(s) > 63 || strings.Contains(s, "..") || ipv4Shaped(s) || reservedBucketName(s) {
 		return false
 	}
 	for i, r := range s {
@@ -162,6 +162,25 @@ func validBucketName(s string) bool {
 		}
 	}
 	return true
+}
+
+// reservedBucketName reports whether s starts with a prefix or ends with a
+// suffix reserved by the AWS general purpose bucket naming rules. AWS reserves
+// the prefixes xn--, sthree- and amzn-s3-demo- and the suffixes -s3alias,
+// --ol-s3, .mrap, --x-s3 and --table-s3.
+// https://docs.aws.amazon.com/AmazonS3/latest/userguide/bucketnamingrules.html
+func reservedBucketName(s string) bool {
+	for _, prefix := range [...]string{"xn--", "sthree-", "amzn-s3-demo-"} {
+		if strings.HasPrefix(s, prefix) {
+			return true
+		}
+	}
+	for _, suffix := range [...]string{"-s3alias", "--ol-s3", ".mrap", "--x-s3", "--table-s3"} {
+		if strings.HasSuffix(s, suffix) {
+			return true
+		}
+	}
+	return false
 }
 
 // ipv4Shaped reports whether s is four dot-separated runs of one to three
