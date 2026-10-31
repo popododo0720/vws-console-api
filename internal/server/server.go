@@ -108,11 +108,48 @@ func Serve(ctx context.Context, opts Options) error {
 }
 
 // surfaceHandler is the chain every surface request runs through: the
-// per-surface counters, the OpenTelemetry server span and vws.http.server.*
-// metrics, then the request id, access log, and panic recovery.
+// per-surface counters, the inbound header guard, the OpenTelemetry server
+// span and vws.http.server.* metrics, then the request id, access log, and
+// panic recovery.
 func surfaceHandler(logger *slog.Logger, metrics *Metrics, sf Surface) http.Handler {
 	handler := httpobs.Middleware(service.Name, routePattern(sf.Handler))(wrap(logger, sf.Name, sf.Handler))
-	return instrument(metrics, sf.Name, handler)
+	return instrument(metrics, sf.Name, sanitizeInbound(handler))
+}
+
+const maxRequestIDBytes = 64
+
+// sanitizeInbound drops an inbound request id that is too long or carries a
+// byte outside the safe set, and drops an inbound traceparent and tracestate,
+// before httpobs.Middleware reads them. Unbounded or unsafe text would
+// otherwise reach the response header, the EC2, S3 and IAM RequestId, and the
+// logs, and a caller-chosen traceparent would let the caller force sampling.
+func sanitizeInbound(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !safeRequestID(r.Header.Get(httpobs.RequestIDHeader)) {
+			r.Header.Del(httpobs.RequestIDHeader)
+		}
+		r.Header.Del("traceparent")
+		r.Header.Del("tracestate")
+		next.ServeHTTP(w, r)
+	})
+}
+
+// safeRequestID reports whether id is non-empty and at most
+// maxRequestIDBytes of [A-Za-z0-9._:-].
+func safeRequestID(id string) bool {
+	if id == "" || len(id) > maxRequestIDBytes {
+		return false
+	}
+	for i := 0; i < len(id); i++ {
+		c := id[i]
+		switch {
+		case 'A' <= c && c <= 'Z', 'a' <= c && c <= 'z', '0' <= c && c <= '9':
+		case c == '.', c == '_', c == ':', c == '-':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func newHTTPServer(addr string, handler http.Handler) *http.Server {

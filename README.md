@@ -60,6 +60,11 @@ server span, and every compute, storage, network, and IAM gRPC call carries
 the W3C `traceparent` and the `x-request-id` metadata. Errors go through
 `report.Error` and `report.Panic` only; the service does not import Sentry.
 
+A client `X-Request-Id` is kept only when it is non-empty, at most 64 bytes of
+`[A-Za-z0-9._:-]`; otherwise the request gets a generated 16-hex-character id.
+Public surfaces drop an inbound `traceparent`, because continuing it would let
+a caller force sampling.
+
 | Variable | Meaning | Default |
 | --- | --- | --- |
 | `OTEL_SERVICE_NAME` | Service name in traces and metrics | `console-api` |

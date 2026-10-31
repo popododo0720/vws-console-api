@@ -131,6 +131,102 @@ func TestRequestIDIsTheSameInLogAndResponse(t *testing.T) {
 	t.Fatalf("no request log line: %s", buf.String())
 }
 
+func TestClientRequestIDIsValidated(t *testing.T) {
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
+	t.Setenv("VWS_HEALTH_ADDR", "")
+	var logs bytes.Buffer
+	shutdown, err := obs.Setup(t.Context(), obs.ForService(service.Name),
+		obs.WithOverride(func(c *obs.Config) { c.LogOutput = &logs }))
+	if err != nil {
+		t.Fatalf("obs.Setup: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := shutdown(context.WithoutCancel(t.Context())); err != nil {
+			t.Errorf("obs shutdown: %v", err)
+		}
+	})
+
+	const validID = "req-0123456789abcdef"
+	tests := []struct {
+		name string
+		id   string
+		keep bool
+	}{
+		{name: "valid", id: validID, keep: true},
+		{name: "64 bytes", id: strings.Repeat("a", 64), keep: true},
+		{name: "longer than 64 bytes", id: strings.Repeat("a", 65)},
+		{name: "newline", id: "req-0123456789abcde\nf"},
+		{name: "space", id: "req-0123456789abcde f"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			start := logs.Len()
+			var seen string
+			ec2 := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				seen = r.Header.Get(httpobs.RequestIDHeader)
+				w.WriteHeader(http.StatusOK)
+			})
+			h := surfaceHandler(slog.Default(), NewMetrics(), Surface{Name: "ec2", Handler: ec2})
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil)
+			req.Header.Set(httpobs.RequestIDHeader, tt.id)
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+
+			got := rec.Header().Get(httpobs.RequestIDHeader)
+			if seen != got {
+				t.Fatalf("handler saw request id %q, response header %q", seen, got)
+			}
+			if tt.keep {
+				if got != tt.id {
+					t.Fatalf("response request id %q, want %q", got, tt.id)
+				}
+			} else {
+				if got == tt.id {
+					t.Fatalf("unsafe request id %q was kept", got)
+				}
+				if !isGeneratedRequestID(got) {
+					t.Fatalf("replacement request id %q is not 16 lowercase hex characters", got)
+				}
+			}
+			if id := requestLogID(t, logs.String()[start:]); id != got {
+				t.Fatalf("log request_id %q, response header %q", id, got)
+			}
+		})
+	}
+}
+
+// requestLogID returns the request_id of the first "request" log line.
+func requestLogID(t *testing.T, logs string) string {
+	t.Helper()
+	for _, line := range strings.Split(logs, "\n") {
+		var entry map[string]any
+		if json.Unmarshal([]byte(line), &entry) != nil || entry["msg"] != "request" {
+			continue
+		}
+		id, ok := entry["request_id"].(string)
+		if !ok {
+			t.Fatalf("request log line has no request_id: %s", line)
+		}
+		return id
+	}
+	t.Fatalf("no request log line: %s", logs)
+	return ""
+}
+
+// isGeneratedRequestID reports whether id has the 16 lowercase hex characters
+// obs.NewRequestID makes.
+func isGeneratedRequestID(id string) bool {
+	if len(id) != 16 {
+		return false
+	}
+	for i := 0; i < len(id); i++ {
+		if c := id[i]; (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
 func TestWriteFailureIsLogged(t *testing.T) {
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&buf, nil))
@@ -143,12 +239,14 @@ func TestWriteFailureIsLogged(t *testing.T) {
 	}
 }
 
-// TestHTTPMiddlewareStartsAServerSpan sends an EC2 Query request through the
-// chain Serve builds for a surface. The handler must run inside a server span
-// that continues the caller's traceparent, so the traceparent an outbound
-// call injects from the handler context carries the caller's trace id.
-// grpcclient's TestClientPropagatesTraceparent covers the gRPC hop.
-func TestHTTPMiddlewareStartsAServerSpan(t *testing.T) {
+// TestHTTPMiddlewareStartsARootServerSpan sends an EC2 Query request through
+// the chain Serve builds for a surface. The handler must run inside a new root
+// server span: the inbound traceparent is dropped at the boundary, so the
+// traceparent an outbound call injects from the handler context carries the
+// local trace id, not the caller's, and a caller cannot force sampling through
+// the parent-based sampler. grpcclient's TestClientPropagatesTraceparent
+// covers the gRPC hop.
+func TestHTTPMiddlewareStartsARootServerSpan(t *testing.T) {
 	previous := otel.GetTracerProvider()
 	previousPropagator := otel.GetTextMapPropagator()
 	spans := tracetest.NewSpanRecorder()
@@ -162,9 +260,11 @@ func TestHTTPMiddlewareStartsAServerSpan(t *testing.T) {
 	})
 
 	var got trace.SpanContext
+	var inboundState string
 	outbound := http.Header{}
 	ec2 := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		got = trace.SpanContextFromContext(r.Context())
+		inboundState = r.Header.Get("tracestate")
 		otel.GetTextMapPropagator().Inject(r.Context(), propagation.HeaderCarrier(outbound))
 		w.WriteHeader(http.StatusOK)
 	})
@@ -175,16 +275,21 @@ func TestHTTPMiddlewareStartsAServerSpan(t *testing.T) {
 	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/", body)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("traceparent", "00-"+inboundTrace+"-00f067aa0ba902b7-01")
+	req.Header.Set("tracestate", "vendor=value")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status %d", rec.Code)
 	}
+	if inboundState != "" {
+		t.Fatalf("handler saw inbound tracestate %q", inboundState)
+	}
 	if !got.IsValid() || got.IsRemote() {
 		t.Fatalf("the handler ran without a local server span: %+v", got)
 	}
-	if got.TraceID().String() != inboundTrace {
-		t.Fatalf("server span trace id %s, inbound %s", got.TraceID(), inboundTrace)
+	localTrace := got.TraceID().String()
+	if localTrace == inboundTrace {
+		t.Fatalf("server span continued the inbound trace id %s", inboundTrace)
 	}
 	var server bool
 	for _, s := range spans.Ended() {
@@ -196,8 +301,11 @@ func TestHTTPMiddlewareStartsAServerSpan(t *testing.T) {
 		t.Fatal("no ended server-kind span matches the handler span")
 	}
 	parent := outbound.Get("traceparent")
-	if !strings.Contains(parent, inboundTrace) || !strings.Contains(parent, got.SpanID().String()) {
-		t.Fatalf("outbound traceparent %q does not carry trace id %s and span %s", parent, inboundTrace, got.SpanID())
+	if !strings.Contains(parent, localTrace) || !strings.Contains(parent, got.SpanID().String()) {
+		t.Fatalf("outbound traceparent %q does not carry trace id %s and span %s", parent, localTrace, got.SpanID())
+	}
+	if strings.Contains(parent, inboundTrace) {
+		t.Fatalf("outbound traceparent %q carries the inbound trace id %s", parent, inboundTrace)
 	}
 }
 
