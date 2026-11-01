@@ -573,9 +573,18 @@ def addresses():
 
 
 def objects():
-    b = "bucket-one"
+    # AWS allows periods in a general purpose bucket name (#222).
+    b = "bucket-one.example.com"
     step("S3 CreateBucket", lambda: s3.create_bucket(Bucket=b))
     step("S3 HeadBucket", lambda: s3.head_bucket(Bucket=b))
+    dotted = "console-one.example.com"
+    bearer = {"Authorization": "Bearer " + os.environ.get("VWS_E2E_CONSOLE_TOKEN", "dev-token")}
+    step("console CreateBucket with a dotted name", lambda: check(
+        console_call("PUT", f"/api/v1/buckets/{dotted}", headers=bearer)[0] == 200, "console create"))
+    step("console GetBucket with a dotted name", lambda: check(
+        console_get(f"/api/v1/buckets/{dotted}")["name"] == dotted, "console get"))
+    step("console DeleteBucket with a dotted name", lambda: check(
+        console_call("DELETE", f"/api/v1/buckets/{dotted}", headers=bearer)[0] == 204, "console delete"))
     # VWS's region is not us-east-1, so an owned name is 409 (#315).
     step("S3 CreateBucket again is BucketAlreadyOwnedByYou", lambda: s3_error(
         "BucketAlreadyOwnedByYou", 409, lambda: s3.create_bucket(Bucket=b)))
