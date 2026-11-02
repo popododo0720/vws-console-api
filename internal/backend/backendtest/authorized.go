@@ -191,6 +191,10 @@ func boundRows(key *string) []boundRow {
 			func(ctx context.Context, a iam.Directory, w iam.AuthorizedPrincipal) error {
 				return a.UpdateLoginProfile(ctx, acct, "alice", boundPw+"x", w)
 			}),
+		user("ChangePassword", boundAlice, ServesLoginProfiles, false,
+			func(ctx context.Context, a iam.Directory, w iam.AuthorizedPrincipal) error {
+				return a.ChangePassword(ctx, acct, "alice", boundPw, boundPw+"y", w)
+			}),
 		user("DeleteLoginProfile", boundAlice, ServesLoginProfiles, true,
 			func(ctx context.Context, a iam.Directory, w iam.AuthorizedPrincipal) error {
 				return a.DeleteLoginProfile(ctx, acct, "alice", w)

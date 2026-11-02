@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/popododo0720/vws-console-api/internal/iam"
 	"github.com/popododo0720/vws-console-api/internal/resource"
@@ -528,6 +529,17 @@ func iamActions() map[string]spec {
 			}
 			return nil, h.cfg.Admin.DeleteUser(c.r.Context(), c.caller.Account, c.form("UserName"), c.authorized)
 		}),
+		"ChangePassword": {
+			params: []string{"OldPassword", "NewPassword"}, needsAdmin: true, resource: callerUserARN,
+			run: func(h *handler, c *exchange) (any, error) {
+				if err := changePasswordInput(c); err != nil {
+					return nil, err
+				}
+				// The backend changes only the user at the authorized ARN.
+				return nil, h.cfg.Admin.ChangePassword(c.r.Context(), c.caller.Account, userName(c),
+					c.form("OldPassword"), c.form("NewPassword"), c.authorized)
+			},
+		},
 		"CreateLoginProfile": admin([]string{"UserName", "Password", "PasswordResetRequired"}, userARN, func(h *handler, c *exchange) (any, error) {
 			if err := loginProfileInput(c); err != nil {
 				return nil, err
@@ -1366,4 +1378,51 @@ func loginProfileInput(c *exchange) error {
 		return resource.Invalid("PasswordResetRequired", "PasswordResetRequired=true is not supported yet")
 	}
 	return nil
+}
+
+// callerUserARN is the ARN ChangePassword is authorized on: the calling IAM
+// user's own, as AWS does (iam:ChangePassword on user/${aws:username}). The
+// account root and role sessions are InvalidUserType.
+func callerUserARN(_ *handler, c *exchange) string {
+	prefix := "arn:vws:iam::" + c.caller.Account.String() + ":user/"
+	if !strings.HasPrefix(c.caller.Principal, prefix) || userName(c) == "" {
+		c.resourceErr = iam.InvalidUserType()
+		return ""
+	}
+	return c.caller.Principal
+}
+
+// maxPasswordParamLen is the AWS length limit of OldPassword and NewPassword.
+const maxPasswordParamLen = 128
+
+// changePasswordInput checks OldPassword and NewPassword against the AWS
+// member constraints: 1 to 128 characters of [\t\n\r\x20-\xFF]. A password
+// is sensitive, so the message never echoes its value.
+func changePasswordInput(c *exchange) error {
+	if err := required(c, "OldPassword", "NewPassword"); err != nil {
+		return err
+	}
+	for _, k := range []string{"OldPassword", "NewPassword"} {
+		v, field := c.form(k), lowerFirst(k)
+		if utf8.RuneCountInString(v) > maxPasswordParamLen {
+			return resource.Invalid(field, "1 validation error detected: Value at '"+field+
+				"' failed to satisfy constraint: Member must have length less than or equal to 128")
+		}
+		if !passwordChars(v) {
+			return resource.Invalid(field, "1 validation error detected: Value at '"+field+
+				"' failed to satisfy constraint: Member must satisfy regular expression pattern: "+
+				"[\\u0009\\u000A\\u000D\\u0020-\\u00FF]+")
+		}
+	}
+	return nil
+}
+
+// passwordChars reports whether v holds only the AWS password characters.
+func passwordChars(v string) bool {
+	for _, r := range v {
+		if r != '\t' && r != '\n' && r != '\r' && (r < 0x20 || r > 0xFF) {
+			return false
+		}
+	}
+	return utf8.ValidString(v)
 }

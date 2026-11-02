@@ -298,3 +298,89 @@ func (w withRoot) Logout(ctx context.Context, token string) error {
 	}
 	return w.next.Logout(ctx, token)
 }
+
+// oldPasswordRejectedMessage is the AWS ChangePassword answer for a wrong
+// OldPassword. AWS documents no distinct code for it; it answers AccessDenied.
+const oldPasswordRejectedMessage = "Either the new password does not conform to the account password policy " +
+	"or the old password was incorrect."
+
+// OldPasswordRejected is the ChangePassword error for an OldPassword that
+// does not verify: AccessDenied, HTTP 403, with the AWS wording.
+func OldPasswordRejected() error { return resource.Denied(oldPasswordRejectedMessage) }
+
+// InvalidUserType is the ChangePassword error for a caller that is not an IAM
+// user (the account root or a role session): InvalidUserType, HTTP 400.
+func InvalidUserType() error {
+	return &resource.Error{
+		Code: resource.CodeInvalidArgument, Field: "InvalidUserType",
+		Message: "Only IAM Users can change their own password.",
+	}
+}
+
+// EntityTemporarilyUnmodifiable is the error of a change that lost a race
+// with another change to the same user: HTTP 409, which the caller retries.
+func EntityTemporarilyUnmodifiable(user string) error {
+	return &resource.Error{
+		Code: resource.CodeConflict, Field: "EntityTemporarilyUnmodifiable",
+		Message: "The user " + user + " is being modified. Try again later.",
+	}
+}
+
+// ChangePassword implements Admin: user's own change. oldPassword must verify
+// against the login profile; on success the new password takes its place and
+// any lockout is cleared. A user with no login profile is NoSuchEntity. want
+// must be the user's ARN.
+func (f *Fake) ChangePassword(
+	ctx context.Context, a resource.AccountID, user, oldPassword, newPassword string, want AuthorizedPrincipal,
+) error {
+	if err := want.Require(); err != nil {
+		return err
+	}
+	if err := checkPassword(newPassword); err != nil {
+		return err
+	}
+	f.mu.RLock()
+	u := f.accounts[a].user(user)
+	var hash string
+	var bindErr error
+	if u != nil {
+		bindErr = want.Bind(u.ARN, UserChanged)
+		if u.login != nil {
+			hash = u.login.hash
+		}
+	}
+	f.mu.RUnlock()
+	switch {
+	case bindErr != nil:
+		return bindErr
+	case u == nil || hash == "":
+		return notFound("Login Profile for User", user)
+	}
+	ok, err := guardedVerify(ctx, f.guard, hash, oldPassword)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return OldPasswordRejected()
+	}
+	newHash, err := guardedHash(ctx, f.guard, newPassword)
+	if err != nil {
+		return err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	u = f.accounts[a].user(user)
+	if u == nil || u.login == nil {
+		return notFound("Login Profile for User", user)
+	}
+	if err := want.Bind(u.ARN, UserChanged); err != nil {
+		return err
+	}
+	if u.login.hash != hash {
+		// Another change landed between the verify and the write.
+		return EntityTemporarilyUnmodifiable(user)
+	}
+	u.login.hash = newHash
+	f.guard.forget(a, user)
+	return nil
+}
