@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/popododo0720/vws-lib/obs"
+
 	"github.com/popododo0720/vws-console-api/internal/backend/fake"
 	"github.com/popododo0720/vws-console-api/internal/cloud"
 	"github.com/popododo0720/vws-console-api/internal/iam"
@@ -203,7 +205,8 @@ func TestSigV4FailuresUseS3ErrorCodes(t *testing.T) {
 			}
 			req := httptest.NewRequestWithContext(t.Context(), method, target, strings.NewReader(tc.body))
 			req.Host = req.URL.Host
-			req.Header.Set("X-Request-Id", sigv4ErrorRequestID)
+			req.Header.Set("X-Request-Id", "req-wire")
+			req = req.WithContext(obs.WithRequestID(req.Context(), sigv4ErrorRequestID))
 			if tc.sign != nil {
 				if err := sigv4.Sign(req, tc.sign.cred, tc.sign.service, tc.sign.region, tc.sign.at); err != nil {
 					t.Fatal(err)

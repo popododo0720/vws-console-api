@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/popododo0720/vws-lib/obs"
+
 	"github.com/popododo0720/vws-console-api/internal/resource"
 )
 
@@ -75,7 +77,8 @@ func TestEveryCodeHasAnEC2Error(t *testing.T) {
 func TestInvalidAMIIDNotFoundShape(t *testing.T) {
 	const msg = "The image id '[ami-0123456789abcdef0]' does not exist"
 	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/", nil)
-	req.Header.Set("X-Request-Id", "req-ami")
+	req.Header.Set("X-Request-Id", "req-wire")
+	req = req.WithContext(obs.WithRequestID(req.Context(), "req-ami"))
 	rec := httptest.NewRecorder()
 	writeErr(rec, req, &resource.Error{Code: resource.CodeNotFound, Kind: resource.KindImage, Message: msg})
 	const want = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n" +

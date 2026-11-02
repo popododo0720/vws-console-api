@@ -47,6 +47,7 @@ change both files together.
 | Ops endpoints and `vws_` metrics. | `TestOpsEndpoints` |
 | Credentials come from env or files; grpc refuses defaults; values never logged. | `TestGRPCRefusesDefaultCredentials` |
 | Logs go through the vws-lib obs slog handler; errors go through `report.Error` and `report.Panic` only. A log carries no account id. | `TestRepositoryRules`; `TestAuditLogCarriesNoAccountID` |
+| A client `X-Request-Id` is kept only when it is non-empty and at most 64 bytes of `[A-Za-z0-9._:-]`, otherwise the request gets a generated id; public surfaces hide an inbound `traceparent` from the telemetry middleware so a client cannot force sampling, and restore it before the signature check so a signature that covers it still verifies. | `TestClientRequestIDIsValidated`, `TestHTTPMiddlewareStartsARootServerSpan`, `TestSigV4SignedClientHeadersSurviveInboundGuard` |
 | IAM and STS actions validate UserName first, at each action's AWS limit (64 or 128), then authorize on the real ARN; a failed lookup authorizes nothing. | `TestUserNameValidationPrecedesAuthorization`, `TestUserNameLengthFollowsTheAWSLimitOfEachAction`, `TestEntityActionsFailClosedWhenTheLookupFails` |
 | `GetCallerIdentity` answers the caller ARN in the `aws` partition. | `TestGetCallerIdentityReturnsAWSARNs` |
 | Every console route is authenticated and authorized. | `TestEveryRouteIsAuthorized` |
