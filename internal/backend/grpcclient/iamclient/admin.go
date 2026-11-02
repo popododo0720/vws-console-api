@@ -1026,8 +1026,9 @@ func (a STSAdmin) recheckUser(
 // commit could deactivate a newer enrollment of the device by a concurrent
 // EnableMFADevice, possibly for a user this caller was never authorized on.
 // vws-proto#125 tracks a conditional deactivate that would make a retry safe.
-// Any failure is an unknown outcome: it is logged without the codes and the
-// call is ServiceFailure.
+// Any failure is an unknown outcome: it is logged without the codes or the
+// account id (only the device path of the serial) and the call is
+// ServiceFailure.
 func (a STSAdmin) undoEnableMFADevice(ctx context.Context, name, owner, user, serial string) error {
 	undo, cancel := context.WithTimeout(context.WithoutCancel(ctx), a.undoBudget())
 	defer cancel()
@@ -1037,8 +1038,19 @@ func (a STSAdmin) undoEnableMFADevice(ctx context.Context, name, owner, user, se
 	}
 	a.logger().LogAttrs(ctx, slog.LevelError, "vws-iam EnableMFADevice undo outcome unknown",
 		slog.String("action", "EnableMFADevice"), slog.String("user_name", user),
-		slog.String("serial_number", serial), slog.String("error", err.Error()))
+		slog.String("mfa_device", mfaDevicePath(serial)), slog.String("error", err.Error()))
 	return resource.Internal(fmt.Errorf("undo EnableMfaDevice of an unverified user, outcome unknown: %w", err))
+}
+
+// mfaDevicePath is the account-free part of an MFA serial ARN
+// ("mfa/alice-phone" for "arn:vws:iam::123456789012:mfa/alice-phone"), so a
+// log can name the device without the account id AGENTS.md keeps out of logs.
+func mfaDevicePath(serial string) string {
+	parts := strings.SplitN(serial, ":", 6)
+	if len(parts) != 6 {
+		return ""
+	}
+	return parts[5]
 }
 
 // enableMFADevice sends EnableMfaDevice, retried on UNAVAILABLE. A retry
