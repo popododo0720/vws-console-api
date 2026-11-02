@@ -1111,6 +1111,16 @@ func iamActions() map[string]spec {
 				return nil, h.cfg.Admin.DeleteVirtualMFADevice(c.r.Context(), c.caller.Account, c.form("SerialNumber"))
 			},
 		},
+		// AWS EnableMFADevice is authorized on the user the device is enabled
+		// for and answers an empty result. Every member is validated first.
+		"EnableMFADevice": {
+			params:     []string{"UserName", "SerialNumber", "AuthenticationCode1", "AuthenticationCode2"},
+			needsAdmin: true, resource: enableMFADeviceARN,
+			run: func(h *handler, c *exchange) (any, error) {
+				return nil, h.cfg.Admin.EnableMFADevice(c.r.Context(), c.caller.Account, c.form("UserName"),
+					c.form("SerialNumber"), c.form("AuthenticationCode1"), c.form("AuthenticationCode2"), c.authorized)
+			},
+		},
 		"TagMFADevice": {
 			params: []string{"SerialNumber"}, prefixes: []string{"Tags.member."}, needsAdmin: true,
 			resource: mfaDeviceARN,

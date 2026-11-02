@@ -230,6 +230,42 @@ const (
 	MFADeviceChanged        = "The MFA device changed while the request was in flight."
 )
 
+// EnableMFADevice failures. InvalidAuthenticationCode is the 403 for codes
+// the device did not emit in sequence; the message never echoes a code.
+// MFADeviceInUse is the EntityAlreadyExists of a device already enabled for a
+// user. UserTemporarilyUnmodifiable is the EntityTemporarilyUnmodifiable of a
+// user that is being renamed, or was deleted and made again, while the device
+// is enabled for it.
+const (
+	// InvalidAuthenticationCode is the Field that marks a PermissionDenied as
+	// the AWS InvalidAuthenticationCode.
+	InvalidAuthenticationCode = "InvalidAuthenticationCode"
+	// EntityTemporarilyUnmodifiable is the Field that marks a Conflict as the
+	// AWS EntityTemporarilyUnmodifiable.
+	EntityTemporarilyUnmodifiable = "EntityTemporarilyUnmodifiable"
+)
+
+// InvalidMFACode is the InvalidAuthenticationCode of EnableMFADevice.
+func InvalidMFACode() error {
+	return &resource.Error{
+		Code: resource.CodePermissionDenied, Field: InvalidAuthenticationCode,
+		Message: "Authentication code for device is not valid.",
+	}
+}
+
+// MFADeviceInUse is the EntityAlreadyExists of a device enabled for a user.
+func MFADeviceInUse() error {
+	return &resource.Error{Code: resource.CodeAlreadyExists, Message: "MFA device is already in use."}
+}
+
+// UserTemporarilyUnmodifiable is the EntityTemporarilyUnmodifiable of user.
+func UserTemporarilyUnmodifiable(user string) error {
+	return &resource.Error{
+		Code: resource.CodeConflict, Field: EntityTemporarilyUnmodifiable,
+		Message: "The user with name " + user + " is temporarily unmodifiable. Try again later.",
+	}
+}
+
 // AssumedRole is the result of AssumeRole.
 type AssumedRole struct {
 	Key           Key
@@ -396,6 +432,15 @@ type Admin interface {
 	// DeleteVirtualMFADevice deletes a virtual device that is not enabled for
 	// a user. An enabled device is a DeleteConflict.
 	DeleteVirtualMFADevice(ctx context.Context, a resource.AccountID, serial string) error
+	// EnableMFADevice enables a virtual device for user after two consecutive
+	// TOTP codes. A user or device the account does not hold is NoSuchEntity,
+	// a device already enabled is EntityAlreadyExists, and codes out of
+	// sequence are InvalidAuthenticationCode. want binds the user: a user no
+	// longer at that ARN is Changed(UserChanged) and keeps no device. The
+	// codes are never logged.
+	EnableMFADevice(
+		ctx context.Context, a resource.AccountID, user, serial, code1, code2 string, want AuthorizedPrincipal,
+	) error
 	TagMFADevice(ctx context.Context, a resource.AccountID, serial string, tags []Tag) error
 	UntagMFADevice(ctx context.Context, a resource.AccountID, serial string, keys []string) error
 	ListMFADeviceTags(ctx context.Context, a resource.AccountID, serial, marker string, maxItems int) (TagPage, error)

@@ -246,6 +246,9 @@ func (c *exchange) wire(e *resource.Error) (int, string) {
 			return http.StatusForbidden, "SignatureDoesNotMatch"
 		}
 	case resource.CodePermissionDenied:
+		if e.Field == iam.InvalidAuthenticationCode {
+			return http.StatusForbidden, "InvalidAuthenticationCode"
+		}
 		return http.StatusForbidden, "AccessDenied"
 	case resource.CodeNotFound:
 		return http.StatusNotFound, "NoSuchEntity"
@@ -254,6 +257,9 @@ func (c *exchange) wire(e *resource.Error) (int, string) {
 	case resource.CodeConflict:
 		if e.Field == "UnmodifiableEntity" {
 			return http.StatusBadRequest, "UnmodifiableEntity"
+		}
+		if e.Field == iam.EntityTemporarilyUnmodifiable {
+			return http.StatusConflict, "EntityTemporarilyUnmodifiable"
 		}
 		if e.Field == iam.ConcurrentModification || c.action == "UpdateUser" {
 			return http.StatusConflict, "ConcurrentModification"
