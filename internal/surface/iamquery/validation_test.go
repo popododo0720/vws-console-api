@@ -81,6 +81,7 @@ var awsUserNameMax = map[string]int{
 	"CreateAccessKey":          128,
 	"DeleteAccessKey":          128,
 	"DeleteUser":               128,
+	"EnableMFADevice":          128,
 	"DeleteUserPolicy":         128,
 	"GetUser":                  128,
 	"GetUserPolicy":            128,
@@ -106,6 +107,11 @@ func TestUserNameLengthFollowsTheAWSLimitOfEachAction(t *testing.T) {
 	// so only UserName decides the outcome.
 	extra := map[string]url.Values{
 		"GetMFADevice": {"SerialNumber": {"arn:aws:iam::123456789012:mfa/device"}},
+		"EnableMFADevice": {
+			"SerialNumber":        {"arn:aws:iam::123456789012:mfa/device"},
+			"AuthenticationCode1": {"123456"},
+			"AuthenticationCode2": {"654321"},
+		},
 	}
 	for action, spec := range iamActions() {
 		if !slices.Contains(spec.params, "UserName") {

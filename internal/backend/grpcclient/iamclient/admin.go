@@ -4,10 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
 	"cloud.google.com/go/longrunning/autogen/longrunningpb"
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
@@ -918,6 +921,189 @@ func mfaDeleteError(err error) error {
 		return &resource.Error{Code: resource.CodeConflict, Message: iam.MFADeviceDeleteConflict}
 	}
 	return mapped
+}
+
+// EnableMFADevice implements iam.Admin over MfaDeviceService.EnableMfaDevice.
+// The device is read by its exact serial number first, so a serial number of
+// another path, partition or account is NoSuchEntity and a device already
+// enabled is EntityAlreadyExists without spending the codes.
+//
+// EnableMfaDeviceRequest carries no user precondition (vws-proto#125), so the
+// user is bound around the call: it is read at want before the enable and
+// again after it, and a user that moved or changed in between gets the device
+// deactivated again and the call answers ConcurrentModification. vws-iam
+// already undoes an enable whose user was deleted or replaced meanwhile.
+//
+// The codes are single use, so a retry after a lost response finds the device
+// enabled; enableMFADevice answers that unknown outcome as ServiceFailure.
+//
+// The undo is one DeactivateMfaDevice under a deadline of its own, never
+// retried: see undoEnableMFADevice.
+func (a STSAdmin) EnableMFADevice(
+	ctx context.Context, account resource.AccountID, user, serial, code1, code2 string, want iam.AuthorizedPrincipal,
+) (err error) {
+	ctx, end := a.observe(ctx, "EnableMFADevice", true, account, user, "")
+	defer func() { end(err) }()
+	if err := want.Require(); err != nil {
+		return err
+	}
+	name, err := mfaDeviceResource(account, serial)
+	if err != nil {
+		return err
+	}
+	if !entityName(user) {
+		return entityNotFound("user", user)
+	}
+	_, etag, err := a.boundUser(ctx, account, user, want)
+	if err != nil {
+		return err
+	}
+	dev, err := retry(ctx, a.backoff, a.mfaDevices.GetMfaDevice, &iamv1.GetMfaDeviceRequest{Name: name})
+	if err != nil {
+		if resource.CodeOf(authError(err)) == resource.CodeNotFound {
+			return iam.MFADeviceNotFound()
+		}
+		return authError(err)
+	}
+	if dev.GetStatus().GetSerialNumber() != serial {
+		return iam.MFADeviceNotFound()
+	}
+	if dev.GetStatus().GetUser() != "" {
+		return iam.MFADeviceInUse()
+	}
+	owner := userResource(account, user)
+	if err := a.enableMFADevice(ctx, name, owner, user, code1, code2); err != nil {
+		return err
+	}
+	verr := a.unchangedUser(ctx, account, user, want, etag)
+	if verr == nil {
+		return nil
+	}
+	// The enable committed but the user is not proven to be at want, so the
+	// device may be enabled under an ARN the caller was never authorized on.
+	// Re-check with a deadline of its own: the caller's may be what ended the
+	// first check.
+	if !iam.IsChanged(verr) {
+		again := a.recheckUser(ctx, account, user, want, etag)
+		if again == nil {
+			return nil
+		}
+		if iam.IsChanged(again) {
+			verr = again
+		}
+	}
+	if err := a.undoEnableMFADevice(ctx, name, owner, user, serial); err != nil {
+		return err
+	}
+	return verr
+}
+
+// undoBudget is the deadline of one undo step: Options.UndoTimeout, or its
+// 10s default for a Client not made by New.
+func (a STSAdmin) undoBudget() time.Duration {
+	if a.undoTimeout <= 0 {
+		return defaultUndoTimeout
+	}
+	return a.undoTimeout
+}
+
+// recheckUser is unchangedUser under its own undoBudget deadline, detached
+// from ctx.
+func (a STSAdmin) recheckUser(
+	ctx context.Context, account resource.AccountID, user string, want iam.AuthorizedPrincipal, etag string,
+) error {
+	check, cancel := context.WithTimeout(context.WithoutCancel(ctx), a.undoBudget())
+	defer cancel()
+	return a.unchangedUser(check, account, user, want, etag)
+}
+
+// undoEnableMFADevice deactivates the device EnableMFADevice just enabled for
+// a user it could not verify. It runs under a fresh detached deadline, so a
+// re-check that used up its own budget still leaves the undo a live one.
+//
+// The undo is sent exactly once. DeactivateMfaDeviceRequest carries neither a
+// request id nor a precondition, so a retry after a lost response that did
+// commit could deactivate a newer enrollment of the device by a concurrent
+// EnableMFADevice, possibly for a user this caller was never authorized on.
+// vws-proto#125 tracks a conditional deactivate that would make a retry safe.
+// Any failure is an unknown outcome: it is logged without the codes or the
+// account id (only the device path of the serial) and the call is
+// ServiceFailure.
+func (a STSAdmin) undoEnableMFADevice(ctx context.Context, name, owner, user, serial string) error {
+	undo, cancel := context.WithTimeout(context.WithoutCancel(ctx), a.undoBudget())
+	defer cancel()
+	_, err := call(undo, a.mfaDevices.DeactivateMfaDevice, &iamv1.DeactivateMfaDeviceRequest{Name: name, User: owner})
+	if err == nil {
+		return nil
+	}
+	a.logger().LogAttrs(ctx, slog.LevelError, "vws-iam EnableMFADevice undo outcome unknown",
+		slog.String("action", "EnableMFADevice"), slog.String("user_name", user),
+		slog.String("mfa_device", mfaDevicePath(serial)), slog.String("error", err.Error()))
+	return resource.Internal(fmt.Errorf("undo EnableMfaDevice of an unverified user, outcome unknown: %w", err))
+}
+
+// mfaDevicePath is the account-free part of an MFA serial ARN
+// ("mfa/alice-phone" for "arn:vws:iam::123456789012:mfa/alice-phone"), so a
+// log can name the device without the account id AGENTS.md keeps out of logs.
+func mfaDevicePath(serial string) string {
+	parts := strings.SplitN(serial, ":", 6)
+	if len(parts) != 6 {
+		return ""
+	}
+	return parts[5]
+}
+
+// enableMFADevice sends EnableMfaDevice, retried on UNAVAILABLE. A retry
+// refused as EntityAlreadyExists is an unknown outcome: without a request id
+// on EnableMfaDeviceRequest (vws-proto#125) nothing proves the enrollment is
+// this call's and not a concurrent one's, so it is neither claimed as success
+// nor undone.
+func (a STSAdmin) enableMFADevice(ctx context.Context, name, owner, user, code1, code2 string) error {
+	attempts := 0
+	enable := func(
+		ctx context.Context, req *iamv1.EnableMfaDeviceRequest, opts ...grpc.CallOption,
+	) (*iamv1.EnableMfaDeviceResponse, error) {
+		attempts++
+		return a.mfaDevices.EnableMfaDevice(ctx, req, opts...)
+	}
+	_, err := retry(ctx, a.backoff, enable, &iamv1.EnableMfaDeviceRequest{
+		Name: name, User: owner, AuthenticationCode_1: code1, AuthenticationCode_2: code2,
+	})
+	if err == nil {
+		return nil
+	}
+	if status.Code(err) == codes.AlreadyExists && attempts > 1 {
+		return resource.Internal(errors.New(
+			"EnableMfaDevice outcome unknown: a retry after UNAVAILABLE was refused as EntityAlreadyExists"))
+	}
+	return mfaEnableError(err, user)
+}
+
+// mfaEnableError maps a vws-iam failure of EnableMFADevice. Wrong codes are
+// InvalidAuthenticationCode (UNAUTHENTICATED with that AWS code), not the
+// signature failure authError would make of it. NOT_FOUND after the device read is the user. ABORTED is a
+// user being renamed or deleted and made again while the device was enabled,
+// which AWS reports as EntityTemporarilyUnmodifiable.
+func mfaEnableError(err error, user string) error {
+	st, ok := status.FromError(err)
+	if !ok {
+		return err
+	}
+	switch st.Code() { //nolint:exhaustive // the rest is authError's.
+	case codes.Unauthenticated:
+		for _, d := range st.Details() {
+			if info, ok := d.(*errdetails.ErrorInfo); ok && info.GetMetadata()["aws_code"] == "InvalidAuthenticationCode" {
+				return iam.InvalidMFACode()
+			}
+		}
+	case codes.NotFound:
+		return &resource.Error{Code: resource.CodeNotFound, Message: "The user with name " + user + " cannot be found."}
+	case codes.AlreadyExists:
+		return iam.MFADeviceInUse()
+	case codes.Aborted:
+		return iam.UserTemporarilyUnmodifiable(user)
+	}
+	return authError(err)
 }
 
 // TagMFADevice implements iam.Admin over MfaDeviceService.TagMFADevice. The

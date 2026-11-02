@@ -40,12 +40,18 @@ const (
 	// a revoked session is a no-op). Login and AssumeRole are tried once: a
 	// retry could count a failed password twice or mint a second session.
 	MaxAttempts = 3
+	// defaultUndoTimeout is the zero Options.UndoTimeout.
+	defaultUndoTimeout = 10 * time.Second
 )
 
 // Options tune the client. The zero value is the production setting.
 type Options struct {
 	// Backoff is the first retry delay; it doubles per attempt. Zero is 50ms.
 	Backoff time.Duration
+	// UndoTimeout bounds each detached step of undoing a write whose
+	// precondition could not be verified afterwards: the re-check and the
+	// compensating call get one each. Zero is 10s.
+	UndoTimeout time.Duration
 }
 
 // Client implements the per-request half of iam.Client, AssumeRole, the
@@ -62,8 +68,10 @@ type Client struct {
 	roles      iamv1.RoleServiceClient
 	groups     iamv1.GroupServiceClient
 	backoff    time.Duration
-	log        *slog.Logger
-	close      func() error
+	// undoTimeout is Options.UndoTimeout.
+	undoTimeout time.Duration
+	log         *slog.Logger
+	close       func() error
 }
 
 // SetLogger sets the logger for the user and group changes. Call it after
@@ -97,12 +105,15 @@ func New(conn grpc.ClientConnInterface, o Options) *Client {
 	if o.Backoff <= 0 {
 		o.Backoff = 50 * time.Millisecond
 	}
+	if o.UndoTimeout <= 0 {
+		o.UndoTimeout = defaultUndoTimeout
+	}
 	return &Client{
 		auth: iamv1.NewAuthServiceClient(conn), tokens: iamv1.NewTokenServiceClient(conn),
 		users: iamv1.NewUserServiceClient(conn), accessKeys: iamv1.NewAccessKeyServiceClient(conn),
 		policies: iamv1.NewPolicyServiceClient(conn), mfaDevices: iamv1.NewMfaDeviceServiceClient(conn),
 		roles: iamv1.NewRoleServiceClient(conn), groups: iamv1.NewGroupServiceClient(conn),
-		backoff: o.Backoff, close: func() error { return nil },
+		backoff: o.Backoff, undoTimeout: o.UndoTimeout, close: func() error { return nil },
 	}
 }
 

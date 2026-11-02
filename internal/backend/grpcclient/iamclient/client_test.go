@@ -102,6 +102,19 @@ type server struct {
 	deleteMfaErr       error
 	deleteMfaRes       *longrunningpb.Operation
 	deleteMfaFailFirst int
+	// EnableMfaDevice and DeactivateMfaDevice calls. enableMfaFailFirst
+	// answers that many enables UNAVAILABLE after recording them; with
+	// enableMfaLands the first one still enables the device, as a lost
+	// response would look. Every enable after a landed one is ALREADY_EXISTS.
+	enableMfa          []*iamv1.EnableMfaDeviceRequest
+	enableMfaErr       error
+	enableMfaFailFirst int
+	enableMfaLands     bool
+	deactivateMfa      []*iamv1.DeactivateMfaDeviceRequest
+	// deactivateMfaErr answers every DeactivateMfaDevice after recording it;
+	// deactivateCtxErr records the server context's error at each call.
+	deactivateMfaErr error
+	deactivateCtxErr []error
 	// Virtual MFA device listing.
 	listMfaDevices      []*iamv1.ListMfaDevicesRequest
 	listMfaDevicesRes   *iamv1.ListMfaDevicesResponse
@@ -114,6 +127,9 @@ type server struct {
 	// records its request and before it answers, so a test can change what
 	// vws-iam holds between two calls (a concurrent UpdateUser).
 	onCall func(method string)
+	// getUserHang makes GetUser record its request and then answer only when
+	// its context ends, as a vws-iam that stopped responding would.
+	getUserHang bool
 	// userEtags are the etags stampUserEtag gave getUserRes values.
 	userEtags map[*iamv1.User]string
 	// noUserEtag answers GetUser fixtures without an etag as they are.
@@ -388,6 +404,12 @@ func (s *server) GetUser(ctx context.Context, req *iamv1.GetUserRequest) (*iamv1
 		return nil, err
 	}
 	s.mu.Lock()
+	if s.getUserHang {
+		s.getUser = append(s.getUser, req)
+		s.mu.Unlock()
+		<-ctx.Done()
+		return nil, status.FromContextError(ctx.Err()).Err()
+	}
 	defer s.mu.Unlock()
 	s.getUser = append(s.getUser, req)
 	if s.onCall != nil {
@@ -476,6 +498,50 @@ func (s *server) DeleteMfaDevice(
 		return s.deleteMfaRes, nil
 	}
 	return &longrunningpb.Operation{Done: true}, nil
+}
+
+func (s *server) EnableMfaDevice(
+	ctx context.Context, req *iamv1.EnableMfaDeviceRequest,
+) (*iamv1.EnableMfaDeviceResponse, error) {
+	if err := s.enter(ctx); err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.enableMfa = append(s.enableMfa, req)
+	if s.onCall != nil {
+		s.onCall("EnableMfaDevice")
+	}
+	if s.getMfaRes != nil && s.getMfaRes.GetStatus().GetUser() != "" {
+		return nil, awsErr(codes.AlreadyExists, "ALREADY_EXISTS", "EntityAlreadyExists")
+	}
+	if s.enableMfaFailFirst > 0 {
+		s.enableMfaFailFirst--
+		if s.enableMfaLands && s.getMfaRes != nil {
+			s.getMfaRes.Status.User = req.GetUser()
+		}
+		return nil, status.Error(codes.Unavailable, "response lost")
+	}
+	if s.enableMfaErr != nil {
+		return nil, s.enableMfaErr
+	}
+	return &iamv1.EnableMfaDeviceResponse{}, nil
+}
+
+func (s *server) DeactivateMfaDevice(
+	ctx context.Context, req *iamv1.DeactivateMfaDeviceRequest,
+) (*iamv1.DeactivateMfaDeviceResponse, error) {
+	if err := s.enter(ctx); err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.deactivateMfa = append(s.deactivateMfa, req)
+	s.deactivateCtxErr = append(s.deactivateCtxErr, ctx.Err())
+	if s.deactivateMfaErr != nil {
+		return nil, s.deactivateMfaErr
+	}
+	return &iamv1.DeactivateMfaDeviceResponse{}, nil
 }
 
 func (s *server) UntagMFADevice(

@@ -52,6 +52,11 @@ type mfaDeviceRec struct {
 	// device is unassigned.
 	user       string
 	enableTime time.Time
+	// seed is the TOTP secret of a device added with AddTOTPMfaDevice; a
+	// device without one accepts no code. lastStep is the time step of the
+	// newest accepted code, so a code is never accepted twice.
+	seed     []byte
+	lastStep int64
 }
 
 type holder struct {
@@ -211,6 +216,17 @@ func (f *Fake) AddMfaDevice(a resource.AccountID, name string) string {
 	st := f.account(a)
 	serial := iamARN(a, "mfa", "/", name)
 	st.mfa[serial] = &mfaDeviceRec{tags: map[string]string{}}
+	return serial
+}
+
+// AddTOTPMfaDevice registers an unassigned virtual MFA device with a TOTP
+// seed, so EnableMFADevice can check codes against it, and returns its serial
+// number. It is for tests.
+func (f *Fake) AddTOTPMfaDevice(a resource.AccountID, name string, seed []byte) string {
+	serial := f.AddMfaDevice(a, name)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.account(a).mfa[serial].seed = append([]byte(nil), seed...)
 	return serial
 }
 
@@ -1436,6 +1452,58 @@ func (st *store) mfaDevice(serial string) (*mfaDeviceRec, error) {
 		return nil, MFADeviceNotFound()
 	}
 	return d, nil
+}
+
+// mfaDevicesOf counts the devices enabled for user. The caller holds f.mu.
+func (st *store) mfaDevicesOf(user string) int {
+	n := 0
+	for _, d := range st.mfa {
+		if d.user == user {
+			n++
+		}
+	}
+	return n
+}
+
+// EnableMFADevice implements Admin. A user already holding
+// MaxMFADevicesPerUser devices is LimitExceeded. code1 must be the device's code of the
+// current or the previous time step and code2 the code of the step after it,
+// newer than any code already accepted, as vws-iam checks them.
+func (f *Fake) EnableMFADevice(
+	_ context.Context, a resource.AccountID, user, serial, code1, code2 string, want AuthorizedPrincipal,
+) error {
+	if err := want.Require(); err != nil {
+		return err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	st := f.account(a)
+	u := st.users[user]
+	if u == nil {
+		return notFound("user", user)
+	}
+	if err := want.Bind(u.ARN, UserChanged); err != nil {
+		return err
+	}
+	d, err := st.mfaDevice(serial)
+	if err != nil {
+		return err
+	}
+	if d.user != "" {
+		return MFADeviceInUse()
+	}
+	// The quota is checked before the codes, so a refused enable does not
+	// spend them.
+	if st.mfaDevicesOf(user) >= MaxMFADevicesPerUser {
+		return MFADevicesPerUserExceeded()
+	}
+	now := f.now()
+	step, ok := totpSequence(d.seed, code1, code2, now)
+	if !ok || step <= d.lastStep {
+		return InvalidMFACode()
+	}
+	d.user, d.enableTime, d.lastStep = user, now, step
+	return nil
 }
 
 // DeleteVirtualMFADevice implements Admin. A device enabled for a user is a

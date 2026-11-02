@@ -30,6 +30,47 @@ func getMFADeviceARN(h *handler, c *exchange) string {
 	return userARN(h, c)
 }
 
+// authCodeRE matches the AWS authenticationCodeType: six digits.
+var authCodeRE = regexp.MustCompile(`^\d{6}$`)
+
+// enableMFADeviceARN validates every EnableMFADevice member before anything
+// is authorized, as AWS does, then authorizes on the named user.
+func enableMFADeviceARN(h *handler, c *exchange) string {
+	if err := validEnableMFADevice(c); err != nil {
+		c.resourceErr = err
+		return ""
+	}
+	return userARN(h, c)
+}
+
+// validEnableMFADevice checks the required UserName (its constraints are
+// checked by validateUserName), SerialNumber and the two authentication codes.
+// A code never appears in the error.
+func validEnableMFADevice(c *exchange) error {
+	if !c.r.Form.Has("UserName") {
+		return nullMember("userName")
+	}
+	if err := validSerialNumber(c.form("SerialNumber")); err != nil {
+		return err
+	}
+	for _, m := range []struct{ param, field string }{
+		{"AuthenticationCode1", "authenticationCode1"}, {"AuthenticationCode2", "authenticationCode2"},
+	} {
+		code := c.form(m.param)
+		switch {
+		case !c.r.Form.Has(m.param):
+			return nullMember(m.field)
+		case len(code) < 6:
+			return badMember(m.field, "Member must have length greater than or equal to 6")
+		case len(code) > 6:
+			return badMember(m.field, "Member must have length less than or equal to 6")
+		case !authCodeRE.MatchString(code):
+			return badMember(m.field, `Member must satisfy regular expression pattern: [\d]+`)
+		}
+	}
+	return nil
+}
+
 // validSerialNumber checks SerialNumber: required, 9 to 256 characters of
 // [\w+=/:,.@-].
 func validSerialNumber(serial string) error {
