@@ -47,6 +47,9 @@ type server struct {
 	authn       []*iamv1.AuthenticateRequest
 	authz       []*iamv1.AuthorizeRequest
 	assume      []*iamv1.AssumeRoleRequest
+	sessionTok  []*iamv1.GetSessionTokenRequest
+	sessionErr  error
+	sessionRes  *iamv1.GetSessionTokenResponse // nil: a complete answer
 	md          []metadata.MD
 	noDeadline  int
 	failFirst   int // answer this many calls with UNAVAILABLE first
@@ -535,6 +538,27 @@ func (s *server) AssumeRole(ctx context.Context, req *iamv1.AssumeRoleRequest) (
 			Project: "123456789012", UniqueId: "AROAOPS:s1", Resource: "projects/123456789012/roles/ops", SessionName: "s1",
 		},
 	}, nil
+}
+
+func (s *server) GetSessionToken(
+	ctx context.Context, req *iamv1.GetSessionTokenRequest,
+) (*iamv1.GetSessionTokenResponse, error) {
+	if err := s.enter(ctx); err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sessionTok = append(s.sessionTok, req)
+	if s.sessionErr != nil {
+		return nil, s.sessionErr
+	}
+	if s.sessionRes != nil {
+		return s.sessionRes, nil
+	}
+	return &iamv1.GetSessionTokenResponse{Credentials: &iamv1.Credentials{
+		AccessKeyId: "ASIASESSIONBOB000000", SecretAccessKey: "session-secret-must-not-leak",
+		SessionToken: "session-token-must-not-leak", ExpireTime: timestamppb.New(authTime.Add(12 * time.Hour)),
+	}}, nil
 }
 
 func awsErr(code codes.Code, reason, aws string) error {

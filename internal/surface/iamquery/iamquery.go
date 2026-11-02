@@ -1,8 +1,9 @@
 // Package iamquery serves the IAM and STS Query APIs on one listener. The
 // credential scope of the signature (.../iam/... or .../sts/...) picks the
 // service, its verifier and its API version. Every action except
-// sts:GetCallerIdentity is authorized as iam:<Action> or sts:<Action> before
-// it runs; every request, that one included, must be signed.
+// sts:GetCallerIdentity and sts:GetSessionToken, which AWS serves without a
+// permission, is authorized as iam:<Action> or sts:<Action> before it runs;
+// every request, those two included, must be signed.
 package iamquery
 
 import (
@@ -246,6 +247,9 @@ func (c *exchange) wire(e *resource.Error) (int, string) {
 			return http.StatusForbidden, "SignatureDoesNotMatch"
 		}
 	case resource.CodePermissionDenied:
+		if e.Field == iam.RegionDisabled {
+			return http.StatusForbidden, iam.RegionDisabled
+		}
 		return http.StatusForbidden, "AccessDenied"
 	case resource.CodeNotFound:
 		return http.StatusNotFound, "NoSuchEntity"

@@ -1,7 +1,7 @@
 // Package iamclient is the vws-iam client: AuthService Authenticate and
 // Authorize, console sessions (Login, ValidateSession, Logout), STS
-// AssumeRole and role description updates over vws.iam.v1 gRPC (vws-proto
-// v0.3.0).
+// AssumeRole and GetSessionToken, and role description updates over
+// vws.iam.v1 gRPC (vws-proto v0.3.0).
 package iamclient
 
 import (
@@ -270,6 +270,50 @@ func (c *Client) AssumeRole(ctx context.Context, caller iam.Principal, roleARN, 
 	}, nil
 }
 
+// GetSessionToken implements STS GetSessionToken over vws-iam TokenService.
+// As in AssumeRole, the caller travels only in the authentication oneof and
+// vws-iam derives and checks it: only a long-term key or the root user is
+// served. A caller with no vws-iam credential (the static root key) is
+// refused without a call. The token code is sent only in its debug_redact
+// field. Not retried: it issues credentials.
+func (c *Client) GetSessionToken(
+	ctx context.Context, caller iam.Principal, duration time.Duration, serial, code string,
+) (iam.Key, error) {
+	req := &iamv1.GetSessionTokenRequest{
+		DurationSeconds: int32(duration / time.Second), //nolint:gosec // the surface bounds duration to 900..129600s.
+		SerialNumber:    serial, TokenCode: code,
+	}
+	switch caller.Ref.ProofKind {
+	case resource.ProofSigV4:
+		var sig iamv1.AuthenticateRequest
+		if err := proto.Unmarshal([]byte(caller.Ref.Proof), &sig); err != nil {
+			return iam.Key{}, resource.Unauthenticated("caller credential unreadable")
+		}
+		req.Authentication = &iamv1.GetSessionTokenRequest_Sigv4{Sigv4: &sig}
+	case resource.ProofSession:
+		req.Authentication = &iamv1.GetSessionTokenRequest_ConsoleSessionToken{ConsoleSessionToken: caller.Ref.Proof}
+	default:
+		if caller.Root {
+			return iam.Key{}, resource.Denied("GetSessionToken needs a vws-iam credential; the static root key has none.")
+		}
+		return iam.Key{}, resource.Unauthenticated("caller has no vws-iam credential")
+	}
+	resp, err := call(ctx, c.tokens.GetSessionToken, req)
+	if err != nil {
+		return iam.Key{}, authError(err)
+	}
+	cr := resp.GetCredentials()
+	if cr.GetAccessKeyId() == "" || cr.GetSecretAccessKey() == "" || cr.GetSessionToken() == "" ||
+		cr.GetExpireTime() == nil {
+		return iam.Key{}, fmt.Errorf("vws-iam: %w", errors.New("GetSessionToken answered incomplete credentials"))
+	}
+	return iam.Key{
+		AccessKey: cr.GetAccessKeyId(), Secret: cr.GetSecretAccessKey(), SessionToken: cr.GetSessionToken(),
+		Expires:   cr.GetExpireTime().AsTime(),
+		Principal: iam.Principal{Account: caller.Account, ARN: caller.ARN, Root: caller.Root},
+	}, nil
+}
+
 // roleResource turns arn:vws:iam::{project}:role{path}{name} into
 // projects/{project}/roles/{name}.
 func roleResource(arn string) (string, error) {
@@ -312,6 +356,11 @@ func authError(err error) error {
 			Code: resource.CodeUnauthenticated, Field: "AccessKeyId",
 			Message: "The security token included in the request is invalid.",
 		})
+	}
+	// STS is never deactivated per region in VWS, but a RegionDisabledException
+	// from vws-iam keeps its AWS code and HTTP 403.
+	if aws == iam.RegionDisabled {
+		return &resource.Error{Code: resource.CodePermissionDenied, Field: iam.RegionDisabled, Message: st.Message()}
 	}
 	switch st.Code() { //nolint:exhaustive // every other code is "unavailable" below.
 	case codes.Unauthenticated:

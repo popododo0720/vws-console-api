@@ -221,6 +221,21 @@ func MFADeviceNotFound() error {
 	return &resource.Error{Code: resource.CodeNotFound, Message: "The specified MFA device does not exist."}
 }
 
+// GetSessionToken durations, from the AWS STS API reference
+// (https://docs.aws.amazon.com/STS/latest/APIReference/API_GetSessionToken.html):
+// 900s to 129600s for an IAM user, 43200s by default; the root user's
+// session is at most, and by default, one hour.
+const (
+	MinSessionTokenDuration     = 900 * time.Second
+	MaxSessionTokenDuration     = 129600 * time.Second
+	DefaultSessionTokenDuration = 43200 * time.Second
+	RootSessionTokenDuration    = time.Hour
+)
+
+// RegionDisabled is the Field of a PermissionDenied error that STS answers
+// as RegionDisabledException, HTTP 403: STS is not active in the region.
+const RegionDisabled = "RegionDisabledException"
+
 // AssumedRole is the result of AssumeRole.
 type AssumedRole struct {
 	Key           Key
@@ -389,6 +404,13 @@ type Admin interface {
 	ListMFADeviceTags(ctx context.Context, a resource.AccountID, serial, marker string, maxItems int) (TagPage, error)
 
 	AssumeRole(ctx context.Context, caller Principal, roleARN, session string, duration time.Duration) (AssumedRole, error)
+
+	// GetSessionToken issues temporary credentials for caller itself, an IAM
+	// user or the root user signing with a long-term key. A zero duration is
+	// the backend default. serial and code are the optional MFA device and
+	// its current code; code is a secret and is never logged. Temporary
+	// callers are PermissionDenied, as in AWS.
+	GetSessionToken(ctx context.Context, caller Principal, duration time.Duration, serial, code string) (Key, error)
 }
 
 // LoginProfile is a user's console password. The password itself is never
