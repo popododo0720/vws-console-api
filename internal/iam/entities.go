@@ -79,6 +79,15 @@ func GroupsPerUserExceeded() error { return quota(groupsPerUserMsg) }
 
 const groupsPerUserMsg = "Cannot exceed quota for GroupsPerUser: 10"
 
+// MaxMFADevicesPerUser is the AWS quota of MFA devices in use per user.
+const MaxMFADevicesPerUser = 8
+
+// MFADevicesPerUserExceeded is the LimitExceeded error of EnableMFADevice for
+// a user that already holds MaxMFADevicesPerUser devices.
+func MFADevicesPerUserExceeded() error { return quota(mfaDevicesPerUserMsg) }
+
+const mfaDevicesPerUserMsg = "Cannot exceed quota for MFADevicesPerUser: 8"
+
 // AccessKeysPerUserExceeded is the AWS LimitExceeded for a third access key.
 func AccessKeysPerUserExceeded() error { return quota(accessKeysPerUserMsg) }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -934,8 +935,10 @@ func mfaDeleteError(err error) error {
 // already undoes an enable whose user was deleted or replaced meanwhile.
 //
 // The codes are single use, so a retry after a lost response finds the device
-// enabled: when that retry is refused as EntityAlreadyExists and the device is
-// now enabled for this user, the first attempt landed and the call succeeds.
+// enabled; enableMFADevice answers that unknown outcome as ServiceFailure.
+//
+// The undo is one DeactivateMfaDevice under a deadline of its own, never
+// retried: see undoEnableMFADevice.
 func (a STSAdmin) EnableMFADevice(
 	ctx context.Context, account resource.AccountID, user, serial, code1, code2 string, want iam.AuthorizedPrincipal,
 ) (err error) {
@@ -978,12 +981,10 @@ func (a STSAdmin) EnableMFADevice(
 	}
 	// The enable committed but the user is not proven to be at want, so the
 	// device may be enabled under an ARN the caller was never authorized on.
-	// Re-check and undo with their own deadline: the caller's may be what
-	// ended the first check.
-	undo, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
-	defer cancel()
+	// Re-check with a deadline of its own: the caller's may be what ended the
+	// first check.
 	if !iam.IsChanged(verr) {
-		again := a.unchangedUser(undo, account, user, want, etag)
+		again := a.recheckUser(ctx, account, user, want, etag)
 		if again == nil {
 			return nil
 		}
@@ -991,11 +992,53 @@ func (a STSAdmin) EnableMFADevice(
 			verr = again
 		}
 	}
-	if _, derr := retry(undo, a.backoff, a.mfaDevices.DeactivateMfaDevice,
-		&iamv1.DeactivateMfaDeviceRequest{Name: name, User: owner}); derr != nil {
-		return resource.Internal(fmt.Errorf("undo EnableMfaDevice of an unverified user: %w", derr))
+	if err := a.undoEnableMFADevice(ctx, name, owner, user, serial); err != nil {
+		return err
 	}
 	return verr
+}
+
+// undoBudget is the deadline of one undo step: Options.UndoTimeout, or its
+// 10s default for a Client not made by New.
+func (a STSAdmin) undoBudget() time.Duration {
+	if a.undoTimeout <= 0 {
+		return defaultUndoTimeout
+	}
+	return a.undoTimeout
+}
+
+// recheckUser is unchangedUser under its own undoBudget deadline, detached
+// from ctx.
+func (a STSAdmin) recheckUser(
+	ctx context.Context, account resource.AccountID, user string, want iam.AuthorizedPrincipal, etag string,
+) error {
+	check, cancel := context.WithTimeout(context.WithoutCancel(ctx), a.undoBudget())
+	defer cancel()
+	return a.unchangedUser(check, account, user, want, etag)
+}
+
+// undoEnableMFADevice deactivates the device EnableMFADevice just enabled for
+// a user it could not verify. It runs under a fresh detached deadline, so a
+// re-check that used up its own budget still leaves the undo a live one.
+//
+// The undo is sent exactly once. DeactivateMfaDeviceRequest carries neither a
+// request id nor a precondition, so a retry after a lost response that did
+// commit could deactivate a newer enrollment of the device by a concurrent
+// EnableMFADevice, possibly for a user this caller was never authorized on.
+// vws-proto#125 tracks a conditional deactivate that would make a retry safe.
+// Any failure is an unknown outcome: it is logged without the codes and the
+// call is ServiceFailure.
+func (a STSAdmin) undoEnableMFADevice(ctx context.Context, name, owner, user, serial string) error {
+	undo, cancel := context.WithTimeout(context.WithoutCancel(ctx), a.undoBudget())
+	defer cancel()
+	_, err := call(undo, a.mfaDevices.DeactivateMfaDevice, &iamv1.DeactivateMfaDeviceRequest{Name: name, User: owner})
+	if err == nil {
+		return nil
+	}
+	a.logger().LogAttrs(ctx, slog.LevelError, "vws-iam EnableMFADevice undo outcome unknown",
+		slog.String("action", "EnableMFADevice"), slog.String("user_name", user),
+		slog.String("serial_number", serial), slog.String("error", err.Error()))
+	return resource.Internal(fmt.Errorf("undo EnableMfaDevice of an unverified user, outcome unknown: %w", err))
 }
 
 // enableMFADevice sends EnableMfaDevice, retried on UNAVAILABLE. A retry

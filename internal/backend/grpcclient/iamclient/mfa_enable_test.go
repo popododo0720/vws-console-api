@@ -2,9 +2,11 @@ package iamclient
 
 import (
 	"bytes"
+	"context"
 	"log/slog"
 	"strings"
 	"testing"
+	"time"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -104,6 +106,70 @@ func TestEnableMFADeviceUnverifiedUserIsUndone(t *testing.T) {
 	if len(s.deactivateMfa) != 1 || s.deactivateMfa[0].GetName() != "projects/123456789012/mfaDevices/alice-phone" ||
 		s.deactivateMfa[0].GetUser() != enableUser {
 		t.Fatalf("not undone: %v", s.deactivateMfa)
+	}
+}
+
+// The re-check after an unverified enable may use up its whole deadline, as
+// a vws-iam that stopped answering GetUser would make it. The undo still runs
+// under a live deadline of its own instead of the re-check's expired one.
+func TestEnableMFADeviceUndoOutlivesTheRecheck(t *testing.T) {
+	a, s := enableHarness(t)
+	a.undoTimeout = 200 * time.Millisecond
+	s.onCall = func(method string) {
+		if method == "EnableMfaDevice" {
+			s.getUserHang = true
+		}
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
+	defer cancel()
+	err := a.EnableMFADevice(ctx, accountID(t), "alice", mfaSerial, "908172", "817263",
+		backendtest.Grant(t.Context(), t, enableUserARN))
+	if err == nil {
+		t.Fatal("succeeded with the user unverified after the enable")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.getUser) < 3 {
+		t.Fatalf("sent %d user reads, want the bind, the check and the re-check", len(s.getUser))
+	}
+	if len(s.deactivateMfa) != 1 || s.deactivateMfa[0].GetName() != "projects/123456789012/mfaDevices/alice-phone" ||
+		s.deactivateMfa[0].GetUser() != enableUser {
+		t.Fatalf("not undone after the re-check used up its deadline: %v", s.deactivateMfa)
+	}
+	if s.deactivateCtxErr[0] != nil {
+		t.Fatalf("undo ran on an ended context: %v", s.deactivateCtxErr[0])
+	}
+}
+
+// DeactivateMfaDevice carries no request id or precondition (vws-proto#125),
+// so a retry after a lost response could deactivate a newer enrollment. An
+// undo answered UNAVAILABLE is therefore sent exactly once, logged without
+// the codes, and the call is ServiceFailure.
+func TestEnableMFADeviceUndoIsSentOnce(t *testing.T) {
+	var buf bytes.Buffer
+	a, s := enableHarness(t)
+	a.SetLogger(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	s.deactivateMfaErr = status.Error(codes.Unavailable, "response lost")
+	s.onCall = func(method string) {
+		if method == "EnableMfaDevice" {
+			s.getUserErr = status.Error(codes.Unavailable, vwsIAMMsg)
+		}
+	}
+	err := enable(t, a, mfaSerial, backendtest.Grant(t.Context(), t, enableUserARN))
+	if resource.CodeOf(err) != resource.CodeInternal {
+		t.Fatalf("got %v, want ServiceFailure", err)
+	}
+	if len(s.deactivateMfa) != 1 {
+		t.Fatalf("sent %d deactivations, want exactly 1", len(s.deactivateMfa))
+	}
+	logged := buf.String()
+	if !strings.Contains(logged, "undo outcome unknown") || !strings.Contains(logged, mfaSerial) {
+		t.Fatalf("unknown undo outcome not logged: %s", logged)
+	}
+	for _, code := range []string{"908172", "817263"} {
+		if strings.Contains(logged+err.Error(), code) {
+			t.Errorf("authentication code %s leaked: %s %v", code, logged, err)
+		}
 	}
 }
 

@@ -1454,7 +1454,19 @@ func (st *store) mfaDevice(serial string) (*mfaDeviceRec, error) {
 	return d, nil
 }
 
-// EnableMFADevice implements Admin. code1 must be the device's code of the
+// mfaDevicesOf counts the devices enabled for user. The caller holds f.mu.
+func (st *store) mfaDevicesOf(user string) int {
+	n := 0
+	for _, d := range st.mfa {
+		if d.user == user {
+			n++
+		}
+	}
+	return n
+}
+
+// EnableMFADevice implements Admin. A user already holding
+// MaxMFADevicesPerUser devices is LimitExceeded. code1 must be the device's code of the
 // current or the previous time step and code2 the code of the step after it,
 // newer than any code already accepted, as vws-iam checks them.
 func (f *Fake) EnableMFADevice(
@@ -1479,6 +1491,11 @@ func (f *Fake) EnableMFADevice(
 	}
 	if d.user != "" {
 		return MFADeviceInUse()
+	}
+	// The quota is checked before the codes, so a refused enable does not
+	// spend them.
+	if st.mfaDevicesOf(user) >= MaxMFADevicesPerUser {
+		return MFADevicesPerUserExceeded()
 	}
 	now := f.now()
 	step, ok := totpSequence(d.seed, code1, code2, now)
