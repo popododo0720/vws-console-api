@@ -1270,6 +1270,7 @@ func iamActions() map[string]spec {
 
 func stsActions() map[string]spec {
 	return map[string]spec{
+		"GetSessionToken": getSessionTokenSpec(),
 		"GetCallerIdentity": {public: true, run: func(h *handler, c *exchange) (any, error) {
 			return struct {
 				Arn     string `xml:"Arn"`

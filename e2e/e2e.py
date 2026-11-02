@@ -903,6 +903,22 @@ def identity():
     step("new user key: IAM ListUsers is AccessDenied", lambda: aws_error("AccessDenied", lambda: bob_iam.list_users()))
     step("new user key: STS GetCallerIdentity needs no policy", lambda: check(
         bob_sts.get_caller_identity()["Arn"] == f"arn:aws:iam::{account}:user/e2e/e2e-bob", "bob arn"))
+    # GetSessionToken needs no policy, as in AWS; its credentials act as bob,
+    # and session credentials cannot call it again.
+    sess = step("new user key: STS GetSessionToken needs no policy", lambda: bob_sts.get_session_token(
+        DurationSeconds=900)["Credentials"])
+    if sess:
+        sess_sts = client("sts", sess["AccessKeyId"], sess["SecretAccessKey"], sess["SessionToken"])
+        step("session token: STS GetCallerIdentity is bob", lambda: check(
+            sess_sts.get_caller_identity()["Arn"] == f"arn:aws:iam::{account}:user/e2e/e2e-bob", "bob arn"))
+        step("session token: STS GetSessionToken is AccessDenied", lambda: aws_error(
+            "AccessDenied", lambda: sess_sts.get_session_token()))
+    loose_sts = boto3.client(
+        "sts", endpoint_url=IAM_URL, region_name="vws-1", aws_access_key_id=key["AccessKeyId"],
+        aws_secret_access_key=key["SecretAccessKey"],
+        config=Config(retries={"total_max_attempts": 1}, parameter_validation=False))
+    step("STS GetSessionToken DurationSeconds 899 is ValidationError", lambda: aws_error(
+        "ValidationError", lambda: loose_sts.get_session_token(DurationSeconds=899)))
     step("IAM GetAccessKeyLastUsed names the key owner", lambda: check(
         iam.get_access_key_last_used(AccessKeyId=key["AccessKeyId"])["UserName"] == "e2e-bob", "owner"))
     step("GetCallerIdentity with a wrong secret is SignatureDoesNotMatch", lambda: aws_error(
