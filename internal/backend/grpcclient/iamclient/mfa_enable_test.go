@@ -60,25 +60,50 @@ func TestEnableMFADeviceOverGRPC(t *testing.T) {
 }
 
 // A lost response is retried. The codes are single use, so vws-iam answers
-// the retry EntityAlreadyExists; the device is then enabled for this user,
-// and the call succeeds instead of reporting its own enable as a conflict.
-func TestEnableMFADeviceLostResponseIsSuccess(t *testing.T) {
+// the retry EntityAlreadyExists. Nothing proves that enrollment is this
+// call's (vws-proto#125), so the call is a ServiceFailure: not claimed as
+// success, and not undone, since it may be a concurrent request's.
+func TestEnableMFADeviceLostResponseIsUnknown(t *testing.T) {
 	a, s := enableHarness(t)
 	s.enableMfaFailFirst, s.enableMfaLands = 1, true
-	if err := enable(t, a, mfaSerial, backendtest.Grant(t.Context(), t, enableUserARN)); err != nil {
-		t.Fatal(err)
+	err := enable(t, a, mfaSerial, backendtest.Grant(t.Context(), t, enableUserARN))
+	if resource.CodeOf(err) != resource.CodeInternal {
+		t.Fatalf("got %v, want ServiceFailure", err)
 	}
 	if len(s.enableMfa) != 2 {
 		t.Fatalf("sent %d enables, want 2", len(s.enableMfa))
 	}
+	if len(s.deactivateMfa) != 0 {
+		t.Fatalf("undid an enrollment it cannot prove is its own: %v", s.deactivateMfa)
+	}
 
-	// EntityAlreadyExists on the first attempt is the AWS error, even though
-	// the device ends up enabled for this user.
+	// EntityAlreadyExists on the first attempt is the AWS error.
 	a, s = enableHarness(t)
 	s.enableMfaErr = awsErr(codes.AlreadyExists, "ALREADY_EXISTS", "EntityAlreadyExists")
-	err := enable(t, a, mfaSerial, backendtest.Grant(t.Context(), t, enableUserARN))
+	err = enable(t, a, mfaSerial, backendtest.Grant(t.Context(), t, enableUserARN))
 	if resource.CodeOf(err) != resource.CodeAlreadyExists {
 		t.Fatalf("got %v, want EntityAlreadyExists", err)
+	}
+}
+
+// A user read after the enable that fails cannot prove the user is still at
+// the authorized ARN, so the device is deactivated again and the call fails.
+func TestEnableMFADeviceUnverifiedUserIsUndone(t *testing.T) {
+	a, s := enableHarness(t)
+	s.onCall = func(method string) {
+		if method == "EnableMfaDevice" {
+			s.getUserErr = status.Error(codes.Unavailable, vwsIAMMsg)
+		}
+	}
+	if err := enable(t, a, mfaSerial, backendtest.Grant(t.Context(), t, enableUserARN)); err == nil {
+		t.Fatal("succeeded with the user unverified after the enable")
+	}
+	if len(s.enableMfa) != 1 {
+		t.Fatalf("sent %d enables, want 1", len(s.enableMfa))
+	}
+	if len(s.deactivateMfa) != 1 || s.deactivateMfa[0].GetName() != "projects/123456789012/mfaDevices/alice-phone" ||
+		s.deactivateMfa[0].GetUser() != enableUser {
+		t.Fatalf("not undone: %v", s.deactivateMfa)
 	}
 }
 
