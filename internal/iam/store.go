@@ -1802,6 +1802,39 @@ func (f *Fake) AssumeRole(_ context.Context, caller Principal, roleARN, session 
 	return AssumedRole{Key: k, AssumedRoleID: role.ID + ":" + session, ARN: arn}, nil
 }
 
+// GetSessionToken implements Admin. The fake verifies no MFA code: any
+// SerialNumber or TokenCode is refused, as vws-iam refuses one without an
+// MFA verifier. A zero duration is 43200s, or 3600s for root.
+func (f *Fake) GetSessionToken(
+	_ context.Context, caller Principal, duration time.Duration, serial, code string,
+) (Key, error) {
+	if _, temporary := assumedRoleName(caller.ARN); temporary {
+		return Key{}, resource.Denied("Cannot call GetSessionToken with session credentials")
+	}
+	if serial != "" || code != "" {
+		return Key{}, resource.Denied("MultiFactorAuthentication failed with invalid MFA one time pass code.")
+	}
+	limit := MaxSessionTokenDuration
+	if caller.Root {
+		limit = RootSessionTokenDuration
+	}
+	if duration == 0 {
+		duration = min(DefaultSessionTokenDuration, limit)
+	}
+	if duration < MinSessionTokenDuration || duration > limit {
+		return Key{}, resource.Invalid("durationSeconds", "DurationSeconds is outside the allowed range.")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	k := Key{
+		AccessKey: randID("ASIA", 16), Secret: randSecret(30), SessionToken: randSecret(96),
+		Expires: f.now().Add(duration), Principal: Principal{Account: caller.Account, ARN: caller.ARN, Root: caller.Root},
+	}
+	f.keys[k.AccessKey] = k
+	f.gcSessions()
+	return k, nil
+}
+
 // gcSessions drops expired temporary keys. The caller holds f.mu.
 func (f *Fake) gcSessions() {
 	now := f.now()
