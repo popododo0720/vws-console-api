@@ -221,6 +221,15 @@ func MFADeviceNotFound() error {
 	return &resource.Error{Code: resource.CodeNotFound, Message: "The specified MFA device does not exist."}
 }
 
+// MFA device messages of DeleteVirtualMFADevice. MFADeviceDeleteConflict is
+// the DeleteConflict of a device still enabled for a user; MFADeviceChanged is
+// the ConcurrentModification when the device changed between its read and the
+// delete.
+const (
+	MFADeviceDeleteConflict = "MFA device is still in use. Deactivate the device before deleting it."
+	MFADeviceChanged        = "The MFA device changed while the request was in flight."
+)
+
 // AssumedRole is the result of AssumeRole.
 type AssumedRole struct {
 	Key           Key
@@ -384,6 +393,9 @@ type Admin interface {
 	// The MFA device argument is the device serial number, the ARN the AWS
 	// Query API calls SerialNumber.
 	GetMFADevice(ctx context.Context, a resource.AccountID, serial string) (MFADevice, error)
+	// DeleteVirtualMFADevice deletes a virtual device that is not enabled for
+	// a user. An enabled device is a DeleteConflict.
+	DeleteVirtualMFADevice(ctx context.Context, a resource.AccountID, serial string) error
 	TagMFADevice(ctx context.Context, a resource.AccountID, serial string, tags []Tag) error
 	UntagMFADevice(ctx context.Context, a resource.AccountID, serial string, keys []string) error
 	ListMFADeviceTags(ctx context.Context, a resource.AccountID, serial, marker string, maxItems int) (TagPage, error)
