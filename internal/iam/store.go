@@ -3,8 +3,11 @@ package iam
 import (
 	"context"
 	"crypto/rand"
+	"encoding/base32"
 	"encoding/base64"
+	"fmt"
 	"maps"
+	"net/url"
 	"regexp"
 	"sort"
 	"strconv"
@@ -208,8 +211,8 @@ func (f *Fake) readAccount(a resource.AccountID) *store {
 
 // AddMfaDevice registers an unassigned virtual MFA device so it can be listed
 // and its tags managed, and returns its serial number (the AWS SerialNumber).
-// It is for tests and for a fake seeded with the devices of an account: the
-// IAM Query surface does not create MFA devices yet.
+// It is for tests and for a fake seeded with the devices of an account;
+// CreateVirtualMFADevice is the API path.
 func (f *Fake) AddMfaDevice(a resource.AccountID, name string) string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -1504,6 +1507,42 @@ func (f *Fake) EnableMFADevice(
 	}
 	d.user, d.enableTime, d.lastStep = user, now, step
 	return nil
+}
+
+// CreateVirtualMFADevice implements Admin. As in vws-iam, a device is named
+// by its name alone, so a name the account holds on another path is
+// EntityAlreadyExists too. The device gets a random 20-byte TOTP seed, so
+// EnableMFADevice accepts codes made from the returned seed.
+func (f *Fake) CreateVirtualMFADevice(
+	_ context.Context, a resource.AccountID, name, path string,
+) (NewVirtualMFADevice, error) {
+	if err := CheckVirtualMFADeviceName(name); err != nil {
+		return NewVirtualMFADevice{}, err
+	}
+	path, err := normPath(path)
+	if err != nil {
+		return NewVirtualMFADevice{}, err
+	}
+	seed := make([]byte, 20)
+	if _, err := rand.Read(seed); err != nil {
+		return NewVirtualMFADevice{}, resource.Internal(fmt.Errorf("virtual MFA device seed: %w", err))
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	st := f.account(a)
+	for serial := range st.mfa {
+		if serial[strings.LastIndex(serial, "/")+1:] == name {
+			return NewVirtualMFADevice{}, MFADeviceExists()
+		}
+	}
+	serial := VirtualMFADeviceSerial(a, path, name)
+	st.mfa[serial] = &mfaDeviceRec{tags: map[string]string{}, seed: seed}
+	enc := base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(seed)
+	uri := url.URL{
+		Scheme: "otpauth", Host: "totp", Path: "/VWS:" + name,
+		RawQuery: url.Values{"secret": {enc}, "issuer": {"VWS"}, "period": {"30"}, "digits": {"6"}}.Encode(),
+	}
+	return NewVirtualMFADevice{SerialNumber: serial, Base32StringSeed: enc, OtpauthURI: uri.String()}, nil
 }
 
 // DeleteVirtualMFADevice implements Admin. A device enabled for a user is a
