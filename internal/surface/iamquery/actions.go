@@ -1100,6 +1100,17 @@ func iamActions() map[string]spec {
 				return toMFADevice(dev), nil
 			},
 		},
+		// AWS DeleteVirtualMFADevice is authorized on the device's serial
+		// number. A device still enabled for a user is DeleteConflict.
+		"DeleteVirtualMFADevice": {
+			params: []string{"SerialNumber"}, needsAdmin: true, resource: mfaDeviceARN,
+			run: func(h *handler, c *exchange) (any, error) {
+				if err := requireMFADevice(c, h, "iam:DeleteVirtualMFADevice"); err != nil {
+					return nil, err
+				}
+				return nil, h.cfg.Admin.DeleteVirtualMFADevice(c.r.Context(), c.caller.Account, c.form("SerialNumber"))
+			},
+		},
 		"TagMFADevice": {
 			params: []string{"SerialNumber"}, prefixes: []string{"Tags.member."}, needsAdmin: true,
 			resource: mfaDeviceARN,

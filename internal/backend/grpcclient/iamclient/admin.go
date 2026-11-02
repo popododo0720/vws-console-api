@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"cloud.google.com/go/longrunning/autogen/longrunningpb"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
@@ -859,6 +860,64 @@ func (a STSAdmin) virtualMFADevice(
 		out.EnableDate = t.AsTime()
 	}
 	return out, nil
+}
+
+// DeleteVirtualMFADevice implements iam.Admin over
+// MfaDeviceService.DeleteMfaDevice. The device is read by its exact serial
+// number first, and the delete carries the etag of that read and a fresh
+// request_id: vws-iam replays a retried request_id, and a device that changed
+// since the read (enabled, or deleted and made again) is refused as
+// ConcurrentModification rather than deleted. vws-iam checks the enabled state
+// under that etag, so an enabled device is DeleteConflict there too.
+func (a STSAdmin) DeleteVirtualMFADevice(ctx context.Context, account resource.AccountID, serial string) error {
+	name, err := mfaDeviceResource(account, serial)
+	if err != nil {
+		return err
+	}
+	dev, err := retry(ctx, a.backoff, a.mfaDevices.GetMfaDevice, &iamv1.GetMfaDeviceRequest{Name: name})
+	if err != nil {
+		return mfaDeleteError(err)
+	}
+	if dev.GetStatus().GetSerialNumber() != serial {
+		return iam.MFADeviceNotFound()
+	}
+	if dev.GetStatus().GetUser() != "" {
+		return &resource.Error{Code: resource.CodeConflict, Message: iam.MFADeviceDeleteConflict}
+	}
+	op, err := retry(ctx, a.backoff, a.mfaDevices.DeleteMfaDevice, &iamv1.DeleteMfaDeviceRequest{
+		Name: name, RequestId: newRequestID(), Etag: dev.GetEtag(),
+	})
+	if err != nil {
+		return mfaDeleteError(err)
+	}
+	switch {
+	case op == nil, !op.GetDone():
+		return operationResult(op)
+	case op.GetError() != nil:
+		return mfaDeleteError(status.ErrorProto(op.GetError()))
+	}
+	return nil
+}
+
+// mfaDeleteError maps a vws-iam failure of DeleteVirtualMFADevice: NOT_FOUND
+// is the AWS NoSuchEntity wording, a lost etag race is ConcurrentModification,
+// and DeleteConflict keeps the AWS message; the rest is authError's.
+func mfaDeleteError(err error) error {
+	st, ok := status.FromError(err)
+	if !ok {
+		return err
+	}
+	switch st.Code() { //nolint:exhaustive // the rest is authError's.
+	case codes.NotFound:
+		return iam.MFADeviceNotFound()
+	case codes.Aborted:
+		return iam.Changed(iam.MFADeviceChanged)
+	}
+	mapped := authError(err)
+	if resource.CodeOf(mapped) == resource.CodeConflict && !iam.IsChanged(mapped) {
+		return &resource.Error{Code: resource.CodeConflict, Message: iam.MFADeviceDeleteConflict}
+	}
+	return mapped
 }
 
 // TagMFADevice implements iam.Admin over MfaDeviceService.TagMFADevice. The

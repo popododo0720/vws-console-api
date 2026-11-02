@@ -1438,6 +1438,23 @@ func (st *store) mfaDevice(serial string) (*mfaDeviceRec, error) {
 	return d, nil
 }
 
+// DeleteVirtualMFADevice implements Admin. A device enabled for a user is a
+// DeleteConflict and stays, tags included.
+func (f *Fake) DeleteVirtualMFADevice(_ context.Context, a resource.AccountID, serial string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	st := f.account(a)
+	d, err := st.mfaDevice(serial)
+	if err != nil {
+		return err
+	}
+	if d.user != "" {
+		return conflict(MFADeviceDeleteConflict)
+	}
+	delete(st.mfa, serial)
+	return nil
+}
+
 // GetMFADevice implements Admin. AWS GetMFADevice accepts only FIDO security
 // key serial numbers (u2f/), and the fake, like vws-iam, keeps no FIDO keys
 // (popododo0720/vws-iam#133). Every serial number, a virtual mfa/ device

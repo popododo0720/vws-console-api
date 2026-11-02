@@ -147,7 +147,7 @@ func TestUserNameLengthFollowsTheAWSLimitOfEachAction(t *testing.T) {
 func TestMFADeviceTagSerialValidationPrecedesAuthorization(t *testing.T) {
 	h, f, rec, root := harness(t)
 	bob := callerWithoutPermissions(t, f, root)
-	for _, action := range []string{"TagMFADevice", "UntagMFADevice", "ListMFADeviceTags"} {
+	for _, action := range []string{"TagMFADevice", "UntagMFADevice", "ListMFADeviceTags", "DeleteVirtualMFADevice"} {
 		for _, serial := range []string{"", "short", "arn vws:iam::123456789012:mfa/x"} {
 			t.Run(action+"/"+serial, func(t *testing.T) {
 				rec.seen = nil

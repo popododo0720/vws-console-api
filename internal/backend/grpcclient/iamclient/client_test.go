@@ -96,6 +96,12 @@ type server struct {
 	getMfa        []*iamv1.GetMfaDeviceRequest
 	getMfaRes     *iamv1.MfaDevice
 	getMfaErr     error
+	// DeleteMfaDevice calls. deleteMfaFailFirst answers that many calls
+	// UNAVAILABLE after recording them, as a lost response would look.
+	deleteMfa          []*iamv1.DeleteMfaDeviceRequest
+	deleteMfaErr       error
+	deleteMfaRes       *longrunningpb.Operation
+	deleteMfaFailFirst int
 	// Virtual MFA device listing.
 	listMfaDevices      []*iamv1.ListMfaDevicesRequest
 	listMfaDevicesRes   *iamv1.ListMfaDevicesResponse
@@ -446,6 +452,28 @@ func (s *server) TagMFADevice(ctx context.Context, req *iamv1.TagMFADeviceReques
 	}
 	if s.tagMfaRes != nil {
 		return s.tagMfaRes, nil
+	}
+	return &longrunningpb.Operation{Done: true}, nil
+}
+
+func (s *server) DeleteMfaDevice(
+	ctx context.Context, req *iamv1.DeleteMfaDeviceRequest,
+) (*longrunningpb.Operation, error) {
+	if err := s.enter(ctx); err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.deleteMfa = append(s.deleteMfa, req)
+	if s.deleteMfaFailFirst > 0 {
+		s.deleteMfaFailFirst--
+		return nil, status.Error(codes.Unavailable, "response lost")
+	}
+	if s.deleteMfaErr != nil {
+		return nil, s.deleteMfaErr
+	}
+	if s.deleteMfaRes != nil {
+		return s.deleteMfaRes, nil
 	}
 	return &longrunningpb.Operation{Done: true}, nil
 }
