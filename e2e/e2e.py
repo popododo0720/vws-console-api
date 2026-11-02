@@ -1035,11 +1035,38 @@ def console_login():
         "POST", "/api/v1/auth/logout", cookies=jar, headers={"X-CSRF-Token": jar["vws_csrf"]})))
     step("after logout the session is 401", lambda: expect(401, console_call("GET", "/api/v1/vpcs", cookies=jar)))
     step("bearer console token still works", lambda: console_get("/api/v1/vpcs"))
+    change_password(account, creds)
     step("IAM DeleteUser with a login profile is DeleteConflict", lambda: aws_error(
         "DeleteConflict", lambda: iam.delete_user(UserName="e2e-carol")))
     step("IAM DeleteUserPolicy (carol)", lambda: iam.delete_user_policy(UserName="e2e-carol", PolicyName="read"))
     step("IAM DeleteLoginProfile", lambda: iam.delete_login_profile(UserName="e2e-carol"))
     step("IAM DeleteUser e2e-carol", lambda: iam.delete_user(UserName="e2e-carol"))
+
+
+def change_password(account, creds):
+    """IAM ChangePassword through boto3 (#188): the caller's own password, the
+    AWS errors, and console sign-in with the new password."""
+    step("IAM PutUserPolicy iam:ChangePassword (carol)", lambda: iam.put_user_policy(
+        UserName="e2e-carol", PolicyName="pw", PolicyDocument=json.dumps({"Version": "2012-10-17", "Statement": [
+            {"Effect": "Allow", "Action": "iam:ChangePassword", "Resource": f"arn:vws:iam::{account}:user/e2e-carol"}]})))
+    key = step("IAM CreateAccessKey (carol)", lambda: iam.create_access_key(UserName="e2e-carol")["AccessKey"])
+    if not key:
+        return
+    carol = client("iam", key["AccessKeyId"], key["SecretAccessKey"])
+    step("IAM ChangePassword as root is InvalidUserType", lambda: aws_error(
+        "InvalidUserType", lambda: iam.change_password(OldPassword="e2e carol pass 1", NewPassword="e2e carol pass 2")))
+    step("IAM ChangePassword weak password is PasswordPolicyViolation", lambda: aws_error(
+        "PasswordPolicyViolation", lambda: carol.change_password(OldPassword="e2e carol pass 1", NewPassword="short")))
+    step("IAM ChangePassword wrong old password is AccessDenied", lambda: aws_error(
+        "AccessDenied", lambda: carol.change_password(OldPassword="not the password", NewPassword="e2e carol pass 2")))
+    step("IAM ChangePassword", lambda: carol.change_password(
+        OldPassword="e2e carol pass 1", NewPassword="e2e carol pass 2"))
+    step("console login with the old password is 401", lambda: check(console_call(
+        "POST", "/api/v1/auth/login", creds)[0] == 401, "old password"))
+    step("console login with the new password is 200", lambda: check(console_call(
+        "POST", "/api/v1/auth/login", dict(creds, password="e2e carol pass 2"))[0] == 200, "new password"))
+    step("IAM DeleteAccessKey (carol)", lambda: iam.delete_access_key(UserName="e2e-carol", AccessKeyId=key["AccessKeyId"]))
+    step("IAM DeleteUserPolicy pw (carol)", lambda: iam.delete_user_policy(UserName="e2e-carol", PolicyName="pw"))
 
 
 STATIC_CONSOLE_URL = os.environ.get("VWS_E2E_STATIC_CONSOLE", "")

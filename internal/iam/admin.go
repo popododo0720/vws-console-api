@@ -285,6 +285,13 @@ type Admin interface {
 	GetLoginProfile(ctx context.Context, a resource.AccountID, user string, want AuthorizedPrincipal) (LoginProfile, error)
 	UpdateLoginProfile(ctx context.Context, a resource.AccountID, user, password string, want AuthorizedPrincipal) error
 	DeleteLoginProfile(ctx context.Context, a resource.AccountID, user string, want AuthorizedPrincipal) error
+	// ChangePassword is the user's own password change: oldPassword must
+	// verify against the login profile. A wrong oldPassword is
+	// OldPasswordRejected; a newPassword the policy refuses is InvalidArgument
+	// with Field "Password". Neither password is ever logged or returned.
+	ChangePassword(
+		ctx context.Context, a resource.AccountID, user, oldPassword, newPassword string, want AuthorizedPrincipal,
+	) error
 
 	// The access key secret is only ever in the CreateAccessKey result.
 	CreateAccessKey(ctx context.Context, a resource.AccountID, user string, want AuthorizedPrincipal) (NewAccessKey, error)

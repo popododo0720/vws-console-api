@@ -253,6 +253,9 @@ func (c *exchange) wire(e *resource.Error) (int, string) {
 		if e.Field == "UnmodifiableEntity" {
 			return http.StatusBadRequest, "UnmodifiableEntity"
 		}
+		if e.Field == "EntityTemporarilyUnmodifiable" {
+			return http.StatusConflict, "EntityTemporarilyUnmodifiable"
+		}
 		if e.Field == iam.ConcurrentModification || c.action == "UpdateUser" {
 			return http.StatusConflict, "ConcurrentModification"
 		}
@@ -265,6 +268,8 @@ func (c *exchange) wire(e *resource.Error) (int, string) {
 			return http.StatusBadRequest, "MalformedPolicyDocument"
 		case e.Field == "Password":
 			return http.StatusBadRequest, "PasswordPolicyViolation"
+		case e.Field == "InvalidUserType":
+			return http.StatusBadRequest, "InvalidUserType"
 		case c.service == sigv4.ServiceSTS, e.Field != "" && e.Field[0] >= 'a' && e.Field[0] <= 'z':
 			// Constraint failures on a member (lower-case field) are
 			// ValidationError in AWS; STS reports all bad input that way.

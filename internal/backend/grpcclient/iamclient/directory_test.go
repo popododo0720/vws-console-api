@@ -85,6 +85,9 @@ type directory struct {
 	// onListAccessKeys, when set, runs under d.mu in each ListAccessKeys, as
 	// another writer acting while a list reads the key pages.
 	onListAccessKeys func(d *directory)
+	// passwords are the console passwords by folded user resource name, for
+	// ChangePassword (#188).
+	passwords map[string]string
 }
 
 type dirKey struct {
@@ -115,7 +118,7 @@ func newDirectory() *directory {
 	return &directory{
 		users: map[string]*dirEntity{}, groups: map[string]*dirEntity{}, ops: map[string]dirOp{}, keys: map[string]*dirKey{},
 		maxPage: 1000, failBefore: map[string]int{}, failAfter: map[string]int{}, calls: map[string][]proto.Message{},
-		policies: map[string]*dirPolicy{},
+		policies: map[string]*dirPolicy{}, passwords: map[string]string{},
 	}
 }
 
