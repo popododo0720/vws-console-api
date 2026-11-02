@@ -163,8 +163,11 @@ func TestEnableMFADeviceUndoIsSentOnce(t *testing.T) {
 		t.Fatalf("sent %d deactivations, want exactly 1", len(s.deactivateMfa))
 	}
 	logged := buf.String()
-	if !strings.Contains(logged, "undo outcome unknown") || !strings.Contains(logged, mfaSerial) {
+	if !strings.Contains(logged, "undo outcome unknown") || !strings.Contains(logged, "mfa/alice-phone") {
 		t.Fatalf("unknown undo outcome not logged: %s", logged)
+	}
+	if strings.Contains(logged, "123456789012") {
+		t.Fatalf("account id leaked into the undo log: %s", logged)
 	}
 	for _, code := range []string{"908172", "817263"} {
 		if strings.Contains(logged+err.Error(), code) {
