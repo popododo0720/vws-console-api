@@ -102,6 +102,15 @@ type server struct {
 	deleteMfaErr       error
 	deleteMfaRes       *longrunningpb.Operation
 	deleteMfaFailFirst int
+	// EnableMfaDevice and DeactivateMfaDevice calls. enableMfaFailFirst
+	// answers that many enables UNAVAILABLE after recording them; with
+	// enableMfaLands the first one still enables the device, as a lost
+	// response would look. Every enable after a landed one is ALREADY_EXISTS.
+	enableMfa          []*iamv1.EnableMfaDeviceRequest
+	enableMfaErr       error
+	enableMfaFailFirst int
+	enableMfaLands     bool
+	deactivateMfa      []*iamv1.DeactivateMfaDeviceRequest
 	// Virtual MFA device listing.
 	listMfaDevices      []*iamv1.ListMfaDevicesRequest
 	listMfaDevicesRes   *iamv1.ListMfaDevicesResponse
@@ -476,6 +485,46 @@ func (s *server) DeleteMfaDevice(
 		return s.deleteMfaRes, nil
 	}
 	return &longrunningpb.Operation{Done: true}, nil
+}
+
+func (s *server) EnableMfaDevice(
+	ctx context.Context, req *iamv1.EnableMfaDeviceRequest,
+) (*iamv1.EnableMfaDeviceResponse, error) {
+	if err := s.enter(ctx); err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.enableMfa = append(s.enableMfa, req)
+	if s.onCall != nil {
+		s.onCall("EnableMfaDevice")
+	}
+	if s.getMfaRes != nil && s.getMfaRes.GetStatus().GetUser() != "" {
+		return nil, awsErr(codes.AlreadyExists, "ALREADY_EXISTS", "EntityAlreadyExists")
+	}
+	if s.enableMfaFailFirst > 0 {
+		s.enableMfaFailFirst--
+		if s.enableMfaLands && s.getMfaRes != nil {
+			s.getMfaRes.Status.User = req.GetUser()
+		}
+		return nil, status.Error(codes.Unavailable, "response lost")
+	}
+	if s.enableMfaErr != nil {
+		return nil, s.enableMfaErr
+	}
+	return &iamv1.EnableMfaDeviceResponse{}, nil
+}
+
+func (s *server) DeactivateMfaDevice(
+	ctx context.Context, req *iamv1.DeactivateMfaDeviceRequest,
+) (*iamv1.DeactivateMfaDeviceResponse, error) {
+	if err := s.enter(ctx); err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.deactivateMfa = append(s.deactivateMfa, req)
+	return &iamv1.DeactivateMfaDeviceResponse{}, nil
 }
 
 func (s *server) UntagMFADevice(

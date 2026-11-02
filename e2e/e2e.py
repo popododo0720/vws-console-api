@@ -742,6 +742,10 @@ def identity():
     step("IAM DeleteVirtualMFADevice missing is NoSuchEntity", lambda: aws_error(
         "NoSuchEntity", lambda: iam.delete_virtual_mfa_device(
             SerialNumber=f"arn:vws:iam::{account}:mfa/e2e-no-such-phone")))
+    step("IAM EnableMFADevice missing user is NoSuchEntity", lambda: aws_error(
+        "NoSuchEntity", lambda: iam.enable_mfa_device(
+            UserName="e2e-nobody", SerialNumber=f"arn:vws:iam::{account}:mfa/e2e-no-such-phone",
+            AuthenticationCode1="123456", AuthenticationCode2="654321")))
     S["policy_arn"] = step("IAM CreatePolicy", lambda: iam.create_policy(
         PolicyName="e2e-describe", PolicyDocument=describe)["Policy"]["Arn"])
     step("IAM CreatePolicy malformed is MalformedPolicyDocument", lambda: aws_error(
