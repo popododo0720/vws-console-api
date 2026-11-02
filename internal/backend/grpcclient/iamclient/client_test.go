@@ -111,6 +111,10 @@ type server struct {
 	enableMfaFailFirst int
 	enableMfaLands     bool
 	deactivateMfa      []*iamv1.DeactivateMfaDeviceRequest
+	// deactivateMfaErr answers every DeactivateMfaDevice after recording it;
+	// deactivateCtxErr records the server context's error at each call.
+	deactivateMfaErr error
+	deactivateCtxErr []error
 	// Virtual MFA device listing.
 	listMfaDevices      []*iamv1.ListMfaDevicesRequest
 	listMfaDevicesRes   *iamv1.ListMfaDevicesResponse
@@ -123,6 +127,9 @@ type server struct {
 	// records its request and before it answers, so a test can change what
 	// vws-iam holds between two calls (a concurrent UpdateUser).
 	onCall func(method string)
+	// getUserHang makes GetUser record its request and then answer only when
+	// its context ends, as a vws-iam that stopped responding would.
+	getUserHang bool
 	// userEtags are the etags stampUserEtag gave getUserRes values.
 	userEtags map[*iamv1.User]string
 	// noUserEtag answers GetUser fixtures without an etag as they are.
@@ -397,6 +404,12 @@ func (s *server) GetUser(ctx context.Context, req *iamv1.GetUserRequest) (*iamv1
 		return nil, err
 	}
 	s.mu.Lock()
+	if s.getUserHang {
+		s.getUser = append(s.getUser, req)
+		s.mu.Unlock()
+		<-ctx.Done()
+		return nil, status.FromContextError(ctx.Err()).Err()
+	}
 	defer s.mu.Unlock()
 	s.getUser = append(s.getUser, req)
 	if s.onCall != nil {
@@ -524,6 +537,10 @@ func (s *server) DeactivateMfaDevice(
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.deactivateMfa = append(s.deactivateMfa, req)
+	s.deactivateCtxErr = append(s.deactivateCtxErr, ctx.Err())
+	if s.deactivateMfaErr != nil {
+		return nil, s.deactivateMfaErr
+	}
 	return &iamv1.DeactivateMfaDeviceResponse{}, nil
 }
 

@@ -2,6 +2,7 @@ package iam
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -151,5 +152,53 @@ func TestFakeEnableMFADeviceRefusesReusedCodes(t *testing.T) {
 	err := f.EnableMFADevice(ctx, account, "alice", serial, c1, c2, grant)
 	if resource.AsError(err).Field != InvalidAuthenticationCode {
 		t.Fatalf("reused codes: %v", err)
+	}
+}
+
+// AWS allows a user at most eight MFA devices: the ninth enable is
+// LimitExceeded, checked before the codes, so the same codes still enable
+// that device once a slot is free. Another user is not limited by alice's.
+func TestFakeEnableMFADeviceLimitsDevicesPerUser(t *testing.T) {
+	ctx := t.Context()
+	f, account, first, seed, at, grant := enableFixture(ctx, t)
+	c1, c2 := TOTPCode(seed, at.Add(-30*time.Second)), TOTPCode(seed, at)
+	serials := []string{first}
+	for i := 2; i <= MaxMFADevicesPerUser; i++ {
+		serials = append(serials, f.AddTOTPMfaDevice(account, fmt.Sprintf("alice-phone-%d", i), seed))
+	}
+	for _, serial := range serials {
+		if err := f.EnableMFADevice(ctx, account, "alice", serial, c1, c2, grant); err != nil {
+			t.Fatalf("enable %s: %v", serial, err)
+		}
+	}
+	ninth := f.AddTOTPMfaDevice(account, "alice-phone-9", seed)
+	err := f.EnableMFADevice(ctx, account, "alice", ninth, c1, c2, grant)
+	if err == nil {
+		t.Fatal("ninth device enabled, want LimitExceeded")
+	}
+	e := resource.AsError(err)
+	if e.Code != resource.CodeResourceExhausted || e.Message != "Cannot exceed quota for MFADevicesPerUser: 8" {
+		t.Fatalf("ninth device: %v, want LimitExceeded", err)
+	}
+	page, err := f.ListMFADevices(ctx, account, "alice", "", 0, grant)
+	if err != nil || len(page.Devices) != MaxMFADevicesPerUser {
+		t.Fatalf("after the refused ninth: %d devices, %v", len(page.Devices), err)
+	}
+
+	// Free one slot outside the API: the refused codes were not spent.
+	f.mu.Lock()
+	f.account(account).mfa[first].user = ""
+	f.mu.Unlock()
+	if err := f.EnableMFADevice(ctx, account, "alice", ninth, c1, c2, grant); err != nil {
+		t.Fatalf("ninth device after a slot freed: %v", err)
+	}
+
+	bob, err := f.CreateUser(ctx, account, "bob", "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bobs := f.AddTOTPMfaDevice(account, "bob-phone", seed)
+	if err := f.EnableMFADevice(ctx, account, "bob", bobs, c1, c2, testGrant(ctx, t, bob.ARN)); err != nil {
+		t.Fatalf("bob limited by alice's devices: %v", err)
 	}
 }
