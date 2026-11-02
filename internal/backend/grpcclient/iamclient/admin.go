@@ -969,29 +969,41 @@ func (a STSAdmin) EnableMFADevice(
 		return iam.MFADeviceInUse()
 	}
 	owner := userResource(account, user)
-	if err := a.enableMFADevice(ctx, name, serial, owner, user, code1, code2); err != nil {
+	if err := a.enableMFADevice(ctx, name, owner, user, code1, code2); err != nil {
 		return err
 	}
-	if err := a.unchangedUser(ctx, account, user, want, etag); err != nil {
-		if !iam.IsChanged(err) {
-			return err
-		}
-		// Undo with its own deadline: the caller's may be what ended the call.
-		undo, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
-		defer cancel()
-		if _, derr := retry(undo, a.backoff, a.mfaDevices.DeactivateMfaDevice,
-			&iamv1.DeactivateMfaDeviceRequest{Name: name, User: owner}); derr != nil {
-			return resource.Internal(fmt.Errorf("undo EnableMfaDevice of a moved user: %w", derr))
-		}
-		return err
+	verr := a.unchangedUser(ctx, account, user, want, etag)
+	if verr == nil {
+		return nil
 	}
-	return nil
+	// The enable committed but the user is not proven to be at want, so the
+	// device may be enabled under an ARN the caller was never authorized on.
+	// Re-check and undo with their own deadline: the caller's may be what
+	// ended the first check.
+	undo, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cancel()
+	if !iam.IsChanged(verr) {
+		again := a.unchangedUser(undo, account, user, want, etag)
+		if again == nil {
+			return nil
+		}
+		if iam.IsChanged(again) {
+			verr = again
+		}
+	}
+	if _, derr := retry(undo, a.backoff, a.mfaDevices.DeactivateMfaDevice,
+		&iamv1.DeactivateMfaDeviceRequest{Name: name, User: owner}); derr != nil {
+		return resource.Internal(fmt.Errorf("undo EnableMfaDevice of an unverified user: %w", derr))
+	}
+	return verr
 }
 
-// enableMFADevice sends EnableMfaDevice, retried on UNAVAILABLE, and treats an
-// EntityAlreadyExists of a retry as success when the device is now enabled
-// for owner.
-func (a STSAdmin) enableMFADevice(ctx context.Context, name, serial, owner, user, code1, code2 string) error {
+// enableMFADevice sends EnableMfaDevice, retried on UNAVAILABLE. A retry
+// refused as EntityAlreadyExists is an unknown outcome: without a request id
+// on EnableMfaDeviceRequest (vws-proto#125) nothing proves the enrollment is
+// this call's and not a concurrent one's, so it is neither claimed as success
+// nor undone.
+func (a STSAdmin) enableMFADevice(ctx context.Context, name, owner, user, code1, code2 string) error {
 	attempts := 0
 	enable := func(
 		ctx context.Context, req *iamv1.EnableMfaDeviceRequest, opts ...grpc.CallOption,
@@ -1006,10 +1018,8 @@ func (a STSAdmin) enableMFADevice(ctx context.Context, name, serial, owner, user
 		return nil
 	}
 	if status.Code(err) == codes.AlreadyExists && attempts > 1 {
-		now, gerr := retry(ctx, a.backoff, a.mfaDevices.GetMfaDevice, &iamv1.GetMfaDeviceRequest{Name: name})
-		if gerr == nil && now.GetStatus().GetSerialNumber() == serial && now.GetStatus().GetUser() == owner {
-			return nil
-		}
+		return resource.Internal(errors.New(
+			"EnableMfaDevice outcome unknown: a retry after UNAVAILABLE was refused as EntityAlreadyExists"))
 	}
 	return mfaEnableError(err, user)
 }
