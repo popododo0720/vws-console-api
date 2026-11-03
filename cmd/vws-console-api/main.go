@@ -89,6 +89,17 @@ func run(ctx context.Context, args []string) (err error) {
 	consoleOrigins := fs.String("console-origins", "", "comma-separated browser origins allowed to sign in and send cookie writes besides the console's own host, such as https://console.vws.example")
 	trustedProxies := fs.String("trusted-proxies", "", "comma-separated CIDRs of L7 proxies in front of the console whose X-Forwarded-For is trusted for the sign-in client address; empty uses the TCP peer")
 	rootPasswordFile := fs.String("root-password-file", "", "file holding the account root's console password (mount it from a Secret); empty disables root console sign-in; no effect with -iam static, where console sign-in is off")
+	limits := console.DefaultLoginLimits()
+	fs.IntVar(&limits.IPBurst, "login-ip-burst", limits.IPBurst,
+		"console sign-in attempts one client address may make at once (1 to 10000)")
+	fs.DurationVar(&limits.IPRefill, "login-ip-refill", limits.IPRefill,
+		"time for one client address to earn one more sign-in attempt (100ms to 24h)")
+	fs.IntVar(&limits.UserBurst, "login-user-burst", limits.UserBurst,
+		"failed console sign-ins one account user name may take at once, from every address together (1 to 10000)")
+	fs.DurationVar(&limits.UserRefill, "login-user-refill", limits.UserRefill,
+		"time for one account user name to earn one more failed sign-in (100ms to 24h)")
+	fs.IntVar(&limits.MaxKeys, "login-max-keys", limits.MaxKeys,
+		"addresses and user names each sign-in limit table holds before it evicts (100 to 1000000)")
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("flags: %w", err)
 	}
@@ -104,6 +115,9 @@ func run(ctx context.Context, args []string) (err error) {
 		}
 	}
 
+	if err := limits.Validate(); err != nil {
+		return fmt.Errorf("-login-*: %w", err)
+	}
 	trusted, err := console.ParseTrustedProxies(*trustedProxies)
 	if err != nil {
 		return fmt.Errorf("-trusted-proxies: %w", err)
@@ -189,6 +203,7 @@ func run(ctx context.Context, args []string) (err error) {
 			Origins:        splitList(*consoleOrigins),
 			TrustedProxies: trusted,
 			LoginDisabled:  !signInEnabled(*iamMode),
+			LoginLimits:    limits,
 		})},
 		{Name: "ec2", Addr: *ec2Addr, Handler: ec2query.New(ec2query.Config{Service: svc, Verifier: ec2, Authorizer: auth})},
 		{Name: "s3", Addr: *s3Addr, Handler: s3rest.New(s3rest.Config{Service: svc, Verifier: s3, Authorizer: auth})},

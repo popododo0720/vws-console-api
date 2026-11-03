@@ -155,3 +155,16 @@ func TestSignInEnabledOnlyWithRealIAM(t *testing.T) {
 		}
 	}
 }
+
+// A sign-in limit flag outside its bounds stops the process at start.
+func TestBadLoginLimitsAreRejected(t *testing.T) {
+	for _, flag := range []string{
+		"-login-ip-burst=0", "-login-user-burst=10001", "-login-ip-refill=1ms",
+		"-login-user-refill=48h", "-login-max-keys=5",
+	} {
+		err := run(t.Context(), []string{flag, "-ops-addr="})
+		if err == nil || !strings.Contains(err.Error(), "-login-*") {
+			t.Errorf("%s: err %v", flag, err)
+		}
+	}
+}

@@ -13,8 +13,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/popododo0720/vws-lib/obs"
+
 	"github.com/popododo0720/vws-console-api/internal/iam"
 	"github.com/popododo0720/vws-console-api/internal/resource"
+	"github.com/popododo0720/vws-console-api/internal/service"
 )
 
 // Console sign-in wire names.
@@ -30,6 +33,9 @@ const (
 	CSRFHeader = "X-CSRF-Token"
 
 	maxLoginBody = 4 << 10
+	// auditActionLogin is the action label of sign-in audit metrics, the
+	// CloudTrail event name of a console sign-in.
+	auditActionLogin = "ConsoleLogin"
 )
 
 // Auth routes, served before the gate authenticates.
@@ -247,9 +253,7 @@ func (h *handler) login(w http.ResponseWriter, r *http.Request) {
 	}
 	ip := h.clientIP(r)
 	if ok, wait := h.logins.take(ip, h.now()); !ok {
-		h.log.WarnContext(r.Context(), "console sign-in rate limited", slog.String("source_ip", ip))
-		retryAfter(w, wait)
-		writeErr(w, r, &resource.Error{Code: resource.CodeResourceExhausted, Message: "too many sign-in attempts; retry later"})
+		h.throttled(w, r, wait, throttledByIP, slog.String("source_ip", ip))
 		return
 	}
 	dec := json.NewDecoder(io.LimitReader(r.Body, maxLoginBody))
@@ -264,16 +268,26 @@ func (h *handler) login(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, r, resource.Invalid("body", "account, userName and password are required"))
 		return
 	}
+	user := userKey(account, in.UserName)
+	if ok, wait := h.users.take(user, h.now()); !ok {
+		h.throttled(w, r, wait, throttledByUser, slog.String("user", in.UserName), slog.String("source_ip", ip))
+		return
+	}
 	s, err := h.iam.Login(r.Context(), iam.LoginRequest{Account: account, UserName: in.UserName, Password: in.Password, MFACode: in.MFACode, SourceIP: ip})
 	log := h.log.With(slog.String("user", in.UserName), slog.String("source_ip", ip))
 	if err != nil {
 		log.WarnContext(r.Context(), "console sign-in failed", slog.String("code", resource.CodeOf(err).String()))
 		if iam.IsBusy(err) {
+			// No password was checked, so the user keeps the attempt.
+			h.users.refund(user)
 			retryAfter(w, time.Second)
 		}
 		writeErr(w, r, sessionErr(err))
 		return
 	}
+	// A success gives the user attempt back; the address attempt stays
+	// spent, so one known password cannot reopen an address for guessing.
+	h.users.refund(user)
 	log.InfoContext(r.Context(), "console sign-in")
 	maxAge := int(time.Until(s.Expires).Seconds())
 	csrf := csrfToken(s.Token)
@@ -281,6 +295,25 @@ func (h *handler) login(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, &http.Cookie{Name: CSRFCookie, Value: csrf, Path: "/", MaxAge: maxAge, Secure: true, SameSite: http.SameSiteStrictMode})
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, sessionBody{Principal: s.Principal.ARN, Account: s.Principal.Account.String(), Root: s.Principal.Root, ExpiresAt: s.Expires, CSRFToken: csrf, LoginEnabled: !h.loginOff})
+}
+
+// Which sign-in bucket ran dry; the audit metric outcome.
+const (
+	throttledByIP   = "throttled_ip"
+	throttledByUser = "throttled_user"
+)
+
+// throttled answers a sign-in refused by a gateway limit: 429
+// ResourceExhausted with Retry-After, a warning log and the audit metric.
+// The log carries the user name and address only, never the password, the
+// MFA code or the account id.
+func (h *handler) throttled(w http.ResponseWriter, r *http.Request, wait time.Duration, by string, attrs ...slog.Attr) {
+	h.log.LogAttrs(r.Context(), slog.LevelWarn, "console sign-in rate limited", append(attrs, slog.String("limit", by))...)
+	obs.M().Audit(r.Context(), service.Name, auditActionLogin, by)
+	retryAfter(w, wait)
+	writeErr(w, r, &resource.Error{
+		Code: resource.CodeResourceExhausted, Message: "too many sign-in attempts; retry later",
+	})
 }
 
 func (h *handler) logout(w http.ResponseWriter, r *http.Request) {

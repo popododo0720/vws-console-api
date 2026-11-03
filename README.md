@@ -208,7 +208,16 @@ wrong passwords in a row from one address lock that user from that address
 only (1 minute, doubling per further failure up to 1 hour, logged as
 `console sign-in locked out` without secrets), so nobody can lock root out
 from elsewhere; each address gets 10 sign-in attempts, refilling one every
-6 s (`429` with `Retry-After`); argon2id hashing runs in a bounded number of
+6 s, and each account user name (any case) gets 10 failed sign-ins from all
+addresses together, refilling one every 30 s, a success giving its attempt
+back (`429` `ResourceExhausted` with `Retry-After`, logged as
+`console sign-in rate limited` with the user name and address only, and
+counted as `vws.audit.events{action="ConsoleLogin",outcome="throttled_ip"}`
+or `"throttled_user"`). Tune them with `-login-ip-burst`,
+`-login-ip-refill`, `-login-user-burst`, `-login-user-refill` and
+`-login-max-keys` (keys each table holds before evicting); a value outside
+its bounds stops startup. These buckets live in process memory, per
+replica, and front the vws-iam lockout without copying it; argon2id hashing runs in a bounded number of
 slots and a sign-in that cannot get one within 200 ms is `503` with
 `Retry-After`. Sign-in and every state-changing cookie request must be
 `Content-Type: application/json` (else `415`) and carry an `Origin` that is

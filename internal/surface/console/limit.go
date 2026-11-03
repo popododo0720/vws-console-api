@@ -15,65 +15,179 @@ import (
 	"github.com/popododo0720/vws-console-api/internal/resource"
 )
 
-// Per-address sign-in rate: a bucket of LoginBurst attempts that refills one
-// attempt every LoginRefill.
+// Default sign-in limits. Per address: a bucket of LoginBurst attempts that
+// refills one attempt every LoginRefill. Per (account, user name): a bucket
+// of LoginUserBurst attempts that refills one every LoginUserRefill; a
+// successful sign-in gives its attempt back, so the user bucket only drains
+// on failures and spreads a password guess over many addresses no faster
+// than this rate. vws-iam keeps its own lockout counters; these buckets are
+// a defense in depth in front of it and hold no lockout state of their own.
 const (
-	LoginBurst  = 10
-	LoginRefill = 6 * time.Second
-
-	maxBuckets = 10000
+	LoginBurst      = 10
+	LoginRefill     = 6 * time.Second
+	LoginUserBurst  = 10
+	LoginUserRefill = 30 * time.Second
+	LoginMaxKeys    = 10000
 )
+
+// Bounds a LoginLimits field must stay within.
+const (
+	minLoginRefill  = 100 * time.Millisecond
+	maxLoginRefill  = 24 * time.Hour
+	maxLoginBurst   = 10000
+	minLoginMaxKeys = 100
+	maxLoginMaxKeys = 1000000
+)
+
+// LoginLimits sets the gateway sign-in rate limits. A zero field takes its
+// default (DefaultLoginLimits).
+type LoginLimits struct {
+	// IPBurst and IPRefill bound attempts per client address.
+	IPBurst  int
+	IPRefill time.Duration
+	// UserBurst and UserRefill bound failed attempts per account and user
+	// name, from every address together.
+	UserBurst  int
+	UserRefill time.Duration
+	// MaxKeys bounds each table (addresses, users), so spraying keys cannot
+	// grow memory without bound.
+	MaxKeys int
+}
+
+// DefaultLoginLimits returns the default sign-in limits.
+func DefaultLoginLimits() LoginLimits {
+	return LoginLimits{
+		IPBurst: LoginBurst, IPRefill: LoginRefill,
+		UserBurst: LoginUserBurst, UserRefill: LoginUserRefill,
+		MaxKeys: LoginMaxKeys,
+	}
+}
+
+func (l LoginLimits) withDefaults() LoginLimits {
+	d := DefaultLoginLimits()
+	if l.IPBurst == 0 {
+		l.IPBurst = d.IPBurst
+	}
+	if l.IPRefill == 0 {
+		l.IPRefill = d.IPRefill
+	}
+	if l.UserBurst == 0 {
+		l.UserBurst = d.UserBurst
+	}
+	if l.UserRefill == 0 {
+		l.UserRefill = d.UserRefill
+	}
+	if l.MaxKeys == 0 {
+		l.MaxKeys = d.MaxKeys
+	}
+	return l
+}
+
+// Validate reports the first field outside its bounds: bursts 1 to 10000,
+// refills 100ms to 24h, MaxKeys 100 to 1000000.
+func (l LoginLimits) Validate() error {
+	for _, b := range []struct {
+		name string
+		v    int
+	}{{"ip burst", l.IPBurst}, {"user burst", l.UserBurst}} {
+		if b.v < 1 || b.v > maxLoginBurst {
+			return fmt.Errorf("sign-in %s %d: want 1 to %d", b.name, b.v, maxLoginBurst)
+		}
+	}
+	for _, r := range []struct {
+		name string
+		v    time.Duration
+	}{{"ip refill", l.IPRefill}, {"user refill", l.UserRefill}} {
+		if r.v < minLoginRefill || r.v > maxLoginRefill {
+			return fmt.Errorf("sign-in %s %s: want %s to %s", r.name, r.v, minLoginRefill, maxLoginRefill)
+		}
+	}
+	if l.MaxKeys < minLoginMaxKeys || l.MaxKeys > maxLoginMaxKeys {
+		return fmt.Errorf("sign-in max keys %d: want %d to %d", l.MaxKeys, minLoginMaxKeys, maxLoginMaxKeys)
+	}
+	return nil
+}
 
 type bucket struct {
 	tokens float64
 	at     time.Time
 }
 
-// limiter is a token bucket per client address.
+// limiter is a token bucket per key (a client address, or an account and
+// user name).
 type limiter struct {
+	burst   float64
+	refill  time.Duration
+	maxKeys int
+
 	mu      sync.Mutex
 	buckets map[string]*bucket
 }
 
-func newLimiter() *limiter { return &limiter{buckets: map[string]*bucket{}} }
+func newLimiter(burst int, refill time.Duration, maxKeys int) *limiter {
+	return &limiter{burst: float64(burst), refill: refill, maxKeys: maxKeys, buckets: map[string]*bucket{}}
+}
 
-// take spends one attempt for ip. When none is left it returns how long
+// take spends one attempt for key. When none is left it returns how long
 // until the next one.
-func (l *limiter) take(ip string, now time.Time) (bool, time.Duration) {
+func (l *limiter) take(key string, now time.Time) (bool, time.Duration) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	b := l.buckets[ip]
+	b := l.buckets[key]
 	if b == nil {
-		if len(l.buckets) >= maxBuckets {
+		if len(l.buckets) >= l.maxKeys {
 			l.prune(now)
 		}
-		b = &bucket{tokens: LoginBurst, at: now}
-		l.buckets[ip] = b
+		b = &bucket{tokens: l.burst, at: now}
+		l.buckets[key] = b
 	}
-	b.tokens = min(LoginBurst, b.tokens+float64(now.Sub(b.at))/float64(LoginRefill))
+	b.tokens = min(l.burst, b.tokens+float64(now.Sub(b.at))/float64(l.refill))
 	b.at = now
 	if b.tokens < 1 {
-		return false, time.Duration((1 - b.tokens) * float64(LoginRefill))
+		return false, time.Duration((1 - b.tokens) * float64(l.refill))
 	}
 	b.tokens--
 	return true, 0
 }
 
+// refund gives back one attempt taken for key, up to the burst. A key
+// pruned since the take is already full, so it is not recreated.
+func (l *limiter) refund(key string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if b := l.buckets[key]; b != nil {
+		b.tokens = min(l.burst, b.tokens+1)
+	}
+}
+
+// size is the number of keys held (tests).
+func (l *limiter) size() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return len(l.buckets)
+}
+
 // prune drops full buckets (idle long enough to have refilled), then
-// arbitrary ones, so spraying addresses cannot grow the table without bound.
+// arbitrary ones, so spraying keys cannot grow the table without bound.
 func (l *limiter) prune(now time.Time) {
-	full := time.Duration(LoginBurst) * LoginRefill
-	for ip, b := range l.buckets {
+	full := time.Duration(l.burst) * l.refill
+	for k, b := range l.buckets {
 		if now.Sub(b.at) >= full {
-			delete(l.buckets, ip)
+			delete(l.buckets, k)
 		}
 	}
-	for ip := range l.buckets {
-		if len(l.buckets) < maxBuckets {
+	for k := range l.buckets {
+		if len(l.buckets) < l.maxKeys {
 			break
 		}
-		delete(l.buckets, ip)
+		delete(l.buckets, k)
 	}
+}
+
+// userKey keys the per-user bucket. IAM user names are unique without
+// regard to case, so case variants share one bucket.
+func userKey(a resource.AccountID, user string) string {
+	return a.String() + "/" + strings.ToLower(user)
 }
 
 // ParseTrustedProxies parses -trusted-proxies: a comma-separated list of

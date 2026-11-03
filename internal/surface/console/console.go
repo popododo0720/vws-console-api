@@ -62,6 +62,9 @@ type Config struct {
 	// loginEnabled false, without credentials too, so the UI can skip its
 	// sign-in page. The bearer console token keeps working.
 	LoginDisabled bool
+	// LoginLimits are the sign-in rate limits; zero fields take their
+	// defaults.
+	LoginLimits LoginLimits
 }
 
 // New returns the console handler.
@@ -74,7 +77,14 @@ func New(cfg Config) http.Handler {
 	if now == nil {
 		now = time.Now
 	}
-	h := &handler{svc: cfg.Service, auth: cfg.Auth, iam: cfg.IAM, log: log, mux: http.NewServeMux(), origins: cfg.Origins, trusted: cfg.TrustedProxies, now: now, logins: newLimiter(), loginOff: cfg.LoginDisabled}
+	lim := cfg.LoginLimits.withDefaults()
+	h := &handler{
+		svc: cfg.Service, auth: cfg.Auth, iam: cfg.IAM, log: log, mux: http.NewServeMux(),
+		origins: cfg.Origins, trusted: cfg.TrustedProxies, now: now,
+		logins:   newLimiter(lim.IPBurst, lim.IPRefill, lim.MaxKeys),
+		users:    newLimiter(lim.UserBurst, lim.UserRefill, lim.MaxKeys),
+		loginOff: cfg.LoginDisabled,
+	}
 	h.routes(h.mux)
 	return h
 }
@@ -143,6 +153,7 @@ type handler struct {
 	trusted  []netip.Prefix
 	now      func() time.Time
 	logins   *limiter
+	users    *limiter
 }
 
 func (h *handler) mutation(action resource.Action) (string, string, http.HandlerFunc) {
