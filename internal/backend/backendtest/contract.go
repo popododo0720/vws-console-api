@@ -134,6 +134,22 @@ func Run(t *testing.T, newSet Harness) {
 	if retagged.Items[0].State != resource.InstanceRunning {
 		t.Fatalf("CreateTags changed the state to %s", retagged.Items[0].State)
 	}
+	untagMut := backend.Mutation{Scope: backend.Scope{Account: account}, Key: "k-untag", Fingerprint: "fp-untag"}
+	untagged, err := set.Compute.DeleteTags(ctx, untagMut, resource.DeleteTagsRequest{
+		IDs: []resource.InstanceID{first.Items[0].ID}, Tags: []resource.TagSelector{{Key: "Cost Center"}},
+	})
+	if err != nil || untagged.Operation.Action != resource.ActionDeleteTags {
+		t.Fatalf("delete tags: %v %+v", err, untagged)
+	}
+	untaggedPage, err := set.Compute.DescribeInstances(ctx, backend.Scope{Account: account}, resource.InstanceQuery{
+		IDs: []resource.InstanceID{first.Items[0].ID}, Page: resource.PageRequest{Size: 50},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := untaggedPage.Items[0].Tags; got["Name"] != "web-2" || got["env"] != "dev" || len(got) != 2 {
+		t.Fatalf("tags after DeleteTags %v", got)
+	}
 	filtered, err := set.Compute.DescribeInstances(ctx, backend.Scope{Account: account}, resource.InstanceQuery{
 		IDs:    []resource.InstanceID{first.Items[0].ID},
 		States: []resource.InstanceState{resource.InstancePending},
@@ -418,4 +434,40 @@ func networkTags(t *testing.T, set backend.Set, account resource.AccountID) {
 	if op, err := set.Network.GetOperation(ctx, scope, tv.Operation.ID); err != nil || op.Action != resource.ActionCreateTags {
 		t.Fatalf("tag operation: %v %+v", err, op)
 	}
+	prod, exact := "prod", "42"
+	uv, err := set.Network.UntagVpcs(ctx, backend.Mutation{Scope: scope, Key: "k-untagvpc", Fingerprint: "fp-untagvpc"},
+		resource.UntagVpcsRequest{IDs: []resource.VpcID{vpcID}, Tags: []resource.TagSelector{
+			{Key: "Owner Team"}, {Key: "env", Value: &prod}, {Key: "Cost Center", Value: &exact}, {Key: "absent"},
+		}})
+	if err != nil || uv.Operation.Action != resource.ActionDeleteTags {
+		t.Fatalf("UntagVpcs: %v %+v", err, uv.Operation)
+	}
+	if got := vpcTags(); !maps.Equal(got, map[string]string{"Name": "net-2", "env": "dev"}) {
+		t.Fatalf("vpc tags after DeleteTags %v", got)
+	}
+	us, err := set.Network.UntagSubnets(ctx, backend.Mutation{Scope: scope, Key: "k-untagsub", Fingerprint: "fp-untagsub"},
+		resource.UntagSubnetsRequest{IDs: []resource.SubnetID{subID}})
+	if err != nil || us.Operation.Action != resource.ActionDeleteTags {
+		t.Fatalf("UntagSubnets: %v %+v", err, us.Operation)
+	}
+	if got := subTags(); len(got) != 0 {
+		t.Fatalf("subnet tags after DeleteTags with no tags %v", got)
+	}
+	missing := backend.Mutation{Scope: scope, Key: "k-untagvpc-missing", Fingerprint: "fp-untagvpc-missing"}
+	_, err = set.Network.UntagVpcs(ctx, missing, resource.UntagVpcsRequest{IDs: []resource.VpcID{vpcID, missingVpc(t)}})
+	if resource.CodeOf(err) != resource.CodeNotFound {
+		t.Fatalf("UntagVpcs on a missing VPC: %v", err)
+	}
+	if got := vpcTags(); !maps.Equal(got, map[string]string{"Name": "net-2", "env": "dev"}) {
+		t.Fatalf("a failed DeleteTags changed the vpc tags to %v", got)
+	}
+}
+
+func missingVpc(t *testing.T) resource.VpcID {
+	t.Helper()
+	id, err := resource.Parse[resource.VpcID]("vpc-0fffffffffffffff0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return id
 }

@@ -2,7 +2,6 @@ package grpcclient
 
 import (
 	"context"
-	"errors"
 
 	"cloud.google.com/go/longrunning/autogen/longrunningpb"
 
@@ -14,7 +13,7 @@ import (
 )
 
 // UpdateVpc serves the labels mask the way vws-network does: the labels are
-// replaced. The fake merges tags, which is the same for tags that only grow.
+// replaced. The fake merges tags, so the loopback clears them first.
 func (s *vpcSrv) UpdateVpc(ctx context.Context, req *networkv1.UpdateVpcRequest) (*longrunningpb.Operation, error) {
 	if paths := req.GetUpdateMask().GetPaths(); len(paths) != 1 || paths[0] != "labels" {
 		return nil, toStatus(resource.Invalid("update_mask", "only labels"))
@@ -37,14 +36,20 @@ func (s *vpcSrv) UpdateVpc(ctx context.Context, req *networkv1.UpdateVpcRequest)
 		return nil, toStatus(err)
 	}
 	tags := userTags(req.GetVpc().GetLabels())
-	if len(tags) == 0 {
-		return nil, toStatus(resource.Internal(errors.New("loopback: empty tag update")))
-	}
-	acc, err := s.w.set.Network.TagVpcs(ctx, backend.Mutation{
-		Scope: backend.Scope{Account: account}, Key: req.GetRequestId(), Fingerprint: fp,
-	}, resource.TagVpcsRequest{IDs: []resource.VpcID{id}, Tags: tags})
+	scope := backend.Scope{Account: account}
+	acc, err := s.w.set.Network.UntagVpcs(ctx, backend.Mutation{
+		Scope: scope, Key: req.GetRequestId() + "-clear", Fingerprint: fp,
+	}, resource.UntagVpcsRequest{IDs: []resource.VpcID{id}})
 	if err != nil {
 		return nil, toStatus(err)
+	}
+	if len(tags) > 0 {
+		acc, err = s.w.set.Network.TagVpcs(ctx, backend.Mutation{
+			Scope: scope, Key: req.GetRequestId(), Fingerprint: fp,
+		}, resource.TagVpcsRequest{IDs: []resource.VpcID{id}, Tags: tags})
+		if err != nil {
+			return nil, toStatus(err)
+		}
 	}
 	return runningOp(projectID, acc.Operation, name, commonv1.OperationVerb_OPERATION_VERB_UPDATE, s.w.now)
 }
@@ -72,14 +77,20 @@ func (s *subnetSrv) UpdateSubnet(ctx context.Context, req *networkv1.UpdateSubne
 		return nil, toStatus(err)
 	}
 	tags := userTags(req.GetSubnet().GetLabels())
-	if len(tags) == 0 {
-		return nil, toStatus(resource.Internal(errors.New("loopback: empty tag update")))
-	}
-	acc, err := s.w.set.Network.TagSubnets(ctx, backend.Mutation{
-		Scope: backend.Scope{Account: account}, Key: req.GetRequestId(), Fingerprint: fp,
-	}, resource.TagSubnetsRequest{IDs: []resource.SubnetID{id}, Tags: tags})
+	scope := backend.Scope{Account: account}
+	acc, err := s.w.set.Network.UntagSubnets(ctx, backend.Mutation{
+		Scope: scope, Key: req.GetRequestId() + "-clear", Fingerprint: fp,
+	}, resource.UntagSubnetsRequest{IDs: []resource.SubnetID{id}})
 	if err != nil {
 		return nil, toStatus(err)
+	}
+	if len(tags) > 0 {
+		acc, err = s.w.set.Network.TagSubnets(ctx, backend.Mutation{
+			Scope: scope, Key: req.GetRequestId(), Fingerprint: fp,
+		}, resource.TagSubnetsRequest{IDs: []resource.SubnetID{id}, Tags: tags})
+		if err != nil {
+			return nil, toStatus(err)
+		}
 	}
 	s.w.retagSub(id.String(), acc.Items[0].Tags)
 	return runningOp(projectID, acc.Operation, name, commonv1.OperationVerb_OPERATION_VERB_UPDATE, s.w.now)

@@ -22,6 +22,20 @@ func (c compute) TerminateInstances(ctx context.Context, m backend.Mutation, req
 }
 
 func (c compute) CreateTags(ctx context.Context, m backend.Mutation, req resource.CreateTagsRequest) (resource.Accepted[resource.Instance], error) {
+	return c.editInstanceTags(ctx, m, req.IDs, resource.ActionCreateTags, mergeEdit(req.Tags))
+}
+
+// DeleteTags deletes the selected tags from each instance. Every instance
+// must exist before any changes.
+func (c compute) DeleteTags(
+	ctx context.Context, m backend.Mutation, req resource.DeleteTagsRequest,
+) (resource.Accepted[resource.Instance], error) {
+	return c.editInstanceTags(ctx, m, req.IDs, resource.ActionDeleteTags, removeEdit(req.Tags))
+}
+
+func (c compute) editInstanceTags(
+	ctx context.Context, m backend.Mutation, ids []resource.InstanceID, action resource.Action, edit tagEdit,
+) (resource.Accepted[resource.Instance], error) {
 	if err := ctx.Err(); err != nil {
 		return resource.Accepted[resource.Instance]{}, err
 	}
@@ -31,26 +45,26 @@ func (c compute) CreateTags(ctx context.Context, m backend.Mutation, req resourc
 	if acc, ok, err := replay[resource.Accepted[resource.Instance]](c.w, m.Key, m.Fingerprint); err != nil || ok {
 		return acc, err
 	}
-	merged := make([]map[string]string, 0, len(req.IDs))
-	targets := make([]resource.Ref, 0, len(req.IDs))
-	for _, id := range req.IDs {
+	merged := make([]map[string]string, 0, len(ids))
+	targets := make([]resource.Ref, 0, len(ids))
+	for _, id := range ids {
 		inst, ok := c.w.inst[id]
 		if !ok || inst.OwnerID != m.Account {
 			return resource.Accepted[resource.Instance]{}, resource.NotFound(resource.KindInstance, id.String())
 		}
-		tags, err := resource.MergeTags(inst.Tags, req.Tags)
+		tags, err := edit(inst.Tags)
 		if err != nil {
 			return resource.Accepted[resource.Instance]{}, err
 		}
 		merged = append(merged, tags)
 		targets = append(targets, id.Ref())
 	}
-	op, err := c.w.newOp(m.Account, resource.ServiceCompute, resource.ActionCreateTags, targets, func(time.Time) {})
+	op, err := c.w.newOp(m.Account, resource.ServiceCompute, action, targets, func(time.Time) {})
 	if err != nil {
 		return resource.Accepted[resource.Instance]{}, err
 	}
-	items := make([]resource.Instance, 0, len(req.IDs))
-	for i, id := range req.IDs {
+	items := make([]resource.Instance, 0, len(ids))
+	for i, id := range ids {
 		inst := c.w.inst[id]
 		inst.Tags = merged[i]
 		items = append(items, *inst)

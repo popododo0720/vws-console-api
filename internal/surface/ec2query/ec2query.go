@@ -117,6 +117,8 @@ func (h *handler) serve(w http.ResponseWriter, r *http.Request) {
 		h.modifyVolume(w, r, caller)
 	case resource.ActionCreateTags.String():
 		h.createTags(w, r, caller)
+	case resource.ActionDeleteTags.String():
+		h.deleteTags(w, r, caller)
 	case resource.ActionCreateSecurityGroup.String():
 		h.createSecurityGroup(w, r, caller)
 	case resource.ActionAuthorizeSecurityGroupIngress.String():
@@ -682,6 +684,8 @@ func rejectUnknown(r *http.Request, action string) error {
 		allow = allowModifyVolume
 	case resource.ActionCreateTags.String():
 		allow = allowCreateTags
+	case resource.ActionDeleteTags.String():
+		allow = allowDeleteTags
 	case resource.ActionCreateSecurityGroup.String():
 		allow = allowCreateGroup
 	case resource.ActionAuthorizeSecurityGroupIngress.String(), resource.ActionRevokeSecurityGroupIngress.String():
@@ -824,6 +828,12 @@ func allowDeleteVolume(key string) bool {
 
 func allowModifyVolume(key string) bool {
 	return key == "Action" || key == "Version" || key == "ClientToken" || key == "VolumeId" || key == "Size"
+}
+
+// allowDeleteTags is allowCreateTags without ClientToken, which EC2
+// DeleteTags does not take.
+func allowDeleteTags(key string) bool {
+	return key != "ClientToken" && allowCreateTags(key)
 }
 
 func allowCreateTags(key string) bool {
@@ -1214,6 +1224,7 @@ func dispatchedAction(action string) bool {
 		resource.ActionDeleteVolume.String(),
 		resource.ActionModifyVolume.String(),
 		resource.ActionCreateTags.String(),
+		resource.ActionDeleteTags.String(),
 		resource.ActionCreateSecurityGroup.String(),
 		resource.ActionAuthorizeSecurityGroupIngress.String(),
 		resource.ActionRevokeSecurityGroupIngress.String(),

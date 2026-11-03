@@ -8,8 +8,33 @@ import (
 	"github.com/popododo0720/vws-console-api/internal/resource"
 )
 
+// tagEdit turns a resource's tags into the tags it has after the request.
+type tagEdit func(map[string]string) (map[string]string, error)
+
+func mergeEdit(add map[string]string) tagEdit {
+	return func(base map[string]string) (map[string]string, error) { return resource.MergeTags(base, add) }
+}
+
+func removeEdit(sel []resource.TagSelector) tagEdit {
+	return func(base map[string]string) (map[string]string, error) { return resource.RemoveTags(base, sel), nil }
+}
+
 // TagVpcs merges tags into each VPC. Every VPC must exist before any changes.
 func (n network) TagVpcs(ctx context.Context, m backend.Mutation, req resource.TagVpcsRequest) (resource.Accepted[resource.Vpc], error) {
+	return n.editVpcTags(ctx, m, req.IDs, resource.ActionCreateTags, mergeEdit(req.Tags))
+}
+
+// UntagVpcs deletes the selected tags from each VPC. Every VPC must exist
+// before any changes.
+func (n network) UntagVpcs(
+	ctx context.Context, m backend.Mutation, req resource.UntagVpcsRequest,
+) (resource.Accepted[resource.Vpc], error) {
+	return n.editVpcTags(ctx, m, req.IDs, resource.ActionDeleteTags, removeEdit(req.Tags))
+}
+
+func (n network) editVpcTags(
+	ctx context.Context, m backend.Mutation, ids []resource.VpcID, action resource.Action, edit tagEdit,
+) (resource.Accepted[resource.Vpc], error) {
 	if err := ctx.Err(); err != nil {
 		return resource.Accepted[resource.Vpc]{}, err
 	}
@@ -19,26 +44,26 @@ func (n network) TagVpcs(ctx context.Context, m backend.Mutation, req resource.T
 	if acc, ok, err := replay[resource.Accepted[resource.Vpc]](n.w, m.Key, m.Fingerprint); err != nil || ok {
 		return acc, err
 	}
-	merged := make([]map[string]string, 0, len(req.IDs))
-	targets := make([]resource.Ref, 0, len(req.IDs))
-	for _, id := range req.IDs {
+	merged := make([]map[string]string, 0, len(ids))
+	targets := make([]resource.Ref, 0, len(ids))
+	for _, id := range ids {
 		vpc, ok := n.w.vpc[id]
 		if !ok || vpc.OwnerID != m.Account {
 			return resource.Accepted[resource.Vpc]{}, resource.NotFound(resource.KindVpc, id.String())
 		}
-		tags, err := resource.MergeTags(vpc.Tags, req.Tags)
+		tags, err := edit(vpc.Tags)
 		if err != nil {
 			return resource.Accepted[resource.Vpc]{}, err
 		}
 		merged = append(merged, tags)
 		targets = append(targets, id.Ref())
 	}
-	op, err := n.w.newOp(m.Account, resource.ServiceNetwork, resource.ActionCreateTags, targets, func(time.Time) {})
+	op, err := n.w.newOp(m.Account, resource.ServiceNetwork, action, targets, func(time.Time) {})
 	if err != nil {
 		return resource.Accepted[resource.Vpc]{}, err
 	}
-	items := make([]resource.Vpc, 0, len(req.IDs))
-	for i, id := range req.IDs {
+	items := make([]resource.Vpc, 0, len(ids))
+	for i, id := range ids {
 		vpc := n.w.vpc[id]
 		vpc.Tags = merged[i]
 		item := *vpc
@@ -53,6 +78,20 @@ func (n network) TagVpcs(ctx context.Context, m backend.Mutation, req resource.T
 // TagSubnets merges tags into each subnet. Every subnet must exist before any
 // changes.
 func (n network) TagSubnets(ctx context.Context, m backend.Mutation, req resource.TagSubnetsRequest) (resource.Accepted[resource.Subnet], error) {
+	return n.editSubnetTags(ctx, m, req.IDs, resource.ActionCreateTags, mergeEdit(req.Tags))
+}
+
+// UntagSubnets deletes the selected tags from each subnet. Every subnet must
+// exist before any changes.
+func (n network) UntagSubnets(
+	ctx context.Context, m backend.Mutation, req resource.UntagSubnetsRequest,
+) (resource.Accepted[resource.Subnet], error) {
+	return n.editSubnetTags(ctx, m, req.IDs, resource.ActionDeleteTags, removeEdit(req.Tags))
+}
+
+func (n network) editSubnetTags(
+	ctx context.Context, m backend.Mutation, ids []resource.SubnetID, action resource.Action, edit tagEdit,
+) (resource.Accepted[resource.Subnet], error) {
 	if err := ctx.Err(); err != nil {
 		return resource.Accepted[resource.Subnet]{}, err
 	}
@@ -62,26 +101,26 @@ func (n network) TagSubnets(ctx context.Context, m backend.Mutation, req resourc
 	if acc, ok, err := replay[resource.Accepted[resource.Subnet]](n.w, m.Key, m.Fingerprint); err != nil || ok {
 		return acc, err
 	}
-	merged := make([]map[string]string, 0, len(req.IDs))
-	targets := make([]resource.Ref, 0, len(req.IDs))
-	for _, id := range req.IDs {
+	merged := make([]map[string]string, 0, len(ids))
+	targets := make([]resource.Ref, 0, len(ids))
+	for _, id := range ids {
 		sub, ok := n.w.sub[id]
 		if !ok || sub.OwnerID != m.Account {
 			return resource.Accepted[resource.Subnet]{}, resource.NotFound(resource.KindSubnet, id.String())
 		}
-		tags, err := resource.MergeTags(sub.Tags, req.Tags)
+		tags, err := edit(sub.Tags)
 		if err != nil {
 			return resource.Accepted[resource.Subnet]{}, err
 		}
 		merged = append(merged, tags)
 		targets = append(targets, id.Ref())
 	}
-	op, err := n.w.newOp(m.Account, resource.ServiceNetwork, resource.ActionCreateTags, targets, func(time.Time) {})
+	op, err := n.w.newOp(m.Account, resource.ServiceNetwork, action, targets, func(time.Time) {})
 	if err != nil {
 		return resource.Accepted[resource.Subnet]{}, err
 	}
-	items := make([]resource.Subnet, 0, len(req.IDs))
-	for i, id := range req.IDs {
+	items := make([]resource.Subnet, 0, len(ids))
+	for i, id := range ids {
 		sub := n.w.sub[id]
 		sub.Tags = merged[i]
 		item := *sub

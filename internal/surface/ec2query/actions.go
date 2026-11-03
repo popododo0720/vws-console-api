@@ -572,6 +572,67 @@ func portValue(raw string) (int, error) {
 	return n, nil
 }
 
+// tagTargets are the ResourceId.N of CreateTags or DeleteTags, by kind.
+type tagTargets struct {
+	insts []resource.InstanceID
+	vpcs  []resource.VpcID
+	subs  []resource.SubnetID
+}
+
+// kinds counts the resource kinds named.
+func (t tagTargets) kinds() int {
+	n := 0
+	for _, k := range []int{len(t.insts), len(t.vpcs), len(t.subs)} {
+		if k > 0 {
+			n++
+		}
+	}
+	return n
+}
+
+// parseTagTargets reads ResourceId.N. Other resource kinds fail with
+// InvalidParameterValue.
+func parseTagTargets(r *http.Request) (tagTargets, error) {
+	var t tagTargets
+	for _, raw := range indexedStrings(r, "ResourceId") {
+		switch {
+		case strings.HasPrefix(raw, "i-"):
+			id, err := resource.Parse[resource.InstanceID](raw)
+			if err != nil {
+				return tagTargets{}, err
+			}
+			t.insts = append(t.insts, id)
+		case strings.HasPrefix(raw, "vpc-"):
+			id, err := resource.Parse[resource.VpcID](raw)
+			if err != nil {
+				return tagTargets{}, err
+			}
+			t.vpcs = append(t.vpcs, id)
+		case strings.HasPrefix(raw, "subnet-"):
+			id, err := resource.Parse[resource.SubnetID](raw)
+			if err != nil {
+				return tagTargets{}, err
+			}
+			t.subs = append(t.subs, id)
+		default:
+			return tagTargets{}, resource.Invalid("ResourceId", "only instances, VPCs and subnets can be tagged")
+		}
+	}
+	if t.kinds() == 0 {
+		return tagTargets{}, resource.Invalid("ResourceId", "required")
+	}
+	return t, nil
+}
+
+// partToken is the client token for one kind of a request that fans out:
+// the caller's own with one kind, else one derived from it per kind.
+func partToken(token resource.ClientToken, kinds int, kind string) (resource.ClientToken, error) {
+	if token.IsZero() || kinds == 1 {
+		return token, nil
+	}
+	return derivedToken(token, kind)
+}
+
 // createTags tags instances, VPCs and subnets, which may be mixed in one call.
 // Other resource kinds fail with InvalidParameterValue. Each kind is its own
 // backend mutation; with a ClientToken and more than one kind, each kind gets
@@ -582,41 +643,9 @@ func (h *handler) createTags(w http.ResponseWriter, r *http.Request, c resource.
 		writeErr(w, r, err)
 		return
 	}
-	var (
-		insts []resource.InstanceID
-		vpcs  []resource.VpcID
-		subs  []resource.SubnetID
-	)
-	for _, raw := range indexedStrings(r, "ResourceId") {
-		switch {
-		case strings.HasPrefix(raw, "i-"):
-			id, err := resource.Parse[resource.InstanceID](raw)
-			if err != nil {
-				writeErr(w, r, err)
-				return
-			}
-			insts = append(insts, id)
-		case strings.HasPrefix(raw, "vpc-"):
-			id, err := resource.Parse[resource.VpcID](raw)
-			if err != nil {
-				writeErr(w, r, err)
-				return
-			}
-			vpcs = append(vpcs, id)
-		case strings.HasPrefix(raw, "subnet-"):
-			id, err := resource.Parse[resource.SubnetID](raw)
-			if err != nil {
-				writeErr(w, r, err)
-				return
-			}
-			subs = append(subs, id)
-		default:
-			writeErr(w, r, resource.Invalid("ResourceId", "only instances, VPCs and subnets can be tagged"))
-			return
-		}
-	}
-	if len(insts)+len(vpcs)+len(subs) == 0 {
-		writeErr(w, r, resource.Invalid("ResourceId", "required"))
+	t, err := parseTagTargets(r)
+	if err != nil {
+		writeErr(w, r, err)
 		return
 	}
 	tags := map[string]string{}
@@ -632,42 +661,31 @@ func (h *handler) createTags(w http.ResponseWriter, r *http.Request, c resource.
 		}
 		tags[k] = v
 	}
-	kinds := 0
-	for _, n := range []int{len(insts), len(vpcs), len(subs)} {
-		if n > 0 {
-			kinds++
-		}
-	}
-	part := func(kind string) (resource.ClientToken, error) {
-		if token.IsZero() || kinds == 1 {
-			return token, nil
-		}
-		return derivedToken(token, kind)
-	}
-	if len(insts) > 0 {
-		t, err := part("instance")
+	kinds := t.kinds()
+	if len(t.insts) > 0 {
+		pt, err := partToken(token, kinds, "instance")
 		if err == nil {
-			_, err = h.svc.CreateTags(r.Context(), c, t, resource.CreateTagsRequest{IDs: insts, Tags: tags})
+			_, err = h.svc.CreateTags(r.Context(), c, pt, resource.CreateTagsRequest{IDs: t.insts, Tags: tags})
 		}
 		if err != nil {
 			writeErr(w, r, err)
 			return
 		}
 	}
-	if len(vpcs) > 0 {
-		t, err := part("vpc")
+	if len(t.vpcs) > 0 {
+		pt, err := partToken(token, kinds, "vpc")
 		if err == nil {
-			_, err = h.svc.TagVpcs(r.Context(), c, t, resource.TagVpcsRequest{IDs: vpcs, Tags: tags})
+			_, err = h.svc.TagVpcs(r.Context(), c, pt, resource.TagVpcsRequest{IDs: t.vpcs, Tags: tags})
 		}
 		if err != nil {
 			writeErr(w, r, err)
 			return
 		}
 	}
-	if len(subs) > 0 {
-		t, err := part("subnet")
+	if len(t.subs) > 0 {
+		pt, err := partToken(token, kinds, "subnet")
 		if err == nil {
-			_, err = h.svc.TagSubnets(r.Context(), c, t, resource.TagSubnetsRequest{IDs: subs, Tags: tags})
+			_, err = h.svc.TagSubnets(r.Context(), c, pt, resource.TagSubnetsRequest{IDs: t.subs, Tags: tags})
 		}
 		if err != nil {
 			writeErr(w, r, err)
@@ -675,6 +693,72 @@ func (h *handler) createTags(w http.ResponseWriter, r *http.Request, c resource.
 		}
 	}
 	writeXML(w, createTagsXML{RequestID: requestID(r), Return: true})
+}
+
+// tagSelectors reads Tag.N of DeleteTags. Tag.N.Value present, even empty,
+// deletes the key only with that value; Tag.N.Value absent deletes the key
+// whatever its value. No Tag.N at all deletes every user tag.
+func tagSelectors(r *http.Request) ([]resource.TagSelector, error) {
+	var out []resource.TagSelector
+	for i := 1; i <= maxDeleteTagIndex; i++ {
+		prefix := "Tag." + strconv.Itoa(i) + "."
+		keys, hasKey := r.Form[prefix+"Key"]
+		values, hasValue := r.Form[prefix+"Value"]
+		if !hasKey && !hasValue {
+			continue
+		}
+		if !hasKey || keys[0] == "" {
+			return nil, resource.Invalid(prefix+"Key", "required")
+		}
+		sel := resource.TagSelector{Key: keys[0]}
+		if hasValue {
+			v := values[0]
+			sel.Value = &v
+		}
+		out = append(out, sel)
+	}
+	return out, nil
+}
+
+// maxDeleteTagIndex bounds Tag.N on DeleteTags, as allowDeleteTags does.
+const maxDeleteTagIndex = 50
+
+// deleteTags deletes tags from instances, VPCs and subnets, mixed as in
+// createTags. Deleting a tag the resource does not have is not an error.
+func (h *handler) deleteTags(w http.ResponseWriter, r *http.Request, c resource.Caller) {
+	t, err := parseTagTargets(r)
+	if err != nil {
+		writeErr(w, r, err)
+		return
+	}
+	sel, err := tagSelectors(r)
+	if err != nil {
+		writeErr(w, r, err)
+		return
+	}
+	var token resource.ClientToken
+	if len(t.insts) > 0 {
+		req := resource.DeleteTagsRequest{IDs: t.insts, Tags: sel}
+		if _, err := h.svc.DeleteTags(r.Context(), c, token, req); err != nil {
+			writeErr(w, r, err)
+			return
+		}
+	}
+	if len(t.vpcs) > 0 {
+		req := resource.UntagVpcsRequest{IDs: t.vpcs, Tags: sel}
+		if _, err := h.svc.UntagVpcs(r.Context(), c, token, req); err != nil {
+			writeErr(w, r, err)
+			return
+		}
+	}
+	if len(t.subs) > 0 {
+		req := resource.UntagSubnetsRequest{IDs: t.subs, Tags: sel}
+		if _, err := h.svc.UntagSubnets(r.Context(), c, token, req); err != nil {
+			writeErr(w, r, err)
+			return
+		}
+	}
+	writeXML(w, deleteTagsXML{RequestID: requestID(r), Return: true})
 }
 
 // derivedToken is a client token for one part of a request that fans out.
