@@ -6,6 +6,7 @@ package iamclient
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -15,6 +16,7 @@ import (
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
@@ -85,13 +87,30 @@ func (c *Client) logger() *slog.Logger {
 	return c.log
 }
 
+// DialOption configures Dial.
+type DialOption func(*dialConfig)
+
+type dialConfig struct{ tls *tls.Config }
+
+// WithTLS secures the connection with cfg, usually from TLSFiles.Config.
+// Without it the connection is plaintext.
+func WithTLS(cfg *tls.Config) DialOption { return func(d *dialConfig) { d.tls = cfg } }
+
 // Dial connects to vws-iam at target. The connection is lazy; the first call
-// dials. Transport security is the cluster network's, as for the other
-// backends.
-func Dial(target string) (*Client, error) {
-	opts := append([]grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
+// dials. It is plaintext unless WithTLS is given. Every call gets an
+// OpenTelemetry client span and the vws.rpc.client metrics.
+func Dial(target string, opts ...DialOption) (*Client, error) {
+	var d dialConfig
+	for _, o := range opts {
+		o(&d)
+	}
+	creds := insecure.NewCredentials()
+	if d.tls != nil {
+		creds = credentials.NewTLS(d.tls)
+	}
+	dial := append([]grpc.DialOption{grpc.WithTransportCredentials(creds)},
 		grpcobs.ClientOptions(service.Name, "iam")...)
-	conn, err := grpc.NewClient(target, opts...)
+	conn, err := grpc.NewClient(target, dial...)
 	if err != nil {
 		return nil, fmt.Errorf("dial vws-iam %s: %w", target, err)
 	}

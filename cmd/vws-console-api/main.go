@@ -76,6 +76,15 @@ func run(ctx context.Context, args []string) (err error) {
 		"fake: in-memory IAM users, groups, roles, policies and STS sessions, lost on restart; "+
 		"grpc: vws-iam at -iam-endpoint authenticates keys, authorizes requests and serves console sign-in and STS AssumeRole")
 	iamEndpoint := fs.String("iam-endpoint", "", "vws-iam gRPC address for -iam=grpc, such as vws-iam.vws-system:9095")
+	iamTLS := iamclient.TLSFiles{}
+	fs.StringVar(&iamTLS.CAFile, "iam-tls-ca-file", "", "PEM CA bundle that verifies the vws-iam server certificate; "+
+		"setting it turns on TLS to vws-iam (empty: plaintext)")
+	fs.StringVar(&iamTLS.CertFile, "iam-tls-cert-file", "", "PEM client certificate for mutual TLS to vws-iam; "+
+		"needs -iam-tls-key-file and -iam-tls-ca-file")
+	fs.StringVar(&iamTLS.KeyFile, "iam-tls-key-file", "", "PEM client key for mutual TLS to vws-iam; "+
+		"needs -iam-tls-cert-file and -iam-tls-ca-file")
+	fs.StringVar(&iamTLS.ServerName, "iam-tls-server-name", "", "name checked against the vws-iam server certificate "+
+		"(empty: the -iam-endpoint host)")
 	iamAddr := fs.String("iam-addr", "127.0.0.1:8084", "IAM and STS Query listen address")
 	consoleOrigins := fs.String("console-origins", "", "comma-separated browser origins allowed to sign in and send cookie writes besides the console's own host, such as https://console.vws.example")
 	trustedProxies := fs.String("trusted-proxies", "", "comma-separated CIDRs of L7 proxies in front of the console whose X-Forwarded-For is trusted for the sign-in client address; empty uses the TCP peer")
@@ -148,7 +157,11 @@ func run(ctx context.Context, args []string) (err error) {
 		if *iamEndpoint == "" {
 			return errors.New("-iam=grpc needs -iam-endpoint")
 		}
-		remote, dialErr := iamclient.Dial(*iamEndpoint)
+		dialOpts, tlsErr := iamDialOptions(ctx, logger, iamTLS)
+		if tlsErr != nil {
+			return tlsErr
+		}
+		remote, dialErr := iamclient.Dial(*iamEndpoint, dialOpts...)
 		if dialErr != nil {
 			return dialErr
 		}
@@ -183,6 +196,23 @@ func run(ctx context.Context, args []string) (err error) {
 			Admin: admin, Authorizer: auth, IAM: verifier(sigv4.ServiceIAM), STS: verifier(sigv4.ServiceSTS),
 		})},
 	}})
+}
+
+// iamDialOptions turns the -iam-tls-* flags into Dial options. Without them
+// the connection is plaintext and a warning says so.
+func iamDialOptions(
+	ctx context.Context, logger *slog.Logger, files iamclient.TLSFiles,
+) ([]iamclient.DialOption, error) {
+	if !files.Enabled() {
+		logger.WarnContext(ctx, "vws-iam connection is plaintext: set -iam-tls-ca-file to turn on TLS")
+		return nil, nil
+	}
+	cfg, err := files.Config()
+	if err != nil {
+		return nil, err
+	}
+	logger.InfoContext(ctx, "vws-iam connection uses TLS", slog.Bool("mutual", files.CertFile != ""))
+	return []iamclient.DialOption{iamclient.WithTLS(cfg)}, nil
 }
 
 // splitList splits a comma-separated flag, dropping empty items.

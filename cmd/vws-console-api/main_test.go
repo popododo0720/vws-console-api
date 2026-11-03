@@ -104,6 +104,25 @@ func TestGRPCIAMNeedsAnEndpoint(t *testing.T) {
 	}
 }
 
+// A bad -iam-tls-* setting stops the process at start instead of dialing
+// vws-iam in plaintext.
+func TestGRPCIAMRejectsBadTLSFlags(t *testing.T) {
+	for name, tc := range map[string]struct {
+		args []string
+		want string
+	}{
+		"missing CA file": {[]string{"-iam-tls-ca-file=" + filepath.Join(t.TempDir(), "absent.crt")}, "read vws-iam CA file"},
+		"cert without CA": {[]string{"-iam-tls-cert-file=/x.crt", "-iam-tls-key-file=/x.key"}, "needs a CA file"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			args := append([]string{"-iam=grpc", "-iam-endpoint=127.0.0.1:1", "-ops-addr="}, tc.args...)
+			if err := run(t.Context(), args); err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err %v, want %q", err, tc.want)
+			}
+		})
+	}
+}
+
 func TestStaticModeWarnsSignInDisabled(t *testing.T) {
 	for _, tc := range []struct {
 		mode, pwFile string
