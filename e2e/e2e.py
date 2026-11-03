@@ -742,6 +742,22 @@ def identity():
     step("IAM DeleteVirtualMFADevice missing is NoSuchEntity", lambda: aws_error(
         "NoSuchEntity", lambda: iam.delete_virtual_mfa_device(
             SerialNumber=f"arn:vws:iam::{account}:mfa/e2e-no-such-phone")))
+    S["mfa"] = step("IAM CreateVirtualMFADevice", lambda: iam.create_virtual_mfa_device(
+        VirtualMFADeviceName="e2e-phone", Path="/e2e/")["VirtualMFADevice"])
+    step("IAM CreateVirtualMFADevice answers serial, base32 seed and PNG", lambda: (
+        check(S["mfa"]["SerialNumber"] == f"arn:vws:iam::{account}:mfa/e2e/e2e-phone", "serial"),
+        check(len(base64.b32decode(S["mfa"]["Base32StringSeed"] + b"=" * (-len(S["mfa"]["Base32StringSeed"]) % 8))) > 0,
+              "seed"),
+        check(S["mfa"]["QRCodePNG"].startswith(b"\x89PNG\r\n\x1a\n"), "png")))
+    step("IAM CreateVirtualMFADevice same name is EntityAlreadyExists", lambda: aws_error(
+        "EntityAlreadyExists", lambda: iam.create_virtual_mfa_device(VirtualMFADeviceName="e2e-phone")))
+    step("IAM CreateVirtualMFADevice bad name is ValidationError", lambda: aws_error(
+        "ValidationError", lambda: iam.create_virtual_mfa_device(VirtualMFADeviceName="e2e phone")))
+    step("IAM CreateVirtualMFADevice Tags is InvalidInput (vws-proto#129)", lambda: aws_error(
+        "InvalidInput", lambda: iam.create_virtual_mfa_device(
+            VirtualMFADeviceName="e2e-tagged", Tags=[{"Key": "team", "Value": "e2e"}])))
+    step("IAM DeleteVirtualMFADevice created", lambda: iam.delete_virtual_mfa_device(
+        SerialNumber=f"arn:vws:iam::{account}:mfa/e2e/e2e-phone"))
     step("IAM EnableMFADevice missing user is NoSuchEntity", lambda: aws_error(
         "NoSuchEntity", lambda: iam.enable_mfa_device(
             UserName="e2e-nobody", SerialNumber=f"arn:vws:iam::{account}:mfa/e2e-no-such-phone",

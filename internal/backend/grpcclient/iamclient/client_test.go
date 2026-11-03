@@ -115,6 +115,11 @@ type server struct {
 	// deactivateCtxErr records the server context's error at each call.
 	deactivateMfaErr error
 	deactivateCtxErr []error
+	// CreateVirtualMfaDevice calls. createMfaRes nil answers a device at the
+	// requested path with testSeed and its URI.
+	createMfa    []*iamv1.CreateVirtualMfaDeviceRequest
+	createMfaRes *iamv1.CreateVirtualMfaDeviceResponse
+	createMfaErr error
 	// Virtual MFA device listing.
 	listMfaDevices      []*iamv1.ListMfaDevicesRequest
 	listMfaDevicesRes   *iamv1.ListMfaDevicesResponse
@@ -498,6 +503,36 @@ func (s *server) DeleteMfaDevice(
 		return s.deleteMfaRes, nil
 	}
 	return &longrunningpb.Operation{Done: true}, nil
+}
+
+func (s *server) CreateVirtualMfaDevice(
+	ctx context.Context, req *iamv1.CreateVirtualMfaDeviceRequest,
+) (*iamv1.CreateVirtualMfaDeviceResponse, error) {
+	if err := s.enter(ctx); err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.createMfa = append(s.createMfa, req)
+	if s.createMfaErr != nil {
+		return nil, s.createMfaErr
+	}
+	if s.createMfaRes != nil {
+		return s.createMfaRes, nil
+	}
+	project := strings.TrimPrefix(req.GetParent(), "projects/")
+	path := req.GetMfaDevice().GetSpec().GetPath()
+	return &iamv1.CreateVirtualMfaDeviceResponse{
+		MfaDevice: &iamv1.MfaDevice{
+			Name: req.GetParent() + "/mfaDevices/" + req.GetMfaDeviceId(),
+			Spec: &iamv1.MfaDeviceSpec{Path: path},
+			Status: &iamv1.MfaDeviceStatus{
+				SerialNumber: "arn:vws:iam::" + project + ":mfa" + path + req.GetMfaDeviceId(),
+			},
+		},
+		Base32StringSeed: testSeed,
+		OtpauthUri:       testURI(req.GetMfaDeviceId(), testSeed),
+	}, nil
 }
 
 func (s *server) EnableMfaDevice(

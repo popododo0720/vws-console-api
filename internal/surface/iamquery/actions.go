@@ -1111,6 +1111,14 @@ func iamActions() map[string]spec {
 				return nil, h.cfg.Admin.DeleteVirtualMFADevice(c.r.Context(), c.caller.Account, c.form("SerialNumber"))
 			},
 		},
+		// AWS CreateVirtualMFADevice is authorized on the serial number the
+		// new device gets. Tags are not accepted yet: vws-proto
+		// CreateVirtualMfaDeviceRequest carries none, so a Tags member is
+		// InvalidInput before anything is created (vws-proto#129).
+		"CreateVirtualMFADevice": {
+			params: []string{"VirtualMFADeviceName", "Path"}, needsAdmin: true,
+			resource: createVirtualMFADeviceARN, run: createVirtualMFADevice,
+		},
 		// AWS EnableMFADevice is authorized on the user the device is enabled
 		// for and answers an empty result. Every member is validated first.
 		"EnableMFADevice": {
