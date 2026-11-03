@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -78,9 +79,13 @@ func TestRateLimitBehindTrustedProxyIsPerClient(t *testing.T) {
 		t.Fatal(err)
 	}
 	e.h = newLoginHandler(t, e, trusted)
+	// Each guess names another user, so the per-user limit is not what
+	// stops the attacker.
+	n := 0
 	send := func(xff string) int {
+		n++
 		r := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "http://127.0.0.1:8080/api/v1/auth/login",
-			strings.NewReader(`{"account":"123456789012","userName":"bob","password":"wrong pass 1"}`))
+			strings.NewReader(`{"account":"123456789012","userName":"user`+strconv.Itoa(n)+`","password":"wrong pass 1"}`))
 		r.RemoteAddr = "10.0.0.5:1"
 		r.Header.Set("Content-Type", "application/json")
 		r.Header.Set("Origin", "http://127.0.0.1:8080")
