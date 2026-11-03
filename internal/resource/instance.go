@@ -427,6 +427,11 @@ func validTags(tags map[string]string) error {
 		if n := utf8.RuneCountInString(k); n < 1 || n > 128 || !tagText(k) {
 			return Invalid("tags", "malformed key")
 		}
+		// EC2 keeps aws: keys, in any case, for itself.
+		// https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/Using_Tags.html#tag-restrictions
+		if strings.HasPrefix(strings.ToLower(k), "aws:") {
+			return Invalid("tags", "reserved")
+		}
 		if utf8.RuneCountInString(v) > 256 || !tagText(v) {
 			return Invalid("tags", "malformed value")
 		}

@@ -3,7 +3,9 @@ package ec2query
 import (
 	"context"
 	"errors"
+	"maps"
 	"net/http"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -45,7 +47,7 @@ func checkFilterNames(filters []queryFilter, allowed ...string) error {
 	return checkFilterNameList(filters, false, allowed)
 }
 
-// checkTagFilterNames is checkFilterNames plus EC2's tag:<key> form.
+// checkTagFilterNames is checkFilterNames plus EC2's tag:<key> and tag-key.
 func checkTagFilterNames(filters []queryFilter, allowed ...string) error {
 	return checkFilterNameList(filters, true, allowed)
 }
@@ -60,7 +62,7 @@ func checkFilterNameList(filters []queryFilter, allowTag bool, allowed []string)
 			continue
 		}
 		if allowTag {
-			if key, ok := strings.CutPrefix(f.name, "tag:"); ok && key != "" {
+			if key, ok := strings.CutPrefix(f.name, "tag:"); (ok && key != "") || f.name == "tag-key" {
 				continue
 			}
 		}
@@ -210,9 +212,13 @@ func (h *handler) allSubnets(ctx context.Context, c resource.Caller) ([]resource
 	}, h.svc.DescribeSubnets)
 }
 
-// tagFilterValue returns the value of tag:<key> for one tag set. The second
-// result reports whether name is a tag filter at all.
+// tagFilterValue returns the value of tag:<key>, or every key for tag-key,
+// for one tag set. The second result reports whether name is a tag filter at
+// all.
 func tagFilterValue(tags map[string]string, name string) ([]string, bool) {
+	if name == "tag-key" {
+		return slices.Collect(maps.Keys(tags)), true
+	}
 	key, ok := strings.CutPrefix(name, "tag:")
 	if !ok {
 		return nil, false
@@ -242,6 +248,9 @@ func subnetFilterValue(s resource.Subnet, name string) []string {
 }
 
 func volumeFilterValue(v resource.Volume, name string) []string {
+	if values, ok := tagFilterValue(v.Tags, name); ok {
+		return values
+	}
 	if name == "attachment.instance-id" && !v.InstanceID.IsZero() {
 		return []string{v.InstanceID.String()}
 	}
@@ -600,6 +609,16 @@ func (h *handler) describeTags(w http.ResponseWriter, r *http.Request, c resourc
 	}
 	for _, subnet := range subnets {
 		rows = appendTagDescriptions(rows, "subnet", subnet.ID.String(), subnet.Tags)
+	}
+	volumes, err := collectPages(r.Context(), c, func(page resource.PageRequest) resource.VolumeQuery {
+		return resource.VolumeQuery{Page: page}
+	}, h.svc.DescribeVolumes)
+	if err != nil {
+		writeErr(w, r, err)
+		return
+	}
+	for _, vol := range volumes {
+		rows = appendTagDescriptions(rows, "volume", vol.ID.String(), vol.Tags)
 	}
 	sort.Slice(rows, func(i, j int) bool { return rows[i].identity() < rows[j].identity() })
 	filtered := rows[:0]

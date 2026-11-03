@@ -236,6 +236,10 @@ func (c computeClient) CreateVolume(ctx context.Context, m backend.Mutation, req
 		return resource.Accepted[resource.Volume]{}, resource.Invalid("volumeType", "unsupported")
 	}
 	projectID := project(m.Account)
+	labels, err := withInternalLabels(req.Tags, map[string]string{labelFingerprint: clip(m.Fingerprint, 63)})
+	if err != nil {
+		return resource.Accepted[resource.Volume]{}, err
+	}
 	spec := &storagev1.VolumeSpec{SizeGib: req.SizeGiB, Type: typ, Iops: req.Iops, ThroughputMibps: req.Throughput}
 	if !req.SnapshotID.IsZero() {
 		// A size of 0 is the snapshot size, which only the snapshot knows.
@@ -259,7 +263,7 @@ func (c computeClient) CreateVolume(ctx context.Context, m backend.Mutation, req
 		VolumeId:  derivedID("vol-", m.Key, "blank"),
 		RequestId: requestUUID(m.Key, "blank-vol"),
 		Volume: &storagev1.Volume{
-			Labels: map[string]string{labelFingerprint: clip(m.Fingerprint, 63)},
+			Labels: labels,
 			Spec:   spec,
 		},
 	})
@@ -2360,7 +2364,7 @@ func acceptedVolume(op *longrunningpb.Operation, req resource.CreateVolumeReques
 	vol := resource.Volume{
 		ID: id, OwnerID: named, SizeGiB: req.SizeGiB, Zone: req.Zone, Type: req.Type, State: state,
 		SnapshotID: req.SnapshotID, CreateTime: parsed.CreateTime,
-		Iops: req.Iops, Throughput: req.Throughput,
+		Iops: req.Iops, Throughput: req.Throughput, Tags: maps.Clone(req.Tags),
 	}
 	parsed.Action = resource.ActionCreateVolume
 	parsed.Targets = []resource.Ref{id.Ref()}
@@ -2430,6 +2434,7 @@ func volumeModel(in *storagev1.Volume) (resource.Volume, error) {
 		Type: volumeTypeOf(in.GetSpec().GetType()), State: state, InstanceID: inst,
 		Device: in.GetStatus().GetDeviceName(), CreateTime: in.GetCreateTime().AsTime().UTC(),
 		Iops: in.GetSpec().GetIops(), Throughput: in.GetSpec().GetThroughputMibps(),
+		Tags: userTags(in.GetLabels()),
 	}
 	if rootVolume(in) {
 		// RunInstances made it from the image, and compute deletes it with
@@ -2520,8 +2525,10 @@ func volumeProto(v resource.Volume, projectID string) *storagev1.Volume {
 	if v.DeleteOnTermination {
 		spec.Source = &storagev1.VolumeSpec_Image{Image: imageName(projectID, "ami-0123456789abcdef0")}
 	}
+	labels, _ := withInternalLabels(v.Tags, nil) //nolint:errcheck // accepted tags fit
 	return &storagev1.Volume{
 		CreateTime: created,
+		Labels:     labels,
 		Name:       volumeName(projectID, v.ID.String()),
 		Spec:       spec,
 		Status:     status,

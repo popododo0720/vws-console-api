@@ -70,6 +70,17 @@ func (s *volumeSrv) UpdateVolume(ctx context.Context, req *storagev1.UpdateVolum
 	if err != nil {
 		return nil, toStatus(err)
 	}
+	if paths := req.GetUpdateMask().GetPaths(); len(paths) == 1 && paths[0] == "labels" {
+		// A labels-only update is a tag change; the fake stores the tags.
+		acc, err := s.w.set.Compute.TagVolumes(ctx, backend.Mutation{
+			Scope: backend.Scope{Account: account}, Key: req.GetRequestId(), Fingerprint: fp,
+		}, resource.TagVolumesRequest{IDs: []resource.VolumeID{id}, Tags: userTags(req.GetVolume().GetLabels())})
+		if err != nil {
+			return nil, toStatus(err)
+		}
+		return runningOp(projectID, acc.Operation, volumeName(projectID, id.String()),
+			commonv1.OperationVerb_OPERATION_VERB_UPDATE, s.w.now)
+	}
 	acc, err := s.w.set.Compute.ModifyVolume(ctx, backend.Mutation{
 		Scope: backend.Scope{Account: account}, Key: req.GetRequestId(), Fingerprint: fp,
 	}, resource.ModifyVolumeRequest{ID: id, SizeGiB: req.GetVolume().GetSpec().GetSizeGib()})

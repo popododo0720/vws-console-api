@@ -49,6 +49,7 @@ func Run(t *testing.T, newSet Harness) {
 	}
 	exerciseImageRegion(ctx, t, set, account, created.Items[0].ID)
 	networkTags(t, set, account)
+	volumeTags(t, set, account)
 	req := resource.RunInstancesRequest{
 		ImageID: img, InstanceType: "vws.small", SubnetID: created.Items[0].ID, Count: 1,
 		Tags: map[string]string{"Name": "web-1", "env": "dev"},
@@ -417,5 +418,59 @@ func networkTags(t *testing.T, set backend.Set, account resource.AccountID) {
 	}
 	if op, err := set.Network.GetOperation(ctx, scope, tv.Operation.ID); err != nil || op.Action != resource.ActionCreateTags {
 		t.Fatalf("tag operation: %v %+v", err, op)
+	}
+}
+
+// volumeTags checks that volume tags survive create, describe and a CreateTags
+// merge, and that an unknown volume id changes no volume.
+func volumeTags(t *testing.T, set backend.Set, account resource.AccountID) {
+	t.Helper()
+	ctx := context.Background()
+	scope := backend.Scope{Account: account}
+	odd := map[string]string{"Name": "data-1", "Cost Center": "42", "env": "dev"}
+	vol, err := set.Compute.CreateVolume(ctx, backend.Mutation{Scope: scope, Key: "k-tvol", Fingerprint: "fp-tvol"},
+		resource.CreateVolumeRequest{SizeGiB: 8, Zone: resource.ZoneName, Type: resource.VolumeGP2, Tags: odd})
+	if err != nil {
+		t.Fatal(err)
+	}
+	volID := vol.Items[0].ID
+	if !maps.Equal(vol.Items[0].Tags, odd) {
+		t.Fatalf("accepted volume tags %v", vol.Items[0].Tags)
+	}
+	volTags := func() map[string]string {
+		page, err := set.Compute.DescribeVolumes(ctx, scope,
+			resource.VolumeQuery{IDs: []resource.VolumeID{volID}, Page: resource.PageRequest{Size: 5}})
+		if err != nil || len(page.Items) != 1 {
+			t.Fatalf("describe volume: %v %+v", err, page.Items)
+		}
+		return page.Items[0].Tags
+	}
+	if got := volTags(); !maps.Equal(got, odd) {
+		t.Fatalf("volume tags %v", got)
+	}
+	add := map[string]string{"Name": "data-2", "Owner Team": "SRE"}
+	want := map[string]string{"Name": "data-2", "Cost Center": "42", "env": "dev", "Owner Team": "SRE"}
+	tv, err := set.Compute.TagVolumes(ctx, backend.Mutation{Scope: scope, Key: "k-tagvol", Fingerprint: "fp-tagvol"},
+		resource.TagVolumesRequest{IDs: []resource.VolumeID{volID}, Tags: add})
+	if err != nil || tv.Operation.Action != resource.ActionCreateTags ||
+		len(tv.Items) != 1 || !maps.Equal(tv.Items[0].Tags, want) {
+		t.Fatalf("TagVolumes: %v %+v", err, tv)
+	}
+	if got := volTags(); !maps.Equal(got, want) {
+		t.Fatalf("volume tags after CreateTags %v", got)
+	}
+	missing, err := resource.Parse[resource.VolumeID]("vol-0fffffffffffffff0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	miss := backend.Mutation{Scope: scope, Key: "k-tagvol-miss", Fingerprint: "fp-tagvol-miss"}
+	_, err = set.Compute.TagVolumes(ctx, miss,
+		resource.TagVolumesRequest{IDs: []resource.VolumeID{volID, missing}, Tags: map[string]string{"stray": "x"}})
+	var re *resource.Error
+	if !errors.As(err, &re) || re.Code != resource.CodeNotFound {
+		t.Fatalf("TagVolumes with a missing volume: %v", err)
+	}
+	if got := volTags(); !maps.Equal(got, want) {
+		t.Fatalf("a refused CreateTags changed the volume: %v", got)
 	}
 }

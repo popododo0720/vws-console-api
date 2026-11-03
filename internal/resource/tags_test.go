@@ -24,6 +24,8 @@ func TestValidTagsFollowEC2(t *testing.T) {
 		"empty key":           {"": "v"},
 		"control character":   {"k": "a\nb"},
 		"invalid UTF-8":       {"k": "\xff"},
+		"aws: prefix":         {"aws:cloudformation:stack-name": "v"},
+		"AWS: prefix":         {"AWS:x": "v"},
 	} {
 		if err := validTags(tags); err == nil {
 			t.Errorf("%s: accepted", name)
