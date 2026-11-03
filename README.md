@@ -100,6 +100,13 @@ there also sign EC2 and S3 calls. `GetCallerIdentity` answers `Arn` in the `aws`
 partition, as AWS does; IAM resource ARNs and `AssumeRole`'s role ARN still use
 `arn:vws` (#430).
 
+The connection to vws-iam is plaintext unless `-iam-tls-ca-file` names a PEM
+CA bundle; then it is TLS 1.2 or later, verified against that CA (and
+`-iam-tls-server-name` when the certificate name differs from the endpoint
+host). Add `-iam-tls-cert-file` and `-iam-tls-key-file` for mutual TLS. The
+client pair is read again on every handshake, so a rotated Secret applies to
+the next connection. A missing or invalid file stops the process at start.
+
 `-iam=grpc -iam-endpoint <host:port>` hands every other key to vws-iam
 (vws-proto v0.3.0, `vws.iam.v1`). `Authenticate` gets the canonical request,
 string to sign, signature and client address (`source_ip`), never a secret;
