@@ -51,7 +51,7 @@ change both files together.
 | IAM and STS actions validate UserName first, at each action's AWS limit (64 or 128), then authorize on the real ARN; a failed lookup authorizes nothing. | `TestUserNameValidationPrecedesAuthorization`, `TestUserNameLengthFollowsTheAWSLimitOfEachAction`, `TestEntityActionsFailClosedWhenTheLookupFails` |
 | `GetCallerIdentity` answers the caller ARN in the `aws` partition. | `TestGetCallerIdentityReturnsAWSARNs` |
 | Every console route is authenticated and authorized. | `TestEveryRouteIsAuthorized` |
-| Console sign-in is rate limited per address and per account user name in bounded tables; a throttle logs no secret. | `TestLoginIsRateLimitedPerUserAcrossAddresses`, `TestLimiterMemoryIsBounded` |
+| Console sign-in is rate limited per address and per account user name in bounded tables; a throttle logs no secret; a failed or throttled sign-in logs no submitted user name. | `TestLoginIsRateLimitedPerUserAcrossAddresses`, `TestLimiterMemoryIsBounded`, `TestFailedLoginLogsNoUserName` |
 | Only `iamclient` speaks vws.iam.v1; no secret reaches vws-iam. | `TestSecretsNeverLeaveConsoleAPI` |
 | Named-entity `iam.Admin` methods take an `iam.AuthorizedPrincipal`, built only by `iam.Authorize`. | `TestOnlyTheAuthorizerBuildsAnAuthorizedPrincipal` |
 | IAM tag, MFA, access key and policy actions follow AWS and act only on the authorized entity. | `TestAccessKeyCallsActOnTheAuthorizedARN`, `TestEntityPolicyCallsActOnTheAuthorizedARN`, `TestMFADeviceTagSerialValidationPrecedesAuthorization` |

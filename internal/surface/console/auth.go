@@ -270,13 +270,15 @@ func (h *handler) login(w http.ResponseWriter, r *http.Request) {
 	}
 	user := userKey(account, in.UserName)
 	if ok, wait := h.users.take(user, h.now()); !ok {
-		h.throttled(w, r, wait, throttledByUser, slog.String("user", in.UserName), slog.String("source_ip", ip))
+		h.throttled(w, r, wait, throttledByUser, slog.String("source_ip", ip))
 		return
 	}
 	s, err := h.iam.Login(r.Context(), iam.LoginRequest{Account: account, UserName: in.UserName, Password: in.Password, MFACode: in.MFACode, SourceIP: ip})
-	log := h.log.With(slog.String("user", in.UserName), slog.String("source_ip", ip))
 	if err != nil {
-		log.WarnContext(r.Context(), "console sign-in failed", slog.String("code", resource.CodeOf(err).String()))
+		// A failed sign-in logs no user name: people type a password into the
+		// name box, and AWS hides the name on a failure too.
+		h.log.WarnContext(r.Context(), "console sign-in failed",
+			slog.String("source_ip", ip), slog.String("code", resource.CodeOf(err).String()))
 		if iam.IsBusy(err) {
 			// No password was checked, so the user keeps the attempt.
 			h.users.refund(user)
@@ -288,7 +290,7 @@ func (h *handler) login(w http.ResponseWriter, r *http.Request) {
 	// A success gives the user attempt back; the address attempt stays
 	// spent, so one known password cannot reopen an address for guessing.
 	h.users.refund(user)
-	log.InfoContext(r.Context(), "console sign-in")
+	h.log.InfoContext(r.Context(), "console sign-in", slog.String("user", in.UserName), slog.String("source_ip", ip))
 	maxAge := int(time.Until(s.Expires).Seconds())
 	csrf := csrfToken(s.Token)
 	http.SetCookie(w, &http.Cookie{Name: SessionCookie, Value: s.Token, Path: "/", MaxAge: maxAge, HttpOnly: true, Secure: true, SameSite: http.SameSiteStrictMode})
@@ -305,8 +307,8 @@ const (
 
 // throttled answers a sign-in refused by a gateway limit: 429
 // ResourceExhausted with Retry-After, a warning log and the audit metric.
-// The log carries the user name and address only, never the password, the
-// MFA code or the account id.
+// The log carries the source address and the limit only, never the user
+// name, the password, the MFA code or the account id.
 func (h *handler) throttled(w http.ResponseWriter, r *http.Request, wait time.Duration, by string, attrs ...slog.Attr) {
 	h.log.LogAttrs(r.Context(), slog.LevelWarn, "console sign-in rate limited", append(attrs, slog.String("limit", by))...)
 	obs.M().Audit(r.Context(), service.Name, auditActionLogin, by)
