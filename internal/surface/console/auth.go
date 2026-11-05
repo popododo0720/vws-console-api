@@ -23,8 +23,9 @@ import (
 // Console sign-in wire names.
 const (
 	// SessionCookie carries the session token. It is HttpOnly, so page
-	// scripts never see it.
-	SessionCookie = "vws_session"
+	// scripts never see it. The __Host- prefix makes a browser accept it
+	// only Secure, with Path=/ and no Domain, so a sibling host cannot set it.
+	SessionCookie = "__Host-vws_session"
 	// CSRFCookie carries the CSRF token for the page to echo in CSRFHeader on
 	// every request that changes state.
 	CSRFCookie = "vws_csrf"

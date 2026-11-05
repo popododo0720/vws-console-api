@@ -132,6 +132,9 @@ func TestLoginSetsHardenedCookies(t *testing.T) {
 	if !s.HttpOnly || !s.Secure || s.SameSite != http.SameSiteStrictMode || s.Path != "/" || s.MaxAge <= 0 {
 		t.Errorf("session cookie not hardened: %+v", s)
 	}
+	if !strings.HasPrefix(s.Name, "__Host-") || s.Domain != "" {
+		t.Errorf("session cookie breaks the __Host- rules: %+v", s)
+	}
 	if strings.Contains(rec.Body.String(), s.Value) {
 		t.Error("session token in the body; it must only be in the HttpOnly cookie")
 	}
