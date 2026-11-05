@@ -103,4 +103,23 @@ func TestConsoleLaunchesOnADirectSubnet(t *testing.T) {
 	if both.Code != http.StatusBadRequest {
 		t.Fatalf("subnetId with networkInterfaces %d %s", both.Code, both.Body)
 	}
+	for name, nics := range map[string]string{
+		"no device index": `[{"subnetId":"subnet-direct-prod"}]`,
+		"unread field":    `[{"deviceIndex":0,"subnetId":"subnet-direct-prod","privateIpAddress":"192.168.200.9"}]`,
+		"two overlay": `[{"deviceIndex":0,"subnetId":"subnet-0123456789abcdef0"},` +
+			`{"deviceIndex":1,"subnetId":"subnet-0123456789abcdef1"}]`,
+	} {
+		bad := do(http.MethodPost, "/api/v1/instances",
+			`{"imageId":"ami-0123456789abcdef0","instanceType":"vws.small","count":1,"networkInterfaces":`+nics+`}`)
+		if bad.Code != http.StatusBadRequest {
+			t.Errorf("%s: %d %s, want 400", name, bad.Code, bad.Body)
+		}
+	}
+	var all struct {
+		Items []json.RawMessage `json:"items"`
+	}
+	if list := do(http.MethodGet, "/api/v1/instances", ""); list.Code != http.StatusOK ||
+		json.Unmarshal(list.Body.Bytes(), &all) != nil || len(all.Items) != 1 {
+		t.Fatalf("refused launches changed the instance count: %s", list.Body)
+	}
 }

@@ -1,6 +1,7 @@
 package resource
 
 import (
+	"encoding/json"
 	"slices"
 	"testing"
 )
@@ -44,6 +45,9 @@ func TestRunInstancesNetworkInterfaces(t *testing.T) {
 		"missing subnet":        {launch(SubnetID{}, primary, NetworkInterfaceSpec{1, SubnetID{}}), false},
 		"too many":              {launch(SubnetID{}, nine...), false},
 		"neither":               {launch(SubnetID{}), false},
+		"two overlay": {
+			launch(SubnetID{}, NetworkInterfaceSpec{0, overlay}, NetworkInterfaceSpec{1, overlay}), false,
+		},
 	} {
 		_, err := c.req.Normalize()
 		e := AsError(err)
@@ -67,5 +71,28 @@ func TestSetInterfacesKeepsThePrimaryOnTheInstance(t *testing.T) {
 	}
 	if got := inst.Interfaces(); len(got) != 2 || got[0].DeviceIndex != 0 || got[1].DeviceIndex != 1 {
 		t.Fatalf("interfaces %+v, want device order", got)
+	}
+}
+
+func TestNetworkInterfaceSpecRequiresADeviceIndex(t *testing.T) {
+	var got NetworkInterfaceSpec
+	err := json.Unmarshal([]byte(`{"deviceIndex":0,"subnetId":"subnet-direct-prod"}`), &got)
+	if err != nil || got.DeviceIndex != 0 || got.SubnetID.String() != "subnet-direct-prod" {
+		t.Fatalf("explicit device 0: %+v %v", got, err)
+	}
+	for name, body := range map[string]string{
+		"missing index": `{"subnetId":"subnet-direct-prod"}`,
+		"unknown field": `{"deviceIndex":0,"subnetId":"subnet-direct-prod","privateIpAddress":"192.168.200.9"}`,
+		"bad subnet":    `{"deviceIndex":0,"subnetId":"subnet-direct-UPPER"}`,
+		"string index":  `{"deviceIndex":"0","subnetId":"subnet-direct-prod"}`,
+	} {
+		var spec NetworkInterfaceSpec
+		err := json.Unmarshal([]byte(body), &spec)
+		if CodeOf(err) != CodeInvalidArgument {
+			t.Errorf("%s: %v, want invalid", name, err)
+		}
+		if name == "missing index" && !IsMissingParameter(AsError(err)) {
+			t.Errorf("missing index: %v, want MissingParameter", err)
+		}
 	}
 }

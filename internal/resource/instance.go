@@ -1,7 +1,10 @@
 package resource
 
 import (
+	"bytes"
 	"cmp"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -255,6 +258,30 @@ type NetworkInterfaceSpec struct {
 	SubnetID    SubnetID `json:"subnetId"`
 }
 
+// UnmarshalJSON requires deviceIndex, as EC2 does, so an omitted index is
+// refused instead of read as the primary interface. The decoder is strict
+// because a custom unmarshaler does not inherit the caller's.
+func (s *NetworkInterfaceSpec) UnmarshalJSON(b []byte) error {
+	var wire struct {
+		DeviceIndex *int     `json:"deviceIndex"`
+		SubnetID    SubnetID `json:"subnetId"`
+	}
+	dec := json.NewDecoder(bytes.NewReader(b))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&wire); err != nil {
+		var e *Error
+		if errors.As(err, &e) {
+			return e
+		}
+		return Invalid("body", "malformed json")
+	}
+	if wire.DeviceIndex == nil {
+		return MissingParameter("deviceIndex", "When specifying network interfaces, you must include a device index.")
+	}
+	*s = NetworkInterfaceSpec{DeviceIndex: *wire.DeviceIndex, SubnetID: wire.SubnetID}
+	return nil
+}
+
 // Interfaces is the launch's interfaces in device order: NetworkInterfaces,
 // or SubnetID as device 0.
 func (r RunInstancesRequest) Interfaces() []NetworkInterfaceSpec {
@@ -370,6 +397,11 @@ func normalizeInterfaces(in []NetworkInterfaceSpec) ([]NetworkInterfaceSpec, err
 	}
 	if _, ok := seen[0]; !ok {
 		return nil, Invalid("deviceIndex", "a network interface with device index 0 is required")
+	}
+	// vws-compute wires every interface only when one is direct; with overlay
+	// interfaces alone it wires the first and drops the rest (vws-compute#55).
+	if len(in) > 1 && !slices.ContainsFunc(in, func(n NetworkInterfaceSpec) bool { return IsDirectSubnet(n.SubnetID) }) {
+		return nil, Invalid("networkInterfaces", "more than one network interface requires one on a direct subnet")
 	}
 	out := slices.Clone(in)
 	slices.SortFunc(out, func(a, b NetworkInterfaceSpec) int { return cmp.Compare(a.DeviceIndex, b.DeviceIndex) })

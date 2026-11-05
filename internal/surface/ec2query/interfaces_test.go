@@ -138,6 +138,8 @@ func TestRunInstancesRefusesBadNetworkInterfaces(t *testing.T) {
 		"no subnet":                     {nic([3]string{"1", "0", ""}), "MissingParameter"},
 		"malformed subnet":              {nic([3]string{"1", "0", "subnet-direct-UPPER"}), "InvalidParameterValue"},
 		"missing direct":                {nic([3]string{"1", "0", "subnet-direct-nope"}), "InvalidSubnetID.NotFound"},
+		"two overlay": {nic([3]string{"1", "0", "subnet-0123456789abcdef0"},
+			[3]string{"2", "1", "subnet-0123456789abcdef1"}), "InvalidParameterValue"},
 	} {
 		code, body := send(c.form)
 		if code != http.StatusBadRequest || !strings.Contains(body, "<Code>"+c.code+"</Code>") {
