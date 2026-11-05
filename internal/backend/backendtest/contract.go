@@ -473,8 +473,9 @@ func networkTags(t *testing.T, set backend.Set, account resource.AccountID) {
 		t.Fatalf("UntagSubnets: %v %+v", err, us.Operation)
 	}
 	// DeleteTags with no tags deletes every tag except the aws: ones.
-	if got, keep := subTags(), map[string]string{"aws:cloudformation:id": want["aws:cloudformation:id"]}; !maps.Equal(got, keep) {
-		t.Fatalf("subnet tags after DeleteTags with no tags %v, want %v", got, keep)
+	keepAWS := map[string]string{"aws:cloudformation:id": want["aws:cloudformation:id"]}
+	if got := subTags(); !maps.Equal(got, keepAWS) {
+		t.Fatalf("subnet tags after DeleteTags with no tags %v, want %v", got, keepAWS)
 	}
 	missing := backend.Mutation{Scope: scope, Key: "k-untagvpc-missing", Fingerprint: "fp-untagvpc-missing"}
 	_, err = set.Network.UntagVpcs(ctx, missing, resource.UntagVpcsRequest{IDs: []resource.VpcID{vpcID, missingVpc(t)}})
