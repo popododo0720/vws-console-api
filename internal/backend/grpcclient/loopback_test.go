@@ -62,10 +62,12 @@ func dialLoopbackClock(t *testing.T, world *fake.World, now time.Time, clock fun
 	computeSrv := grpc.NewServer(
 		grpc.MaxRecvMsgSize(MaxMessageBytes()),
 		grpc.MaxSendMsgSize(MaxMessageBytes()),
+		grpc.UnaryInterceptor(enforceLabelGrammar),
 	)
 	storageSrv := grpc.NewServer(
 		grpc.MaxRecvMsgSize(MaxMessageBytes()),
 		grpc.MaxSendMsgSize(MaxMessageBytes()),
+		grpc.UnaryInterceptor(enforceLabelGrammar),
 	)
 	loop := newLoopWorld(world.Set(), now)
 	computev1.RegisterInstanceServiceServer(computeSrv, &instanceSrv{w: loop})

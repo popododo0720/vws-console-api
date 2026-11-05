@@ -114,7 +114,7 @@ func Run(t *testing.T, newSet Harness) {
 		t.Fatalf("tags %v, want Name=web-1 env=dev", got)
 	}
 	tagged, err := set.Compute.CreateTags(ctx, backend.Mutation{Scope: backend.Scope{Account: account}, Key: "k-tags", Fingerprint: "fp-tags"}, resource.CreateTagsRequest{
-		IDs: []resource.InstanceID{first.Items[0].ID}, Tags: map[string]string{"Name": "web-2", "Cost Center": "42"},
+		IDs: []resource.InstanceID{first.Items[0].ID}, Tags: unlabelableTags("web-2"),
 	})
 	if err != nil || tagged.Operation.Action != resource.ActionCreateTags {
 		t.Fatalf("create tags: %v %+v", err, tagged)
@@ -128,8 +128,10 @@ func Run(t *testing.T, newSet Harness) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := retagged.Items[0].Tags; got["Name"] != "web-2" || got["env"] != "dev" || got["Cost Center"] != "42" || len(got) != 3 {
-		t.Fatalf("tags after CreateTags %v", got)
+	wantTags := unlabelableTags("web-2")
+	wantTags["env"] = "dev"
+	if got := retagged.Items[0].Tags; !maps.Equal(got, wantTags) {
+		t.Fatalf("tags after CreateTags\n got %q\nwant %q", got, wantTags)
 	}
 	if retagged.Items[0].State != resource.InstanceRunning {
 		t.Fatalf("CreateTags changed the state to %s", retagged.Items[0].State)
@@ -358,13 +360,28 @@ func exerciseImageRegion(
 	}
 }
 
+// unlabelableTags are EC2-valid tags that a resource API label cannot hold
+// as they are: a key with uppercase or punctuation, a key in the vws- label
+// space, and values over 63 bytes (#93).
+func unlabelableTags(name string) map[string]string {
+	return map[string]string{
+		"Name":                   name,
+		"Cost Center":            "42",
+		"vws-looks-internal":     "user value",
+		"aws:cloudformation:id":  "a<b>&c",
+		"long":                   strings.Repeat("v", 256),
+		strings.Repeat("K", 128): strings.Repeat("값", 85),
+	}
+}
+
 // networkTags checks that VPC and subnet tags survive create, describe, and a
 // CreateTags merge, including tags that are not valid backend labels.
 func networkTags(t *testing.T, set backend.Set, account resource.AccountID) {
 	t.Helper()
 	ctx := context.Background()
 	scope := backend.Scope{Account: account}
-	odd := map[string]string{"Name": "net-1", "Cost Center": "42", "env": "dev"}
+	odd := unlabelableTags("net-1")
+	odd["env"] = "dev"
 	vpc, err := set.Network.CreateVpc(ctx, backend.Mutation{Scope: scope, Key: "k-tvpc", Fingerprint: "fp-tvpc"},
 		resource.CreateVpcRequest{Cidr: "10.40.0.0/16", Tags: odd})
 	if err != nil {
@@ -398,7 +415,8 @@ func networkTags(t *testing.T, set backend.Set, account resource.AccountID) {
 		t.Fatalf("subnet tags %v", got)
 	}
 	add := map[string]string{"Name": "net-2", "Owner Team": "SRE"}
-	want := map[string]string{"Name": "net-2", "Cost Center": "42", "env": "dev", "Owner Team": "SRE"}
+	want := maps.Clone(odd)
+	maps.Copy(want, add)
 	tv, err := set.Network.TagVpcs(ctx, backend.Mutation{Scope: scope, Key: "k-tagvpc", Fingerprint: "fp-tagvpc"},
 		resource.TagVpcsRequest{IDs: []resource.VpcID{vpcID}, Tags: add})
 	if err != nil || tv.Operation.Action != resource.ActionCreateTags {
