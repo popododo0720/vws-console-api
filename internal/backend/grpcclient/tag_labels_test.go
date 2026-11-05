@@ -12,6 +12,8 @@ import (
 	"unicode/utf8"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 
 	commonv1 "github.com/popododo0720/vws-proto/gen/go/vws/common/v1"
@@ -90,12 +92,16 @@ func TestUndecodableTagChunksFail(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	delete(labels, tagChunkKey(1))
-	if got, err := userTags(labels); resource.CodeOf(err) != resource.CodeInternal {
-		t.Fatalf("a missing tag chunk read as %q, %v; want Internal, not tags without the packed ones", got, err)
-	}
-	if _, _, err := mergedLabels(labels, map[string]string{"env": "prod"}); resource.CodeOf(err) != resource.CodeInternal {
-		t.Fatalf("CreateTags over undecodable chunks: %v; want Internal, not a rewrite that drops them", err)
+	for _, missing := range []int{0, 1} {
+		broken := maps.Clone(labels)
+		delete(broken, tagChunkKey(missing))
+		if got, err := userTags(broken); resource.CodeOf(err) != resource.CodeInternal {
+			t.Fatalf("missing tag chunk %d read as %q, %v; want Internal, not tags without the packed ones", missing, got, err)
+		}
+		_, _, err := mergedLabels(broken, map[string]string{"env": "prod"})
+		if resource.CodeOf(err) != resource.CodeInternal {
+			t.Fatalf("CreateTags over missing chunk %d: %v; want Internal, not a rewrite that drops them", missing, err)
+		}
 	}
 }
 
@@ -117,45 +123,49 @@ func TestUndecodableTagChunksAreSkippedInList(t *testing.T) {
 	if err != nil || len(page.Items) != 1 || page.Items[0].ID.String() != goodID {
 		t.Fatalf("listing %+v, %v; want only %s", page.Items, err, goodID)
 	}
-	if !strings.Contains(logs.String(), bad.GetName()) {
-		t.Fatalf("the skipped record is not logged: %s", logs.String())
+	if !strings.Contains(logs.String(), "id="+badID) || strings.Contains(logs.String(), account.String()) {
+		t.Fatalf("the skipped record is not logged by id alone: %s", logs.String())
 	}
 	id, err := resource.Parse[resource.InstanceID](badID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := client.DescribeInstances(ctx, scope, resource.InstanceQuery{IDs: []resource.InstanceID{id}}); resource.CodeOf(err) != resource.CodeInternal {
+	_, err = client.DescribeInstances(ctx, scope, resource.InstanceQuery{IDs: []resource.InstanceID{id}})
+	if resource.CodeOf(err) != resource.CodeInternal {
 		t.Fatalf("an id read of the bad record: %v; want Internal", err)
 	}
 }
 
-// badTagSubnets serves one VPC holding a readable subnet and one whose tag
-// chunks do not decode.
-type badTagSubnets struct {
+// badTagNetwork serves VPCs and subnets, some with tag chunks that do not
+// decode.
+type badTagNetwork struct {
 	networkv1.UnimplementedVpcServiceServer
 	networkv1.UnimplementedSubnetServiceServer
-	vpc     string
+	vpcs    []*networkv1.Vpc
 	subnets []*networkv1.Subnet
 }
 
-func (s *badTagSubnets) ListVpcs(context.Context, *networkv1.ListVpcsRequest) (*networkv1.ListVpcsResponse, error) {
-	return &networkv1.ListVpcsResponse{Vpcs: []*networkv1.Vpc{{Name: s.vpc}}}, nil
+func (s *badTagNetwork) ListVpcs(context.Context, *networkv1.ListVpcsRequest) (*networkv1.ListVpcsResponse, error) {
+	return &networkv1.ListVpcsResponse{Vpcs: s.vpcs}, nil
 }
 
-func (s *badTagSubnets) ListSubnets(context.Context, *networkv1.ListSubnetsRequest) (*networkv1.ListSubnetsResponse, error) {
+func (s *badTagNetwork) GetVpc(_ context.Context, req *networkv1.GetVpcRequest) (*networkv1.Vpc, error) {
+	for _, vpc := range s.vpcs {
+		if vpc.GetName() == req.GetName() {
+			return vpc, nil
+		}
+	}
+	return nil, status.Error(codes.NotFound, "missing vpc")
+}
+
+func (s *badTagNetwork) ListSubnets(
+	context.Context, *networkv1.ListSubnetsRequest,
+) (*networkv1.ListSubnetsResponse, error) {
 	return &networkv1.ListSubnetsResponse{Subnets: s.subnets}, nil
 }
 
-func TestUndecodableSubnetTagChunksAreSkippedInList(t *testing.T) {
-	account := mustAccount(t)
-	projectID := project(account)
-	const vpcID, goodID, badID = "vpc-0123456789abcdef0", "subnet-0123456789abcdef0", "subnet-0fedcba9876543210"
-	good := subnetProto(resource.Subnet{Cidr: "10.0.1.0/24", State: resource.SubnetAvailable}, projectID, vpcID)
-	good.Name = subnetName(projectID, vpcID, goodID)
-	bad := subnetProto(resource.Subnet{Cidr: "10.0.2.0/24", State: resource.SubnetAvailable}, projectID, vpcID)
-	bad.Name = subnetName(projectID, vpcID, badID)
-	bad.Labels = map[string]string{tagChunkKey(0): `{"Owner Team":`}
-	world := &badTagSubnets{vpc: vpcName(projectID, vpcID), subnets: []*networkv1.Subnet{good, bad}}
+func dialBadTagNetwork(t *testing.T, world *badTagNetwork) (networkClient, *bytes.Buffer) {
+	t.Helper()
 	lis := bufconn.Listen(MaxMessageBytes())
 	srv := grpc.NewServer()
 	networkv1.RegisterVpcServiceServer(srv, world)
@@ -172,25 +182,73 @@ func TestUndecodableSubnetTagChunksAreSkippedInList(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = conn.Close() })
 	var logs bytes.Buffer
-	client := networkClient{&api{
+	return networkClient{&api{
 		vpcs:    networkv1.NewVpcServiceClient(conn),
 		subnets: networkv1.NewSubnetServiceClient(conn),
 		log:     slog.New(slog.NewTextHandler(&logs, nil)),
-	}}
+	}}, &logs
+}
+
+func badTagVpc(projectID, id string) *networkv1.Vpc {
+	vpc := vpcProto(resource.Vpc{Cidr: "10.0.0.0/16", State: resource.VpcAvailable}, projectID)
+	vpc.Name = vpcName(projectID, id)
+	return vpc
+}
+
+func TestUndecodableSubnetTagChunksAreSkippedInList(t *testing.T) {
+	account := mustAccount(t)
+	projectID := project(account)
+	const vpcID, goodID, badID = "vpc-0123456789abcdef0", "subnet-0123456789abcdef0", "subnet-0fedcba9876543210"
+	good := subnetProto(resource.Subnet{Cidr: "10.0.1.0/24", State: resource.SubnetAvailable}, projectID, vpcID)
+	good.Name = subnetName(projectID, vpcID, goodID)
+	bad := subnetProto(resource.Subnet{Cidr: "10.0.2.0/24", State: resource.SubnetAvailable}, projectID, vpcID)
+	bad.Name = subnetName(projectID, vpcID, badID)
+	bad.Labels = map[string]string{tagChunkKey(0): `{"Owner Team":`}
+	client, logs := dialBadTagNetwork(t, &badTagNetwork{
+		vpcs:    []*networkv1.Vpc{badTagVpc(projectID, vpcID)},
+		subnets: []*networkv1.Subnet{good, bad},
+	})
 	ctx := context.Background()
 	scope := backend.Scope{Account: account}
 	page, err := client.DescribeSubnets(ctx, scope, resource.SubnetQuery{})
 	if err != nil || len(page.Items) != 1 || page.Items[0].ID.String() != goodID {
 		t.Fatalf("listing %+v, %v; want only %s", page.Items, err, goodID)
 	}
-	if !strings.Contains(logs.String(), bad.GetName()) {
-		t.Fatalf("the skipped record is not logged: %s", logs.String())
+	if !strings.Contains(logs.String(), "id="+badID) || strings.Contains(logs.String(), account.String()) {
+		t.Fatalf("the skipped record is not logged by id alone: %s", logs.String())
 	}
 	id, err := resource.Parse[resource.SubnetID](badID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := client.DescribeSubnets(ctx, scope, resource.SubnetQuery{IDs: []resource.SubnetID{id}}); resource.CodeOf(err) != resource.CodeInternal {
+	_, err = client.DescribeSubnets(ctx, scope, resource.SubnetQuery{IDs: []resource.SubnetID{id}})
+	if resource.CodeOf(err) != resource.CodeInternal {
+		t.Fatalf("an id read of the bad record: %v; want Internal", err)
+	}
+}
+
+func TestUndecodableVpcTagChunksAreSkippedInList(t *testing.T) {
+	account := mustAccount(t)
+	projectID := project(account)
+	const goodID, badID = "vpc-0123456789abcdef0", "vpc-0fedcba9876543210"
+	bad := badTagVpc(projectID, badID)
+	bad.Labels = map[string]string{tagChunkKey(0): `{"Owner Team":`}
+	client, logs := dialBadTagNetwork(t, &badTagNetwork{vpcs: []*networkv1.Vpc{badTagVpc(projectID, goodID), bad}})
+	ctx := context.Background()
+	scope := backend.Scope{Account: account}
+	page, err := client.DescribeVpcs(ctx, scope, resource.VpcQuery{})
+	if err != nil || len(page.Items) != 1 || page.Items[0].ID.String() != goodID {
+		t.Fatalf("listing %+v, %v; want only %s", page.Items, err, goodID)
+	}
+	if !strings.Contains(logs.String(), "id="+badID) || strings.Contains(logs.String(), account.String()) {
+		t.Fatalf("the skipped record is not logged by id alone: %s", logs.String())
+	}
+	id, err := resource.Parse[resource.VpcID](badID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = client.DescribeVpcs(ctx, scope, resource.VpcQuery{IDs: []resource.VpcID{id}})
+	if resource.CodeOf(err) != resource.CodeInternal {
 		t.Fatalf("an id read of the bad record: %v; want Internal", err)
 	}
 }

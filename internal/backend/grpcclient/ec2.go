@@ -2056,6 +2056,9 @@ func (c networkClient) DescribeVpcs(ctx context.Context, s backend.Scope, q reso
 				continue
 			}
 			if err != nil {
+				if len(want) == 0 && c.skipBadRecord(ctx, item.GetName(), err) {
+					continue
+				}
 				return resource.Page[resource.Vpc]{}, err
 			}
 			items = append(items, vpc)

@@ -342,18 +342,23 @@ const (
 // cannot rewrite the labels without the tags they hold (#93).
 func userTags(labels map[string]string) (map[string]string, error) {
 	if len(labels) == 0 {
-		return nil, nil
+		return nil, nil //nolint:nilnil // no tags is a nil map, not an error
 	}
 	out := map[string]string{}
 	var blob strings.Builder
-	for i := 0; ; i++ {
-		part, ok := labels[tagChunkKey(i)]
+	read := 0
+	for ; ; read++ {
+		part, ok := labels[tagChunkKey(read)]
 		if !ok {
 			break
 		}
 		blob.WriteString(part)
 	}
+	chunks := 0
 	for key, value := range labels {
+		if strings.HasPrefix(key, labelTagChunk) {
+			chunks++
+		}
 		if key == labelNameTag {
 			out[nameTag] = value
 			continue
@@ -363,6 +368,9 @@ func userTags(labels map[string]string) (map[string]string, error) {
 		}
 		out[key] = value
 	}
+	if chunks != read {
+		return nil, resource.Internal(&badTagLabelsError{fmt.Errorf("%d of %d chunks are in sequence", read, chunks)})
+	}
 	if blob.Len() > 0 {
 		var packed map[string]string
 		if err := json.Unmarshal([]byte(blob.String()), &packed); err != nil {
@@ -371,7 +379,7 @@ func userTags(labels map[string]string) (map[string]string, error) {
 		maps.Copy(out, packed)
 	}
 	if len(out) == 0 {
-		return nil, nil
+		return nil, nil //nolint:nilnil // no tags is a nil map, not an error
 	}
 	return out, nil
 }

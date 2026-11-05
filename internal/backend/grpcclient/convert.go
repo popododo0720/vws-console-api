@@ -395,7 +395,7 @@ func (a *api) skipBadRecord(ctx context.Context, name string, err error) bool {
 	var tags *badTagLabelsError
 	if errors.As(err, &tags) {
 		a.logger().WarnContext(ctx, "skipping a record whose tag labels do not decode",
-			slog.String("name", name), slog.Any("err", err))
+			slog.String("id", lastSegment(name)), slog.Any("err", err))
 		return true
 	}
 	var typ *unknownVolumeTypeError
@@ -693,7 +693,10 @@ func subnetModel(in *networkv1.Subnet) (resource.Subnet, error) {
 	if err != nil {
 		return resource.Subnet{}, err
 	}
-	return resource.Subnet{ID: id, OwnerID: owner, VpcID: vpcID, Cidr: in.GetSpec().GetIpv4Cidr(), State: state, Zone: in.GetSpec().GetZone(), Tags: tags}, nil
+	return resource.Subnet{
+		ID: id, OwnerID: owner, VpcID: vpcID, Cidr: in.GetSpec().GetIpv4Cidr(), State: state,
+		Zone: in.GetSpec().GetZone(), Tags: tags,
+	}, nil
 }
 
 func subnetStateOf(obs commonv1.ReconciliationState) (resource.SubnetState, error) {
