@@ -2548,7 +2548,11 @@ func vpcModel(in *networkv1.Vpc) (resource.Vpc, error) {
 	if err != nil {
 		return resource.Vpc{}, err
 	}
-	return resource.Vpc{ID: id, OwnerID: owner, Cidr: in.GetSpec().GetIpv4Cidr(), State: state, Tags: userTags(in.GetLabels())}, nil
+	tags, err := userTags(in.GetLabels())
+	if err != nil {
+		return resource.Vpc{}, err
+	}
+	return resource.Vpc{ID: id, OwnerID: owner, Cidr: in.GetSpec().GetIpv4Cidr(), State: state, Tags: tags}, nil
 }
 
 func vpcStateOf(obs commonv1.ReconciliationState) (string, error) {

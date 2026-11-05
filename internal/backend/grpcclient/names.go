@@ -338,9 +338,11 @@ const (
 	tagChunkDigits = 2
 )
 
-func userTags(labels map[string]string) map[string]string {
+// userTags fails when the tag chunks do not decode, so a later CreateTags
+// cannot rewrite the labels without the tags they hold (#93).
+func userTags(labels map[string]string) (map[string]string, error) {
 	if len(labels) == 0 {
-		return nil
+		return nil, nil
 	}
 	out := map[string]string{}
 	var blob strings.Builder
@@ -363,14 +365,15 @@ func userTags(labels map[string]string) map[string]string {
 	}
 	if blob.Len() > 0 {
 		var packed map[string]string
-		if err := json.Unmarshal([]byte(blob.String()), &packed); err == nil {
-			maps.Copy(out, packed)
+		if err := json.Unmarshal([]byte(blob.String()), &packed); err != nil {
+			return nil, resource.Internal(&badTagLabelsError{err})
 		}
+		maps.Copy(out, packed)
 	}
 	if len(out) == 0 {
-		return nil
+		return nil, nil
 	}
-	return out
+	return out, nil
 }
 
 func tagChunkKey(i int) string {

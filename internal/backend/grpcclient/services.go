@@ -946,6 +946,9 @@ func (c networkClient) listSubnetParent(ctx context.Context, parent string, want
 		for _, item := range out.GetSubnets() {
 			sub, err := subnetModel(item)
 			if err != nil {
+				if _, named := want[lastSegment(item.GetName())]; !named && c.skipBadRecord(ctx, item.GetName(), err) {
+					continue
+				}
 				return nil, err
 			}
 			if len(want) > 0 {
