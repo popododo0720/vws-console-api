@@ -1,7 +1,9 @@
 package console
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -374,4 +376,61 @@ func TestConfiguredOriginIsAllowed(t *testing.T) {
 func cloudFor(t *testing.T) *cloud.Service {
 	t.Helper()
 	return cloud.New(cloud.Config{Backends: fake.New(fake.Options{}).Set()})
+}
+
+const loginJSON = `{"account":"123456789012","userName":"bob","password":"correct horse 1"}`
+
+func TestReloginRevokesThePreviousSession(t *testing.T) {
+	e := newLoginEnv(t)
+	first, _ := e.login(t)
+	rec := e.do(t, http.MethodPost, "/api/v1/auth/login", loginJSON, nil, first)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("re-login %d %s", rec.Code, rec.Body)
+	}
+	second := cookie(t, rec, SessionCookie)
+	if second.Value == first.Value {
+		t.Fatal("re-login reused the session token")
+	}
+	if got := e.do(t, http.MethodGet, "/api/v1/auth/session", "", nil, first); got.Code != http.StatusUnauthorized {
+		t.Errorf("previous session after re-login: %d %s", got.Code, got.Body)
+	}
+	if got := e.do(t, http.MethodGet, "/api/v1/auth/session", "", nil, second); got.Code != http.StatusOK {
+		t.Errorf("new session: %d %s", got.Code, got.Body)
+	}
+}
+
+type failingLogout struct{ iam.Client }
+
+func (failingLogout) Logout(context.Context, string) error { return errors.New("vws-iam is down") }
+
+func TestReloginWithAFailingLogoutSetsNoCookie(t *testing.T) {
+	e := newLoginEnv(t)
+	first, _ := e.login(t)
+	e.h = New(Config{
+		IAM: failingLogout{iam.WithRoot(e.root, e.fake)},
+		Now: func() time.Time { return *e.clock },
+	})
+	rec := e.do(t, http.MethodPost, "/api/v1/auth/login", loginJSON, nil, first)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("re-login with a failing logout: %d %s", rec.Code, rec.Body)
+	}
+	if got := rec.Header().Values("Set-Cookie"); len(got) != 0 {
+		t.Errorf("cookies set on a failed re-login: %v", got)
+	}
+	if got := e.do(t, http.MethodGet, "/api/v1/auth/session", "", nil, first); got.Code != http.StatusOK {
+		t.Errorf("previous session after a failed re-login: %d %s", got.Code, got.Body)
+	}
+}
+
+func TestReloginWithAnUnknownCookieSucceeds(t *testing.T) {
+	e := newLoginEnv(t)
+	stale := &http.Cookie{Name: SessionCookie, Value: "garbage"}
+	rec := e.do(t, http.MethodPost, "/api/v1/auth/login", loginJSON, nil, stale)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("login with a garbage cookie: %d %s", rec.Code, rec.Body)
+	}
+	fresh := cookie(t, rec, SessionCookie)
+	if got := e.do(t, http.MethodGet, "/api/v1/auth/session", "", nil, fresh); got.Code != http.StatusOK {
+		t.Errorf("new session: %d %s", got.Code, got.Body)
+	}
 }

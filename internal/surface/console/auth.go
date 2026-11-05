@@ -291,6 +291,15 @@ func (h *handler) login(w http.ResponseWriter, r *http.Request) {
 	// A success gives the user attempt back; the address attempt stays
 	// spent, so one known password cannot reopen an address for guessing.
 	h.users.refund(user)
+	// A browser that signs in again would otherwise leave its old session
+	// valid until it expires. If the revoke fails the new token has not been
+	// handed out, so nobody holds it and it simply expires with SessionTTL.
+	if old, err := r.Cookie(SessionCookie); err == nil && old.Value != "" {
+		if err := h.iam.Logout(r.Context(), old.Value); err != nil {
+			writeErr(w, r, sessionErr(err))
+			return
+		}
+	}
 	h.log.InfoContext(r.Context(), "console sign-in", slog.String("user", in.UserName), slog.String("source_ip", ip))
 	maxAge := int(time.Until(s.Expires).Seconds())
 	csrf := csrfToken(s.Token)
