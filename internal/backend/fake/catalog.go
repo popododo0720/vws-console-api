@@ -439,6 +439,9 @@ func (n network) AssociateAddress(ctx context.Context, m backend.Mutation, req r
 	if !ok || inst.OwnerID != m.Account || inst.State == resource.InstanceTerminated {
 		return resource.Accepted[resource.Address]{}, resource.NotFound(resource.KindInstance, req.InstanceID.String())
 	}
+	if resource.IsDirectSubnet(inst.SubnetID) {
+		return resource.Accepted[resource.Address]{}, resource.DirectElasticIP()
+	}
 	for _, other := range n.w.addr {
 		if other.ID != addr.ID && other.InstanceID == req.InstanceID {
 			return resource.Accepted[resource.Address]{}, resource.Invalid("instanceId", "instance already has an address")

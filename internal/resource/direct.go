@@ -28,6 +28,14 @@ func IsDirectSubnet(id SubnetID) bool { return strings.HasPrefix(id.v, directSub
 // UnauthorizedOperation, as vws-network does.
 func DirectReadOnly() *Error { return Denied("direct networks are read-only") }
 
+// DirectElasticIP refuses an elastic IP for an instance whose primary
+// interface is on a direct network. That interface is already on the
+// physical network, with no NAT to attach the address to. EC2 answers
+// InvalidParameterCombination, as vws-network does.
+func DirectElasticIP() *Error {
+	return InvalidCombination("instanceId", "an elastic ip cannot attach to a direct network interface")
+}
+
 // validDirectSubnet is the vws-network direct name rule,
 // ^[a-z][a-z0-9-]{0,14}$, after the prefix.
 func validDirectSubnet(s string) bool {

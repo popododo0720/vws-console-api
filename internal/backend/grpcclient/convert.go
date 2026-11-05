@@ -587,6 +587,21 @@ func nicIndex(name string) (int, bool) {
 	return n, true
 }
 
+// primaryDevice is the compute device name of the instance's device 0
+// interface, read as instanceInterfaces reads it.
+func primaryDevice(in *computev1.Instance) (string, bool) {
+	for i, nic := range in.GetSpec().GetNetworkInterfaces() {
+		index, ok := nicIndex(nic.GetDeviceName())
+		if !ok {
+			index = i
+		}
+		if index == 0 {
+			return nic.GetDeviceName(), true
+		}
+	}
+	return "", false
+}
+
 // instanceInterfaces reads the spec's interfaces. A device name that is not
 // nic<N> is its position. The address of each is the status entry of the
 // same device name, since compute need not list them in spec order. A

@@ -217,6 +217,37 @@ func directLaunch(ctx context.Context, t *testing.T, newSet Harness, overlay, di
 	if err != nil || len(all.Items) != 1 {
 		t.Fatalf("refused launches left instances: %v %+v", err, all.Items)
 	}
+
+	associate := func(account resource.AccountID, key string, inst resource.InstanceID) (resource.AddressID, error) {
+		t.Helper()
+		eip, err := set.Network.AllocateAddress(ctx, mut(account, key), resource.AllocateAddressRequest{Domain: "vpc"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = set.Network.AssociateAddress(ctx, mut(account, key+"-assoc"), resource.AssociateAddressRequest{
+			ID: eip.Items[0].ID, InstanceID: inst,
+		})
+		return eip.Items[0].ID, err
+	}
+	for _, c := range []struct {
+		account resource.AccountID
+		key     string
+		inst    resource.InstanceID
+	}{{owner, "eip-direct-primary", behind.Items[0].ID}, {other, "eip-direct-only", only.Items[0].ID}} {
+		eip, err := associate(c.account, c.key, c.inst)
+		if !resource.IsInvalidCombination(resource.AsError(err)) {
+			t.Fatalf("%s: elastic IP on a direct primary interface: %v, want InvalidParameterCombination", c.key, err)
+		}
+		page, err := set.Network.DescribeAddresses(ctx, backend.Scope{Account: c.account}, resource.AddressQuery{
+			IDs: []resource.AddressID{eip}, Page: resource.PageRequest{Size: 50},
+		})
+		if err != nil || len(page.Items) != 1 || !page.Items[0].InstanceID.IsZero() {
+			t.Fatalf("%s: a refused association stuck: %v %+v", c.key, err, page.Items)
+		}
+	}
+	if _, err := associate(owner, "eip-overlay-primary", id); err != nil {
+		t.Fatalf("elastic IP on an overlay primary with a direct secondary: %v", err)
+	}
 }
 
 // checkDirectVisible checks that account reads the direct subnet as vws-network

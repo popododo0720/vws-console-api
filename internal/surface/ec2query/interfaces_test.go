@@ -4,6 +4,7 @@ import (
 	"encoding/xml"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -145,5 +146,54 @@ func TestRunInstancesRefusesBadNetworkInterfaces(t *testing.T) {
 	}
 	if got := describeAll(t, send); len(got) != 0 {
 		t.Fatalf("refused launches left instances: %+v", got)
+	}
+}
+
+func TestAssociateAddressRefusesADirectPrimaryInterface(t *testing.T) {
+	send := directHarness(t)
+	ok := func(f url.Values) string {
+		t.Helper()
+		code, body := send(f)
+		if code != http.StatusOK {
+			t.Fatalf("%s %d %s", f.Get("Action"), code, body)
+		}
+		return body
+	}
+	overlay := newSubnet(t, ok)
+	launch := func(token string, members ...[2]string) string {
+		f := launchForm("", token, nil)
+		f.Del("SubnetId")
+		for i, m := range members {
+			prefix := "NetworkInterface." + strconv.Itoa(i+1) + "."
+			f.Set(prefix+"DeviceIndex", m[0])
+			f.Set(prefix+"SubnetId", m[1])
+		}
+		return xmlText(t, ok(f), "instanceId")
+	}
+	direct := launch("eip-direct", [2]string{"0", "subnet-direct-prod"}, [2]string{"1", overlay})
+	mixed := launch("eip-mixed", [2]string{"0", overlay}, [2]string{"1", "subnet-direct-prod"})
+	alloc := func() string {
+		return xmlText(t, ok(url.Values{"Action": {"AllocateAddress"}, "Domain": {"vpc"}}), "allocationId")
+	}
+	refused := alloc()
+	code, body := send(url.Values{"Action": {"AssociateAddress"}, "AllocationId": {refused}, "InstanceId": {direct}})
+	if code != http.StatusBadRequest || !strings.Contains(body, "<Code>InvalidParameterCombination</Code>") {
+		t.Fatalf("direct primary %d %s", code, body)
+	}
+	described := ok(url.Values{"Action": {"DescribeAddresses"}, "AllocationId.1": {refused}})
+	if strings.Contains(described, "<instanceId>") {
+		t.Fatalf("a refused association stuck: %s", described)
+	}
+	ok(url.Values{"Action": {"AssociateAddress"}, "AllocationId": {alloc()}, "InstanceId": {mixed}})
+	var got struct {
+		NICs []struct {
+			DeviceIndex int    `xml:"attachment>deviceIndex"`
+			PublicIP    string `xml:"association>publicIp"`
+		} `xml:"reservationSet>item>instancesSet>item>networkInterfaceSet>item"`
+	}
+	body = ok(url.Values{"Action": {"DescribeInstances"}, "InstanceId.1": {mixed}})
+	if xml.Unmarshal([]byte(body), &got) != nil || len(got.NICs) != 2 ||
+		got.NICs[0].DeviceIndex != 0 || got.NICs[0].PublicIP == "" || got.NICs[1].PublicIP != "" {
+		t.Fatalf("the address is not on device 0 alone: %s", body)
 	}
 }
