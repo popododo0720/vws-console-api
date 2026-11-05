@@ -370,7 +370,7 @@ func unlabelableTags(name string) map[string]string {
 		"vws-looks-internal":     "user value",
 		"aws:cloudformation:id":  "a<b>&c",
 		"long":                   strings.Repeat("v", 256),
-		strings.Repeat("K", 128): strings.Repeat("값", 85),
+		strings.Repeat("K", 128): strings.Repeat("€", 85),
 	}
 }
 
