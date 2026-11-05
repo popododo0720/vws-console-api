@@ -41,7 +41,7 @@ func (r CreateVpcRequest) Normalize() (CreateVpcRequest, error) {
 		return CreateVpcRequest{}, err
 	}
 	r.Cidr = cidr
-	if err := validTags(r.Tags); err != nil {
+	if err := validRequestTags(r.Tags); err != nil {
 		return CreateVpcRequest{}, err
 	}
 	return r, nil
@@ -211,7 +211,7 @@ func (r CreateVolumeRequest) Normalize() (CreateVolumeRequest, error) {
 	if r.Zone != ZoneName {
 		return CreateVolumeRequest{}, Invalid("availabilityZone", "unsupported")
 	}
-	if err := validTags(r.Tags); err != nil {
+	if err := validRequestTags(r.Tags); err != nil {
 		return CreateVolumeRequest{}, err
 	}
 	return r, nil
