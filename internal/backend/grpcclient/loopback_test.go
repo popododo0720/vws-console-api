@@ -35,14 +35,20 @@ import (
 
 func TestContractOverGRPC(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0).UTC()
+	direct, err := resource.Parse[resource.SubnetID](backendtest.DirectSubnet)
+	if err != nil {
+		t.Fatal(err)
+	}
 	world := fake.New(fake.Options{
 		Now:     func() time.Time { return now },
 		Entropy: &fake.Sequence{},
+		Direct:  []fake.DirectNetwork{{ID: direct, Cidr: backendtest.DirectCidr}},
 	})
 	harness := dialLoopback(t, world, now)
 	backendtest.Run(t, harness)
 	// The #213 DetachVolume client-token table, in its own account.
 	t.Run("DetachReplay", func(t *testing.T) { backendtest.DetachReplay(t, harness) })
+	t.Run("DirectNetworks", func(t *testing.T) { backendtest.DirectNetworks(t, harness) })
 }
 
 // dialLoopback serves world through the loopback resource API on bufconn,
@@ -341,6 +347,15 @@ func (w *loopWorld) vpcOf(subnetID string) string {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return w.subnetVPC[subnetID]
+}
+
+// vpcSegment is the VPC segment of sub's name. A direct subnet is in
+// vpc-direct, which the loopback never created.
+func (w *loopWorld) vpcSegment(sub resource.Subnet) string {
+	if resource.IsDirectSubnet(sub.ID) {
+		return sub.VpcID.String()
+	}
+	return w.vpcOf(sub.ID.String())
 }
 
 func (w *loopWorld) rememberSubnet(id, vpc string) {
@@ -1200,7 +1215,7 @@ func (s *subnetSrv) GetSubnet(ctx context.Context, req *networkv1.GetSubnetReque
 	if len(page.Items) == 0 {
 		return nil, toStatus(resource.NotFound(resource.KindSubnet, idText))
 	}
-	return subnetProto(page.Items[0], projectID, s.w.vpcOf(idText)), nil
+	return subnetProto(page.Items[0], projectID, s.w.vpcSegment(page.Items[0])), nil
 }
 
 func (s *subnetSrv) ListSubnets(ctx context.Context, req *networkv1.ListSubnetsRequest) (*networkv1.ListSubnetsResponse, error) {
@@ -1224,7 +1239,7 @@ func (s *subnetSrv) ListSubnets(ctx context.Context, req *networkv1.ListSubnetsR
 	}
 	items := make([]*networkv1.Subnet, 0, len(page.Items))
 	for _, sub := range page.Items {
-		if s.w.vpcOf(sub.ID.String()) != vpcID {
+		if s.w.vpcSegment(sub) != vpcID {
 			continue
 		}
 		items = append(items, subnetProto(sub, projectID, vpcID))

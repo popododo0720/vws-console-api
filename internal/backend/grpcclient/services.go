@@ -836,6 +836,9 @@ func (c storageClient) objectErr(ctx context.Context, s backend.Scope, bucket re
 type networkClient struct{ *api }
 
 func (c networkClient) CreateSubnet(ctx context.Context, m backend.Mutation, req resource.CreateSubnetRequest) (resource.Accepted[resource.Subnet], error) {
+	if resource.IsDirectVpc(req.VpcID) {
+		return resource.Accepted[resource.Subnet]{}, resource.DirectReadOnly()
+	}
 	projectID := project(m.Account)
 	var vpcID, vpcCIDR string
 	if req.VpcID.IsZero() {
@@ -926,6 +929,13 @@ func (c networkClient) DescribeSubnets(ctx context.Context, s backend.Scope, q r
 			break
 		}
 	}
+	// vws-network lists the direct subnets under vpc-direct, which ListVpcs
+	// does not return.
+	direct, err := c.listSubnetParent(ctx, vpcName(projectID, resource.DirectVpcID().String()), want)
+	if err != nil {
+		return resource.Page[resource.Subnet]{}, err
+	}
+	items = append(items, direct...)
 	if len(q.IDs) == 1 && len(items) == 0 {
 		return resource.Page[resource.Subnet]{}, resource.NotFound(resource.KindSubnet, q.IDs[0].String())
 	}

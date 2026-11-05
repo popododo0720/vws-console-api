@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"maps"
 	"strings"
 	"time"
 
@@ -637,10 +638,15 @@ func subnetProto(sub resource.Subnet, projectID, vpcID string) *networkv1.Subnet
 	}
 	// The tags were accepted when they were stored, so they fit.
 	labels, _ := withInternalLabels(sub.Tags, nil) //nolint:errcheck // accepted tags fit
+	zone := resource.ZoneName
+	if resource.IsDirectSubnet(sub.ID) {
+		// vws-network gives a direct subnet no zone and sets its label as is.
+		zone, labels = "", maps.Clone(sub.Tags)
+	}
 	return &networkv1.Subnet{
 		Name:   subnetName(projectID, vpcID, sub.ID.String()),
 		Labels: labels,
-		Spec:   &networkv1.SubnetSpec{Zone: resource.ZoneName, Ipv4Cidr: sub.Cidr},
+		Spec:   &networkv1.SubnetSpec{Zone: zone, Ipv4Cidr: sub.Cidr},
 		Status: &networkv1.SubnetStatus{
 			Observed: &commonv1.ObservedState{State: obs},
 		},
@@ -671,7 +677,15 @@ func subnetModel(in *networkv1.Subnet) (resource.Subnet, error) {
 	if parsed, parseErr := resource.Parse[resource.VpcID](parts[5]); parseErr == nil {
 		vpcID = parsed
 	}
-	return resource.Subnet{ID: id, OwnerID: owner, VpcID: vpcID, Cidr: in.GetSpec().GetIpv4Cidr(), State: state, Zone: in.GetSpec().GetZone(), Tags: userTags(in.GetLabels())}, nil
+	zone := in.GetSpec().GetZone()
+	if zone == "" && resource.IsDirectSubnet(id) {
+		// A direct network spans the region; vws-network gives it no zone.
+		zone = resource.ZoneName
+	}
+	return resource.Subnet{
+		ID: id, OwnerID: owner, VpcID: vpcID, Cidr: in.GetSpec().GetIpv4Cidr(), State: state, Zone: zone,
+		Tags: userTags(in.GetLabels()),
+	}, nil
 }
 
 func subnetStateOf(obs commonv1.ReconciliationState) (resource.SubnetState, error) {

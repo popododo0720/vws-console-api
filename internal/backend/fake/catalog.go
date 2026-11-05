@@ -154,6 +154,9 @@ func (n network) DeleteSubnet(ctx context.Context, m backend.Mutation, req resou
 	n.w.mu.Lock()
 	defer n.w.mu.Unlock()
 	n.w.settle(n.w.now())
+	if resource.IsDirectSubnet(req.ID) {
+		return resource.Accepted[resource.Subnet]{}, resource.DirectReadOnly()
+	}
 	if acc, ok, err := replay[resource.Accepted[resource.Subnet]](n.w, m.Key, m.Fingerprint); err != nil || ok {
 		return acc, err
 	}

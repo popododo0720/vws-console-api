@@ -207,6 +207,9 @@ func (c computeClient) DescribeSnapshots(ctx context.Context, s backend.Scope, q
 }
 
 func (c networkClient) DeleteSubnet(ctx context.Context, m backend.Mutation, req resource.DeleteSubnetRequest) (resource.Accepted[resource.Subnet], error) {
+	if resource.IsDirectSubnet(req.ID) {
+		return resource.Accepted[resource.Subnet]{}, resource.DirectReadOnly()
+	}
 	// The subnet name includes the VPC. After the row is gone the client cannot form it.
 	projectID := project(m.Account)
 	name, err := computeClient(c).findSubnet(ctx, projectID, req.ID.String())

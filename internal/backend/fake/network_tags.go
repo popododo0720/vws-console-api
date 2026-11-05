@@ -2,6 +2,7 @@ package fake
 
 import (
 	"context"
+	"slices"
 	"time"
 
 	"github.com/popododo0720/vws-console-api/internal/backend"
@@ -59,6 +60,9 @@ func (n network) TagSubnets(ctx context.Context, m backend.Mutation, req resourc
 	n.w.mu.Lock()
 	defer n.w.mu.Unlock()
 	n.w.settle(n.w.now())
+	if slices.ContainsFunc(req.IDs, resource.IsDirectSubnet) {
+		return resource.Accepted[resource.Subnet]{}, resource.DirectReadOnly()
+	}
 	if acc, ok, err := replay[resource.Accepted[resource.Subnet]](n.w, m.Key, m.Fingerprint); err != nil || ok {
 		return acc, err
 	}
