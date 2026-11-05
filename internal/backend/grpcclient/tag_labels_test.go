@@ -159,9 +159,15 @@ func (s *badTagNetwork) GetVpc(_ context.Context, req *networkv1.GetVpcRequest) 
 }
 
 func (s *badTagNetwork) ListSubnets(
-	context.Context, *networkv1.ListSubnetsRequest,
+	_ context.Context, req *networkv1.ListSubnetsRequest,
 ) (*networkv1.ListSubnetsResponse, error) {
-	return &networkv1.ListSubnetsResponse{Subnets: s.subnets}, nil
+	var out []*networkv1.Subnet
+	for _, sub := range s.subnets {
+		if strings.HasPrefix(sub.GetName(), req.GetParent()+"/") {
+			out = append(out, sub)
+		}
+	}
+	return &networkv1.ListSubnetsResponse{Subnets: out}, nil
 }
 
 func dialBadTagNetwork(t *testing.T, world *badTagNetwork) (networkClient, *bytes.Buffer) {
