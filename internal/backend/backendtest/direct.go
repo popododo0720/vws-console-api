@@ -69,6 +69,154 @@ func DirectNetworks(t *testing.T, newSet Harness) {
 		t.Fatalf("a refused batch tagged the other subnet: %v %+v", err, got.Items)
 	}
 	checkDirectVisible(ctx, t, set, owner, direct)
+	directLaunch(ctx, t, newSet, ownID, direct)
+}
+
+// directLaunch launches with interfaces on overlay and direct subnets. The
+// interfaces come back in device order, on any client set, after a retry
+// and after a stop and start. Any account may use a direct subnet, but only
+// its own overlay subnets. A launch naming a missing subnet launches
+// nothing.
+func directLaunch(ctx context.Context, t *testing.T, newSet Harness, overlay, direct resource.SubnetID) {
+	t.Helper()
+	set := newSet()
+	owner := parse[resource.AccountID](t, "456789012345")
+	other := parse[resource.AccountID](t, "567890123456")
+	img := parse[resource.ImageID](t, "ami-0123456789abcdef0")
+	mut := func(account resource.AccountID, key string) backend.Mutation {
+		return backend.Mutation{Scope: backend.Scope{Account: account}, Key: "dl-" + key, Fingerprint: "fp-dl-" + key}
+	}
+	launch := func(
+		m backend.Mutation, nics ...resource.NetworkInterfaceSpec,
+	) (resource.Accepted[resource.Instance], error) {
+		return set.Compute.RunInstances(ctx, m, resource.RunInstancesRequest{
+			ImageID: img, InstanceType: "vws.small", Count: 1, NetworkInterfaces: nics,
+		})
+	}
+	read := func(s backend.Set, account resource.AccountID, id resource.InstanceID) resource.Instance {
+		t.Helper()
+		page, err := s.Compute.DescribeInstances(ctx, backend.Scope{Account: account}, resource.InstanceQuery{
+			IDs: []resource.InstanceID{id}, Page: resource.PageRequest{Size: 50},
+		})
+		if err != nil || len(page.Items) != 1 {
+			t.Fatalf("describe %s: %v %+v", id, err, page.Items)
+		}
+		return page.Items[0]
+	}
+	type placed struct {
+		subnet resource.SubnetID
+		vpc    resource.VpcID
+	}
+	check := func(what string, inst resource.Instance, want ...placed) {
+		t.Helper()
+		nics := inst.NetworkInterfaces
+		if len(nics) != len(want) {
+			t.Fatalf("%s: interfaces %+v, want %+v", what, nics, want)
+		}
+		for i, w := range want {
+			if nics[i].DeviceIndex != i || nics[i].SubnetID != w.subnet || nics[i].VpcID != w.vpc || nics[i].PrivateIP == "" {
+				t.Fatalf("%s: interface %d is %+v, want %+v with an address", what, i, nics[i], w)
+			}
+		}
+		if inst.SubnetID != nics[0].SubnetID || inst.VpcID != nics[0].VpcID || inst.PrivateIP != nics[0].PrivateIP {
+			t.Fatalf("%s: instance on %s %s %s, want its device 0 interface %+v",
+				what, inst.SubnetID, inst.VpcID, inst.PrivateIP, nics[0])
+		}
+	}
+	subnet := func(id resource.SubnetID) placed {
+		t.Helper()
+		page, err := set.Network.DescribeSubnets(ctx, backend.Scope{Account: owner}, resource.SubnetQuery{
+			IDs: []resource.SubnetID{id}, Page: resource.PageRequest{Size: 50},
+		})
+		if err != nil || len(page.Items) != 1 {
+			t.Fatalf("subnet %s: %v %+v", id, err, page.Items)
+		}
+		return placed{id, page.Items[0].VpcID}
+	}
+	onOverlay, onDirect := subnet(overlay), placed{direct, resource.DirectVpcID()}
+
+	mixed := mut(owner, "mixed")
+	first, err := launch(mixed,
+		resource.NetworkInterfaceSpec{DeviceIndex: 1, SubnetID: direct},
+		resource.NetworkInterfaceSpec{DeviceIndex: 0, SubnetID: overlay})
+	if err != nil {
+		t.Fatalf("overlay primary with a direct secondary: %v", err)
+	}
+	id := first.Items[0].ID
+	again, err := launch(mixed,
+		resource.NetworkInterfaceSpec{DeviceIndex: 1, SubnetID: direct},
+		resource.NetworkInterfaceSpec{DeviceIndex: 0, SubnetID: overlay})
+	if err != nil || len(again.Items) != 1 || again.Items[0].ID != id || again.Operation.ID != first.Operation.ID {
+		t.Fatalf("retry of a two-interface launch: %v %+v, want instance %s", err, again.Items, id)
+	}
+	if _, err := set.Compute.GetOperation(ctx, mixed.Scope, first.Operation.ID); err != nil {
+		t.Fatal(err)
+	}
+	check("mixed launch", read(set, owner, id), onOverlay, onDirect)
+	check("mixed launch on a new client", read(newSet(), owner, id), onOverlay, onDirect)
+
+	ids := []resource.InstanceID{id}
+	stop, err := set.Compute.StopInstances(ctx, mut(owner, "stop"), resource.StopInstancesRequest{IDs: ids})
+	if err != nil {
+		t.Fatalf("stop: %v", err)
+	}
+	if _, err := set.Compute.GetOperation(ctx, mixed.Scope, stop.Operation.ID); err != nil {
+		t.Fatal(err)
+	}
+	start, err := set.Compute.StartInstances(ctx, mut(owner, "start"), resource.StartInstancesRequest{IDs: ids})
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	if _, err := set.Compute.GetOperation(ctx, mixed.Scope, start.Operation.ID); err != nil {
+		t.Fatal(err)
+	}
+	check("mixed launch after a stop and start", read(set, owner, id), onOverlay, onDirect)
+
+	second, err := set.Network.CreateSubnet(ctx, mut(owner, "second"), resource.CreateSubnetRequest{Cidr: "10.8.0.0/24"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := set.Network.GetOperation(ctx, mixed.Scope, second.Operation.ID); err != nil {
+		t.Fatal(err)
+	}
+	onSecond := subnet(second.Items[0].ID)
+	behind, err := launch(mut(owner, "direct-primary"),
+		resource.NetworkInterfaceSpec{DeviceIndex: 0, SubnetID: direct},
+		resource.NetworkInterfaceSpec{DeviceIndex: 1, SubnetID: onSecond.subnet})
+	if err != nil {
+		t.Fatalf("direct primary with an overlay secondary: %v", err)
+	}
+	check("direct primary launch", read(set, owner, behind.Items[0].ID), onDirect, onSecond)
+	_, err = set.Network.DeleteSubnet(ctx, mut(owner, "del-second"), resource.DeleteSubnetRequest{ID: onSecond.subnet})
+	if resource.CodeOf(err) != resource.CodeConflict {
+		t.Fatalf("delete of a subnet only a secondary interface uses: %v, want Conflict", err)
+	}
+
+	only, err := launch(mut(other, "direct-only"), resource.NetworkInterfaceSpec{DeviceIndex: 0, SubnetID: direct})
+	if err != nil {
+		t.Fatalf("direct primary in another account: %v", err)
+	}
+	check("direct-only launch", read(set, other, only.Items[0].ID), onDirect)
+
+	if _, err := launch(mut(other, "foreign"),
+		resource.NetworkInterfaceSpec{DeviceIndex: 0, SubnetID: direct},
+		resource.NetworkInterfaceSpec{DeviceIndex: 1, SubnetID: overlay},
+	); resource.CodeOf(err) != resource.CodeNotFound {
+		t.Fatalf("a secondary interface on another account's subnet: %v, want NotFound", err)
+	}
+	missing := parse[resource.SubnetID](t, "subnet-direct-nope")
+	if _, err := launch(mut(other, "missing"),
+		resource.NetworkInterfaceSpec{DeviceIndex: 0, SubnetID: direct},
+		resource.NetworkInterfaceSpec{DeviceIndex: 1, SubnetID: missing},
+	); resource.AsError(err).Kind != resource.KindSubnet || resource.CodeOf(err) != resource.CodeNotFound {
+		t.Fatalf("a missing direct subnet: %v, want a subnet NotFound", err)
+	}
+	all, err := set.Compute.DescribeInstances(ctx, backend.Scope{Account: other}, resource.InstanceQuery{
+		Page: resource.PageRequest{Size: 50},
+	})
+	if err != nil || len(all.Items) != 1 {
+		t.Fatalf("refused launches left instances: %v %+v", err, all.Items)
+	}
 }
 
 // checkDirectVisible checks that account reads the direct subnet as vws-network

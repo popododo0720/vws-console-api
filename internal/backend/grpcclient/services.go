@@ -62,7 +62,7 @@ func (c computeClient) RunInstances(ctx context.Context, m backend.Mutation, req
 		return resource.Accepted[resource.Instance]{}, resource.Invalid("count", "must be from 1 to 10")
 	}
 	projectID := project(m.Account)
-	subnet, err := c.findSubnet(ctx, projectID, req.SubnetID.String())
+	nics, err := c.launchInterfaces(ctx, projectID, req.Interfaces())
 	if err != nil {
 		return resource.Accepted[resource.Instance]{}, err
 	}
@@ -112,11 +112,8 @@ func (c computeClient) RunInstances(ctx context.Context, m backend.Mutation, req
 					MachineType: req.InstanceType,
 					Power:       computev1.InstancePower_INSTANCE_POWER_RUNNING,
 					KeyPair:     keyPair,
-					UserData:    req.UserData,
-					NetworkInterfaces: []*computev1.NetworkInterface{{
-						DeviceName: "nic0",
-						Subnet:     subnet,
-					}},
+					UserData:          req.UserData,
+					NetworkInterfaces: nics,
 					Volumes: []*computev1.VolumeAttachment{{
 						Volume:     volumeName(projectID, volID),
 						DeviceName: "boot",
@@ -236,11 +233,8 @@ func (c computeClient) StopInstances(ctx context.Context, m backend.Mutation, re
 					Labels: labels,
 					Spec: &computev1.InstanceSpec{
 						MachineType: model.InstanceType,
-						Power:       computev1.InstancePower_INSTANCE_POWER_STOPPED,
-						NetworkInterfaces: []*computev1.NetworkInterface{{
-							DeviceName: "nic0",
-							Subnet:     subnetName(projectID, "", model.SubnetID.String()),
-						}},
+						Power:             computev1.InstancePower_INSTANCE_POWER_STOPPED,
+						NetworkInterfaces: got.GetSpec().GetNetworkInterfaces(),
 					},
 				},
 			}, nil
@@ -401,7 +395,41 @@ func (c computeClient) getInstance(ctx context.Context, projectID, id string) (r
 	return instanceModel(out)
 }
 
+// launchInterfaces is the spec of each interface of a launch, in device
+// order. vws-compute reads device name "nic<N>" as EC2 device index N
+// (vws-compute#55).
+func (c computeClient) launchInterfaces(
+	ctx context.Context, projectID string, specs []resource.NetworkInterfaceSpec,
+) ([]*computev1.NetworkInterface, error) {
+	names := map[resource.SubnetID]string{}
+	out := make([]*computev1.NetworkInterface, 0, len(specs))
+	for _, spec := range specs {
+		name, ok := names[spec.SubnetID]
+		if !ok {
+			var err error
+			if name, err = c.findSubnet(ctx, projectID, spec.SubnetID.String()); err != nil {
+				return nil, err
+			}
+			names[spec.SubnetID] = name
+		}
+		out = append(out, &computev1.NetworkInterface{DeviceName: nicDevice(spec.DeviceIndex), Subnet: name})
+	}
+	return out, nil
+}
+
+// findSubnet is the full name of subnet id in the project. A direct subnet is
+// under vpc-direct, which ListVpcs does not return.
 func (c computeClient) findSubnet(ctx context.Context, projectID, id string) (string, error) {
+	if parsed, err := resource.Parse[resource.SubnetID](id); err == nil && resource.IsDirectSubnet(parsed) {
+		found, err := c.findSubnetIn(ctx, vpcName(projectID, resource.DirectVpcID().String()), id)
+		if err != nil {
+			return "", err
+		}
+		if found == "" {
+			return "", resource.NotFound(resource.KindSubnet, id)
+		}
+		return found, nil
+	}
 	token := ""
 	for page := 0; page < 20; page++ {
 		out, err := c.vpcs.ListVpcs(ctx, &networkv1.ListVpcsRequest{

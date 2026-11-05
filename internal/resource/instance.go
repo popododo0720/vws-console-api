@@ -1,7 +1,9 @@
 package resource
 
 import (
+	"cmp"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 	"unicode"
@@ -120,10 +122,12 @@ type Instance struct {
 	StateReason   StateReason   `json:"stateReason,omitzero"`
 	ImageID       ImageID       `json:"imageId"`
 	InstanceType  string        `json:"instanceType"`
-	SubnetID      SubnetID      `json:"subnetId"`
-	VpcID         VpcID         `json:"vpcId,omitzero"`
-	Zone          string        `json:"availabilityZone"`
-	LaunchTime    time.Time     `json:"launchTime,omitzero"`
+	// SubnetID, VpcID and PrivateIP are those of the primary interface,
+	// device index 0, as in EC2. SetInterfaces keeps them so.
+	SubnetID   SubnetID  `json:"subnetId"`
+	VpcID      VpcID     `json:"vpcId,omitzero"`
+	Zone       string    `json:"availabilityZone"`
+	LaunchTime time.Time `json:"launchTime,omitzero"`
 	// PublicIP and PublicIPAllocationID come from the elastic IP associated
 	// with the instance. Both are empty when there is none.
 	PublicIP             string            `json:"publicIpAddress,omitempty"`
@@ -144,6 +148,37 @@ type Instance struct {
 	// until the detach completes. They hold no bind: nothing can detach,
 	// rebind or boot from them.
 	DetachingDevices []BlockDevice `json:"-"`
+	// NetworkInterfaces are in device order. Each is on an overlay or a
+	// direct subnet.
+	NetworkInterfaces []NetworkInterface `json:"networkInterfaces,omitempty"`
+}
+
+// NetworkInterface is one interface of an instance.
+type NetworkInterface struct {
+	DeviceIndex int      `json:"deviceIndex"`
+	SubnetID    SubnetID `json:"subnetId"`
+	VpcID       VpcID    `json:"vpcId,omitzero"`
+	PrivateIP   string   `json:"privateIpAddress,omitempty"`
+}
+
+// SetInterfaces stores nics in device order and copies the primary one's
+// subnet, VPC and address to the instance.
+func (i *Instance) SetInterfaces(nics []NetworkInterface) {
+	sorted := slices.Clone(nics)
+	slices.SortFunc(sorted, func(a, b NetworkInterface) int { return cmp.Compare(a.DeviceIndex, b.DeviceIndex) })
+	i.NetworkInterfaces = sorted
+	if len(sorted) > 0 && sorted[0].DeviceIndex == 0 {
+		i.SubnetID, i.VpcID, i.PrivateIP = sorted[0].SubnetID, sorted[0].VpcID, sorted[0].PrivateIP
+	}
+}
+
+// Interfaces returns the instance's interfaces, or the primary one alone
+// when the instance lists none.
+func (i Instance) Interfaces() []NetworkInterface {
+	if len(i.NetworkInterfaces) > 0 {
+		return i.NetworkInterfaces
+	}
+	return []NetworkInterface{{SubnetID: i.SubnetID, VpcID: i.VpcID, PrivateIP: i.PrivateIP}}
 }
 
 // RootDeviceName is the device EC2 reports for an instance's boot volume.
@@ -183,7 +218,8 @@ func (c InstanceStateChange) Owner() AccountID { return c.OwnerID }
 // Identity returns the instance id.
 func (c InstanceStateChange) Identity() string { return c.ID.String() }
 
-// RunInstancesRequest launches one or more instances.
+// RunInstancesRequest launches one or more instances. It names either
+// SubnetID, for one interface, or NetworkInterfaces.
 type RunInstancesRequest struct {
 	ImageID      ImageID           `json:"imageId"`
 	InstanceType string            `json:"instanceType"`
@@ -201,6 +237,31 @@ type RunInstancesRequest struct {
 	// Ebs.Throughput (MiB/s). Zero means omitted; see RootPerformance.
 	RootIops       int64 `json:"rootIops,omitempty"`
 	RootThroughput int64 `json:"rootThroughput,omitempty"`
+	// NetworkInterfaces places each interface on a subnet by device index
+	// (EC2 NetworkInterface.N). Any of them, the primary included, may be
+	// on a direct subnet.
+	NetworkInterfaces []NetworkInterfaceSpec `json:"networkInterfaces,omitempty"`
+}
+
+// MaxNetworkInterfaces is the most interfaces one instance takes, device
+// indexes 0 to MaxNetworkInterfaces-1. vws-compute sets no limit; 8 is the
+// EC2 limit of the smaller instance types.
+const MaxNetworkInterfaces = 8
+
+// NetworkInterfaceSpec is one interface of a launch. Device index 0 is the
+// primary interface.
+type NetworkInterfaceSpec struct {
+	DeviceIndex int      `json:"deviceIndex"`
+	SubnetID    SubnetID `json:"subnetId"`
+}
+
+// Interfaces is the launch's interfaces in device order: NetworkInterfaces,
+// or SubnetID as device 0.
+func (r RunInstancesRequest) Interfaces() []NetworkInterfaceSpec {
+	if len(r.NetworkInterfaces) > 0 {
+		return r.NetworkInterfaces
+	}
+	return []NetworkInterfaceSpec{{SubnetID: r.SubnetID}}
 }
 
 // RootVolumeSizeGiB is the size of the root volume RunInstances creates.
@@ -240,7 +301,17 @@ func (r RunInstancesRequest) Normalize() (RunInstancesRequest, error) {
 		return RunInstancesRequest{}, Invalid("instanceType", "unsupported instance type")
 	}
 	r.InstanceType = typ
-	if r.SubnetID.IsZero() {
+	switch {
+	case len(r.NetworkInterfaces) > 0 && !r.SubnetID.IsZero():
+		return RunInstancesRequest{}, InvalidCombination("subnetId",
+			"Network interfaces and an instance-level subnet ID may not be specified on the same request")
+	case len(r.NetworkInterfaces) > 0:
+		nics, err := normalizeInterfaces(r.NetworkInterfaces)
+		if err != nil {
+			return RunInstancesRequest{}, err
+		}
+		r.NetworkInterfaces = nics
+	case r.SubnetID.IsZero():
 		return RunInstancesRequest{}, Invalid("subnetId", "required")
 	}
 	if r.Count == 0 {
@@ -273,6 +344,36 @@ func (r RunInstancesRequest) Normalize() (RunInstancesRequest, error) {
 		return RunInstancesRequest{}, err
 	}
 	return r, nil
+}
+
+// normalizeInterfaces checks the device indexes and sorts a copy by them,
+// so the order the caller listed them in does not change the fingerprint.
+// SubnetID is never filled in from NetworkInterfaces, or the reverse, so the
+// fingerprint of a request with SubnetID alone stays the same.
+func normalizeInterfaces(in []NetworkInterfaceSpec) ([]NetworkInterfaceSpec, error) {
+	if len(in) > MaxNetworkInterfaces {
+		return nil, Invalid("networkInterfaces", fmt.Sprintf("must list from 1 to %d interfaces", MaxNetworkInterfaces))
+	}
+	seen := map[int]struct{}{}
+	for _, nic := range in {
+		if nic.DeviceIndex < 0 || nic.DeviceIndex >= MaxNetworkInterfaces {
+			return nil, Invalid("deviceIndex",
+				fmt.Sprintf("Value (%d) for parameter deviceIndex is invalid.", nic.DeviceIndex))
+		}
+		if _, ok := seen[nic.DeviceIndex]; ok {
+			return nil, Invalid("deviceIndex", fmt.Sprintf("device index %d is used more than once", nic.DeviceIndex))
+		}
+		seen[nic.DeviceIndex] = struct{}{}
+		if nic.SubnetID.IsZero() {
+			return nil, Invalid("subnetId", "each network interface requires a subnet")
+		}
+	}
+	if _, ok := seen[0]; !ok {
+		return nil, Invalid("deviceIndex", "a network interface with device index 0 is required")
+	}
+	out := slices.Clone(in)
+	slices.SortFunc(out, func(a, b NetworkInterfaceSpec) int { return cmp.Compare(a.DeviceIndex, b.DeviceIndex) })
+	return out, nil
 }
 
 // checkRootPerformance applies the CreateVolume per-type rules (EC2 API

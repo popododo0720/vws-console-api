@@ -3,8 +3,10 @@ package grpcclient
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"maps"
+	"strconv"
 	"strings"
 	"time"
 
@@ -279,7 +281,9 @@ func longOp(projectID, local, resourceName, requestID string, verb commonv1.Oper
 	}, nil
 }
 
-func instanceProto(inst resource.Instance, projectID, vpcID string) *computev1.Instance {
+// instanceProto is inst as vws-compute serves it. vpcOf is the VPC segment
+// of each interface's subnet name.
+func instanceProto(inst resource.Instance, projectID string, vpcOf func(resource.SubnetID) string) *computev1.Instance {
 	// The tags were accepted when the instance was made, so they fit.
 	labels, _ := withInternalLabels(inst.Tags, map[string]string{ //nolint:errcheck // accepted tags fit
 		labelImage:       inst.ImageID.String(),
@@ -298,21 +302,21 @@ func instanceProto(inst resource.Instance, projectID, vpcID string) *computev1.I
 			MachineType: inst.InstanceType,
 			Power:       power,
 			UserData:    inst.UserData,
-			NetworkInterfaces: []*computev1.NetworkInterface{{
-				DeviceName: "nic0",
-				Subnet:     subnetName(projectID, vpcID, inst.SubnetID.String()),
-			}},
-			Volumes: volumeAttachments(projectID, inst.BlockDevices),
+			Volumes:     volumeAttachments(projectID, inst.BlockDevices),
 		},
 		Status: &computev1.InstanceStatus{
 			Observed: &commonv1.ObservedState{State: obs},
 			Power:    power,
-			NetworkInterfaces: []*computev1.ObservedNetworkInterface{{
-				DeviceName:  "nic0",
-				Subnet:      subnetName(projectID, vpcID, inst.SubnetID.String()),
-				PrivateIpv4: inst.PrivateIP,
-			}},
 		},
+	}
+	for _, nic := range inst.Interfaces() {
+		name := subnetName(projectID, vpcOf(nic.SubnetID), nic.SubnetID.String())
+		out.Spec.NetworkInterfaces = append(out.Spec.NetworkInterfaces, &computev1.NetworkInterface{
+			DeviceName: nicDevice(nic.DeviceIndex), Subnet: name,
+		})
+		out.Status.NetworkInterfaces = append(out.Status.NetworkInterfaces, &computev1.ObservedNetworkInterface{
+			DeviceName: nicDevice(nic.DeviceIndex), Subnet: name, PrivateIpv4: nic.PrivateIP,
+		})
 	}
 	if !inst.KeyPairID.IsZero() {
 		out.Spec.KeyPair = keyPairName(projectID, inst.KeyPairID.String())
@@ -498,21 +502,9 @@ func instanceModel(in *computev1.Instance) (resource.Instance, error) {
 	if err != nil {
 		return resource.Instance{}, resource.Internal(err)
 	}
-	nics := in.GetSpec().GetNetworkInterfaces()
-	if len(nics) == 0 {
-		return resource.Instance{}, resource.Internal(errors.New("missing subnet"))
-	}
-	sub, err := resource.Parse[resource.SubnetID](lastSegment(nics[0].GetSubnet()))
+	nics, err := instanceInterfaces(in)
 	if err != nil {
-		return resource.Instance{}, resource.Internal(err)
-	}
-	// The subnet name is .../vpcs/{vpc}/subnets/{subnet}. A subnet outside a
-	// user VPC has a segment that is not a VPC id, and the field stays empty.
-	var vpcID resource.VpcID
-	if parts := strings.Split(nics[0].GetSubnet(), "/"); len(parts) == 8 {
-		if parsed, perr := resource.Parse[resource.VpcID](parts[5]); perr == nil {
-			vpcID = parsed
-		}
+		return resource.Instance{}, err
 	}
 	observed := in.GetStatus().GetObserved().GetState()
 	state := instanceStateOf(observed, in.GetStatus().GetPower())
@@ -570,17 +562,74 @@ func instanceModel(in *computev1.Instance) (resource.Instance, error) {
 			Device: o.GetDeviceName(), VolumeID: volID, Status: resource.AttachmentDetaching,
 		})
 	}
-	private := ""
-	if nics := in.GetStatus().GetNetworkInterfaces(); len(nics) > 0 {
-		private = nics[0].GetPrivateIpv4()
-	}
-	return resource.Instance{
+	out := resource.Instance{
 		ID: id, ReservationID: resID, OwnerID: owner, State: state, StateReason: reason, ImageID: img,
-		InstanceType: in.GetSpec().GetMachineType(), SubnetID: sub, VpcID: vpcID, Zone: parts[3],
-		LaunchTime: launchTime(in), PrivateIP: private, Tags: userTags(in.GetLabels()),
+		InstanceType: in.GetSpec().GetMachineType(), Zone: parts[3],
+		LaunchTime: launchTime(in), Tags: userTags(in.GetLabels()),
 		KeyPairID: keyPairID, UserData: in.GetSpec().GetUserData(),
 		RootDeviceName: rootDevice, BlockDevices: blocks, DetachingDevices: detaching,
-	}, nil
+	}
+	out.SetInterfaces(nics)
+	return out, nil
+}
+
+// nicDevice is the vws-compute device name of EC2 device index i
+// (vws-compute#55).
+func nicDevice(i int) string { return "nic" + strconv.Itoa(i) }
+
+// nicIndex reads a device name nicDevice wrote.
+func nicIndex(name string) (int, bool) {
+	rest, ok := strings.CutPrefix(name, "nic")
+	n, err := strconv.Atoi(rest)
+	if !ok || err != nil || n < 0 || nicDevice(n) != name {
+		return 0, false
+	}
+	return n, true
+}
+
+// instanceInterfaces reads the spec's interfaces. A device name that is not
+// nic<N> is its position. The address of each is the status entry of the
+// same device name, since compute need not list them in spec order. A
+// record with no interface, a bad subnet name or one device index twice is
+// bad, so a listing skips it.
+func instanceInterfaces(in *computev1.Instance) ([]resource.NetworkInterface, error) {
+	spec := in.GetSpec().GetNetworkInterfaces()
+	if len(spec) == 0 {
+		return nil, resource.Internal(errors.New("missing subnet"))
+	}
+	private := map[string]string{}
+	for _, nic := range in.GetStatus().GetNetworkInterfaces() {
+		private[nic.GetDeviceName()] = nic.GetPrivateIpv4()
+	}
+	seen := map[int]struct{}{}
+	out := make([]resource.NetworkInterface, 0, len(spec))
+	for i, nic := range spec {
+		sub, err := resource.Parse[resource.SubnetID](lastSegment(nic.GetSubnet()))
+		if err != nil {
+			return nil, resource.Internal(err)
+		}
+		// The subnet name is .../vpcs/{vpc}/subnets/{subnet}. A subnet
+		// outside a user VPC has a segment that is not a VPC id, and the
+		// field stays empty.
+		var vpcID resource.VpcID
+		if parts := strings.Split(nic.GetSubnet(), "/"); len(parts) == 8 {
+			if parsed, perr := resource.Parse[resource.VpcID](parts[5]); perr == nil {
+				vpcID = parsed
+			}
+		}
+		index, ok := nicIndex(nic.GetDeviceName())
+		if !ok {
+			index = i
+		}
+		if _, dup := seen[index]; dup {
+			return nil, resource.Internal(fmt.Errorf("device index %d named twice", index))
+		}
+		seen[index] = struct{}{}
+		out = append(out, resource.NetworkInterface{
+			DeviceIndex: index, SubnetID: sub, VpcID: vpcID, PrivateIP: private[nic.GetDeviceName()],
+		})
+	}
+	return out, nil
 }
 
 func instanceStateOf(obs commonv1.ReconciliationState, power computev1.InstancePower) resource.InstanceState {

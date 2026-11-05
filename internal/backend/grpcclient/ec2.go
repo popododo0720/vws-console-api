@@ -167,11 +167,8 @@ func (c computeClient) changeInstances(ctx context.Context, m backend.Mutation, 
 					Labels: labels,
 					Spec: &computev1.InstanceSpec{
 						MachineType: model.InstanceType,
-						Power:       power,
-						NetworkInterfaces: []*computev1.NetworkInterface{{
-							DeviceName: "nic0",
-							Subnet:     subnetName(projectID, "", model.SubnetID.String()),
-						}},
+						Power:             power,
+						NetworkInterfaces: got.GetSpec().GetNetworkInterfaces(),
 					},
 				},
 			}, nil

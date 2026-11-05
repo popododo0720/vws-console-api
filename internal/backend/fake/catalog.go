@@ -3,6 +3,7 @@ package fake
 import (
 	"context"
 	"errors"
+	"slices"
 	"time"
 
 	"github.com/popododo0720/vws-console-api/internal/backend"
@@ -165,7 +166,10 @@ func (n network) DeleteSubnet(ctx context.Context, m backend.Mutation, req resou
 		return resource.Accepted[resource.Subnet]{}, resource.NotFound(resource.KindSubnet, req.ID.String())
 	}
 	for _, inst := range n.w.inst {
-		if inst.SubnetID == req.ID && inst.State != resource.InstanceTerminated {
+		onSubnet := slices.ContainsFunc(inst.Interfaces(), func(nic resource.NetworkInterface) bool {
+			return nic.SubnetID == req.ID
+		})
+		if onSubnet && inst.State != resource.InstanceTerminated {
 			return resource.Accepted[resource.Subnet]{}, resource.Conflict(resource.KindSubnet, req.ID.String(), "subnet has dependents")
 		}
 	}

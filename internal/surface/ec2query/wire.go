@@ -103,13 +103,14 @@ type nicSet struct {
 	Items []nicItem `xml:"item"`
 }
 
-// nicItem is the instance's one network interface. VWS has no separate
+// nicItem is one network interface of the instance. VWS has no separate
 // interface id, so only the fields the console reads are set.
 type nicItem struct {
 	SubnetID    string          `xml:"subnetId,omitempty"`
 	VpcID       string          `xml:"vpcId,omitempty"`
 	OwnerID     string          `xml:"ownerId,omitempty"`
 	PrivateIP   string          `xml:"privateIpAddress,omitempty"`
+	DeviceIndex int             `xml:"attachment>deviceIndex"`
 	Association *nicAssociation `xml:"association,omitempty"`
 }
 
@@ -849,20 +850,25 @@ func launchTimeXML(t time.Time) string {
 	return t.UTC().Format("2006-01-02T15:04:05.000Z")
 }
 
-// nicSetOf is the instance's network interface with its elastic IP, if any.
+// nicSetOf is the instance's network interfaces in device order. The
+// elastic IP, if any, is on the primary one.
 func nicSetOf(inst resource.Instance) *nicSet {
-	nic := nicItem{
-		SubnetID: inst.SubnetID.String(), VpcID: inst.VpcID.String(),
-		OwnerID: inst.OwnerID.String(), PrivateIP: inst.PrivateIP,
-	}
-	if inst.PublicIP != "" {
-		nic.Association = &nicAssociation{
-			PublicIP: inst.PublicIP, IPOwnerID: inst.OwnerID.String(),
-			AllocationID:  inst.PublicIPAllocationID.String(),
-			AssociationID: resource.AssociationID(inst.PublicIPAllocationID),
+	out := &nicSet{}
+	for _, iface := range inst.Interfaces() {
+		nic := nicItem{
+			SubnetID: iface.SubnetID.String(), VpcID: iface.VpcID.String(),
+			OwnerID: inst.OwnerID.String(), PrivateIP: iface.PrivateIP, DeviceIndex: iface.DeviceIndex,
 		}
+		if iface.DeviceIndex == 0 && inst.PublicIP != "" {
+			nic.Association = &nicAssociation{
+				PublicIP: inst.PublicIP, IPOwnerID: inst.OwnerID.String(),
+				AllocationID:  inst.PublicIPAllocationID.String(),
+				AssociationID: resource.AssociationID(inst.PublicIPAllocationID),
+			}
+		}
+		out.Items = append(out.Items, nic)
 	}
-	return &nicSet{Items: []nicItem{nic}}
+	return out
 }
 
 func rootTypeOf(inst resource.Instance) string {
