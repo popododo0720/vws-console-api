@@ -55,10 +55,13 @@ type DeleteVpcRequest struct {
 // Action returns DeleteVpc.
 func (DeleteVpcRequest) Action() Action { return ActionDeleteVpc }
 
-// Normalize checks the id.
+// Normalize checks the id. The direct VPC cannot be deleted.
 func (r DeleteVpcRequest) Normalize() (DeleteVpcRequest, error) {
 	if r.ID.IsZero() {
 		return DeleteVpcRequest{}, Invalid("vpcId", "required")
+	}
+	if IsDirectVpc(r.ID) {
+		return DeleteVpcRequest{}, DirectReadOnly()
 	}
 	return r, nil
 }
@@ -448,13 +451,16 @@ type CreateSecurityGroupRequest struct {
 // Action returns CreateSecurityGroup.
 func (CreateSecurityGroupRequest) Action() Action { return ActionCreateSecurityGroup }
 
-// Normalize checks the name and VPC.
+// Normalize checks the name and VPC. The direct VPC takes no new group.
 func (r CreateSecurityGroupRequest) Normalize() (CreateSecurityGroupRequest, error) {
 	if r.Name == "" || len(r.Name) > 255 {
 		return CreateSecurityGroupRequest{}, Invalid("groupName", "malformed")
 	}
 	if r.VpcID.IsZero() {
 		return CreateSecurityGroupRequest{}, Invalid("vpcId", "required")
+	}
+	if IsDirectVpc(r.VpcID) {
+		return CreateSecurityGroupRequest{}, DirectReadOnly()
 	}
 	return r, nil
 }

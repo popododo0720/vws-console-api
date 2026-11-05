@@ -598,6 +598,11 @@ func (h *handler) createTags(w http.ResponseWriter, r *http.Request, c resource.
 			insts = append(insts, id)
 		case strings.HasPrefix(raw, "vpc-"):
 			id, err := resource.Parse[resource.VpcID](raw)
+			if err == nil && resource.IsDirectVpc(id) {
+				// The tags fan out per kind, so a refusal must come before
+				// any of them is written.
+				err = resource.DirectReadOnly()
+			}
 			if err != nil {
 				writeErr(w, r, err)
 				return
@@ -605,6 +610,9 @@ func (h *handler) createTags(w http.ResponseWriter, r *http.Request, c resource.
 			vpcs = append(vpcs, id)
 		case strings.HasPrefix(raw, "subnet-"):
 			id, err := resource.Parse[resource.SubnetID](raw)
+			if err == nil && resource.IsDirectSubnet(id) {
+				err = resource.DirectReadOnly()
+			}
 			if err != nil {
 				writeErr(w, r, err)
 				return

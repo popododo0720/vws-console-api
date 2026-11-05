@@ -1,5 +1,7 @@
 package resource
 
+import "slices"
+
 // TagVpcsRequest adds or overwrites tags on VPCs. Other tags stay.
 type TagVpcsRequest struct {
 	IDs  []VpcID           `json:"vpcIds"`
@@ -9,10 +11,13 @@ type TagVpcsRequest struct {
 // Action returns CreateTags.
 func (TagVpcsRequest) Action() Action { return ActionCreateTags }
 
-// Normalize checks the ids and the tags.
+// Normalize checks the ids and the tags. The direct VPC takes no tag.
 func (r TagVpcsRequest) Normalize() (TagVpcsRequest, error) {
 	if err := distinctIDs("vpcIds", r.IDs); err != nil {
 		return TagVpcsRequest{}, err
+	}
+	if slices.ContainsFunc(r.IDs, IsDirectVpc) {
+		return TagVpcsRequest{}, DirectReadOnly()
 	}
 	if err := requiredTags(r.Tags); err != nil {
 		return TagVpcsRequest{}, err
@@ -29,10 +34,14 @@ type TagSubnetsRequest struct {
 // Action returns CreateTags.
 func (TagSubnetsRequest) Action() Action { return ActionCreateTags }
 
-// Normalize checks the ids and the tags.
+// Normalize checks the ids and the tags. A direct subnet takes no tag, and
+// one in the batch refuses the whole batch.
 func (r TagSubnetsRequest) Normalize() (TagSubnetsRequest, error) {
 	if err := distinctIDs("subnetIds", r.IDs); err != nil {
 		return TagSubnetsRequest{}, err
+	}
+	if slices.ContainsFunc(r.IDs, IsDirectSubnet) {
+		return TagSubnetsRequest{}, DirectReadOnly()
 	}
 	if err := requiredTags(r.Tags); err != nil {
 		return TagSubnetsRequest{}, err
