@@ -166,7 +166,7 @@ func (c computeClient) changeInstances(ctx context.Context, m backend.Mutation, 
 					Name:   got.GetName(),
 					Labels: labels,
 					Spec: &computev1.InstanceSpec{
-						MachineType: model.InstanceType,
+						MachineType:       model.InstanceType,
 						Power:             power,
 						NetworkInterfaces: got.GetSpec().GetNetworkInterfaces(),
 					},

@@ -44,24 +44,24 @@ type World struct {
 	latency time.Duration
 	entropy io.Reader
 
-	mu    sync.Mutex
-	idem  map[string]idemRecord
-	ops   map[string]*opRecord
-	inst  map[resource.InstanceID]*resource.Instance
-	sub   map[resource.SubnetID]*resource.Subnet
+	mu   sync.Mutex
+	idem map[string]idemRecord
+	ops  map[string]*opRecord
+	inst map[resource.InstanceID]*resource.Instance
+	sub  map[resource.SubnetID]*resource.Subnet
 	// direct holds the direct subnets with no owner: each account reads
 	// them as its own.
 	direct []resource.Subnet
 	vpc    map[resource.VpcID]*resource.Vpc
-	vol   map[resource.VolumeID]*resource.Volume
-	sg    map[resource.SecurityGroupID]*resource.SecurityGroup
-	key   map[resource.KeyPairID]*resource.KeyPair
-	addr  map[resource.AddressID]*resource.Address
-	snap  map[resource.SnapshotID]*resource.Snapshot
-	img   map[resource.ImageID]*resource.Image
-	buck  map[resource.BucketName]*resource.Bucket
-	obj   map[string]*storedObject
-	seqIP uint32
+	vol    map[resource.VolumeID]*resource.Volume
+	sg     map[resource.SecurityGroupID]*resource.SecurityGroup
+	key    map[resource.KeyPairID]*resource.KeyPair
+	addr   map[resource.AddressID]*resource.Address
+	snap   map[resource.SnapshotID]*resource.Snapshot
+	img    map[resource.ImageID]*resource.Image
+	buck   map[resource.BucketName]*resource.Bucket
+	obj    map[string]*storedObject
+	seqIP  uint32
 	// detached is when each volume was last detached from each instance
 	// with a client token, for the DetachVolume record budget (#303).
 	detached map[resource.InstanceID]map[resource.VolumeID]time.Time

@@ -109,9 +109,9 @@ func (c computeClient) RunInstances(ctx context.Context, m backend.Mutation, req
 			Instance: &computev1.Instance{
 				Labels: labels,
 				Spec: &computev1.InstanceSpec{
-					MachineType: req.InstanceType,
-					Power:       computev1.InstancePower_INSTANCE_POWER_RUNNING,
-					KeyPair:     keyPair,
+					MachineType:       req.InstanceType,
+					Power:             computev1.InstancePower_INSTANCE_POWER_RUNNING,
+					KeyPair:           keyPair,
 					UserData:          req.UserData,
 					NetworkInterfaces: nics,
 					Volumes: []*computev1.VolumeAttachment{{
@@ -232,7 +232,7 @@ func (c computeClient) StopInstances(ctx context.Context, m backend.Mutation, re
 					Name:   got.GetName(),
 					Labels: labels,
 					Spec: &computev1.InstanceSpec{
-						MachineType: model.InstanceType,
+						MachineType:       model.InstanceType,
 						Power:             computev1.InstancePower_INSTANCE_POWER_STOPPED,
 						NetworkInterfaces: got.GetSpec().GetNetworkInterfaces(),
 					},
