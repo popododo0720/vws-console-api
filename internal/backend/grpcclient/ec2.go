@@ -2060,6 +2060,9 @@ func (c networkClient) DescribeVpcs(ctx context.Context, s backend.Scope, q reso
 				continue
 			}
 			if err != nil {
+				if len(want) == 0 && c.skipBadRecord(ctx, item.GetName(), err) {
+					continue
+				}
 				return resource.Page[resource.Vpc]{}, err
 			}
 			items = append(items, vpc)
@@ -2429,12 +2432,16 @@ func volumeModel(in *storagev1.Volume) (resource.Volume, error) {
 		}
 		snap = parsed
 	}
+	tags, err := userTags(in.GetLabels())
+	if err != nil {
+		return resource.Volume{}, err
+	}
 	vol := resource.Volume{
 		ID: id, OwnerID: owner, SizeGiB: in.GetSpec().GetSizeGib(), Zone: parts[3], SnapshotID: snap,
 		Type: volumeTypeOf(in.GetSpec().GetType()), State: state, InstanceID: inst,
 		Device: in.GetStatus().GetDeviceName(), CreateTime: in.GetCreateTime().AsTime().UTC(),
 		Iops: in.GetSpec().GetIops(), Throughput: in.GetSpec().GetThroughputMibps(),
-		Tags: userTags(in.GetLabels()),
+		Tags: tags,
 	}
 	if rootVolume(in) {
 		// RunInstances made it from the image, and compute deletes it with
@@ -2555,7 +2562,11 @@ func vpcModel(in *networkv1.Vpc) (resource.Vpc, error) {
 	if err != nil {
 		return resource.Vpc{}, err
 	}
-	return resource.Vpc{ID: id, OwnerID: owner, Cidr: in.GetSpec().GetIpv4Cidr(), State: state, Tags: userTags(in.GetLabels())}, nil
+	tags, err := userTags(in.GetLabels())
+	if err != nil {
+		return resource.Vpc{}, err
+	}
+	return resource.Vpc{ID: id, OwnerID: owner, Cidr: in.GetSpec().GetIpv4Cidr(), State: state, Tags: tags}, nil
 }
 
 func vpcStateOf(obs commonv1.ReconciliationState) (string, error) {
