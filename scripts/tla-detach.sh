@@ -10,8 +10,17 @@
 # Logs go to TLA_OUT (default a new temporary directory).
 set -euo pipefail
 
+# Our own copy of the upstream tlaplus v1.8.0 prerelease jar (#563): the
+# release tla2tools-v1.8.0-20261103 of this repo, whose notes give the upstream
+# URL, the date fetched and the sha256. Upstream republishes prerelease assets
+# (v1.8.0 was rebuilt on 2026-11-03), so an upstream URL is never pinned. This
+# copy is never replaced; a new version gets a new tag. The newest stable
+# release, v1.7.4, checks this spec about 15 times slower and misses the job
+# timeout. .github/workflows/tla.yml reads TLA_SHA256 from this line as its
+# cache key.
 TLA_VERSION=1.8.0
-TLA_SHA256=dae639a1f51a9e13ce60c369b15f32124cf1a78017aca366b6de0ae2b5169439
+TLA_URL=https://github.com/popododo0720/vws-console-api/releases/download/tla2tools-v1.8.0-20261103/tla2tools.jar
+TLA_SHA256=e20447644bfabd29d6bd0fc2c0eb1473fb301c1a0e4dfe1961938ce5a191edbf
 
 die() { echo "tla-detach: $*" >&2; exit 1; }
 
@@ -22,11 +31,10 @@ out=${TLA_OUT:-$(mktemp -d)}
 mkdir -p "$out"
 
 command -v java >/dev/null || die "java not found"
-jar=${TLA_TOOLS_JAR:-${TLA_CACHE:-${HOME}/.cache/vws}/tla2tools-${TLA_VERSION}.jar}
+jar=${TLA_TOOLS_JAR:-${TLA_CACHE:-${HOME}/.cache/vws}/tla2tools-${TLA_SHA256}.jar}
 if [[ ! -f $jar ]]; then
   mkdir -p "$(dirname "$jar")"
-  curl -fsSL -o "${jar}.part" \
-    "https://github.com/tlaplus/tlaplus/releases/download/v${TLA_VERSION}/tla2tools.jar"
+  curl -fsSL -o "${jar}.part" "$TLA_URL"
   mv "${jar}.part" "$jar"
 fi
 echo "${TLA_SHA256}  ${jar}" | sha256sum -c --quiet - || die "${jar} is not tla2tools ${TLA_VERSION}"

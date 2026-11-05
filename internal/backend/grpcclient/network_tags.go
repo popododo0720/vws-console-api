@@ -194,7 +194,11 @@ func removeEdit(sel []resource.TagSelector) tagEdit {
 // editedLabels applies edit to the tags stored in labels and re-encodes them,
 // keeping every internal label except the old tag chunks.
 func editedLabels(labels map[string]string, edit tagEdit) (map[string]string, map[string]string, error) {
-	tags, err := edit(userTags(labels))
+	stored, err := userTags(labels)
+	if err != nil {
+		return nil, nil, err
+	}
+	tags, err := edit(stored)
 	if err != nil {
 		return nil, nil, err
 	}

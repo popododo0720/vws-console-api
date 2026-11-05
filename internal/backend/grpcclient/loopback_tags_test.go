@@ -35,7 +35,10 @@ func (s *vpcSrv) UpdateVpc(ctx context.Context, req *networkv1.UpdateVpcRequest)
 	if err != nil {
 		return nil, toStatus(err)
 	}
-	tags := userTags(req.GetVpc().GetLabels())
+	tags, err := userTags(req.GetVpc().GetLabels())
+	if err != nil {
+		return nil, toStatus(err)
+	}
 	scope := backend.Scope{Account: account}
 	acc, err := s.w.set.Network.UntagVpcs(ctx, backend.Mutation{
 		Scope: scope, Key: req.GetRequestId() + "-clear", Fingerprint: fp,
@@ -76,7 +79,10 @@ func (s *subnetSrv) UpdateSubnet(ctx context.Context, req *networkv1.UpdateSubne
 	if err != nil {
 		return nil, toStatus(err)
 	}
-	tags := userTags(req.GetSubnet().GetLabels())
+	tags, err := userTags(req.GetSubnet().GetLabels())
+	if err != nil {
+		return nil, toStatus(err)
+	}
 	scope := backend.Scope{Account: account}
 	acc, err := s.w.set.Network.UntagSubnets(ctx, backend.Mutation{
 		Scope: scope, Key: req.GetRequestId() + "-clear", Fingerprint: fp,
