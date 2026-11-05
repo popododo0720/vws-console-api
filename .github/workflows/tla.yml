@@ -38,9 +38,13 @@ jobs:
         with:
           distribution: temurin
           java-version: "21"
+      # The cache key is the pinned hash read from the script, so a jar cached
+      # under another pin is never restored (#563).
+      - id: pin
+        run: grep -E '^TLA_SHA256=[0-9a-f]{64}$' scripts/tla-detach.sh >>"$GITHUB_OUTPUT"
       - uses: actions/cache@v4
         with:
           path: ~/.cache/vws
-          key: tla2tools-1.8.0
+          key: tla2tools-${{ steps.pin.outputs.TLA_SHA256 }}
       - name: TLC passes the real design, fails every seeded bug and each known finding
         run: scripts/tla-detach.sh

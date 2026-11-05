@@ -29,8 +29,8 @@ scripts/tla-detach.sh          # about 5 minutes on 8 cores
 scripts/tla-detach.sh model    # only the real design
 ```
 
-Needs Java 11+; the script downloads tla2tools 1.8.0 once and checks its
-sha256. It passes when the real design has 0 violations, every seeded bug
+Needs Java 11+; the script downloads the pinned stable tla2tools (1.7.4)
+once and checks its sha256. It passes when the real design has 0 violations, every seeded bug
 (`Fix*=FALSE`) breaks the property it guards, and each known finding still
 fails. Logs, with full TLC traces, are in the directory it prints.
 

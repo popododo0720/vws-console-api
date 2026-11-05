@@ -10,8 +10,13 @@
 # Logs go to TLA_OUT (default a new temporary directory).
 set -euo pipefail
 
-TLA_VERSION=1.8.0
-TLA_SHA256=dae639a1f51a9e13ce60c369b15f32124cf1a78017aca366b6de0ae2b5169439
+# A stable tlaplus release, never a prerelease: upstream republishes prerelease
+# assets (v1.8.0 was rebuilt on 2026-11-03, #563), so their hash does not hold.
+# .github/workflows/tla.yml reads TLA_SHA256 from this line as its cache key.
+# TLC 2.19 (1.7.4) writes no SpecTE files unless -generateSpecTE is given.
+TLA_VERSION=1.7.4
+TLA_URL=https://github.com/tlaplus/tlaplus/releases/download/v${TLA_VERSION}/tla2tools.jar
+TLA_SHA256=936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88
 
 die() { echo "tla-detach: $*" >&2; exit 1; }
 
@@ -25,8 +30,7 @@ command -v java >/dev/null || die "java not found"
 jar=${TLA_TOOLS_JAR:-${TLA_CACHE:-${HOME}/.cache/vws}/tla2tools-${TLA_VERSION}.jar}
 if [[ ! -f $jar ]]; then
   mkdir -p "$(dirname "$jar")"
-  curl -fsSL -o "${jar}.part" \
-    "https://github.com/tlaplus/tlaplus/releases/download/v${TLA_VERSION}/tla2tools.jar"
+  curl -fsSL -o "${jar}.part" "$TLA_URL"
   mv "${jar}.part" "$jar"
 fi
 echo "${TLA_SHA256}  ${jar}" | sha256sum -c --quiet - || die "${jar} is not tla2tools ${TLA_VERSION}"
@@ -34,7 +38,7 @@ echo "${TLA_SHA256}  ${jar}" | sha256sum -c --quiet - || die "${jar} is not tla2
 # tlc NAME CFG: runs TLC, keeps the log in $out/NAME.log, prints its verdict.
 tlc() {
   local name=$1 config=$2 log=${out}/$1.log
-  (cd "$spec_dir" && java -XX:+UseParallelGC -cp "$jar" tlc2.TLC -workers auto -noGenerateSpecTE \
+  (cd "$spec_dir" && java -XX:+UseParallelGC -cp "$jar" tlc2.TLC -workers auto \
     -metadir "${out}/${name}.states" -config "$config" detach.tla) >"$log" 2>&1 || true
   rm -rf "${out}/${name}.states"
   if grep -q '^Model checking completed. No error has been found.' "$log"; then
