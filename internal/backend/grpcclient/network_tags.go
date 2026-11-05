@@ -161,7 +161,11 @@ func (c networkClient) findSubnet(ctx context.Context, projectID, id string) (*n
 // mergedLabels writes add over the tags stored in labels and re-encodes them,
 // keeping every internal label except the old tag chunks.
 func mergedLabels(labels, add map[string]string) (map[string]string, map[string]string, error) {
-	tags, err := resource.MergeTags(userTags(labels), add)
+	stored, err := userTags(labels)
+	if err != nil {
+		return nil, nil, err
+	}
+	tags, err := resource.MergeTags(stored, add)
 	if err != nil {
 		return nil, nil, err
 	}

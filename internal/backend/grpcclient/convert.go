@@ -366,6 +366,14 @@ func (e *badRecordNameError) Error() string { return e.err.Error() }
 
 func (e *badRecordNameError) Unwrap() error { return e.err }
 
+// badTagLabelsError marks a backend record whose vws-tags- labels do not
+// decode. A listing skips it and logs; an explicit id read still fails.
+type badTagLabelsError struct{ err error }
+
+func (e *badTagLabelsError) Error() string { return "tag labels do not decode: " + e.err.Error() }
+
+func (e *badTagLabelsError) Unwrap() error { return e.err }
+
 // unknownVolumeTypeError marks a stored volume whose storage type this build
 // cannot name: UNSPECIFIED, or a type a later vws-proto added. Its type is
 // never guessed. A listing skips it and logs, DeleteVolume and DetachVolume
@@ -387,6 +395,12 @@ func (a *api) skipBadRecord(ctx context.Context, name string, err error) bool {
 	if errors.As(err, &bad) {
 		a.logger().WarnContext(ctx, "skipping a record with an invalid resource name",
 			slog.String("name", name), slog.Any("err", err))
+		return true
+	}
+	var tags *badTagLabelsError
+	if errors.As(err, &tags) {
+		a.logger().WarnContext(ctx, "skipping a record whose tag labels do not decode",
+			slog.String("id", lastSegment(name)), slog.Any("err", err))
 		return true
 	}
 	var typ *unknownVolumeTypeError
@@ -562,10 +576,14 @@ func instanceModel(in *computev1.Instance) (resource.Instance, error) {
 			Device: o.GetDeviceName(), VolumeID: volID, Status: resource.AttachmentDetaching,
 		})
 	}
+	tags, err := userTags(in.GetLabels())
+	if err != nil {
+		return resource.Instance{}, err
+	}
 	out := resource.Instance{
 		ID: id, ReservationID: resID, OwnerID: owner, State: state, StateReason: reason, ImageID: img,
 		InstanceType: in.GetSpec().GetMachineType(), Zone: parts[3],
-		LaunchTime: launchTime(in), Tags: userTags(in.GetLabels()),
+		LaunchTime: launchTime(in), Tags: tags,
 		KeyPairID: keyPairID, UserData: in.GetSpec().GetUserData(),
 		RootDeviceName: rootDevice, BlockDevices: blocks, DetachingDevices: detaching,
 	}
@@ -741,6 +759,10 @@ func subnetModel(in *networkv1.Subnet) (resource.Subnet, error) {
 	if parsed, parseErr := resource.Parse[resource.VpcID](parts[5]); parseErr == nil {
 		vpcID = parsed
 	}
+	tags, err := userTags(in.GetLabels())
+	if err != nil {
+		return resource.Subnet{}, err
+	}
 	zone := in.GetSpec().GetZone()
 	if zone == "" && resource.IsDirectSubnet(id) {
 		// A direct network spans the region; vws-network gives it no zone.
@@ -748,7 +770,7 @@ func subnetModel(in *networkv1.Subnet) (resource.Subnet, error) {
 	}
 	return resource.Subnet{
 		ID: id, OwnerID: owner, VpcID: vpcID, Cidr: in.GetSpec().GetIpv4Cidr(), State: state, Zone: zone,
-		Tags: userTags(in.GetLabels()),
+		Tags: tags,
 	}, nil
 }
 

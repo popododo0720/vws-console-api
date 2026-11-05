@@ -69,10 +69,12 @@ func dialLoopbackClock(t *testing.T, world *fake.World, now time.Time, clock fun
 	computeSrv := grpc.NewServer(
 		grpc.MaxRecvMsgSize(MaxMessageBytes()),
 		grpc.MaxSendMsgSize(MaxMessageBytes()),
+		grpc.UnaryInterceptor(enforceLabelGrammar),
 	)
 	storageSrv := grpc.NewServer(
 		grpc.MaxRecvMsgSize(MaxMessageBytes()),
 		grpc.MaxSendMsgSize(MaxMessageBytes()),
+		grpc.UnaryInterceptor(enforceLabelGrammar),
 	)
 	loop := newLoopWorld(world.Set(), now)
 	computev1.RegisterInstanceServiceServer(computeSrv, &instanceSrv{w: loop})
@@ -601,11 +603,15 @@ func (s *instanceSrv) CreateInstance(ctx context.Context, req *computev1.CreateI
 		// other values in the contract.
 		rootIops, rootMiBps = boot.GetSpec().GetIops(), boot.GetSpec().GetThroughputMibps()
 	}
+	tags, err := userTags(req.GetInstance().GetLabels())
+	if err != nil {
+		return nil, toStatus(err)
+	}
 	acc, err := s.w.set.Compute.RunInstances(ctx, backend.Mutation{
 		Scope: backend.Scope{Account: account}, Key: req.GetRequestId(), Fingerprint: fp,
 	}, resource.RunInstancesRequest{
 		ImageID: img, InstanceType: spec.GetMachineType(), NetworkInterfaces: nics, Count: 1,
-		Tags: userTags(req.GetInstance().GetLabels()), KeyName: keyName, UserData: spec.GetUserData(),
+		Tags: tags, KeyName: keyName, UserData: spec.GetUserData(),
 		// The fake creates the root volume itself. It takes the type of the
 		// boot volume the client created, so a type the client drops or
 		// changes on the way to vws-storage shows in the contract (#323).
@@ -738,7 +744,10 @@ func (s *instanceSrv) retag(ctx context.Context, req *computev1.UpdateInstanceRe
 	if err != nil {
 		return nil, toStatus(err)
 	}
-	tags := userTags(req.GetInstance().GetLabels())
+	tags, err := userTags(req.GetInstance().GetLabels())
+	if err != nil {
+		return nil, toStatus(err)
+	}
 	if len(tags) == 0 {
 		return nil, toStatus(resource.Invalid("labels", "no tags"))
 	}
@@ -1141,9 +1150,13 @@ func (s *vpcSrv) CreateVpc(ctx context.Context, req *networkv1.CreateVpcRequest)
 		if err != nil {
 			return nil, toStatus(err)
 		}
+		tags, err := userTags(req.GetVpc().GetLabels())
+		if err != nil {
+			return nil, toStatus(err)
+		}
 		acc, err := s.w.set.Network.CreateVpc(ctx, backend.Mutation{
 			Scope: backend.Scope{Account: account}, Key: req.GetRequestId(), Fingerprint: fp,
-		}, resource.CreateVpcRequest{Cidr: req.GetVpc().GetSpec().GetIpv4Cidr(), Tags: userTags(req.GetVpc().GetLabels())})
+		}, resource.CreateVpcRequest{Cidr: req.GetVpc().GetSpec().GetIpv4Cidr(), Tags: tags})
 		if err != nil {
 			return nil, toStatus(err)
 		}
@@ -1198,9 +1211,13 @@ func (s *subnetSrv) CreateSubnet(ctx context.Context, req *networkv1.CreateSubne
 	if parsed, parseErr := resource.Parse[resource.VpcID](vpcID); parseErr == nil {
 		vpcRef = parsed
 	}
+	tags, err := userTags(req.GetSubnet().GetLabels())
+	if err != nil {
+		return nil, toStatus(err)
+	}
 	acc, err := s.w.set.Network.CreateSubnet(ctx, backend.Mutation{
 		Scope: backend.Scope{Account: account}, Key: req.GetRequestId(), Fingerprint: fp,
-	}, resource.CreateSubnetRequest{Cidr: req.GetSubnet().GetSpec().GetIpv4Cidr(), VpcID: vpcRef, Tags: userTags(req.GetSubnet().GetLabels())})
+	}, resource.CreateSubnetRequest{Cidr: req.GetSubnet().GetSpec().GetIpv4Cidr(), VpcID: vpcRef, Tags: tags})
 	if err != nil {
 		return nil, toStatus(err)
 	}
