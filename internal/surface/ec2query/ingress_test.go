@@ -176,3 +176,64 @@ func TestAuthorizeIngressBoundsTheRuleCount(t *testing.T) {
 		t.Fatalf("60 rules %d %s", res.Code, res.Body)
 	}
 }
+
+// #219: an ICMP permission carries the ICMP type in FromPort and the code in
+// ToPort, -1 meaning all, and each pair is stored and described as sent.
+func TestICMPTypeAndCodeRoundTrip(t *testing.T) {
+	h, cred, now := harness(t)
+	id := ingressGroup(t, h, cred, now)
+	form := url.Values{"Action": {"AuthorizeSecurityGroupIngress"}, "Version": {Version}, "GroupId": {id}}
+	pairs := [][2]string{{"-1", "-1"}, {"8", "0"}, {"3", "4"}, {"0", "0"}, {"8", "-1"}}
+	for i, pair := range pairs {
+		p := "IpPermissions." + itoa(i+1) + "."
+		form.Set(p+"IpProtocol", "icmp")
+		form.Set(p+"FromPort", pair[0])
+		form.Set(p+"ToPort", pair[1])
+		form.Set(p+"IpRanges.1.CidrIp", "10.0.0.0/16")
+	}
+	if res := signed(t, h, cred, now, form.Encode()); res.Code != http.StatusOK {
+		t.Fatalf("authorize %d %s", res.Code, res.Body)
+	}
+	body := describedGroup(t, h, cred, now, id)
+	for _, pair := range pairs {
+		want := "<fromPort>" + pair[0] + "</fromPort><toPort>" + pair[1] + "</toPort>"
+		if !strings.Contains(body, want) {
+			t.Fatalf("missing %s in %s", want, body)
+		}
+	}
+}
+
+// #219: an ICMP type or code EC2 refuses is InvalidParameterValue, and an
+// ICMP permission without its type and code is MissingParameter, not echo
+// reply (0/0) or every ICMP message (-1/-1).
+func TestICMPTypeAndCodeAreChecked(t *testing.T) {
+	h, cred, now := harness(t)
+	id := ingressGroup(t, h, cred, now)
+	for _, tc := range []struct {
+		ports url.Values
+		code  string
+	}{
+		{url.Values{"IpPermissions.1.FromPort": {"-1"}, "IpPermissions.1.ToPort": {"0"}}, "InvalidParameterValue"},
+		{url.Values{"IpPermissions.1.FromPort": {"256"}, "IpPermissions.1.ToPort": {"0"}}, "InvalidParameterValue"},
+		{url.Values{"IpPermissions.1.FromPort": {"8"}, "IpPermissions.1.ToPort": {"256"}}, "InvalidParameterValue"},
+		{url.Values{"IpPermissions.1.FromPort": {"-2"}, "IpPermissions.1.ToPort": {"-1"}}, "InvalidParameterValue"},
+		{url.Values{}, "MissingParameter"},
+		{url.Values{"IpPermissions.1.FromPort": {"8"}}, "MissingParameter"},
+		{url.Values{"IpPermissions.1.ToPort": {"0"}}, "MissingParameter"},
+	} {
+		form := url.Values{
+			"Action": {"AuthorizeSecurityGroupIngress"}, "Version": {Version}, "GroupId": {id},
+			"IpPermissions.1.IpProtocol": {"icmp"}, "IpPermissions.1.IpRanges.1.CidrIp": {"10.0.0.0/16"},
+		}
+		for k, v := range tc.ports {
+			form[k] = v
+		}
+		res := signed(t, h, cred, now, form.Encode())
+		if res.Code != http.StatusBadRequest || !strings.Contains(res.Body.String(), "<Code>"+tc.code+"</Code>") {
+			t.Fatalf("%v: %d %s", tc.ports, res.Code, res.Body)
+		}
+	}
+	if body := describedGroup(t, h, cred, now, id); strings.Contains(body, "10.0.0.0/16") {
+		t.Fatalf("a refused request wrote a rule: %s", body)
+	}
+}

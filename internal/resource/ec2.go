@@ -460,11 +460,12 @@ func (r CreateSecurityGroupRequest) Normalize() (CreateSecurityGroupRequest, err
 	return r, nil
 }
 
-// IPPermission is one AWS IpPermissions entry. IngressRules flattens it.
+// IPPermission is one AWS IpPermissions entry. IngressRules flattens it. A nil
+// port was not sent, which an ICMP permission may not do.
 type IPPermission struct {
 	Protocol         string            `json:"ipProtocol"`
-	FromPort         int               `json:"fromPort"`
-	ToPort           int               `json:"toPort"`
+	FromPort         *int              `json:"fromPort"`
+	ToPort           *int              `json:"toPort"`
 	IPRanges         []IPRange         `json:"ipRanges,omitempty"`
 	IPv6Ranges       []IPv6Range       `json:"ipv6Ranges,omitempty"`
 	UserIDGroupPairs []UserIDGroupPair `json:"userIdGroupPairs,omitempty"`
@@ -520,23 +521,54 @@ func IngressRules(perms []IPPermission) ([]IngressRule, error) {
 		case len(p.IPRanges) == 0:
 			return nil, Invalid("ipRanges", "Each permission needs at least one IPv4 range.")
 		}
+		from, to, err := permissionPorts(p)
+		if err != nil {
+			return nil, err
+		}
 		for _, r := range p.IPRanges {
 			if r.Description != "" {
 				return nil, Unsupported("description", "Descriptions on security group rules are not supported.")
 			}
 			rules = append(
 				rules,
-				IngressRule{Protocol: p.Protocol, FromPort: p.FromPort, ToPort: p.ToPort, Cidr: r.CidrIP},
+				IngressRule{Protocol: p.Protocol, FromPort: from, ToPort: to, Cidr: r.CidrIP},
 			)
 		}
 	}
 	return rules, nil
 }
 
+// permissionPorts returns the permission's ports, 0 for one not sent. EC2
+// requires a port range for icmp, so an ICMP permission without both its type
+// and its code is refused. Reading the omission as 0/0 would store echo reply,
+// and reading it as -1/-1 would allow every ICMP message.
+func permissionPorts(p IPPermission) (int, int, error) {
+	if protocol, err := canonicalProtocol(p.Protocol); err == nil && protocol == "icmp" {
+		if p.FromPort == nil || p.ToPort == nil {
+			return 0, 0, MissingParameter("fromPort",
+				"An icmp permission must contain FromPort, the ICMP type, and ToPort, the ICMP code.")
+		}
+	}
+	var from, to int
+	if p.FromPort != nil {
+		from = *p.FromPort
+	}
+	if p.ToPort != nil {
+		to = *p.ToPort
+	}
+	return from, to, nil
+}
+
 // MaxIngressRules bounds the rules one AuthorizeSecurityGroupIngress adds. It
 // is the default EC2 quota of inbound rules per security group, so a larger
 // request could not fit a group anyway.
 const MaxIngressRules = 60
+
+// The ICMP type and code bounds. -1 means every type or every code.
+const (
+	icmpAny = -1
+	icmpMax = 255
+)
 
 // AuthorizeSecurityGroupIngressRequest adds inbound rules, all or none.
 type AuthorizeSecurityGroupIngressRequest struct {
@@ -626,10 +658,28 @@ func normalizeRule(rule IngressRule) (IngressRule, error) {
 		rule.ToPort = 0
 		return rule, nil
 	}
+	if protocol == "icmp" {
+		return rule, checkICMP(rule.FromPort, rule.ToPort)
+	}
 	if rule.FromPort < 0 || rule.ToPort > 65535 || rule.ToPort < 0 || rule.FromPort > rule.ToPort {
 		return IngressRule{}, Invalid("fromPort", "malformed")
 	}
 	return rule, nil
+}
+
+// checkICMP checks an ICMP type and code as EC2 does. Each is 0 to 255 or -1
+// for all, and all types takes all codes.
+func checkICMP(typ, code int) error {
+	switch {
+	case typ < icmpAny || typ > icmpMax:
+		return Invalid("fromPort", fmt.Sprintf("Invalid value '%d' for ICMP type. It must be -1 or 0 to 255.", typ))
+	case code < icmpAny || code > icmpMax:
+		return Invalid("toPort", fmt.Sprintf("Invalid value '%d' for ICMP code. It must be -1 or 0 to 255.", code))
+	case typ == icmpAny && code != icmpAny:
+		return Invalid("toPort", "The ICMP code must be -1 when the ICMP type is -1.")
+	default:
+		return nil
+	}
 }
 
 // canonicalProtocol accepts the names and protocol numbers a query client sends.

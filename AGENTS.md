@@ -63,6 +63,7 @@ change both files together.
 | S3 object writes: mask, request id, `If-None-Match`, waiting for the operation. | `TestPutIfNoneMatchIsWriteOnce`, `TestPutObjectWaitsForTheOperation` |
 | S3 bucket creates answer as S3 outside us-east-1. | `backendtest.BucketCreate` |
 | AuthorizeSecurityGroupIngress takes the `IpPermissions` list, all rules or none; a source VWS cannot store is `UnsupportedOperation`, never dropped. | `TestAuthorizeIngressTakesSeveralPermissions`, `TestUnsupportedIngressSourceIsRefused`, `TestAuthorizeIngressIsAllOrNothing` |
+| An ICMP permission is type in FromPort and code in ToPort, -1 or 0 to 255, stored as sent; one without both is `MissingParameter`. | `TestICMPTypeAndCodeAreChecked`, `TestICMPTypeAndCodeRoundTrip`, `exerciseEC2` |
 | EC2 catalog actions are served on both surfaces. | `TestCatalogActionsAreImplemented` |
 | EC2 describe calls take boto3's parameter names. | `TestDescribeStandardParameters` |
 | EC2 instance, image, volume and address behavior. | `exerciseEC2`, `backendtest.AttachLifecycle` |

@@ -2,6 +2,7 @@ package backendtest
 
 import (
 	"context"
+	"slices"
 	"testing"
 
 	"github.com/popododo0720/vws-console-api/internal/backend"
@@ -460,6 +461,30 @@ func exerciseEC2(ctx context.Context, t *testing.T, set backend.Set, account res
 		Scope: scope, Key: "k-revoke-missing", Fingerprint: "fp-revoke-missing",
 	}, lastRule); !resource.IsPermissionNotFound(err) {
 		t.Fatalf("missing rule: %v", err)
+	}
+	// #219: ICMP type and code survive the backend.
+	full, err := set.Network.CreateSecurityGroup(ctx, backend.Mutation{
+		Scope: scope, Key: "k-sg-full", Fingerprint: "fp-sg-full",
+	}, resource.CreateSecurityGroupRequest{Name: "full", VpcID: created.Items[0].ID})
+	if err != nil {
+		t.Fatalf("group to fill: %v", err)
+	}
+	fullID := full.Items[0].ID
+	icmp := []resource.IngressRule{
+		{Protocol: "icmp", FromPort: -1, ToPort: -1, Cidr: "10.0.0.0/16"},
+		{Protocol: "icmp", FromPort: 8, ToPort: 0, Cidr: "10.0.0.0/16"},
+		{Protocol: "icmp", FromPort: 3, ToPort: 4, Cidr: "10.0.0.0/16"},
+	}
+	withICMP, err := set.Network.AuthorizeSecurityGroupIngress(ctx, backend.Mutation{
+		Scope: scope, Key: "k-auth-icmp", Fingerprint: "fp-auth-icmp",
+	}, resource.AuthorizeSecurityGroupIngressRequest{ID: fullID, Rules: icmp})
+	if err != nil || !slices.Equal(withICMP.Items[0].Rules, icmp) {
+		t.Fatalf("icmp: %v %+v", err, withICMP.Items)
+	}
+	if _, err := set.Network.DeleteSecurityGroup(ctx, backend.Mutation{
+		Scope: scope, Key: "k-del-sg-full", Fingerprint: "fp-del-sg-full",
+	}, resource.DeleteSecurityGroupRequest{ID: fullID}); err != nil {
+		t.Fatalf("delete the full group: %v", err)
 	}
 
 	keyM := backend.Mutation{Scope: scope, Key: "k-key", Fingerprint: "fp-key"}
