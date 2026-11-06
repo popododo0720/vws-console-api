@@ -2567,10 +2567,7 @@ func vpcModel(in *networkv1.Vpc) (resource.Vpc, error) {
 	if err != nil {
 		return resource.Vpc{}, err
 	}
-	state, err := vpcStateOf(in.GetStatus().GetObserved().GetState())
-	if err != nil {
-		return resource.Vpc{}, err
-	}
+	state := vpcStateOf(in.GetStatus().GetObserved().GetState())
 	tags, err := userTags(in.GetLabels())
 	if err != nil {
 		return resource.Vpc{}, err
@@ -2578,18 +2575,21 @@ func vpcModel(in *networkv1.Vpc) (resource.Vpc, error) {
 	return resource.Vpc{ID: id, OwnerID: owner, Cidr: in.GetSpec().GetIpv4Cidr(), State: state, Tags: tags}, nil
 }
 
-func vpcStateOf(obs commonv1.ReconciliationState) (string, error) {
+// vpcStateOf maps a VPC reconciliation state. EC2 documents only pending and
+// available for a VPC, so a failed VPC is pending: it never claims to be usable.
+func vpcStateOf(obs commonv1.ReconciliationState) string {
 	switch obs {
-	case commonv1.ReconciliationState_RECONCILIATION_STATE_PENDING, commonv1.ReconciliationState_RECONCILIATION_STATE_RECONCILING:
-		return resource.VpcPending, nil
 	case commonv1.ReconciliationState_RECONCILIATION_STATE_READY:
-		return resource.VpcAvailable, nil
+		return resource.VpcAvailable
 	case commonv1.ReconciliationState_RECONCILIATION_STATE_DELETING:
-		return resource.VpcDeleting, nil
-	case commonv1.ReconciliationState_RECONCILIATION_STATE_ERROR, commonv1.ReconciliationState_RECONCILIATION_STATE_UNSPECIFIED:
-		return "", resource.Internal(errors.New("bad vpc state"))
+		return resource.VpcDeleting
+	case commonv1.ReconciliationState_RECONCILIATION_STATE_PENDING,
+		commonv1.ReconciliationState_RECONCILIATION_STATE_RECONCILING,
+		commonv1.ReconciliationState_RECONCILIATION_STATE_ERROR,
+		commonv1.ReconciliationState_RECONCILIATION_STATE_UNSPECIFIED:
+		return resource.VpcPending
 	default:
-		return "", resource.Internal(errors.New("bad vpc state"))
+		return resource.VpcPending
 	}
 }
 
