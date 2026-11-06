@@ -83,7 +83,7 @@ if [[ ${1:-all} == all ]]; then
     echo "${name} (${what}): ${got}, want ${prop}"
     [[ $got == "$prop" ]] || fail=1
   done <<'CHECKS'
-seed-fail-open FixFailClosed AuthorizedOnRealARN
+seed-fail-open FixFailClosed DenyIsNeverSkipped
 seed-bind FixBind ReadsBound
 seed-page-etag FixPageEtag PagesBound
 seed-write-etag FixWriteEtag WritesBound

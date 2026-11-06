@@ -33,12 +33,19 @@ modeled action stands for the code path it takes (`Shape` in the spec):
 
 | Shape | Action modeled | Others of the same shape |
 | --- | --- | --- |
-| `read`: bind and data in one read | `GetUser` | `GetGroup`, `GetRole`, `ListGroupsForUser`, the policy reads |
+| `read`: the entity's data all comes from the bind read | `GetUser` | `GetGroup`, `GetRole`, `ListGroupsForUser`, the user and group policy reads |
 | `pages`: bind, pages, etag reread | `ListAccessKeys` | `ListMFADevices` |
 | `cas`: write under the bound etag | `UpdateUser` | `DeleteUser`, `UpdateGroup`, `DeleteGroup`, group membership, user and group policy writes |
 | `expect`: write with `expected_user_arn` | `UpdateAccessKey` | `DeleteAccessKey` |
 | `undo`: write, etag reread, undo | `EnableMFADevice` | |
 | `none`: write with no precondition | `CreateAccessKey`, `UpdateRole` | `UpdateRoleDescription` |
+
+A `read` call may make more RPCs after the bind read, but they read other
+resources: `ListGroupsForUser` reads each group the user's status names, and
+`ListAttachedUserPolicies` reads each managed policy the bound read lists,
+then binds the user again. The entity's own data (its groups, its attached
+and inline policies) is the bind read's, so a move after it changes nothing
+the call returns.
 
 The fake backend (`internal/iam/store.go`) binds and acts under one lock, so
 there every call is one step and cannot break these properties.
@@ -47,7 +54,7 @@ there every call is one step and cannot break these properties.
 
 | Property | Plain meaning | Code it guards | Seeded bug that breaks it |
 | --- | --- | --- | --- |
-| `AuthorizedOnRealARN` | A failed lookup authorizes nothing: every principal is the entity's real ARN when it was authorized. | `spec.resource` sets `resourceErr` (`iamquery.go`) | `FixFailClosed=FALSE`: authorize the path-less ARN, which a Deny on the real path misses |
+| `DenyIsNeverSkipped` | A failed lookup authorizes nothing: no request is allowed while the entity's real ARN is denied. `Bind` would then refuse the guessed principal too, so this guards the decision, not the data. | `spec.resource` sets `resourceErr` (`iamquery.go`) | `FixFailClosed=FALSE`: authorize the path-less ARN, which a Deny on the real path misses |
 | `ReadsBound` | A one-call read returns data only of the entity at the authorized ARN. | `AuthorizedPrincipal.Bind` on every entity read (#331, #342) | `FixBind=FALSE`: read by name |
 | `PagesBound` | A read of several calls returns no page read while the entity was elsewhere, a move away and back included. | `unchangedUser` compares the etag (#407) | `FixPageEtag=FALSE`: the reread checks the ARN only |
 | `WritesBound` | A guarded write never applies to the entity at another ARN. | the etag on `UpdateUser` and `UpdateGroup`; `expected_user_arn` on access key writes (#340) | `FixWriteEtag=FALSE` or `FixExpectARN=FALSE` |
@@ -76,7 +83,8 @@ property then moves into `iamauth.cfg`.
 2. `UpdateRoleBound`: `UpdateRole` and `UpdateRoleDescription` bind the role
    with `roleAt`, then send `UpdateRoleRequest` without the role's etag. A
    role deleted and created again on a denied path in between is changed
-   (5 states).
+   (5 states). `UpdateRoleRequest.role` already carries `Role.etag` in
+   vws-proto.
 3. `EnableNeverStaysUnverified`: `EnableMFADevice` enables the device first
    and checks the user after. A restart between the enable and the check
    (or an undo whose outcome is unknown, which the code already answers as

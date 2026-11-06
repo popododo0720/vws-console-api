@@ -242,9 +242,10 @@ Spec == Init /\ [][Next]_vars
 
 ShapeIs(r, s) == Shape[act[r]] = s
 
-(* A failed lookup authorizes nothing: every principal is the entity's   *)
-(* real ARN at the time of the decision.                                  *)
-AuthorizedOnRealARN == \A r \in Reqs: want[r] # Zero => want[r] = authOn[r]
+(* A failed lookup authorizes nothing: no request is allowed while the   *)
+(* entity's real ARN is denied. Bind then refuses a guessed principal too, *)
+(* so in this model the guess reaches no data; this keeps the decision.   *)
+DenyIsNeverSkipped == \A r \in Reqs: want[r] # Zero => authOn[r] \notin Denied
 
 (* A one-call read returns data only of the entity at the authorized ARN. *)
 ReadsBound == \A r \in Reqs: ShapeIs(r, "read") /\ result[r] = "ok" => ~tainted[r]
