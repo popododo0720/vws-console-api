@@ -2,6 +2,7 @@ package grpcclient
 
 import (
 	"fmt"
+	"maps"
 	"sync"
 	"testing"
 	"time"
@@ -28,9 +29,9 @@ func TestConcurrentAuthorizesKeepEveryRule(t *testing.T) {
 				Scope: scope, Key: fmt.Sprintf("k-auth-%d", i), Fingerprint: fmt.Sprintf("fp-auth-%d", i),
 			}, resource.AuthorizeSecurityGroupIngressRequest{
 				ID: group,
-				Rule: resource.IngressRule{
+				Rules: []resource.IngressRule{{
 					Protocol: "tcp", FromPort: 1000 + i, ToPort: 1000 + i, Cidr: "10.0.0.0/16",
-				},
+				}},
 			})
 		}(i)
 	}
@@ -59,12 +60,12 @@ func TestDuplicateRuleIsDuplicatePermission(t *testing.T) {
 	rule := resource.IngressRule{Protocol: "tcp", FromPort: 22, ToPort: 22, Cidr: "10.0.0.0/16"}
 	if _, err := set.Network.AuthorizeSecurityGroupIngress(ctx, backend.Mutation{
 		Scope: scope, Key: "k-auth", Fingerprint: "fp-auth",
-	}, resource.AuthorizeSecurityGroupIngressRequest{ID: group, Rule: rule}); err != nil {
+	}, resource.AuthorizeSecurityGroupIngressRequest{ID: group, Rules: []resource.IngressRule{rule}}); err != nil {
 		t.Fatal(err)
 	}
 	_, err := set.Network.AuthorizeSecurityGroupIngress(ctx, backend.Mutation{
 		Scope: scope, Key: "k-auth-again", Fingerprint: "fp-auth-again",
-	}, resource.AuthorizeSecurityGroupIngressRequest{ID: group, Rule: rule})
+	}, resource.AuthorizeSecurityGroupIngressRequest{ID: group, Rules: []resource.IngressRule{rule}})
 	if !resource.IsDuplicatePermission(err) {
 		t.Fatalf("duplicate rule = %v, want a duplicate permission", err)
 	}
@@ -101,12 +102,12 @@ func TestSameRequestRetriesTheFirstOperation(t *testing.T) {
 	rule := resource.IngressRule{Protocol: "tcp", FromPort: 22, ToPort: 22, Cidr: "10.0.0.0/16"}
 	auth := backend.Mutation{Scope: scope, Key: "k-auth", Fingerprint: "fp-auth"}
 	first, err := set.Network.AuthorizeSecurityGroupIngress(ctx, auth,
-		resource.AuthorizeSecurityGroupIngressRequest{ID: group, Rule: rule})
+		resource.AuthorizeSecurityGroupIngressRequest{ID: group, Rules: []resource.IngressRule{rule}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	again, err := set.Network.AuthorizeSecurityGroupIngress(ctx, auth,
-		resource.AuthorizeSecurityGroupIngressRequest{ID: group, Rule: rule})
+		resource.AuthorizeSecurityGroupIngressRequest{ID: group, Rules: []resource.IngressRule{rule}})
 	if err != nil || again.Operation.ID != first.Operation.ID || len(again.Items[0].Rules) != 1 {
 		t.Fatalf("authorize retry: %v %+v", err, again)
 	}
@@ -136,7 +137,7 @@ func TestConcurrentRevokesKeepNoRule(t *testing.T) {
 		})
 		if _, err := set.Network.AuthorizeSecurityGroupIngress(ctx, backend.Mutation{
 			Scope: scope, Key: fmt.Sprintf("k-open-%d", i), Fingerprint: fmt.Sprintf("fp-open-%d", i),
-		}, resource.AuthorizeSecurityGroupIngressRequest{ID: group, Rule: rules[i]}); err != nil {
+		}, resource.AuthorizeSecurityGroupIngressRequest{ID: group, Rules: []resource.IngressRule{rules[i]}}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -196,4 +197,33 @@ func securityGroupForTest(t *testing.T) (backend.Set, backend.Scope, resource.Se
 		t.Fatal(err)
 	}
 	return set, scope, group.Items[0].ID
+}
+
+// #217: the fingerprint label tells a same-token retry from the same token
+// with other rules. A group last written before the label existed replays.
+func TestIngressReplayChecksTheFingerprintLabel(t *testing.T) {
+	m := backend.Mutation{Key: "k-auth", Fingerprint: "fp-auth"}
+	action := resource.ActionAuthorizeSecurityGroupIngress
+	other := "fp-other"
+	labels := map[string]string{
+		labelAction: action.String(), labelRequest: requestUUID(m.Key, "ingress"), labelEtag: "7",
+	}
+	for name, tc := range map[string]struct {
+		fingerprint *string
+		replay      bool
+		code        resource.Code
+	}{
+		"same":   {fingerprint: &m.Fingerprint, replay: true},
+		"other":  {fingerprint: &other, code: resource.CodeIdempotencyMismatch},
+		"legacy": {replay: true},
+	} {
+		group := resource.SecurityGroup{Labels: maps.Clone(labels)}
+		if tc.fingerprint != nil {
+			group.Labels[labelFingerprint] = *tc.fingerprint
+		}
+		etag, replay, err := sameIngressRequest(group, m, action, "ingress")
+		if replay != tc.replay || resource.CodeOf(err) != tc.code || (replay && etag != "7") {
+			t.Errorf("%s: etag %q replay %v err %v", name, etag, replay, err)
+		}
+	}
 }

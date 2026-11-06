@@ -232,6 +232,26 @@ const (
 
 // EnableMFADevice failures. InvalidAuthenticationCode is the 403 for codes
 // the device did not emit in sequence; the message never echoes a code.
+// SessionCredentialsRefused is the AccessDenied of GetSessionToken called with
+// temporary credentials.
+func SessionCredentialsRefused() error {
+	return resource.Denied("Cannot call GetSessionToken with session credentials")
+}
+
+// SessionMFAIncomplete is the AccessDenied of a GetSessionToken serial number
+// sent without a code, or a code without one.
+func SessionMFAIncomplete() error {
+	return resource.Denied(
+		"MultiFactorAuthentication failed, must provide both MFA serial number and one time pass code.",
+	)
+}
+
+// SessionMFAInvalid is the AccessDenied of a GetSessionToken MFA code that
+// does not verify.
+func SessionMFAInvalid() error {
+	return resource.Denied("MultiFactorAuthentication failed with invalid MFA one time pass code.")
+}
+
 // MFADeviceInUse is the EntityAlreadyExists of a device already enabled for a
 // user. UserTemporarilyUnmodifiable is the EntityTemporarilyUnmodifiable of a
 // user that is being renamed, or was deleted and made again, while the device
@@ -271,6 +291,15 @@ type AssumedRole struct {
 	Key           Key
 	AssumedRoleID string // role id ":" session name
 	ARN           string // arn:vws:sts::<account>:assumed-role/<role>/<session>
+}
+
+// SessionTokenRequest is a GetSessionToken request. A zero Duration is the
+// AWS default: 12 hours for a user, 1 hour for the root user. SerialNumber
+// and TokenCode are both set or both empty; TokenCode is never logged.
+type SessionTokenRequest struct {
+	Duration     time.Duration
+	SerialNumber string
+	TokenCode    string
 }
 
 // Ref is the identity of one IAM user, group or role: its ARN, path
@@ -315,7 +344,7 @@ type Directory interface {
 // service-linked role, or Field ConcurrentModification for an entity that
 // moved since authorization), InvalidArgument (Field "PolicyDocument" for a
 // malformed policy), ResourceExhausted (a quota), PermissionDenied (AssumeRole
-// trust).
+// trust, or a GetSessionToken MFA code that does not verify).
 type Admin interface {
 	CreateUser(ctx context.Context, a resource.AccountID, name, path string) (User, error)
 	GetUser(ctx context.Context, a resource.AccountID, name string, want AuthorizedPrincipal) (User, error)
@@ -451,6 +480,10 @@ type Admin interface {
 	ListMFADeviceTags(ctx context.Context, a resource.AccountID, serial, marker string, maxItems int) (TagPage, error)
 
 	AssumeRole(ctx context.Context, caller Principal, roleARN, session string, duration time.Duration) (AssumedRole, error)
+	// GetSessionToken issues temporary credentials with caller's own
+	// permissions, MFA-marked when the request's device code verifies. Only a
+	// long-term key of a user or the root user may call it.
+	GetSessionToken(ctx context.Context, caller Principal, req SessionTokenRequest) (Key, error)
 }
 
 // LoginProfile is a user's console password. The password itself is never

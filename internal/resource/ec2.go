@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"slices"
 	"strings"
 	"time"
 )
@@ -465,10 +466,120 @@ func (r CreateSecurityGroupRequest) Normalize() (CreateSecurityGroupRequest, err
 	return r, nil
 }
 
-// AuthorizeSecurityGroupIngressRequest adds one inbound rule.
+// IPPermission is one AWS IpPermissions entry. IngressRules flattens it. A nil
+// port was not sent, which an ICMP permission may not do.
+type IPPermission struct {
+	Protocol         string            `json:"ipProtocol"`
+	FromPort         *int              `json:"fromPort"`
+	ToPort           *int              `json:"toPort"`
+	IPRanges         []IPRange         `json:"ipRanges,omitempty"`
+	IPv6Ranges       []IPv6Range       `json:"ipv6Ranges,omitempty"`
+	UserIDGroupPairs []UserIDGroupPair `json:"userIdGroupPairs,omitempty"`
+	PrefixListIDs    []PrefixListID    `json:"prefixListIds,omitempty"`
+}
+
+// IPRange is one IPv4 source of an IPPermission.
+type IPRange struct {
+	CidrIP      string `json:"cidrIp"`
+	Description string `json:"description,omitempty"`
+}
+
+// IPv6Range is one IPv6 source of an IPPermission. VWS refuses it.
+type IPv6Range struct {
+	CidrIPv6    string `json:"cidrIpv6"`
+	Description string `json:"description,omitempty"`
+}
+
+// UserIDGroupPair is one security group source of an IPPermission. VWS
+// refuses it.
+type UserIDGroupPair struct {
+	Description            string `json:"description,omitempty"`
+	GroupID                string `json:"groupId,omitempty"`
+	GroupName              string `json:"groupName,omitempty"`
+	PeeringStatus          string `json:"peeringStatus,omitempty"`
+	UserID                 string `json:"userId,omitempty"`
+	VpcID                  string `json:"vpcId,omitempty"`
+	VpcPeeringConnectionID string `json:"vpcPeeringConnectionId,omitempty"`
+}
+
+// PrefixListID is one prefix list source of an IPPermission. VWS refuses it.
+type PrefixListID struct {
+	Description  string `json:"description,omitempty"`
+	PrefixListID string `json:"prefixListId"`
+}
+
+// IngressRules flattens permissions into one rule per IPv4 range, in request
+// order. A source kind or a range description VWS cannot store is refused,
+// so no part of a permission is dropped.
+func IngressRules(perms []IPPermission) ([]IngressRule, error) {
+	var rules []IngressRule
+	for _, p := range perms {
+		switch {
+		case len(p.IPv6Ranges) > 0:
+			return nil, Unsupported("ipv6Ranges", "IPv6 ranges in security group rules are not supported.")
+		case len(p.UserIDGroupPairs) > 0:
+			return nil, Unsupported(
+				"userIdGroupPairs",
+				"Security group sources in security group rules are not supported.",
+			)
+		case len(p.PrefixListIDs) > 0:
+			return nil, Unsupported("prefixListIds", "Prefix lists in security group rules are not supported.")
+		case len(p.IPRanges) == 0:
+			return nil, Invalid("ipRanges", "Each permission needs at least one IPv4 range.")
+		}
+		from, to, err := permissionPorts(p)
+		if err != nil {
+			return nil, err
+		}
+		for _, r := range p.IPRanges {
+			if r.Description != "" {
+				return nil, Unsupported("description", "Descriptions on security group rules are not supported.")
+			}
+			rules = append(
+				rules,
+				IngressRule{Protocol: p.Protocol, FromPort: from, ToPort: to, Cidr: r.CidrIP},
+			)
+		}
+	}
+	return rules, nil
+}
+
+// permissionPorts returns the permission's ports, 0 for one not sent. EC2
+// requires a port range for icmp, so an ICMP permission without both its type
+// and its code is refused. Reading the omission as 0/0 would store echo reply,
+// and reading it as -1/-1 would allow every ICMP message.
+func permissionPorts(p IPPermission) (int, int, error) {
+	if protocol, err := canonicalProtocol(p.Protocol); err == nil && protocol == "icmp" {
+		if p.FromPort == nil || p.ToPort == nil {
+			return 0, 0, MissingParameter("fromPort",
+				"An icmp permission must contain FromPort, the ICMP type, and ToPort, the ICMP code.")
+		}
+	}
+	var from, to int
+	if p.FromPort != nil {
+		from = *p.FromPort
+	}
+	if p.ToPort != nil {
+		to = *p.ToPort
+	}
+	return from, to, nil
+}
+
+// MaxIngressRules is the default EC2 quota of inbound rules per security
+// group. A group holds at most this many, so one request adds at most this
+// many too.
+const MaxIngressRules = 60
+
+// The ICMP type and code bounds. -1 means every type or every code.
+const (
+	icmpAny = -1
+	icmpMax = 255
+)
+
+// AuthorizeSecurityGroupIngressRequest adds inbound rules, all or none.
 type AuthorizeSecurityGroupIngressRequest struct {
-	ID   SecurityGroupID `json:"groupId"`
-	Rule IngressRule     `json:"ipPermissions"`
+	ID    SecurityGroupID `json:"groupId"`
+	Rules []IngressRule   `json:"rules"`
 }
 
 // Action returns AuthorizeSecurityGroupIngress.
@@ -476,13 +587,33 @@ func (AuthorizeSecurityGroupIngressRequest) Action() Action {
 	return ActionAuthorizeSecurityGroupIngress
 }
 
-// Normalize checks the group and the rule.
+// Normalize checks the group and canonicalizes each rule. A rule named twice
+// is a duplicate, as a rule the group already has would be.
 func (r AuthorizeSecurityGroupIngressRequest) Normalize() (AuthorizeSecurityGroupIngressRequest, error) {
-	id, rule, err := normalizeIngressRule(r.ID, r.Rule)
-	if err != nil {
-		return AuthorizeSecurityGroupIngressRequest{}, err
+	if r.ID.IsZero() {
+		return AuthorizeSecurityGroupIngressRequest{}, Invalid("groupId", "required")
 	}
-	return AuthorizeSecurityGroupIngressRequest{ID: id, Rule: rule}, nil
+	if len(r.Rules) == 0 {
+		return AuthorizeSecurityGroupIngressRequest{}, MissingParameter(
+			"ipPermissions",
+			"The request must contain the parameter ipPermissions.",
+		)
+	}
+	if len(r.Rules) > MaxIngressRules {
+		return AuthorizeSecurityGroupIngressRequest{}, RulesPerSecurityGroupLimitExceeded(r.ID.String())
+	}
+	rules := make([]IngressRule, 0, len(r.Rules))
+	for _, rule := range r.Rules {
+		canon, err := normalizeRule(rule)
+		if err != nil {
+			return AuthorizeSecurityGroupIngressRequest{}, err
+		}
+		if slices.Contains(rules, canon) {
+			return AuthorizeSecurityGroupIngressRequest{}, DuplicatePermission(r.ID.String())
+		}
+		rules = append(rules, canon)
+	}
+	return AuthorizeSecurityGroupIngressRequest{ID: r.ID, Rules: rules}, nil
 }
 
 // RevokeSecurityGroupIngressRequest removes one inbound rule.
@@ -509,25 +640,51 @@ func normalizeIngressRule(id SecurityGroupID, rule IngressRule) (SecurityGroupID
 	if id.IsZero() {
 		return SecurityGroupID{}, IngressRule{}, Invalid("groupId", "required")
 	}
-	protocol, err := canonicalProtocol(rule.Protocol)
+	rule, err := normalizeRule(rule)
 	if err != nil {
 		return SecurityGroupID{}, IngressRule{}, err
+	}
+	return id, rule, nil
+}
+
+func normalizeRule(rule IngressRule) (IngressRule, error) {
+	protocol, err := canonicalProtocol(rule.Protocol)
+	if err != nil {
+		return IngressRule{}, err
 	}
 	rule.Protocol = protocol
 	cidr, err := normalizeCIDR(rule.Cidr)
 	if err != nil {
-		return SecurityGroupID{}, IngressRule{}, err
+		return IngressRule{}, err
 	}
 	rule.Cidr = cidr
 	if protocol == "-1" {
 		rule.FromPort = 0
 		rule.ToPort = 0
-		return id, rule, nil
+		return rule, nil
+	}
+	if protocol == "icmp" {
+		return rule, checkICMP(rule.FromPort, rule.ToPort)
 	}
 	if rule.FromPort < 0 || rule.ToPort > 65535 || rule.ToPort < 0 || rule.FromPort > rule.ToPort {
-		return SecurityGroupID{}, IngressRule{}, Invalid("fromPort", "malformed")
+		return IngressRule{}, Invalid("fromPort", "malformed")
 	}
-	return id, rule, nil
+	return rule, nil
+}
+
+// checkICMP checks an ICMP type and code as EC2 does. Each is 0 to 255 or -1
+// for all, and all types takes all codes.
+func checkICMP(typ, code int) error {
+	switch {
+	case typ < icmpAny || typ > icmpMax:
+		return Invalid("fromPort", fmt.Sprintf("Invalid value '%d' for ICMP type. It must be -1 or 0 to 255.", typ))
+	case code < icmpAny || code > icmpMax:
+		return Invalid("toPort", fmt.Sprintf("Invalid value '%d' for ICMP code. It must be -1 or 0 to 255.", code))
+	case typ == icmpAny && code != icmpAny:
+		return Invalid("toPort", "The ICMP code must be -1 when the ICMP type is -1.")
+	default:
+		return nil
+	}
 }
 
 // canonicalProtocol accepts the names and protocol numbers a query client sends.

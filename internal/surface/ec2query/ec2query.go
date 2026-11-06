@@ -726,8 +726,10 @@ func rejectUnknown(r *http.Request, action string) error {
 		allow = allowCreateTags
 	case resource.ActionCreateSecurityGroup.String():
 		allow = allowCreateGroup
-	case resource.ActionAuthorizeSecurityGroupIngress.String(), resource.ActionRevokeSecurityGroupIngress.String():
+	case resource.ActionAuthorizeSecurityGroupIngress.String():
 		allow = allowAuthorize
+	case resource.ActionRevokeSecurityGroupIngress.String():
+		allow = allowRevoke
 	case resource.ActionStartInstances.String():
 		allow = allowStop
 	case resource.ActionTerminateInstances.String():
@@ -791,12 +793,37 @@ func rejectUnknown(r *http.Request, action string) error {
 	default:
 		allow = allowCommon
 	}
+	pastLimit := false
 	for key := range r.Form {
-		if !allow(key) {
-			return resource.Invalid(key, "unsupported")
+		if allow(key) {
+			continue
 		}
+		// An unknown key wins over the limit, whatever the map order.
+		if action == resource.ActionAuthorizeSecurityGroupIngress.String() && ruleIndexPastLimit(key) {
+			pastLimit = true
+			continue
+		}
+		return resource.Invalid(key, "unsupported")
+	}
+	if pastLimit {
+		return resource.RulesPerSecurityGroupLimitExceeded(r.Form.Get("GroupId"))
 	}
 	return nil
+}
+
+// ruleIndexPastLimit reports an authorize key that is refused only because an
+// index is above maxQueryIndex. Such an index names a rule past the 60 a group
+// can hold, so it is the group limit, not an unknown parameter (#219).
+func ruleIndexPastLimit(key string) bool {
+	parts := strings.Split(key, ".")
+	past := false
+	for i, part := range parts {
+		if n, err := strconv.Atoi(part); err == nil && n > maxQueryIndex && strconv.Itoa(n) == part {
+			parts[i] = "1"
+			past = true
+		}
+	}
+	return past && allowAuthorize(strings.Join(parts, "."))
 }
 
 func allowCommon(key string) bool {
@@ -899,10 +926,22 @@ func allowCreateGroup(key string) bool {
 }
 
 func allowAuthorize(key string) bool {
-	if key == "Action" || key == "Version" || key == "ClientToken" || key == "GroupId" || key == "IpProtocol" || key == "FromPort" || key == "ToPort" || key == "CidrIp" {
+	if legacyRuleField(key) || key == "Action" || key == "Version" || key == "ClientToken" || key == "GroupId" {
+		return true
+	}
+	_, field, ok := ipPermissionKey(key)
+	return ok && permissionLeaf(field)
+}
+
+func allowRevoke(key string) bool {
+	if legacyRuleField(key) || key == "Action" || key == "Version" || key == "ClientToken" || key == "GroupId" {
 		return true
 	}
 	return permissionField(key)
+}
+
+func legacyRuleField(key string) bool {
+	return key == "IpProtocol" || key == "FromPort" || key == "ToPort" || key == "CidrIp"
 }
 
 func allowCreateKey(key string) bool {
@@ -1144,6 +1183,73 @@ func tagSpecField(key string) bool {
 	return leaf == "Key" || leaf == "Value"
 }
 
+// ipPermissionKey splits IpPermissions.N.field. N is written without leading
+// zeros, so two keys never name one permission.
+func ipPermissionKey(key string) (int, string, bool) {
+	rest, ok := strings.CutPrefix(key, "IpPermissions.")
+	if !ok {
+		return 0, "", false
+	}
+	raw, field, ok := strings.Cut(rest, ".")
+	if !ok {
+		return 0, "", false
+	}
+	n, ok := queryIndex(raw)
+	return n, field, ok
+}
+
+// permissionSource splits a source list field such as IpRanges.M.CidrIp.
+// The query names the UserIdGroupPairs member Groups.
+func permissionSource(field string) (string, int, string, bool) {
+	list, rest, ok := strings.Cut(field, ".")
+	if !ok {
+		return "", 0, "", false
+	}
+	raw, leaf, ok := strings.Cut(rest, ".")
+	if !ok {
+		return "", 0, "", false
+	}
+	m, ok := queryIndex(raw)
+	return list, m, leaf, ok
+}
+
+func permissionLeaf(field string) bool {
+	switch field {
+	case "IpProtocol", "FromPort", "ToPort":
+		return true
+	default:
+	}
+	list, _, leaf, ok := permissionSource(field)
+	if !ok {
+		return false
+	}
+	switch list {
+	case "IpRanges":
+		return leaf == "CidrIp" || leaf == "Description"
+	case "Ipv6Ranges":
+		return leaf == "CidrIpv6" || leaf == "Description"
+	case "PrefixListIds":
+		return leaf == "PrefixListId" || leaf == "Description"
+	case "Groups":
+		switch leaf {
+		case "Description", "GroupId", "GroupName", "PeeringStatus", "UserId", "VpcId", "VpcPeeringConnectionId":
+			return true
+		default:
+			return false
+		}
+	default:
+		return false
+	}
+}
+
+func queryIndex(raw string) (int, bool) {
+	n, err := strconv.Atoi(raw)
+	if err != nil || n < 1 || n > maxQueryIndex || strconv.Itoa(n) != raw {
+		return 0, false
+	}
+	return n, true
+}
+
 func permissionField(key string) bool {
 	rest, ok := strings.CutPrefix(key, "IpPermissions.")
 	if !ok {
@@ -1366,6 +1472,9 @@ func ec2Refinement(e *resource.Error) (errs.AWSEntry, bool) {
 		if resource.IsInvalidCombination(e) {
 			return badRequest("InvalidParameterCombination")
 		}
+		if resource.IsUnsupported(e) {
+			return badRequest("UnsupportedOperation")
+		}
 		// EC2 names a malformed instance ID separately (#246).
 		if e.Kind == resource.KindInstance {
 			return badRequest("InvalidInstanceID.Malformed")
@@ -1378,6 +1487,12 @@ func ec2Refinement(e *resource.Error) (errs.AWSEntry, bool) {
 		// EC2 reports a volume type it does not support as UnknownVolumeType.
 		if strings.EqualFold(e.Field, "volumeType") {
 			return badRequest("UnknownVolumeType")
+		}
+	case resource.CodeResourceExhausted:
+		// A full security group is a 400 quota error, not the 503 throttle
+		// RequestLimitExceeded a ResourceExhausted otherwise gets.
+		if resource.IsRulesPerSecurityGroupLimitExceeded(e) {
+			return badRequest("RulesPerSecurityGroupLimitExceeded")
 		}
 	case resource.CodeAlreadyExists:
 		// A duplicate security group rule is InvalidPermission.Duplicate,

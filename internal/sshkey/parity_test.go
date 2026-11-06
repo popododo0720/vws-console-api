@@ -66,13 +66,18 @@ func TestEd25519FingerprintIsBase64SHA256(t *testing.T) {
 	}
 }
 
-func rsaKey(t *testing.T, bits int) *rsa.PrivateKey {
+// rsaKey returns an RSA public key with a random modulus of exactly bits
+// bits. Import reads only the modulus and its size, so the modulus need not
+// be a product of two primes; generating real keys cost CI about 20s under
+// -race (#200).
+func rsaKey(t *testing.T, bits int) *rsa.PublicKey {
 	t.Helper()
-	k, err := rsa.GenerateKey(rand.Reader, bits)
+	n, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), uint(bits-1)))
 	if err != nil {
 		t.Fatal(err)
 	}
-	return k
+	n.SetBit(n, bits-1, 1).SetBit(n, 0, 1)
+	return &rsa.PublicKey{N: n, E: 65537}
 }
 
 func sshRSALine(k *rsa.PublicKey) string {
@@ -84,13 +89,13 @@ func sshRSALine(k *rsa.PublicKey) string {
 // every import format gives the same key.
 func TestImportFormats(t *testing.T) {
 	k := rsaKey(t, 2048)
-	pkix, err := x509.MarshalPKIXPublicKey(&k.PublicKey)
+	pkix, err := x509.MarshalPKIXPublicKey(k)
 	if err != nil {
 		t.Fatal(err)
 	}
 	sum := md5.Sum(pkix) //nolint:gosec // AWS format
 	want := colons(sum[:])
-	line := sshRSALine(&k.PublicKey)
+	line := sshRSALine(k)
 	blob := strings.Fields(line)[1]
 	var wrapped strings.Builder
 	for b := blob; len(b) > 0; {
@@ -102,7 +107,7 @@ func TestImportFormats(t *testing.T) {
 		"openssh":       line + " me@host\n",
 		"rfc4716":       "---- BEGIN SSH2 PUBLIC KEY ----\nComment: \"2048-bit RSA, converted by me@host\\\n from OpenSSH\"\n" + wrapped.String() + "---- END SSH2 PUBLIC KEY ----\n",
 		"der-pkix-b64":  base64.StdEncoding.EncodeToString(pkix),
-		"der-pkcs1-b64": base64.StdEncoding.EncodeToString(x509.MarshalPKCS1PublicKey(&k.PublicKey)),
+		"der-pkcs1-b64": base64.StdEncoding.EncodeToString(x509.MarshalPKCS1PublicKey(k)),
 		"der-raw":       string(pkix),
 		"pem":           string(pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: pkix})),
 	}
@@ -122,16 +127,12 @@ func TestImportFormats(t *testing.T) {
 
 func TestRSASizes(t *testing.T) {
 	for _, bits := range []int{1024, 3072, 4096} {
-		if _, err := ParsePublic(sshRSALine(&rsaKey(t, bits).PublicKey)); err != nil {
+		if _, err := ParsePublic(sshRSALine(rsaKey(t, bits))); err != nil {
 			t.Fatalf("%d bits: %v", bits, err)
 		}
 	}
 	for _, bits := range []int{1023, 4097} {
-		n, err := rand.Prime(rand.Reader, bits)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err := ParsePublic(sshRSALine(&rsa.PublicKey{N: n, E: 65537})); err == nil {
+		if _, err := ParsePublic(sshRSALine(rsaKey(t, bits))); err == nil {
 			t.Fatalf("%d bits accepted", bits)
 		}
 	}

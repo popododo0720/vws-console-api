@@ -1,6 +1,6 @@
 // Package iamclient is the vws-iam client: AuthService Authenticate and
 // Authorize, console sessions (Login, ValidateSession, Logout), STS
-// AssumeRole and role description updates over vws.iam.v1 gRPC (vws-proto
+// AssumeRole and GetSessionToken, and role description updates over vws.iam.v1 gRPC (vws-proto
 // v0.3.0).
 package iamclient
 
@@ -39,8 +39,9 @@ const (
 	CallTimeout = 5 * time.Second
 	// MaxAttempts bounds retries on UNAVAILABLE of the calls that are safe
 	// to repeat: Authenticate, Authorize, ValidateSession and Logout (revoking
-	// a revoked session is a no-op). Login and AssumeRole are tried once: a
-	// retry could count a failed password twice or mint a second session.
+	// a revoked session is a no-op). Login, AssumeRole and GetSessionToken
+	// are tried once: a retry could count a failed password twice or mint a
+	// second session.
 	MaxAttempts = 3
 	// defaultUndoTimeout is the zero Options.UndoTimeout.
 	defaultUndoTimeout = 10 * time.Second
@@ -267,19 +268,17 @@ func (c *Client) AssumeRole(ctx context.Context, caller iam.Principal, roleARN, 
 		return iam.AssumedRole{}, err
 	}
 	req := &iamv1.AssumeRoleRequest{Role: role, RoleSessionName: session, DurationSeconds: int32(duration / time.Second)} //nolint:gosec // the surface bounds duration to 900..43200s.
-	switch caller.Ref.ProofKind {
-	case resource.ProofSigV4:
-		var sig iamv1.AuthenticateRequest
-		if err := proto.Unmarshal([]byte(caller.Ref.Proof), &sig); err != nil {
-			return iam.AssumedRole{}, resource.Unauthenticated("caller credential unreadable")
-		}
-		req.Authentication = &iamv1.AssumeRoleRequest_Sigv4{Sigv4: &sig}
-	case resource.ProofSession:
-		req.Authentication = &iamv1.AssumeRoleRequest_ConsoleSessionToken{ConsoleSessionToken: caller.Ref.Proof}
+	sig, sessionToken, err := authenticationOf(caller)
+	switch {
+	case err != nil:
+		return iam.AssumedRole{}, err
+	case sig != nil:
+		req.Authentication = &iamv1.AssumeRoleRequest_Sigv4{Sigv4: sig}
+	case sessionToken != "":
+		req.Authentication = &iamv1.AssumeRoleRequest_ConsoleSessionToken{ConsoleSessionToken: sessionToken}
+	case caller.Root:
+		return iam.AssumedRole{}, resource.Denied("Roles may not be assumed by root accounts.")
 	default:
-		if caller.Root {
-			return iam.AssumedRole{}, resource.Denied("Roles may not be assumed by root accounts.")
-		}
 		return iam.AssumedRole{}, resource.Unauthenticated("caller has no vws-iam credential")
 	}
 	resp, err := call(ctx, c.tokens.AssumeRole, req)
@@ -298,6 +297,64 @@ func (c *Client) AssumeRole(ctx context.Context, caller iam.Principal, roleARN, 
 		},
 		AssumedRoleID: resp.GetAssumedRoleUser().GetUniqueId(), ARN: p.ARN,
 	}, nil
+}
+
+// GetSessionToken implements STS GetSessionToken over vws-iam TokenService,
+// naming the caller only by its authentication oneof, as AssumeRole does.
+// vws-iam verifies the MFA code and refuses a temporary credential. A caller
+// with no vws-iam credential (the static root key) is refused without a
+// call: vws-iam cannot issue a session for a key it does not hold. Not
+// retried: it issues credentials and spends the MFA code.
+func (c *Client) GetSessionToken(
+	ctx context.Context, caller iam.Principal, r iam.SessionTokenRequest,
+) (iam.Key, error) {
+	req := &iamv1.GetSessionTokenRequest{
+		DurationSeconds: int32(r.Duration / time.Second), //nolint:gosec // the surface bounds duration to 900..129600s.
+		SerialNumber:    r.SerialNumber, TokenCode: r.TokenCode,
+	}
+	sig, sessionToken, err := authenticationOf(caller)
+	switch {
+	case err != nil:
+		return iam.Key{}, err
+	case sig != nil:
+		req.Authentication = &iamv1.GetSessionTokenRequest_Sigv4{Sigv4: sig}
+	case sessionToken != "":
+		req.Authentication = &iamv1.GetSessionTokenRequest_ConsoleSessionToken{ConsoleSessionToken: sessionToken}
+	default:
+		return iam.Key{}, resource.Unauthenticated("caller has no vws-iam credential")
+	}
+	resp, err := call(ctx, c.tokens.GetSessionToken, req)
+	if err != nil {
+		return iam.Key{}, authError(err)
+	}
+	cr := resp.GetCredentials()
+	if cr.GetAccessKeyId() == "" || cr.GetSecretAccessKey() == "" || cr.GetSessionToken() == "" {
+		return iam.Key{}, unavailable("GetSessionToken")
+	}
+	return iam.Key{
+		AccessKey: cr.GetAccessKeyId(), Secret: cr.GetSecretAccessKey(), SessionToken: cr.GetSessionToken(),
+		Expires:   cr.GetExpireTime().AsTime(),
+		Principal: iam.Principal{Account: caller.Account, ARN: caller.ARN, Root: caller.Root},
+	}, nil
+}
+
+// authenticationOf is the credential an STS call names its caller by: the
+// SigV4 request it authenticated with, or its console session token. Both
+// are empty for a caller with no vws-iam credential, such as the static root
+// key.
+func authenticationOf(caller iam.Principal) (*iamv1.AuthenticateRequest, string, error) {
+	switch caller.Ref.ProofKind {
+	case resource.ProofSigV4:
+		var sig iamv1.AuthenticateRequest
+		if err := proto.Unmarshal([]byte(caller.Ref.Proof), &sig); err != nil {
+			return nil, "", resource.Unauthenticated("caller credential unreadable")
+		}
+		return &sig, "", nil
+	case resource.ProofSession:
+		return nil, caller.Ref.Proof, nil
+	default:
+		return nil, "", nil
+	}
 }
 
 // roleResource turns arn:vws:iam::{project}:role{path}{name} into

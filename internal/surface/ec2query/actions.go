@@ -5,7 +5,9 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/xml"
+	"maps"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -399,13 +401,18 @@ func (h *handler) authorizeIngress(w http.ResponseWriter, r *http.Request, c res
 		writeErr(w, r, err)
 		return
 	}
-	rule, err := ingressRule(r)
+	perms, err := ipPermissions(r)
+	if err != nil {
+		writeErr(w, r, err)
+		return
+	}
+	rules, err := resource.IngressRules(perms)
 	if err != nil {
 		writeErr(w, r, err)
 		return
 	}
 	if _, err := h.svc.AuthorizeSecurityGroupIngress(r.Context(), c, token, resource.AuthorizeSecurityGroupIngressRequest{
-		ID: id, Rule: rule,
+		ID: id, Rules: rules,
 	}); err != nil {
 		writeErr(w, r, err)
 		return
@@ -536,6 +543,116 @@ func (h *handler) createKeyPair(w http.ResponseWriter, r *http.Request, c resour
 	})
 }
 
+// maxQueryIndex bounds N in IpPermissions.N and M in its source lists. A
+// request adds at most resource.MaxIngressRules rules, so a larger index
+// cannot name a rule that fits.
+const maxQueryIndex = resource.MaxIngressRules
+
+// ipPermissions reads IpPermissions.N in index order, or the top-level
+// IpProtocol, FromPort, ToPort and CidrIp as one permission. A request that
+// sends both is refused rather than one of them being dropped.
+func ipPermissions(r *http.Request) ([]resource.IPPermission, error) {
+	type permissionForm struct {
+		fields map[string]string
+		lists  map[string]map[int]map[string]string
+	}
+	forms := map[int]*permissionForm{}
+	legacy := false
+	for key := range r.Form {
+		if legacyRuleField(key) {
+			legacy = true
+			continue
+		}
+		n, field, ok := ipPermissionKey(key)
+		if !ok {
+			continue
+		}
+		form := forms[n]
+		if form == nil {
+			form = &permissionForm{fields: map[string]string{}, lists: map[string]map[int]map[string]string{}}
+			forms[n] = form
+		}
+		list, m, leaf, ok := permissionSource(field)
+		if !ok {
+			form.fields[field] = r.Form.Get(key)
+			continue
+		}
+		if form.lists[list] == nil {
+			form.lists[list] = map[int]map[string]string{}
+		}
+		if form.lists[list][m] == nil {
+			form.lists[list][m] = map[string]string{}
+		}
+		form.lists[list][m][leaf] = r.Form.Get(key)
+	}
+	if legacy {
+		if len(forms) > 0 {
+			return nil, resource.InvalidCombination("IpPermissions",
+				"The parameter IpPermissions cannot be used with IpProtocol, FromPort, ToPort or CidrIp.")
+		}
+		from, err := sentPort(r.Form.Get("FromPort"))
+		if err != nil {
+			return nil, err
+		}
+		to, err := sentPort(r.Form.Get("ToPort"))
+		if err != nil {
+			return nil, err
+		}
+		perm := resource.IPPermission{Protocol: r.Form.Get("IpProtocol"), FromPort: from, ToPort: to}
+		if cidr := r.Form.Get("CidrIp"); cidr != "" {
+			perm.IPRanges = []resource.IPRange{{CidrIP: cidr}}
+		}
+		return []resource.IPPermission{perm}, nil
+	}
+	perms := make([]resource.IPPermission, 0, len(forms))
+	for _, n := range slices.Sorted(maps.Keys(forms)) {
+		form := forms[n]
+		from, err := sentPort(form.fields["FromPort"])
+		if err != nil {
+			return nil, err
+		}
+		to, err := sentPort(form.fields["ToPort"])
+		if err != nil {
+			return nil, err
+		}
+		perm := resource.IPPermission{Protocol: form.fields["IpProtocol"], FromPort: from, ToPort: to}
+		for _, src := range inOrder(form.lists["IpRanges"]) {
+			perm.IPRanges = append(
+				perm.IPRanges,
+				resource.IPRange{CidrIP: src["CidrIp"], Description: src["Description"]},
+			)
+		}
+		for _, src := range inOrder(form.lists["Ipv6Ranges"]) {
+			perm.IPv6Ranges = append(
+				perm.IPv6Ranges,
+				resource.IPv6Range{CidrIPv6: src["CidrIpv6"], Description: src["Description"]},
+			)
+		}
+		for _, src := range inOrder(form.lists["Groups"]) {
+			perm.UserIDGroupPairs = append(perm.UserIDGroupPairs, resource.UserIDGroupPair{
+				Description: src["Description"], GroupID: src["GroupId"], GroupName: src["GroupName"],
+				PeeringStatus: src["PeeringStatus"], UserID: src["UserId"], VpcID: src["VpcId"],
+				VpcPeeringConnectionID: src["VpcPeeringConnectionId"],
+			})
+		}
+		for _, src := range inOrder(form.lists["PrefixListIds"]) {
+			perm.PrefixListIDs = append(perm.PrefixListIDs, resource.PrefixListID{
+				Description: src["Description"], PrefixListID: src["PrefixListId"],
+			})
+		}
+		perms = append(perms, perm)
+	}
+	return perms, nil
+}
+
+func inOrder(byIndex map[int]map[string]string) []map[string]string {
+	out := make([]map[string]string, 0, len(byIndex))
+	for _, m := range slices.Sorted(maps.Keys(byIndex)) {
+		out = append(out, byIndex[m])
+	}
+	return out
+}
+
 func ingressRule(r *http.Request) (resource.IngressRule, error) {
 	protocol := r.Form.Get("IpPermissions.1.IpProtocol")
 	fromRaw := r.Form.Get("IpPermissions.1.FromPort")
@@ -559,6 +676,19 @@ func ingressRule(r *http.Request) (resource.IngressRule, error) {
 		return resource.IngressRule{}, err
 	}
 	return resource.IngressRule{Protocol: protocol, FromPort: from, ToPort: to, Cidr: cidr}, nil
+}
+
+// sentPort reads a port of an IpPermissions entry. Nil means it was not sent,
+// which resource.IngressRules refuses for icmp.
+func sentPort(raw string) (*int, error) {
+	if raw == "" {
+		return nil, nil //nolint:nilnil // a nil port is one the request did not send
+	}
+	n, err := portValue(raw)
+	if err != nil {
+		return nil, err
+	}
+	return &n, nil
 }
 
 func portValue(raw string) (int, error) {

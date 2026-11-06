@@ -330,7 +330,7 @@ func (c computeClient) nameKeys(ctx context.Context, projectID string, items []r
 	if !slices.ContainsFunc(items, func(i resource.Instance) bool { return !i.KeyPairID.IsZero() }) {
 		return nil
 	}
-	keys, err := c.listKeys(ctx, projectID)
+	keys, err := c.listKeys(ctx, projectID, true)
 	if err != nil {
 		return err
 	}

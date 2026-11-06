@@ -63,7 +63,7 @@ func (c computeClient) DescribeKeyPairs(ctx context.Context, s backend.Scope, q 
 		}
 		return pageByID([]resource.KeyPair{key}, q.Page, func(item resource.KeyPair) string { return item.ID.String() })
 	}
-	items, err := c.listKeys(ctx, projectID)
+	items, err := c.listKeys(ctx, projectID, len(q.IDs) == 0 && len(q.Names) == 0)
 	if err != nil {
 		return resource.Page[resource.KeyPair]{}, err
 	}
@@ -186,6 +186,9 @@ func (c computeClient) DescribeSnapshots(ctx context.Context, s backend.Scope, q
 		for _, item := range out.GetSnapshots() {
 			snap, err := snapshotModel(item)
 			if err != nil {
+				if len(want) == 0 && c.skipBadRecord(ctx, item.GetName(), err) {
+					continue
+				}
 				return resource.Page[resource.Snapshot]{}, err
 			}
 			if len(want) > 0 {
@@ -437,6 +440,9 @@ func (c networkClient) DescribeAddresses(ctx context.Context, s backend.Scope, q
 		for _, item := range out.GetAddresses() {
 			addr, err := addressModel(item)
 			if err != nil {
+				if len(q.IDs) == 0 && len(q.PublicIPs) == 0 && c.skipBadRecord(ctx, item.GetName(), err) {
+					continue
+				}
 				return resource.Page[resource.Address]{}, err
 			}
 			if !addressVisible(addr, q) {
@@ -481,7 +487,7 @@ func (c computeClient) lookupKey(ctx context.Context, projectID string, req reso
 }
 
 func (c computeClient) findKey(ctx context.Context, projectID string, req resource.DeleteKeyPairRequest) (resource.KeyPair, error) {
-	items, err := c.listKeys(ctx, projectID)
+	items, err := c.listKeys(ctx, projectID, false)
 	if err != nil {
 		return resource.KeyPair{}, err
 	}
@@ -502,7 +508,9 @@ func (c computeClient) getKey(ctx context.Context, projectID, id string) (resour
 	return keyModel(out)
 }
 
-func (c computeClient) listKeys(ctx context.Context, projectID string) ([]resource.KeyPair, error) {
+// listKeys reads every key pair. With skipBad it leaves out a record whose
+// name is not a key pair id, for a read that names no key.
+func (c computeClient) listKeys(ctx context.Context, projectID string, skipBad bool) ([]resource.KeyPair, error) {
 	var items []resource.KeyPair
 	token := ""
 	for page := 0; page < 50; page++ {
@@ -515,6 +523,9 @@ func (c computeClient) listKeys(ctx context.Context, projectID string) ([]resour
 		for _, item := range out.GetKeyPairs() {
 			key, err := keyModel(item)
 			if err != nil {
+				if skipBad && c.skipBadRecord(ctx, item.GetName(), err) {
+					continue
+				}
 				return nil, err
 			}
 			items = append(items, key)
@@ -623,15 +634,15 @@ func keyModel(in *computev1.KeyPair) (resource.KeyPair, error) {
 	}
 	parts := splitSlash(in.GetName())
 	if len(parts) != 6 || parts[4] != "keyPairs" {
-		return resource.KeyPair{}, resource.Internal(errors.New("bad key pair name"))
+		return resource.KeyPair{}, resource.Internal(&badRecordNameError{errors.New("bad key pair name")})
 	}
 	id, err := resource.Parse[resource.KeyPairID](parts[5])
 	if err != nil {
-		return resource.KeyPair{}, resource.Internal(err)
+		return resource.KeyPair{}, resource.Internal(&badRecordNameError{err})
 	}
 	owner, err := accountOf(parts[1])
 	if err != nil {
-		return resource.KeyPair{}, err
+		return resource.KeyPair{}, resource.Internal(&badRecordNameError{err})
 	}
 	key := resource.KeyPair{
 		ID: id, OwnerID: owner, Name: labelName(in.GetLabels()), Fingerprint: in.GetStatus().GetFingerprintSha256(),
@@ -651,15 +662,15 @@ func snapshotModel(in *storagev1.Snapshot) (resource.Snapshot, error) {
 	}
 	parts := splitSlash(in.GetName())
 	if len(parts) != 6 || parts[4] != "snapshots" {
-		return resource.Snapshot{}, resource.Internal(errors.New("bad snapshot name"))
+		return resource.Snapshot{}, resource.Internal(&badRecordNameError{errors.New("bad snapshot name")})
 	}
 	id, err := resource.Parse[resource.SnapshotID](parts[5])
 	if err != nil {
-		return resource.Snapshot{}, resource.Internal(err)
+		return resource.Snapshot{}, resource.Internal(&badRecordNameError{err})
 	}
 	owner, err := accountOf(parts[1])
 	if err != nil {
-		return resource.Snapshot{}, err
+		return resource.Snapshot{}, resource.Internal(&badRecordNameError{err})
 	}
 	vol, err := resource.Parse[resource.VolumeID](lastSegment(in.GetSpec().GetVolume()))
 	if err != nil {
@@ -681,15 +692,15 @@ func addressModel(in *networkv1.Address) (resource.Address, error) {
 	}
 	parts := splitSlash(in.GetName())
 	if len(parts) != 6 || parts[4] != "addresses" {
-		return resource.Address{}, resource.Internal(errors.New("bad address name"))
+		return resource.Address{}, resource.Internal(&badRecordNameError{errors.New("bad address name")})
 	}
 	id, err := resource.Parse[resource.AddressID](parts[5])
 	if err != nil {
-		return resource.Address{}, resource.Internal(err)
+		return resource.Address{}, resource.Internal(&badRecordNameError{err})
 	}
 	owner, err := accountOf(parts[1])
 	if err != nil {
-		return resource.Address{}, err
+		return resource.Address{}, resource.Internal(&badRecordNameError{err})
 	}
 	var inst resource.InstanceID
 	if name := in.GetStatus().GetInstance(); name != "" {

@@ -91,11 +91,12 @@ OTLP exporter; `-ops-addr` keeps serving the process's Prometheus text series.
 IAM and STS Query share `-iam-addr` (default `127.0.0.1:8084`). The service in
 the signature's credential scope (`iam` or `sts`, region `vws-1`) picks the API:
 IAM `2010-05-08`, STS `2011-06-15`, with AWS's XML and error codes. Every
-action except `GetCallerIdentity` (as in AWS) is authorized as `iam:<Action>`
-or `sts:<Action>`; every request must be signed. `-iam=static` (the
+action except `GetCallerIdentity` and `GetSessionToken` (as in AWS) is
+authorized as `iam:<Action>` or `sts:<Action>`; every request must be signed. `-iam=static` (the
 default) serves only `GetCallerIdentity` for the `-access-key` root key.
 `-iam=fake` adds users, groups, roles, managed and inline policies, access keys
-and `AssumeRole` in memory, lost on restart. The root key keeps working in every mode, and keys created
+`AssumeRole` and `GetSessionToken` in memory, lost on restart. As in AWS, IAM
+refuses `GetSessionToken` credentials issued without MFA. The root key keeps working in every mode, and keys created
 there also sign EC2 and S3 calls. `GetCallerIdentity` answers `Arn` in the `aws`
 partition, as AWS does; IAM resource ARNs and `AssumeRole`'s role ARN still use
 `arn:vws` (#430).
@@ -122,11 +123,13 @@ vws-iam is `429`, and `UNAVAILABLE` or a transport failure is `503` with
 (`403`) and its session revoked, because the console has no password-change
 flow yet. STS `AssumeRole` sends the caller in the request's `authentication`
 field: the caller's own SigV4 request, or its console session token; nothing
-goes in gRPC metadata. The static root key cannot assume a role (as in AWS).
+goes in gRPC metadata. `GetSessionToken` names its caller the same way;
+vws-iam checks its MFA code. The static root key cannot assume a role (as in
+AWS) and gets no session token, since vws-iam does not hold it.
 Each call has a 5 s timeout, or the request's deadline if earlier;
 `Authenticate`, `Authorize`, `ValidateSession` and `Logout` retry `UNAVAILABLE`
-up to 3 times with doubling backoff; `Login` and `AssumeRole` are never
-retried. User and group management (`CreateUser`, `GetUser`, `ListUsers`,
+up to 3 times with doubling backoff; `Login`, `AssumeRole` and
+`GetSessionToken` are never retried. User and group management (`CreateUser`, `GetUser`, `ListUsers`,
 `UpdateUser`, `DeleteUser`, `CreateGroup`, `GetGroup`, `ListGroups`,
 `UpdateGroup`, `DeleteGroup`, `AddUserToGroup`, `RemoveUserFromGroup`,
 `ListGroupsForUser`) goes to `UserService` and `GroupService`: every change
@@ -198,7 +201,7 @@ names nobody and there is nothing to sign in to; a bad bearer token is still
 With sign-in on: `POST /api/v1/auth/login` with
 `{"account","userName","password"}` (an IAM user's `CreateLoginProfile`
 password, or `root` with the password in `-root-password-file`, mounted from a
-Secret). It sets an HttpOnly, Secure, SameSite=Strict `vws_session` cookie
+Secret). It sets an HttpOnly, Secure, SameSite=Strict `__Host-vws_session` cookie
 (12 hours) and a `vws_csrf` cookie; every request other than GET/HEAD on a
 session must echo `vws_csrf` in `X-CSRF-Token`. Each console route is
 authorized as the matching IAM action (`ec2:DescribeVpcs`, `ec2:CreateVpc`,

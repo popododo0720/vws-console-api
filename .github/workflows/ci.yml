@@ -24,7 +24,7 @@ jobs:
           fetch-depth: 0
       - name: guard-agents.sh rejects bad inputs
         run: scripts/guard-agents.sh selftest
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
       - uses: golangci/golangci-lint-action@v9
@@ -36,28 +36,65 @@ jobs:
       - name: Format (gofumpt, goimports)
         run: golangci-lint fmt --diff
 
+  # setup-go v6 installs the go.mod toolchain line itself. Under v5 the go
+  # command fetched that toolchain into the module cache first, and the cache
+  # restore then failed on the existing files, so every run built cold (#200).
+  # This job keeps its own cache: the shared setup-go key is saved by whichever
+  # job ends first, and that is never the one holding the -race build.
   test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
+          cache: false
+      - uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: go-race-${{ runner.os }}-${{ hashFiles('go.sum') }}-${{ github.sha }}
+          restore-keys: |
+            go-race-${{ runner.os }}-${{ hashFiles('go.sum') }}-
+            go-race-${{ runner.os }}-
       - name: go.mod and go.sum are tidy
         run: go mod tidy && git diff --exit-code go.mod go.sum
       - run: go vet ./...
       - name: Architecture rules and Judgment count
         run: scripts/guard-agents.sh archtest
       - run: go test -race -count=1 ./...
+      - name: Save the build cache from main
+        if: github.event_name == 'push'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: go-race-${{ runner.os }}-${{ hashFiles('go.sum') }}-${{ github.sha }}
 
+  # e2e reads the test job's cache: its go vet leaves the plain build that
+  # e2e/run.sh links, and the shared setup-go cache saved by lint has none.
   e2e:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
+          cache: false
+      - uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: go-race-${{ runner.os }}-${{ hashFiles('go.sum') }}-${{ github.sha }}
+          restore-keys: |
+            go-race-${{ runner.os }}-${{ hashFiles('go.sum') }}-
+            go-race-${{ runner.os }}-
       - run: pip install -r e2e/requirements.txt
+      - name: aws CLI v2 for the IAM, STS and DetachVolume CLI steps
+        run: aws --version
       - run: e2e/run.sh
         env:
           VWS_E2E_STRICT: "1"
