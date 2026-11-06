@@ -2435,7 +2435,7 @@ func volumeModel(in *storagev1.Volume) (resource.Volume, error) {
 	if name := in.GetStatus().GetInstance(); name != "" {
 		parsed, err := resource.Parse[resource.InstanceID](lastSegment(name))
 		if err != nil {
-			return resource.Volume{}, resource.Internal(err)
+			return resource.Volume{}, badField("status.instance", err)
 		}
 		inst = parsed
 	}
@@ -2443,7 +2443,7 @@ func volumeModel(in *storagev1.Volume) (resource.Volume, error) {
 	if name := in.GetSpec().GetSnapshot(); name != "" {
 		parsed, err := resource.Parse[resource.SnapshotID](lastSegment(name))
 		if err != nil {
-			return resource.Volume{}, resource.Internal(err)
+			return resource.Volume{}, badField("spec.snapshot", err)
 		}
 		snap = parsed
 	}
