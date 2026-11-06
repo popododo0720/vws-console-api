@@ -161,11 +161,12 @@ func (c computeClient) replayTags(
 	if err := op.GetMetadata().UnmarshalTo(meta); err != nil {
 		return nil, resource.Instance{}, resource.Internal(err)
 	}
-	if meta.GetRequestId() != requestID || meta.GetResource() != instanceName(projectID, id.String()) ||
-		meta.GetVerb() != commonv1.OperationVerb_OPERATION_VERB_UPDATE {
+	if meta.GetRequestId() != requestID || meta.GetVerb() != commonv1.OperationVerb_OPERATION_VERB_UPDATE {
 		return nil, resource.Instance{}, resource.Internal(errors.New("operation lookup returned another request"))
 	}
-	if err := rpcErr(op, nil); err != nil {
+	if meta.GetResource() != instanceName(projectID, id.String()) || rpcErr(op, nil) != nil {
+		// The token tagged another instance at this position, or its update
+		// failed: not this retry's result.
 		return nil, resource.Instance{}, cause
 	}
 	inst, err := c.getInstance(ctx, projectID, id.String())

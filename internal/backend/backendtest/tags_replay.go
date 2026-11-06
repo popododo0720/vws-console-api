@@ -12,7 +12,8 @@ import (
 // TagsReplay is the CreateTags client-token table (#333). A retry with the
 // token and parameters of a CreateTags that succeeded returns that
 // operation, even after a detach changed the instance and holds label room
-// for its records. The same token with other tags is a mismatch.
+// for its records. The same token with other tags, another instance or the
+// instances in another order is a mismatch.
 //
 // Each backend set gets its own account, so it may share a world with Run.
 func TagsReplay(t *testing.T, newSet Harness) {
@@ -106,4 +107,35 @@ func TagsReplay(t *testing.T, newSet Harness) {
 			}
 		})
 	}
+
+	t.Run("another instance or order is a mismatch", func(t *testing.T) {
+		tags := map[string]string{"env": "prod"}
+		if _, err := set.Compute.CreateTags(ctx, mut("both"), resource.CreateTagsRequest{
+			IDs: []resource.InstanceID{first, second}, Tags: tags,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		for _, tc := range []struct {
+			name      string
+			key       string
+			first, re []resource.InstanceID
+		}{
+			{name: "another instance", key: "one", first: []resource.InstanceID{first}, re: []resource.InstanceID{second}},
+			{
+				name: "another order", key: "pair",
+				first: []resource.InstanceID{first, second}, re: []resource.InstanceID{second, first},
+			},
+		} {
+			m := mut(tc.key)
+			if _, err := set.Compute.CreateTags(ctx, m, resource.CreateTagsRequest{IDs: tc.first, Tags: tags}); err != nil {
+				t.Fatalf("%s: first CreateTags: %v", tc.name, err)
+			}
+			again := m
+			again.Fingerprint += "-" + tc.name
+			_, err := set.Compute.CreateTags(ctx, again, resource.CreateTagsRequest{IDs: tc.re, Tags: tags})
+			if resource.CodeOf(err) != resource.CodeIdempotencyMismatch {
+				t.Fatalf("%s, same token: %v, want IdempotencyMismatch", tc.name, err)
+			}
+		}
+	})
 }

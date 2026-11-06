@@ -38,8 +38,10 @@ func (s *stubLookup) LookupOperation(
 // TestReplayTagsAnswersOnlyItsOwnOperation checks each LookupOperation
 // outcome a refused CreateTags retry can meet besides its own succeeded
 // update, which backendtest.TagsReplay covers (#333). An unknown or expired
-// request id, a compute without the lookup and a failed first update keep
-// the mismatch; an outage stays retryable; a foreign answer is internal.
+// request id, a compute without the lookup, a failed first update and an
+// update of another instance (the token at this position tagged it) keep
+// the mismatch; an outage stays retryable; an answer for another request id
+// or verb is internal.
 func TestReplayTagsAnswersOnlyItsOwnOperation(t *testing.T) {
 	const projectID = "acct-123456789012"
 	id, err := resource.Parse[resource.InstanceID]("i-0123456789abcdef0")
@@ -86,7 +88,7 @@ func TestReplayTagsAnswersOnlyItsOwnOperation(t *testing.T) {
 		},
 		{
 			name: "another instance", lookup: &stubLookup{op: op(t, other, requestID, update)},
-			want: resource.CodeInternal,
+			want: resource.CodeIdempotencyMismatch,
 		},
 		{
 			name: "another request id", lookup: &stubLookup{op: op(t, name, requestUUID("key", "tags", "01"), update)},
