@@ -72,7 +72,8 @@ func modifyForm(id string, params map[string]string) string {
 // one call and answers the target and original values in volumeModification
 // (EC2 API Reference, ModifyVolume and VolumeModification). Values the target
 // type cannot hold are refused with EC2's codes and change nothing. A retry
-// with the same ClientToken answers the first modification.
+// with the same ClientToken answers the first modification's target; its
+// original values are re-read, which #617 tracks.
 func TestModifyVolumeTakesTypeIopsAndThroughput(t *testing.T) {
 	h, cred, now := harness(t)
 	res := signed(t, h, cred, now, createVolumeForm(map[string]string{"VolumeType": "gp2", "Size": "10"}))
