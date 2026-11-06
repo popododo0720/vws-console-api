@@ -92,3 +92,61 @@ func TestAuthorizeIngressTakesIPPermissions(t *testing.T) {
 		t.Fatalf("single object %d %s", old.Code, old.Body)
 	}
 }
+
+// #219: a console ICMP permission takes the type in fromPort and the code in
+// toPort. One that omits either is a 400 naming fromPort, never echo reply.
+func TestAuthorizeIngressICMPTypeAndCode(t *testing.T) {
+	account, err := resource.Parse[resource.AccountID]("123456789012")
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc := cloud.New(cloud.Config{Backends: fake.New(fake.Options{}).Set()})
+	h := New(rootConfig(svc, account))
+	do := func(path, body, key string) *httptest.ResponseRecorder {
+		t.Helper()
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, path, strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer tok")
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Idempotency-Key", key)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec
+	}
+	var acc struct {
+		Items []resource.SecurityGroup `json:"items"`
+	}
+	read := func(rec *httptest.ResponseRecorder) {
+		t.Helper()
+		if rec.Code != http.StatusAccepted || json.Unmarshal(rec.Body.Bytes(), &acc) != nil || len(acc.Items) != 1 {
+			t.Fatalf("%d %s", rec.Code, rec.Body)
+		}
+	}
+	var vpc struct {
+		Items []resource.Vpc `json:"items"`
+	}
+	vpcRec := do("/api/v1/vpcs", `{"cidrBlock":"10.5.0.0/16"}`, "vpc-icmp")
+	if json.Unmarshal(vpcRec.Body.Bytes(), &vpc) != nil || len(vpc.Items) != 1 {
+		t.Fatalf("vpc %d %s", vpcRec.Code, vpcRec.Body)
+	}
+	read(do("/api/v1/security-groups", `{"groupName":"ping","vpcId":"`+vpc.Items[0].ID.String()+`"}`, "sg-icmp"))
+	path := "/api/v1/security-groups/" + acc.Items[0].ID.String() + "/authorize-ingress"
+	for name, ports := range map[string]string{
+		"neither": ``, "no code": `"fromPort":8,`, "null type": `"fromPort":null,"toPort":0,`,
+	} {
+		rec := do(path, `{"ipPermissions":[{"ipProtocol":"icmp",`+ports+`"ipRanges":[{"cidrIp":"10.0.0.0/16"}]}]}`,
+			"icmp-"+strings.ReplaceAll(name, " ", "-"))
+		if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), `"field":"fromPort"`) {
+			t.Fatalf("%s: %d %s", name, rec.Code, rec.Body)
+		}
+	}
+	ranges := `"ipRanges":[{"cidrIp":"10.0.0.0/16"}]`
+	read(do(path, `{"ipPermissions":[{"ipProtocol":"icmp","fromPort":-1,"toPort":-1,`+ranges+`},`+
+		`{"ipProtocol":"icmp","fromPort":8,"toPort":0,`+ranges+`}]}`, "icmp-ok"))
+	want := []resource.IngressRule{
+		{Protocol: "icmp", FromPort: -1, ToPort: -1, Cidr: "10.0.0.0/16"},
+		{Protocol: "icmp", FromPort: 8, ToPort: 0, Cidr: "10.0.0.0/16"},
+	}
+	if got := acc.Items[0].Rules; len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("rules %+v", got)
+	}
+}

@@ -152,7 +152,9 @@ func TestAuthorizeIngressRefusesAmbiguousForms(t *testing.T) {
 	}
 }
 
-// #217: one request adds at most resource.MaxIngressRules rules.
+// #217, #219: one request adds at most resource.MaxIngressRules rules, the
+// EC2 quota of a whole group, so a larger one is
+// RulesPerSecurityGroupLimitExceeded.
 func TestAuthorizeIngressBoundsTheRuleCount(t *testing.T) {
 	h, cred, now := harness(t)
 	id := ingressGroup(t, h, cred, now)
@@ -167,12 +169,145 @@ func TestAuthorizeIngressBoundsTheRuleCount(t *testing.T) {
 		}
 	}
 	res := signed(t, h, cred, now, form.Encode())
-	if res.Code != http.StatusBadRequest || !strings.Contains(res.Body.String(), "InvalidParameterValue") {
+	if res.Code != http.StatusBadRequest ||
+		!strings.Contains(res.Body.String(), "<Code>RulesPerSecurityGroupLimitExceeded</Code>") {
 		t.Fatalf("62 rules %d %s", res.Code, res.Body)
 	}
 	form.Del("IpPermissions.2.IpRanges.31.CidrIp")
 	form.Del("IpPermissions.2.IpRanges.30.CidrIp")
 	if res := signed(t, h, cred, now, form.Encode()); res.Code != http.StatusOK {
 		t.Fatalf("60 rules %d %s", res.Code, res.Body)
+	}
+}
+
+// #219: an ICMP permission carries the ICMP type in FromPort and the code in
+// ToPort, -1 meaning all, and each pair is stored and described as sent.
+func TestICMPTypeAndCodeRoundTrip(t *testing.T) {
+	h, cred, now := harness(t)
+	id := ingressGroup(t, h, cred, now)
+	form := url.Values{"Action": {"AuthorizeSecurityGroupIngress"}, "Version": {Version}, "GroupId": {id}}
+	pairs := [][2]string{{"-1", "-1"}, {"8", "0"}, {"3", "4"}, {"0", "0"}, {"8", "-1"}}
+	for i, pair := range pairs {
+		p := "IpPermissions." + itoa(i+1) + "."
+		form.Set(p+"IpProtocol", "icmp")
+		form.Set(p+"FromPort", pair[0])
+		form.Set(p+"ToPort", pair[1])
+		form.Set(p+"IpRanges.1.CidrIp", "10.0.0.0/16")
+	}
+	if res := signed(t, h, cred, now, form.Encode()); res.Code != http.StatusOK {
+		t.Fatalf("authorize %d %s", res.Code, res.Body)
+	}
+	body := describedGroup(t, h, cred, now, id)
+	for _, pair := range pairs {
+		want := "<fromPort>" + pair[0] + "</fromPort><toPort>" + pair[1] + "</toPort>"
+		if !strings.Contains(body, want) {
+			t.Fatalf("missing %s in %s", want, body)
+		}
+	}
+}
+
+// #219: an ICMP type or code EC2 refuses is InvalidParameterValue, and an
+// ICMP permission without its type and code is MissingParameter, not echo
+// reply (0/0) or every ICMP message (-1/-1).
+func TestICMPTypeAndCodeAreChecked(t *testing.T) {
+	h, cred, now := harness(t)
+	id := ingressGroup(t, h, cred, now)
+	for _, tc := range []struct {
+		ports url.Values
+		code  string
+	}{
+		{url.Values{"IpPermissions.1.FromPort": {"-1"}, "IpPermissions.1.ToPort": {"0"}}, "InvalidParameterValue"},
+		{url.Values{"IpPermissions.1.FromPort": {"256"}, "IpPermissions.1.ToPort": {"0"}}, "InvalidParameterValue"},
+		{url.Values{"IpPermissions.1.FromPort": {"8"}, "IpPermissions.1.ToPort": {"256"}}, "InvalidParameterValue"},
+		{url.Values{"IpPermissions.1.FromPort": {"-2"}, "IpPermissions.1.ToPort": {"-1"}}, "InvalidParameterValue"},
+		{url.Values{}, "MissingParameter"},
+		{url.Values{"IpPermissions.1.FromPort": {"8"}}, "MissingParameter"},
+		{url.Values{"IpPermissions.1.ToPort": {"0"}}, "MissingParameter"},
+	} {
+		form := url.Values{
+			"Action": {"AuthorizeSecurityGroupIngress"}, "Version": {Version}, "GroupId": {id},
+			"IpPermissions.1.IpProtocol": {"icmp"}, "IpPermissions.1.IpRanges.1.CidrIp": {"10.0.0.0/16"},
+		}
+		for k, v := range tc.ports {
+			form[k] = v
+		}
+		res := signed(t, h, cred, now, form.Encode())
+		if res.Code != http.StatusBadRequest || !strings.Contains(res.Body.String(), "<Code>"+tc.code+"</Code>") {
+			t.Fatalf("%v: %d %s", tc.ports, res.Code, res.Body)
+		}
+	}
+	if body := describedGroup(t, h, cred, now, id); strings.Contains(body, "10.0.0.0/16") {
+		t.Fatalf("a refused request wrote a rule: %s", body)
+	}
+}
+
+// #219: a group holds at most resource.MaxIngressRules inbound rules. An
+// authorize past it is RulesPerSecurityGroupLimitExceeded and writes nothing.
+func TestRulesPerSecurityGroupLimitExceeded(t *testing.T) {
+	h, cred, now := harness(t)
+	id := ingressGroup(t, h, cred, now)
+	full := url.Values{"Action": {"AuthorizeSecurityGroupIngress"}, "Version": {Version}, "GroupId": {id}}
+	for m := 1; m <= 60; m++ {
+		full.Set("IpPermissions.1.IpRanges."+itoa(m)+".CidrIp", "10."+itoa(m)+".0.0/16")
+	}
+	full.Set("IpPermissions.1.IpProtocol", "tcp")
+	full.Set("IpPermissions.1.FromPort", "22")
+	full.Set("IpPermissions.1.ToPort", "22")
+	if res := signed(t, h, cred, now, full.Encode()); res.Code != http.StatusOK {
+		t.Fatalf("60 rules %d %s", res.Code, res.Body)
+	}
+	over := signed(t, h, cred, now, url.Values{
+		"Action": {"AuthorizeSecurityGroupIngress"}, "Version": {Version}, "GroupId": {id},
+		"IpProtocol": {"tcp"}, "FromPort": {"443"}, "ToPort": {"443"}, "CidrIp": {"10.0.0.0/16"},
+	}.Encode())
+	if over.Code != http.StatusBadRequest ||
+		!strings.Contains(over.Body.String(), "<Code>RulesPerSecurityGroupLimitExceeded</Code>") ||
+		!strings.Contains(over.Body.String(), "The maximum number of rules per security group has been reached.") {
+		t.Fatalf("61st rule %d %s", over.Code, over.Body)
+	}
+	if body := describedGroup(t, h, cred, now, id); strings.Contains(body, "<fromPort>443</fromPort>") {
+		t.Fatalf("a refused request wrote a rule: %s", body)
+	}
+}
+
+// #219: an IpPermissions.N or IpRanges.M index above 60 names a rule no group
+// can hold, so it is RulesPerSecurityGroupLimitExceeded, not an unknown key.
+func TestRuleIndexPastTheLimitIsTheGroupLimit(t *testing.T) {
+	h, cred, now := harness(t)
+	id := ingressGroup(t, h, cred, now)
+	for _, key := range []string{"IpPermissions.1.IpRanges.61.CidrIp", "IpPermissions.61.IpRanges.1.CidrIp"} {
+		res := signed(t, h, cred, now, url.Values{
+			"Action": {"AuthorizeSecurityGroupIngress"}, "Version": {Version}, "GroupId": {id},
+			"IpPermissions.1.IpProtocol": {"tcp"}, "IpPermissions.1.FromPort": {"22"}, "IpPermissions.1.ToPort": {"22"},
+			"IpPermissions.61.IpProtocol": {"tcp"}, "IpPermissions.61.FromPort": {"22"}, "IpPermissions.61.ToPort": {"22"},
+			"IpPermissions.1.IpRanges.1.CidrIp": {"10.0.0.0/16"}, key: {"10.61.0.0/16"},
+		}.Encode())
+		if res.Code != http.StatusBadRequest ||
+			!strings.Contains(res.Body.String(), "<Code>RulesPerSecurityGroupLimitExceeded</Code>") {
+			t.Fatalf("%s: %d %s", key, res.Code, res.Body)
+		}
+	}
+	for _, unknown := range []url.Values{
+		{"IpPermissions.1.Bogus.61.CidrIp": {"10.0.0.0/16"}},
+		{"IpPermissions.1.Bogus": {"x"}, "IpPermissions.61.IpProtocol": {"tcp"}},
+	} {
+		form := url.Values{
+			"Action": {"AuthorizeSecurityGroupIngress"}, "Version": {Version}, "GroupId": {id},
+			"IpPermissions.1.IpProtocol": {"tcp"},
+		}
+		for k, v := range unknown {
+			form[k] = v
+		}
+		// The form is a map, so repeat to catch an answer that hangs on its order.
+		for range 50 {
+			res := signed(t, h, cred, now, form.Encode())
+			if res.Code != http.StatusBadRequest ||
+				!strings.Contains(res.Body.String(), "<Code>InvalidParameterValue</Code>") {
+				t.Fatalf("unknown key %v: %d %s", unknown, res.Code, res.Body)
+			}
+		}
+	}
+	if body := describedGroup(t, h, cred, now, id); strings.Contains(body, "10.0.0.0/16") {
+		t.Fatalf("a refused request wrote a rule: %s", body)
 	}
 }

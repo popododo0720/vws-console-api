@@ -751,12 +751,37 @@ func rejectUnknown(r *http.Request, action string) error {
 	default:
 		allow = allowCommon
 	}
+	pastLimit := false
 	for key := range r.Form {
-		if !allow(key) {
-			return resource.Invalid(key, "unsupported")
+		if allow(key) {
+			continue
 		}
+		// An unknown key wins over the limit, whatever the map order.
+		if action == resource.ActionAuthorizeSecurityGroupIngress.String() && ruleIndexPastLimit(key) {
+			pastLimit = true
+			continue
+		}
+		return resource.Invalid(key, "unsupported")
+	}
+	if pastLimit {
+		return resource.RulesPerSecurityGroupLimitExceeded(r.Form.Get("GroupId"))
 	}
 	return nil
+}
+
+// ruleIndexPastLimit reports an authorize key that is refused only because an
+// index is above maxQueryIndex. Such an index names a rule past the 60 a group
+// can hold, so it is the group limit, not an unknown parameter (#219).
+func ruleIndexPastLimit(key string) bool {
+	parts := strings.Split(key, ".")
+	past := false
+	for i, part := range parts {
+		if n, err := strconv.Atoi(part); err == nil && n > maxQueryIndex && strconv.Itoa(n) == part {
+			parts[i] = "1"
+			past = true
+		}
+	}
+	return past && allowAuthorize(strings.Join(parts, "."))
 }
 
 func allowCommon(key string) bool {
@@ -1406,6 +1431,12 @@ func ec2Refinement(e *resource.Error) (errs.AWSEntry, bool) {
 		// EC2 reports a volume type it does not support as UnknownVolumeType.
 		if strings.EqualFold(e.Field, "volumeType") {
 			return badRequest("UnknownVolumeType")
+		}
+	case resource.CodeResourceExhausted:
+		// A full security group is a 400 quota error, not the 503 throttle
+		// RequestLimitExceeded a ResourceExhausted otherwise gets.
+		if resource.IsRulesPerSecurityGroupLimitExceeded(e) {
+			return badRequest("RulesPerSecurityGroupLimitExceeded")
 		}
 	case resource.CodeAlreadyExists:
 		// A duplicate security group rule is InvalidPermission.Duplicate,

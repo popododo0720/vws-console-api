@@ -692,6 +692,9 @@ func (n network) AuthorizeSecurityGroupIngress(ctx context.Context, m backend.Mu
 			return resource.Accepted[resource.SecurityGroup]{}, resource.DuplicatePermission(req.ID.String())
 		}
 	}
+	if len(group.Rules)+len(req.Rules) > resource.MaxIngressRules {
+		return resource.Accepted[resource.SecurityGroup]{}, resource.RulesPerSecurityGroupLimitExceeded(req.ID.String())
+	}
 	previous := group.Rules
 	group.Rules = append(slices.Clone(previous), req.Rules...)
 	op, err := n.w.newOp(m.Account, resource.ServiceNetwork, resource.ActionAuthorizeSecurityGroupIngress, []resource.Ref{group.ID.Ref()}, func(time.Time) {})

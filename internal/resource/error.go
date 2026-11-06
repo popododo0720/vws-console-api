@@ -90,6 +90,10 @@ type Error struct {
 	// permissionMissing marks a security group rule that is not there, which
 	// EC2 answers as InvalidPermission.NotFound (#272).
 	permissionMissing bool
+	// rulesLimit marks a security group that would hold more than
+	// MaxIngressRules inbound rules, which EC2 answers as
+	// RulesPerSecurityGroupLimitExceeded.
+	rulesLimit bool
 	// deleting marks a bucket create refused because the caller's own bucket
 	// of that name is still being deleted (#321).
 	deleting bool
@@ -270,6 +274,27 @@ func DuplicatePermission(id string) *Error {
 func IsDuplicatePermission(err error) bool {
 	var e *Error
 	return errors.As(err, &e) && e.duplicate
+}
+
+// RulesPerSecurityGroupLimitExceeded reports an authorize that would leave a
+// group with more than MaxIngressRules inbound rules. The message is the one
+// EC2 sends, as quoted in
+// https://repost.aws/questions/QUu4w_UD2JRPGnJ4MvWOKeZA
+func RulesPerSecurityGroupLimitExceeded(id string) *Error {
+	return &Error{
+		Code:       CodeResourceExhausted,
+		Kind:       KindSecurityGroup,
+		ID:         id,
+		Message:    "The maximum number of rules per security group has been reached.",
+		rulesLimit: true,
+	}
+}
+
+// IsRulesPerSecurityGroupLimitExceeded reports whether err came from
+// RulesPerSecurityGroupLimitExceeded.
+func IsRulesPerSecurityGroupLimitExceeded(err error) bool {
+	var e *Error
+	return errors.As(err, &e) && e.rulesLimit
 }
 
 // PermissionNotFound reports a security group rule that is not present.

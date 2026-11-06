@@ -590,11 +590,11 @@ func ipPermissions(r *http.Request) ([]resource.IPPermission, error) {
 			return nil, resource.InvalidCombination("IpPermissions",
 				"The parameter IpPermissions cannot be used with IpProtocol, FromPort, ToPort or CidrIp.")
 		}
-		from, err := portValue(r.Form.Get("FromPort"))
+		from, err := sentPort(r.Form.Get("FromPort"))
 		if err != nil {
 			return nil, err
 		}
-		to, err := portValue(r.Form.Get("ToPort"))
+		to, err := sentPort(r.Form.Get("ToPort"))
 		if err != nil {
 			return nil, err
 		}
@@ -607,11 +607,11 @@ func ipPermissions(r *http.Request) ([]resource.IPPermission, error) {
 	perms := make([]resource.IPPermission, 0, len(forms))
 	for _, n := range slices.Sorted(maps.Keys(forms)) {
 		form := forms[n]
-		from, err := portValue(form.fields["FromPort"])
+		from, err := sentPort(form.fields["FromPort"])
 		if err != nil {
 			return nil, err
 		}
-		to, err := portValue(form.fields["ToPort"])
+		to, err := sentPort(form.fields["ToPort"])
 		if err != nil {
 			return nil, err
 		}
@@ -676,6 +676,19 @@ func ingressRule(r *http.Request) (resource.IngressRule, error) {
 		return resource.IngressRule{}, err
 	}
 	return resource.IngressRule{Protocol: protocol, FromPort: from, ToPort: to, Cidr: cidr}, nil
+}
+
+// sentPort reads a port of an IpPermissions entry. Nil means it was not sent,
+// which resource.IngressRules refuses for icmp.
+func sentPort(raw string) (*int, error) {
+	if raw == "" {
+		return nil, nil //nolint:nilnil // a nil port is one the request did not send
+	}
+	n, err := portValue(raw)
+	if err != nil {
+		return nil, err
+	}
+	return &n, nil
 }
 
 func portValue(raw string) (int, error) {
