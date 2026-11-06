@@ -2,6 +2,7 @@ package grpcclient
 
 import (
 	"context"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -33,6 +34,7 @@ func TestBadReferenceIsSkippedInList(t *testing.T) {
 	}
 	badVolumes := map[string]func(*storagev1.Volume){
 		"vol-0000000000000000a": func(v *storagev1.Volume) { v.Status.Instance = "instances/bad" },
+		"vol-0000000000000000c": func(v *storagev1.Volume) { v.Status.Instance = "instances/" + account.String() },
 		"vol-0000000000000000b": func(v *storagev1.Volume) {
 			v.Spec.Source = &storagev1.VolumeSpec_Snapshot{Snapshot: "snapshots/bad"}
 		},
@@ -102,5 +104,52 @@ func TestBadReferenceIsSkippedInList(t *testing.T) {
 		if resource.CodeOf(err) != resource.CodeInternal {
 			t.Errorf("explicit read of %s: %v", id, err)
 		}
+	}
+}
+
+// TestSkippedInstanceKeepsItsAttachState lists the volumes of an instance
+// with no vws-image label: one compute reports ATTACHED, and one the spec
+// names before storage does (#214). They read as they do beside the same
+// instance with its label.
+func TestSkippedInstanceKeepsItsAttachState(t *testing.T) {
+	account := mustAccount(t)
+	projectID := project(account)
+	ready := commonv1.ReconciliationState_RECONCILIATION_STATE_READY
+	const instID = "i-0123456789abcdef0"
+	const attachedID = "vol-0123456789abcdef0"
+	const pendingID = "vol-0123456789abcdef1"
+	list := func(dropImage bool) []resource.Volume {
+		inst := observedInstance(projectID, instID, ready, computev1.InstancePower_INSTANCE_POWER_RUNNING)
+		if dropImage {
+			delete(inst.Labels, labelImage)
+		}
+		inst.Spec.Volumes = []*computev1.VolumeAttachment{
+			{Volume: volumeName(projectID, attachedID), DeviceName: "/dev/sdf"},
+			{Volume: volumeName(projectID, pendingID), DeviceName: "/dev/sdg"},
+		}
+		inst.Status.Volumes = []*computev1.ObservedVolumeAttachment{{
+			Volume: volumeName(projectID, attachedID), DeviceName: "/dev/sdf",
+			State: computev1.VolumeAttachState_VOLUME_ATTACH_STATE_ATTACHED,
+		}}
+		world := &invalidNameWorld{
+			inst: []*computev1.Instance{inst},
+			vol: []*storagev1.Volume{
+				observedVolume(projectID, attachedID, ready, instID),
+				observedVolume(projectID, pendingID, ready, ""),
+			},
+		}
+		client, _ := dialInvalidNameWorld(t, world)
+		volumes, err := client.DescribeVolumes(context.Background(), backend.Scope{Account: account}, resource.VolumeQuery{})
+		if err != nil {
+			t.Fatalf("DescribeVolumes: %v", err)
+		}
+		return volumes.Items
+	}
+	healthy, skipped := list(false), list(true)
+	if len(healthy) != 2 || healthy[0].AttachState != resource.AttachmentAttached {
+		t.Fatalf("healthy instance volumes %+v", healthy)
+	}
+	if !reflect.DeepEqual(skipped, healthy) {
+		t.Fatalf("skipped instance volumes %+v, want %+v", skipped, healthy)
 	}
 }

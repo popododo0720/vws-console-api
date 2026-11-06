@@ -1633,7 +1633,8 @@ func (c computeClient) attachViews(
 		}
 		for _, item := range page.GetInstances() {
 			model, err := instanceModel(item)
-			if err == nil {
+			var field *badRecordFieldError
+			if err == nil || errors.As(err, &field) {
 				err = addAttachViews(out, item, model)
 			}
 			if err != nil {
