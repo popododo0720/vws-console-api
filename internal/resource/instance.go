@@ -249,7 +249,7 @@ func (r RunInstancesRequest) Normalize() (RunInstancesRequest, error) {
 	if r.Count < 1 || r.Count > 10 {
 		return RunInstancesRequest{}, Invalid("count", "must be from 1 to 10")
 	}
-	if err := validTags(r.Tags); err != nil {
+	if err := validRequestTags(r.Tags); err != nil {
 		return RunInstancesRequest{}, err
 	}
 	if len(r.KeyName) > 255 {
@@ -393,7 +393,7 @@ func (r CreateTagsRequest) Normalize() (CreateTagsRequest, error) {
 	if len(r.Tags) == 0 {
 		return CreateTagsRequest{}, Invalid("tags", "required")
 	}
-	if err := validTags(r.Tags); err != nil {
+	if err := validRequestTags(r.Tags); err != nil {
 		return CreateTagsRequest{}, err
 	}
 	return r, nil
@@ -432,6 +432,19 @@ func validTags(tags map[string]string) error {
 		}
 	}
 	return nil
+}
+
+// validRequestTags is validTags for the tags a request sets. EC2 keeps aws:
+// keys, in any case, for itself, so a request may not set one; a resource
+// that already has one can still take other tags.
+// https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/Using_Tags.html#tag-restrictions
+func validRequestTags(tags map[string]string) error {
+	for k := range tags {
+		if strings.HasPrefix(strings.ToLower(k), "aws:") {
+			return Invalid("tags", "reserved")
+		}
+	}
+	return validTags(tags)
 }
 
 // tagText reports whether s is valid UTF-8 with no control characters.

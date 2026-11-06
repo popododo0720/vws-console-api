@@ -40,11 +40,31 @@ func (r TagSubnetsRequest) Normalize() (TagSubnetsRequest, error) {
 	return r, nil
 }
 
+// TagVolumesRequest adds or overwrites tags on volumes. Other tags stay.
+type TagVolumesRequest struct {
+	IDs  []VolumeID        `json:"volumeIds"`
+	Tags map[string]string `json:"tags"`
+}
+
+// Action returns CreateTags.
+func (TagVolumesRequest) Action() Action { return ActionCreateTags }
+
+// Normalize checks the ids and the tags.
+func (r TagVolumesRequest) Normalize() (TagVolumesRequest, error) {
+	if err := distinctIDs("volumeIds", r.IDs); err != nil {
+		return TagVolumesRequest{}, err
+	}
+	if err := requiredTags(r.Tags); err != nil {
+		return TagVolumesRequest{}, err
+	}
+	return r, nil
+}
+
 func requiredTags(tags map[string]string) error {
 	if len(tags) == 0 {
 		return Invalid("tags", "required")
 	}
-	return validTags(tags)
+	return validRequestTags(tags)
 }
 
 func distinctIDs[T interface {

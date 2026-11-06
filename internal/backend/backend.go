@@ -102,6 +102,8 @@ type Compute interface {
 	DescribeInstances(ctx context.Context, s Scope, q resource.InstanceQuery) (resource.Page[resource.Instance], error)
 	CreateTags(ctx context.Context, m Mutation, req resource.CreateTagsRequest) (resource.Accepted[resource.Instance], error)
 	CreateVolume(ctx context.Context, m Mutation, req resource.CreateVolumeRequest) (resource.Accepted[resource.Volume], error)
+	// TagVolumes merges tags into volumes; every volume must exist first.
+	TagVolumes(ctx context.Context, m Mutation, req resource.TagVolumesRequest) (resource.Accepted[resource.Volume], error)
 	AttachVolume(ctx context.Context, m Mutation, req resource.AttachVolumeRequest) (resource.Accepted[resource.Volume], error)
 	DetachVolume(
 		ctx context.Context, m Mutation, req resource.DetachVolumeRequest,
