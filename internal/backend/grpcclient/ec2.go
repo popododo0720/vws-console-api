@@ -2134,7 +2134,7 @@ func (c networkClient) AuthorizeSecurityGroupIngress(ctx context.Context, m back
 		resource.Conflict(resource.KindSecurityGroup, req.ID.String(), "security group changed")
 }
 
-// authorizeIngressOnce reads the group, adds the rule and writes the whole
+// authorizeIngressOnce reads the group, adds the rules and writes the whole
 // rule list with the etag from that read. A stale etag is etagMismatchError so
 // the caller rereads and tries again.
 func (c networkClient) authorizeIngressOnce(
@@ -2144,16 +2144,22 @@ func (c networkClient) authorizeIngressOnce(
 	if err != nil {
 		return resource.Accepted[resource.SecurityGroup]{}, err
 	}
-	for _, have := range current.Rules {
-		if have == req.Rule {
-			if etag, ok := sameIngressRequest(current, m, resource.ActionAuthorizeSecurityGroupIngress, "ingress"); ok {
-				return c.writeGroupRules(ctx, m, projectID, current, current.Rules, etag, "ingress",
-					resource.ActionAuthorizeSecurityGroupIngress)
-			}
-			return resource.Accepted[resource.SecurityGroup]{}, resource.DuplicatePermission(current.ID.String())
+	present := 0
+	for _, rule := range req.Rules {
+		if slices.Contains(current.Rules, rule) {
+			present++
 		}
 	}
-	rules := append(append([]resource.IngressRule{}, current.Rules...), req.Rule)
+	if present == len(req.Rules) {
+		if etag, ok := sameIngressRequest(current, m, resource.ActionAuthorizeSecurityGroupIngress, "ingress"); ok {
+			return c.writeGroupRules(ctx, m, projectID, current, current.Rules, etag, "ingress",
+				resource.ActionAuthorizeSecurityGroupIngress)
+		}
+	}
+	if present > 0 {
+		return resource.Accepted[resource.SecurityGroup]{}, resource.DuplicatePermission(current.ID.String())
+	}
+	rules := append(slices.Clone(current.Rules), req.Rules...)
 	return c.writeGroupRules(ctx, m, projectID, current, rules, current.Etag, "ingress",
 		resource.ActionAuthorizeSecurityGroupIngress)
 }

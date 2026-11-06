@@ -62,6 +62,7 @@ change both files together.
 | Operation names and 500s follow `docs/rules.md`. | `TestOperationLocalServiceNames`, `TestInternalErrorIsLogged` |
 | S3 object writes: mask, request id, `If-None-Match`, waiting for the operation. | `TestPutIfNoneMatchIsWriteOnce`, `TestPutObjectWaitsForTheOperation` |
 | S3 bucket creates answer as S3 outside us-east-1. | `backendtest.BucketCreate` |
+| AuthorizeSecurityGroupIngress takes the `IpPermissions` list, all rules or none; a source VWS cannot store is `UnsupportedOperation`, never dropped. | `TestAuthorizeIngressTakesSeveralPermissions`, `TestUnsupportedIngressSourceIsRefused`, `TestAuthorizeIngressIsAllOrNothing` |
 | EC2 catalog actions are served on both surfaces. | `TestCatalogActionsAreImplemented` |
 | EC2 describe calls take boto3's parameter names. | `TestDescribeStandardParameters` |
 | EC2 instance, image, volume and address behavior. | `exerciseEC2`, `backendtest.AttachLifecycle` |

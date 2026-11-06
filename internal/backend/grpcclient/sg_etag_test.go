@@ -28,9 +28,9 @@ func TestConcurrentAuthorizesKeepEveryRule(t *testing.T) {
 				Scope: scope, Key: fmt.Sprintf("k-auth-%d", i), Fingerprint: fmt.Sprintf("fp-auth-%d", i),
 			}, resource.AuthorizeSecurityGroupIngressRequest{
 				ID: group,
-				Rule: resource.IngressRule{
+				Rules: []resource.IngressRule{{
 					Protocol: "tcp", FromPort: 1000 + i, ToPort: 1000 + i, Cidr: "10.0.0.0/16",
-				},
+				}},
 			})
 		}(i)
 	}
@@ -59,12 +59,12 @@ func TestDuplicateRuleIsDuplicatePermission(t *testing.T) {
 	rule := resource.IngressRule{Protocol: "tcp", FromPort: 22, ToPort: 22, Cidr: "10.0.0.0/16"}
 	if _, err := set.Network.AuthorizeSecurityGroupIngress(ctx, backend.Mutation{
 		Scope: scope, Key: "k-auth", Fingerprint: "fp-auth",
-	}, resource.AuthorizeSecurityGroupIngressRequest{ID: group, Rule: rule}); err != nil {
+	}, resource.AuthorizeSecurityGroupIngressRequest{ID: group, Rules: []resource.IngressRule{rule}}); err != nil {
 		t.Fatal(err)
 	}
 	_, err := set.Network.AuthorizeSecurityGroupIngress(ctx, backend.Mutation{
 		Scope: scope, Key: "k-auth-again", Fingerprint: "fp-auth-again",
-	}, resource.AuthorizeSecurityGroupIngressRequest{ID: group, Rule: rule})
+	}, resource.AuthorizeSecurityGroupIngressRequest{ID: group, Rules: []resource.IngressRule{rule}})
 	if !resource.IsDuplicatePermission(err) {
 		t.Fatalf("duplicate rule = %v, want a duplicate permission", err)
 	}
@@ -101,12 +101,12 @@ func TestSameRequestRetriesTheFirstOperation(t *testing.T) {
 	rule := resource.IngressRule{Protocol: "tcp", FromPort: 22, ToPort: 22, Cidr: "10.0.0.0/16"}
 	auth := backend.Mutation{Scope: scope, Key: "k-auth", Fingerprint: "fp-auth"}
 	first, err := set.Network.AuthorizeSecurityGroupIngress(ctx, auth,
-		resource.AuthorizeSecurityGroupIngressRequest{ID: group, Rule: rule})
+		resource.AuthorizeSecurityGroupIngressRequest{ID: group, Rules: []resource.IngressRule{rule}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	again, err := set.Network.AuthorizeSecurityGroupIngress(ctx, auth,
-		resource.AuthorizeSecurityGroupIngressRequest{ID: group, Rule: rule})
+		resource.AuthorizeSecurityGroupIngressRequest{ID: group, Rules: []resource.IngressRule{rule}})
 	if err != nil || again.Operation.ID != first.Operation.ID || len(again.Items[0].Rules) != 1 {
 		t.Fatalf("authorize retry: %v %+v", err, again)
 	}
@@ -136,7 +136,7 @@ func TestConcurrentRevokesKeepNoRule(t *testing.T) {
 		})
 		if _, err := set.Network.AuthorizeSecurityGroupIngress(ctx, backend.Mutation{
 			Scope: scope, Key: fmt.Sprintf("k-open-%d", i), Fingerprint: fmt.Sprintf("fp-open-%d", i),
-		}, resource.AuthorizeSecurityGroupIngressRequest{ID: group, Rule: rules[i]}); err != nil {
+		}, resource.AuthorizeSecurityGroupIngressRequest{ID: group, Rules: []resource.IngressRule{rules[i]}}); err != nil {
 			t.Fatal(err)
 		}
 	}

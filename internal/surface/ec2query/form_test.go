@@ -76,15 +76,22 @@ func TestUnreadQueryFieldsAreRejected(t *testing.T) {
 	auth.Set("IpPermissions.1.FromPort", "22")
 	auth.Set("IpPermissions.1.ToPort", "22")
 	auth.Set("IpPermissions.1.IpRanges.1.CidrIp", "10.0.0.0/16")
-	auth.Set("IpPermissions.2.IpProtocol", "udp")
-	res = signed(t, h, cred, now, auth.Encode())
-	if res.Code != http.StatusBadRequest || !strings.Contains(res.Body.String(), "InvalidParameterValue") {
-		t.Fatalf("second permission %d %s", res.Code, res.Body)
+	for _, unread := range []string{
+		"IpPermissions.61.IpProtocol", "IpPermissions.01.IpProtocol", "IpPermissions.1.IpRanges.61.CidrIp",
+		"IpPermissions.1.CidrIp", "IpPermissions.1.IpRanges.1.Foo",
+	} {
+		auth.Set(unread, "x")
+		res = signed(t, h, cred, now, auth.Encode())
+		if res.Code != http.StatusBadRequest || !strings.Contains(res.Body.String(), "InvalidParameterValue") {
+			t.Fatalf("%s %d %s", unread, res.Code, res.Body)
+		}
+		auth.Del(unread)
 	}
-	auth.Del("IpPermissions.2.IpProtocol")
+	auth.Set("IpPermissions.2.IpProtocol", "udp")
+	auth.Set("IpPermissions.2.IpRanges.1.CidrIp", "10.1.0.0/16")
 	res = signed(t, h, cred, now, auth.Encode())
 	if res.Code != http.StatusBadRequest || !strings.Contains(res.Body.String(), "InvalidGroup.NotFound") {
-		t.Fatalf("one permission %d %s", res.Code, res.Body)
+		t.Fatalf("two permissions %d %s", res.Code, res.Body)
 	}
 }
 

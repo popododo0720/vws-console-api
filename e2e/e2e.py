@@ -174,6 +174,21 @@ def network():
             GroupId=S["sg"], IpPermissions=[rule]))
     step("RevokeSecurityGroupIngress removes the rule", revoke_ingress)
 
+    def several_permissions():
+        """#217: one call takes several permissions with several IpRanges, and
+        a source VWS cannot store is UnsupportedOperation."""
+        ec2.authorize_security_group_ingress(GroupId=S["sg"], IpPermissions=[
+            {"IpProtocol": "tcp", "FromPort": 80, "ToPort": 80,
+             "IpRanges": [{"CidrIp": "10.0.0.0/16"}, {"CidrIp": "10.1.0.0/16"}]},
+            {"IpProtocol": "udp", "FromPort": 53, "ToPort": 53, "IpRanges": [{"CidrIp": "0.0.0.0/0"}]},
+        ])
+        opened = ec2.describe_security_groups(GroupIds=[S["sg"]])["SecurityGroups"][0]["IpPermissions"]
+        cidrs = {(p.get("FromPort"), r["CidrIp"]) for p in opened for r in p.get("IpRanges", [])}
+        check({(80, "10.0.0.0/16"), (80, "10.1.0.0/16"), (53, "0.0.0.0/0")} <= cidrs, f"rules {opened}")
+        ec2_error("UnsupportedOperation", lambda: ec2.authorize_security_group_ingress(GroupId=S["sg"], IpPermissions=[
+            {"IpProtocol": "tcp", "FromPort": 443, "ToPort": 443, "Ipv6Ranges": [{"CidrIpv6": "::/0"}]}]))
+    step("AuthorizeSecurityGroupIngress takes several permissions", several_permissions)
+
     step("CreateKeyPair", lambda: ec2.create_key_pair(KeyName="k1"))
     S["vol"] = step("CreateVolume", lambda: ec2.create_volume(AvailabilityZone="vws-1a", Size=10, ClientToken="v0")["VolumeId"])
 

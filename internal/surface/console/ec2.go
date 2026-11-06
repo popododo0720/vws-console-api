@@ -213,14 +213,19 @@ func (h *handler) authorizeIngress(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Rule resource.IngressRule `json:"ipPermissions"`
+		Permissions []resource.IPPermission `json:"ipPermissions"`
 	}
 	if err := decode(w, r, &body); err != nil {
 		writeErr(w, r, err)
 		return
 	}
+	rules, err := resource.IngressRules(body.Permissions)
+	if err != nil {
+		writeErr(w, r, err)
+		return
+	}
 	acc, err := h.svc.AuthorizeSecurityGroupIngress(r.Context(), c, token, resource.AuthorizeSecurityGroupIngressRequest{
-		ID: id, Rule: body.Rule,
+		ID: id, Rules: rules,
 	})
 	if err != nil {
 		writeErr(w, r, err)
