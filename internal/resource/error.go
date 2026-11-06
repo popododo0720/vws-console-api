@@ -101,6 +101,7 @@ const (
 	invalidValue invalidReason = iota
 	invalidMissing
 	invalidCombination
+	invalidUnsupported
 )
 
 func (e *Error) Error() string {
@@ -181,11 +182,21 @@ func InvalidCombination(field, message string) *Error {
 	return &Error{Code: CodeInvalidArgument, Field: field, Message: message, invalid: invalidCombination}
 }
 
+// Unsupported reports a valid AWS parameter that VWS cannot honor. EC2
+// answers UnsupportedOperation, so the request is refused instead of the
+// parameter being dropped.
+func Unsupported(field, message string) *Error {
+	return &Error{Code: CodeInvalidArgument, Field: field, Message: message, invalid: invalidUnsupported}
+}
+
 // IsMissingParameter reports whether e came from MissingParameter.
 func IsMissingParameter(e *Error) bool { return e != nil && e.invalid == invalidMissing }
 
 // IsInvalidCombination reports whether e came from InvalidCombination.
 func IsInvalidCombination(e *Error) bool { return e != nil && e.invalid == invalidCombination }
+
+// IsUnsupported reports whether e came from Unsupported.
+func IsUnsupported(e *Error) bool { return e != nil && e.invalid == invalidUnsupported }
 
 // Malformed reports an identifier that failed validation. EC2 names a
 // malformed instance ID in its own sentence.

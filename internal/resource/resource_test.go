@@ -404,15 +404,15 @@ func TestIngressProtocolIsCanonical(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, err := (AuthorizeSecurityGroupIngressRequest{
-		ID:   id,
-		Rule: IngressRule{Protocol: "17", FromPort: 53, ToPort: 53, Cidr: "10.0.0.0/16"},
+		ID:    id,
+		Rules: []IngressRule{{Protocol: "17", FromPort: 53, ToPort: 53, Cidr: "10.0.0.0/16"}},
 	}).Normalize()
-	if err != nil || got.Rule.Protocol != "udp" {
-		t.Fatalf("%v %+v", err, got.Rule)
+	if err != nil || got.Rules[0].Protocol != "udp" {
+		t.Fatalf("%v %+v", err, got.Rules)
 	}
 	_, err = (AuthorizeSecurityGroupIngressRequest{
-		ID:   id,
-		Rule: IngressRule{Protocol: "sctp", FromPort: 1, ToPort: 1, Cidr: "10.0.0.0/16"},
+		ID:    id,
+		Rules: []IngressRule{{Protocol: "sctp", FromPort: 1, ToPort: 1, Cidr: "10.0.0.0/16"}},
 	}).Normalize()
 	if CodeOf(err) != CodeInvalidArgument {
 		t.Fatalf("sctp: %v", err)
