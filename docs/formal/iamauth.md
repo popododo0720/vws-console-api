@@ -75,17 +75,17 @@ Each fails on the real design. `scripts/tla-iam.sh` keeps them in its list
 and fails once one holds, so a fix shows up as a failing CI step; the
 property then moves into `iamauth.cfg`.
 
-1. `CreateAccessKeyBound`: `CreateAccessKey` binds the user with `keyUser`,
+1. `CreateAccessKeyBound` (#624): `CreateAccessKey` binds the user with `keyUser`,
    then sends `CreateAccessKeyRequest`, which has no `expected_user_arn` or
    etag in vws-proto, and does not read the user again. A user moved to a
    denied path in between gets the key, and the caller gets its secret
    (5 states).
-2. `UpdateRoleBound`: `UpdateRole` and `UpdateRoleDescription` bind the role
+2. `UpdateRoleBound` (#625): `UpdateRole` and `UpdateRoleDescription` bind the role
    with `roleAt`, then send `UpdateRoleRequest` without the role's etag. A
    role deleted and created again on a denied path in between is changed
    (5 states). `UpdateRoleRequest.role` already carries `Role.etag` in
    vws-proto.
-3. `EnableNeverStaysUnverified`: `EnableMFADevice` enables the device first
+3. `EnableNeverStaysUnverified` (#626): `EnableMFADevice` enables the device first
    and checks the user after. A restart between the enable and the check
    (or an undo whose outcome is unknown, which the code already answers as
    an internal error) leaves the device enabled for a user at a denied path
