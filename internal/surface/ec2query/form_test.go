@@ -76,13 +76,16 @@ func TestUnreadQueryFieldsAreRejected(t *testing.T) {
 	auth.Set("IpPermissions.1.FromPort", "22")
 	auth.Set("IpPermissions.1.ToPort", "22")
 	auth.Set("IpPermissions.1.IpRanges.1.CidrIp", "10.0.0.0/16")
-	for _, unread := range []string{
-		"IpPermissions.61.IpProtocol", "IpPermissions.01.IpProtocol", "IpPermissions.1.IpRanges.61.CidrIp",
-		"IpPermissions.1.CidrIp", "IpPermissions.1.IpRanges.1.Foo",
+	for unread, code := range map[string]string{
+		"IpPermissions.01.IpProtocol": "InvalidParameterValue", "IpPermissions.1.CidrIp": "InvalidParameterValue",
+		"IpPermissions.1.IpRanges.1.Foo": "InvalidParameterValue",
+		// #219: an index past 60 names a rule no group can hold.
+		"IpPermissions.61.IpProtocol":        "RulesPerSecurityGroupLimitExceeded",
+		"IpPermissions.1.IpRanges.61.CidrIp": "RulesPerSecurityGroupLimitExceeded",
 	} {
 		auth.Set(unread, "x")
 		res = signed(t, h, cred, now, auth.Encode())
-		if res.Code != http.StatusBadRequest || !strings.Contains(res.Body.String(), "InvalidParameterValue") {
+		if res.Code != http.StatusBadRequest || !strings.Contains(res.Body.String(), "<Code>"+code+"</Code>") {
 			t.Fatalf("%s %d %s", unread, res.Code, res.Body)
 		}
 		auth.Del(unread)

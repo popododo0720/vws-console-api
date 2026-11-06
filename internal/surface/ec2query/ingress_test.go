@@ -269,3 +269,32 @@ func TestRulesPerSecurityGroupLimitExceeded(t *testing.T) {
 		t.Fatalf("a refused request wrote a rule: %s", body)
 	}
 }
+
+// #219: an IpPermissions.N or IpRanges.M index above 60 names a rule no group
+// can hold, so it is RulesPerSecurityGroupLimitExceeded, not an unknown key.
+func TestRuleIndexPastTheLimitIsTheGroupLimit(t *testing.T) {
+	h, cred, now := harness(t)
+	id := ingressGroup(t, h, cred, now)
+	for _, key := range []string{"IpPermissions.1.IpRanges.61.CidrIp", "IpPermissions.61.IpRanges.1.CidrIp"} {
+		res := signed(t, h, cred, now, url.Values{
+			"Action": {"AuthorizeSecurityGroupIngress"}, "Version": {Version}, "GroupId": {id},
+			"IpPermissions.1.IpProtocol": {"tcp"}, "IpPermissions.1.FromPort": {"22"}, "IpPermissions.1.ToPort": {"22"},
+			"IpPermissions.61.IpProtocol": {"tcp"}, "IpPermissions.61.FromPort": {"22"}, "IpPermissions.61.ToPort": {"22"},
+			"IpPermissions.1.IpRanges.1.CidrIp": {"10.0.0.0/16"}, key: {"10.61.0.0/16"},
+		}.Encode())
+		if res.Code != http.StatusBadRequest ||
+			!strings.Contains(res.Body.String(), "<Code>RulesPerSecurityGroupLimitExceeded</Code>") {
+			t.Fatalf("%s: %d %s", key, res.Code, res.Body)
+		}
+	}
+	res := signed(t, h, cred, now, url.Values{
+		"Action": {"AuthorizeSecurityGroupIngress"}, "Version": {Version}, "GroupId": {id},
+		"IpPermissions.1.IpProtocol": {"tcp"}, "IpPermissions.1.Bogus.61.CidrIp": {"10.0.0.0/16"},
+	}.Encode())
+	if res.Code != http.StatusBadRequest || !strings.Contains(res.Body.String(), "<Code>InvalidParameterValue</Code>") {
+		t.Fatalf("unknown key past the index: %d %s", res.Code, res.Body)
+	}
+	if body := describedGroup(t, h, cred, now, id); strings.Contains(body, "10.0.0.0/16") {
+		t.Fatalf("a refused request wrote a rule: %s", body)
+	}
+}
