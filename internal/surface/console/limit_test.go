@@ -232,6 +232,38 @@ func TestLoginIsRateLimitedPerUserAcrossAddresses(t *testing.T) {
 	}
 }
 
+// A failed or throttled sign-in logs no submitted user name, since people
+// type a password into that box; a success names the real user.
+func TestFailedLoginLogsNoUserName(t *testing.T) {
+	var logs bytes.Buffer
+	e := limitedEnv(t, LoginLimits{UserBurst: 1, UserRefill: time.Hour}, slog.New(slog.NewJSONHandler(&logs, nil)))
+	const typed = "Tr0ub4dor-in-name-box"
+
+	if rec := e.loginFrom(t, "198.51.100.1", typed, "wrong pass 1"); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("failed sign-in: %d %s", rec.Code, rec.Body)
+	}
+	if rec := e.loginFrom(t, "198.51.100.2", typed, "wrong pass 1"); rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("throttled sign-in: %d %s", rec.Code, rec.Body)
+	}
+	out := logs.String()
+	for _, want := range []string{"console sign-in failed", "console sign-in rate limited", `"limit":"throttled_user"`} {
+		if !strings.Contains(out, want) {
+			t.Errorf("log lacks %q: %s", want, out)
+		}
+	}
+	if strings.Contains(out, typed) || strings.Contains(out, `"user"`) {
+		t.Errorf("failed sign-in logged a user name: %s", out)
+	}
+
+	logs.Reset()
+	if rec := e.loginFrom(t, "198.51.100.3", "bob", "correct horse 1"); rec.Code != http.StatusOK {
+		t.Fatalf("sign-in: %d %s", rec.Code, rec.Body)
+	}
+	if out := logs.String(); !strings.Contains(out, `"msg":"console sign-in"`) || !strings.Contains(out, `"user":"bob"`) {
+		t.Errorf("success log does not name the user: %s", out)
+	}
+}
+
 func auditCount(t *testing.T, reader *sdkmetric.ManualReader, outcome string) int64 {
 	t.Helper()
 	var rm metricdata.ResourceMetrics

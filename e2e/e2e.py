@@ -1031,11 +1031,12 @@ def console_login():
     for raw in set_cookies:
         name, _, rest = raw.partition("=")
         jar[name] = rest.split(";", 1)[0]
-    session_cookie = next((c for c in set_cookies if c.startswith("vws_session=")), "")
-    step("session cookie is HttpOnly, Secure, SameSite=Strict", lambda: check(
-        all(a in session_cookie for a in ("HttpOnly", "Secure", "SameSite=Strict")), session_cookie))
+    session_cookie = next((c for c in set_cookies if c.startswith("__Host-vws_session=")), "")
+    step("session cookie is HttpOnly, Secure, SameSite=Strict, __Host-", lambda: check(
+        all(a in session_cookie for a in ("HttpOnly", "Secure", "SameSite=Strict", "Path=/"))
+        and "Domain" not in session_cookie, session_cookie))
     step("login body names the user and hides the token", lambda: check(
-        body["principal"] == f"arn:vws:iam::{account}:user/e2e-carol" and jar["vws_session"] not in json.dumps(body), body))
+        body["principal"] == f"arn:vws:iam::{account}:user/e2e-carol" and jar["__Host-vws_session"] not in json.dumps(body), body))
     step("GET /api/v1/auth/session", lambda: check(expect(200, console_call(
         "GET", "/api/v1/auth/session", cookies=jar))[1]["principal"].endswith(":user/e2e-carol"), "principal"))
     step("session says loginEnabled true with IAM", lambda: check(console_call(

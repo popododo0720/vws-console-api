@@ -147,8 +147,12 @@ func TestLoginLockoutIsPerUserAndIPWithBackoff(t *testing.T) {
 	if err := try("192.0.2.50", "correct horse 1"); err != nil {
 		t.Fatalf("bob from another IP: %v", err)
 	}
-	if !strings.Contains(logs.String(), `"msg":"console sign-in locked out"`) || !strings.Contains(logs.String(), `"source_ip":"198.51.100.1"`) || !strings.Contains(logs.String(), `"user":"bob"`) {
+	if !strings.Contains(logs.String(), `"msg":"console sign-in locked out"`) ||
+		!strings.Contains(logs.String(), `"source_ip":"198.51.100.1"`) {
 		t.Errorf("no lockout notice: %s", logs.String())
+	}
+	if strings.Contains(logs.String(), `"user"`) || strings.Contains(logs.String(), "bob") {
+		t.Errorf("user name in the lockout log: %s", logs.String())
 	}
 	if strings.Contains(logs.String(), "guess wrong") || strings.Contains(logs.String(), "correct horse") {
 		t.Errorf("password in the log: %s", logs.String())

@@ -198,7 +198,7 @@ names nobody and there is nothing to sign in to; a bad bearer token is still
 With sign-in on: `POST /api/v1/auth/login` with
 `{"account","userName","password"}` (an IAM user's `CreateLoginProfile`
 password, or `root` with the password in `-root-password-file`, mounted from a
-Secret). It sets an HttpOnly, Secure, SameSite=Strict `vws_session` cookie
+Secret). It sets an HttpOnly, Secure, SameSite=Strict `__Host-vws_session` cookie
 (12 hours) and a `vws_csrf` cookie; every request other than GET/HEAD on a
 session must echo `vws_csrf` in `X-CSRF-Token`. Each console route is
 authorized as the matching IAM action (`ec2:DescribeVpcs`, `ec2:CreateVpc`,
