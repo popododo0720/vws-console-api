@@ -361,6 +361,22 @@ func (e *badRecordNameError) Error() string { return e.err.Error() }
 
 func (e *badRecordNameError) Unwrap() error { return e.err }
 
+// badRecordFieldError marks a backend record whose name is an id but whose
+// required label or resource reference does not parse. A listing skips it and
+// logs; an explicit id read still fails.
+type badRecordFieldError struct {
+	field string
+	err   error
+}
+
+func (e *badRecordFieldError) Error() string { return e.field + ": " + e.err.Error() }
+
+func (e *badRecordFieldError) Unwrap() error { return e.err }
+
+func badField(field string, err error) error {
+	return resource.Internal(&badRecordFieldError{field: field, err: err})
+}
+
 // badTagLabelsError marks a backend record whose vws-tags- labels do not
 // decode. A listing skips it and logs; an explicit id read still fails.
 type badTagLabelsError struct{ err error }
@@ -390,6 +406,12 @@ func (a *api) skipBadRecord(ctx context.Context, name string, err error) bool {
 	if errors.As(err, &bad) {
 		a.logger().WarnContext(ctx, "skipping a record with an invalid resource name",
 			slog.String("name", name), slog.Any("err", err))
+		return true
+	}
+	var field *badRecordFieldError
+	if errors.As(err, &field) {
+		a.logger().WarnContext(ctx, "skipping a record with an unreadable field",
+			slog.String("id", lastSegment(name)), slog.String("field", field.field))
 		return true
 	}
 	var tags *badTagLabelsError
@@ -503,26 +525,32 @@ func instanceModel(in *computev1.Instance) (resource.Instance, error) {
 	if err != nil {
 		return resource.Instance{}, resource.Internal(&badRecordNameError{err})
 	}
+	// A field that does not parse stays zero and the model is returned beside
+	// the first such error, so attachViews still sees the instance's volumes.
+	var bad error
+	note := func(field string, err error) {
+		if bad == nil {
+			bad = badField(field, err)
+		}
+	}
 	resID, err := resource.Parse[resource.ReservationID](in.GetLabels()[labelReservation])
 	if err != nil {
-		return resource.Instance{}, resource.Internal(err)
+		note(labelReservation, err)
 	}
 	img, err := resource.Parse[resource.ImageID](in.GetLabels()[labelImage])
 	if err != nil {
-		return resource.Instance{}, resource.Internal(err)
+		note(labelImage, err)
 	}
-	nics := in.GetSpec().GetNetworkInterfaces()
-	if len(nics) == 0 {
-		return resource.Instance{}, resource.Internal(errors.New("missing subnet"))
-	}
-	sub, err := resource.Parse[resource.SubnetID](lastSegment(nics[0].GetSubnet()))
-	if err != nil {
-		return resource.Instance{}, resource.Internal(err)
-	}
-	// The subnet name is .../vpcs/{vpc}/subnets/{subnet}. A subnet outside a
-	// user VPC has a segment that is not a VPC id, and the field stays empty.
+	var sub resource.SubnetID
 	var vpcID resource.VpcID
-	if parts := strings.Split(nics[0].GetSubnet(), "/"); len(parts) == 8 {
+	if nics := in.GetSpec().GetNetworkInterfaces(); len(nics) == 0 {
+		note("spec.network_interfaces", errors.New("missing subnet"))
+	} else if sub, err = resource.Parse[resource.SubnetID](lastSegment(nics[0].GetSubnet())); err != nil {
+		note("spec.network_interfaces.subnet", err)
+	} else if parts := strings.Split(nics[0].GetSubnet(), "/"); len(parts) == 8 {
+		// The subnet name is .../vpcs/{vpc}/subnets/{subnet}. A subnet outside
+		// a user VPC has a segment that is not a VPC id, and the field stays
+		// empty.
 		if parsed, perr := resource.Parse[resource.VpcID](parts[5]); perr == nil {
 			vpcID = parsed
 		}
@@ -542,7 +570,7 @@ func instanceModel(in *computev1.Instance) (resource.Instance, error) {
 	var keyPairID resource.KeyPairID
 	if name := in.GetSpec().GetKeyPair(); name != "" {
 		if keyPairID, err = resource.Parse[resource.KeyPairID](lastSegment(name)); err != nil {
-			return resource.Instance{}, resource.Internal(err)
+			note("spec.key_pair", err)
 		}
 	}
 	attach, err := observedVolumes(in)
@@ -554,7 +582,8 @@ func instanceModel(in *computev1.Instance) (resource.Instance, error) {
 	for _, v := range in.GetSpec().GetVolumes() {
 		volID, err := resource.Parse[resource.VolumeID](lastSegment(v.GetVolume()))
 		if err != nil {
-			return resource.Instance{}, resource.Internal(err)
+			note("spec.volumes.volume", err)
+			continue
 		}
 		device := v.GetDeviceName()
 		if v.GetBoot() {
@@ -597,7 +626,7 @@ func instanceModel(in *computev1.Instance) (resource.Instance, error) {
 		LaunchTime: launchTime(in), PrivateIP: private, Tags: tags,
 		KeyPairID: keyPairID, UserData: in.GetSpec().GetUserData(),
 		RootDeviceName: rootDevice, BlockDevices: blocks, DetachingDevices: detaching,
-	}, nil
+	}, bad
 }
 
 func instanceStateOf(obs commonv1.ReconciliationState, power computev1.InstancePower) resource.InstanceState {
