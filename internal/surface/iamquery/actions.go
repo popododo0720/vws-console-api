@@ -1346,7 +1346,7 @@ func stsActions() map[string]spec {
 		"GetSessionToken": {
 			params: []string{"DurationSeconds", "SerialNumber", "TokenCode"}, needsAdmin: true, public: true,
 			run: func(h *handler, c *exchange) (any, error) {
-				if c.r.Header.Get("X-Amz-Security-Token") != "" || c.r.URL.Query().Has("X-Amz-Security-Token") {
+				if sessionTokenOf(c.r) != "" {
 					return nil, iam.SessionCredentialsRefused()
 				}
 				req, err := sessionTokenRequest(c)
@@ -1382,7 +1382,10 @@ var (
 // constraints. The token code is never echoed.
 func sessionTokenRequest(c *exchange) (iam.SessionTokenRequest, error) {
 	var req iam.SessionTokenRequest
-	if raw := c.form("DurationSeconds"); raw != "" {
+	_, serialSent := c.r.Form["SerialNumber"]
+	_, codeSent := c.r.Form["TokenCode"]
+	if _, sent := c.r.Form["DurationSeconds"]; sent {
+		raw := c.form("DurationSeconds")
 		n, err := strconv.Atoi(raw)
 		switch {
 		case err != nil || n < 900:
@@ -1393,11 +1396,11 @@ func sessionTokenRequest(c *exchange) (iam.SessionTokenRequest, error) {
 		req.Duration = time.Duration(n) * time.Second
 	}
 	req.SerialNumber, req.TokenCode = c.form("SerialNumber"), c.form("TokenCode")
-	if req.SerialNumber != "" && !mfaSerial.MatchString(req.SerialNumber) {
+	if serialSent && !mfaSerial.MatchString(req.SerialNumber) {
 		return req, validation(req.SerialNumber, "serialNumber",
 			`Member must have length between 9 and 256 and match pattern [\w+=/:,.@-]*`)
 	}
-	if req.TokenCode != "" && !mfaCode.MatchString(req.TokenCode) {
+	if codeSent && !mfaCode.MatchString(req.TokenCode) {
 		return req, validation("", "tokenCode", `Member must have length 6 and match pattern [\d]*`)
 	}
 	if (req.SerialNumber == "") != (req.TokenCode == "") {

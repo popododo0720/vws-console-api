@@ -51,6 +51,9 @@ func TestGetSessionToken(t *testing.T) {
 	has(t, call(t, h, session, sigv4.ServiceSTS, url.Values{"Action": {"GetSessionToken"}}), http.StatusForbidden,
 		`<Code>AccessDenied</Code>`, `Cannot call GetSessionToken with session credentials`)
 
+	has(t, call(t, h, session, sigv4.ServiceIAM, url.Values{"Action": {"GetUser"}}), http.StatusForbidden,
+		`<Code>InvalidClientTokenId</Code>`)
+
 	has(t, call(t, h, root, sigv4.ServiceSTS, url.Values{"Action": {"GetSessionToken"}, "DurationSeconds": {"129600"}}),
 		http.StatusOK, `<Expiration>2026-10-09T11:00:00Z</Expiration>`)
 	has(t, call(t, h, bob, sigv4.ServiceSTS, url.Values{"Action": {"GetSessionToken"}, "DurationSeconds": {"900"}}),
@@ -68,6 +71,12 @@ func TestGetSessionTokenWithMFA(t *testing.T) {
 		t.Fatal(err)
 	}
 	bob := sigv4.Credential{AccessKey: k.AccessKeyID, Secret: k.Secret}
+	if err := f.PutInlinePolicy(ctx, root.Account, iam.EntityUser, "bob", "p",
+		`{"Statement":[{"Effect":"Allow","Action":"iam:GetUser","Resource":"*"}]}`,
+		backendtest.EntityGrant(ctx, t, f, root.Account, iam.EntityUser, "bob"),
+	); err != nil {
+		t.Fatal(err)
+	}
 	seed := []byte("12345678901234567890")
 	serial := f.AddTOTPMfaDevice(root.Account, "bob-phone", seed)
 	if err := f.AssignMfaDevice(root.Account, serial, "bob", now); err != nil {
@@ -75,7 +84,11 @@ func TestGetSessionTokenWithMFA(t *testing.T) {
 	}
 	code := iam.TOTPCode(seed, now)
 	form := url.Values{"Action": {"GetSessionToken"}, "SerialNumber": {serial}, "TokenCode": {code}}
-	has(t, call(t, h, bob, sigv4.ServiceSTS, form), http.StatusOK, `<SessionToken>`)
+	first := call(t, h, bob, sigv4.ServiceSTS, form)
+	has(t, first, http.StatusOK, `<SessionToken>`)
+	// AWS lets IAM take GetSessionToken credentials only with MFA.
+	has(t, call(t, h, sessionCredential(t, first.Body.String()), sigv4.ServiceIAM, url.Values{"Action": {"GetUser"}}),
+		http.StatusOK, `<UserName>bob</UserName>`)
 	res := call(t, h, bob, sigv4.ServiceSTS, form)
 	has(t, res, http.StatusForbidden, `<Code>AccessDenied</Code>`, `invalid MFA one time pass code`)
 	if strings.Contains(res.Body.String(), code) {
@@ -145,6 +158,9 @@ func TestGetSessionTokenValidation(t *testing.T) {
 			http.StatusForbidden,
 			[]string{`<Code>AccessDenied</Code>`, `must provide both`},
 		},
+		{"empty duration", url.Values{"DurationSeconds": {""}}, http.StatusBadRequest, []string{`durationSeconds`}},
+		{"empty serial", url.Values{"SerialNumber": {""}}, http.StatusBadRequest, []string{`at &#39;serialNumber&#39;`}},
+		{"empty code", url.Values{"TokenCode": {""}}, http.StatusBadRequest, []string{`at &#39;tokenCode&#39;`}},
 		{
 			"unapplied parameter",
 			url.Values{"MinimumSessionTokenSize": {"0"}},

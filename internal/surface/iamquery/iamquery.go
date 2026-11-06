@@ -86,6 +86,13 @@ func (h *handler) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	c.caller = caller
+	if c.service == sigv4.ServiceIAM && sessionTokenOf(r) != "" && !caller.Ref.MFA &&
+		!strings.Contains(caller.Principal, ":assumed-role/") {
+		// AWS refuses IAM to GetSessionToken credentials issued without MFA
+		// (https://docs.aws.amazon.com/STS/latest/APIReference/API_GetSessionToken.html).
+		c.fail(resource.Unauthenticated("The security token included in the request is invalid."))
+		return
+	}
 	if err := r.ParseForm(); err != nil {
 		c.fail(resource.Invalid("body", "malformed form"))
 		return
@@ -145,6 +152,15 @@ func (h *handler) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	c.ok(result)
+}
+
+// sessionTokenOf is the SigV4 session token the request was signed with. A
+// verified request carries one only for temporary credentials.
+func sessionTokenOf(r *http.Request) string {
+	if t := r.Header.Get("X-Amz-Security-Token"); t != "" {
+		return t
+	}
+	return r.URL.Query().Get("X-Amz-Security-Token")
 }
 
 // scopeService reads the service out of the Credential scope.

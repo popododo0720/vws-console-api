@@ -965,6 +965,9 @@ def identity():
             session_sts.get_caller_identity()["Arn"] == f"arn:aws:iam::{account}:user/e2e/e2e-bob", "bob arn"))
         step("session token: STS GetSessionToken is AccessDenied", lambda: aws_error(
             "AccessDenied", lambda: session_sts.get_session_token()))
+        step("session token without MFA: IAM GetUser is InvalidClientTokenId", lambda: aws_error(
+            "InvalidClientTokenId", lambda: client(
+                "iam", session["AccessKeyId"], session["SecretAccessKey"], session["SessionToken"]).get_user()))
     step("STS GetSessionToken with a serial and no code is AccessDenied", lambda: aws_error(
         "AccessDenied", lambda: bob_sts.get_session_token(SerialNumber=f"arn:aws:iam::{account}:mfa/e2e-phone")))
     # botocore refuses DurationSeconds below 900 itself; send it unvalidated.
