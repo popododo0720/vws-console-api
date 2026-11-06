@@ -70,9 +70,24 @@ func (s *volumeSrv) UpdateVolume(ctx context.Context, req *storagev1.UpdateVolum
 	if err != nil {
 		return nil, toStatus(err)
 	}
+	spec, mod := req.GetVolume().GetSpec(), resource.ModifyVolumeRequest{ID: id}
+	for _, path := range req.GetUpdateMask().GetPaths() {
+		switch path {
+		case "spec.size_gib":
+			mod.SizeGiB = spec.GetSizeGib()
+		case "spec.type":
+			mod.Type = volumeTypeOf(spec.GetType())
+		case "spec.iops":
+			mod.Iops = spec.GetIops()
+		case "spec.throughput_mibps":
+			mod.Throughput = spec.GetThroughputMibps()
+		default:
+			return nil, toStatus(resource.Invalid("updateMask", "unsupported path "+path))
+		}
+	}
 	acc, err := s.w.set.Compute.ModifyVolume(ctx, backend.Mutation{
 		Scope: backend.Scope{Account: account}, Key: req.GetRequestId(), Fingerprint: fp,
-	}, resource.ModifyVolumeRequest{ID: id, SizeGiB: req.GetVolume().GetSpec().GetSizeGib()})
+	}, mod)
 	if err != nil {
 		return nil, toStatus(err)
 	}

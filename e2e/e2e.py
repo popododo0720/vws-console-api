@@ -226,6 +226,20 @@ def network():
         ec2_error("InvalidParameterValue", lambda: ec2.modify_volume(VolumeId=vid, Size=1))
         ec2.delete_volume(VolumeId=vid)
     step("ModifyVolume grows a volume and refuses to shrink it", modify_volume)
+    def modify_volume_type():
+        vid = ec2.create_volume(AvailabilityZone="vws-1a", Size=10, VolumeType="gp2")["VolumeId"]
+        ec2.get_waiter("volume_available").wait(VolumeIds=[vid], WaiterConfig={"Delay": 1, "MaxAttempts": 30})
+        ec2_error("InvalidParameterCombination", lambda: ec2.modify_volume(VolumeId=vid, Iops=3000))
+        mod = ec2.modify_volume(VolumeId=vid, Size=20, VolumeType="gp3", Iops=4000, Throughput=250)["VolumeModification"]
+        check(mod["TargetVolumeType"] == "gp3" and mod["OriginalVolumeType"] == "gp2" and mod["TargetIops"] == 4000
+              and mod["TargetThroughput"] == 250 and mod["TargetSize"] == 20, f"modification {mod}")
+        deadline = time.monotonic() + 30
+        want = {"VolumeType": "gp3", "Size": 20, "Iops": 4000, "Throughput": 250}
+        while {k: ec2.describe_volumes(VolumeIds=[vid])["Volumes"][0].get(k) for k in want} != want:
+            check(time.monotonic() < deadline, "volume did not become gp3 at 20 GiB, 4000 IOPS, 250 MiB/s")
+            time.sleep(1)
+        ec2.delete_volume(VolumeId=vid)
+    step("ModifyVolume changes VolumeType, Iops and Throughput in one call", modify_volume_type)
     step("DescribeVolumes has CreateTime", lambda: check(
         all("CreateTime" in v for v in ec2.describe_volumes()["Volumes"]), "CreateTime missing"))
     def restore():

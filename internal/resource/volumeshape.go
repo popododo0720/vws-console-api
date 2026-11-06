@@ -116,24 +116,70 @@ func checkVolumeSize(t VolumeType, sizeGiB int64) error {
 	return nil
 }
 
-// CheckGrow enforces the EC2 ModifyVolume Size rules on growing v to
-// sizeGiB with its type, Iops and Throughput kept: no shrink, and the size
-// range of v's type. Growing only lowers the Iops-per-GiB ratio, so the
-// ratios CheckVolumeShape enforces cannot be broken by it.
+// Modify returns v as req leaves it, checked by the EC2 ModifyVolume rules
+// against the target type and size together, so a change that is legal only
+// with the new size (st1 needs 125 GiB) is accepted in one request. A size
+// left out keeps the size and a type left out keeps the type. Iops and
+// Throughput left out keep the stored values, or take the EC2 defaults when
+// the type changes: 3,000 IOPS for gp3, io1 and io2, 125 MiB/s for gp3, none
+// for the other types. A new size or type is checked against the target
+// type's size range, and a new type or performance like a new volume
+// (CheckVolumeShape), so a retype to io1 under 60 GiB is refused, as EC2
+// refuses it. A size-only grow keeps the stored performance unchecked, as
+// vws-storage does (vws-storage#87), so a volume stored before the
+// performance rules still grows. A volume never shrinks.
 //
 // A volume stored above its type's maximum (#427: a standard volume grown
 // past 1,024 GiB under the old flat 16,384 GiB cap) has no target size at or
 // above its own inside the range, so every explicit Size is refused, even the
 // current size. EC2 requires the target size to be at least the existing
-// size and a size change to stay within the limits of the current volume
-// type. A no-op leaves Size out, which this API requires.
+// size and within the limits of the target volume type.
 // https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_ModifyVolume.html
 // https://docs.aws.amazon.com/ebs/latest/userguide/ebs-modify-volume.html
-func (v Volume) CheckGrow(sizeGiB int64) error {
-	if sizeGiB < v.SizeGiB {
-		return Invalid("size", "a volume cannot shrink")
+func (v Volume) Modify(req ModifyVolumeRequest) (Volume, error) {
+	if req.SizeGiB != 0 && req.SizeGiB < v.SizeGiB {
+		return Volume{}, Invalid("size", "a volume cannot shrink")
 	}
-	return checkVolumeSize(v.Type, sizeGiB)
+	to := v
+	if req.SizeGiB != 0 {
+		to.SizeGiB = req.SizeGiB
+	}
+	if req.Type != "" {
+		to.Type = req.Type
+	}
+	retyped := to.Type != v.Type
+	if retyped {
+		to.Iops, to.Throughput = retypePerformance(to.Type)
+	}
+	if req.Iops != 0 {
+		to.Iops = req.Iops
+	}
+	if req.Throughput != 0 {
+		to.Throughput = req.Throughput
+	}
+	if retyped || req.SizeGiB != 0 {
+		if err := checkVolumeSize(to.Type, to.SizeGiB); err != nil {
+			return Volume{}, err
+		}
+	}
+	if retyped || to.Iops != v.Iops || to.Throughput != v.Throughput {
+		if err := CheckVolumeShape(to.Type, to.SizeGiB, to.Iops, to.Throughput); err != nil {
+			return Volume{}, err
+		}
+	}
+	return to, nil
+}
+
+// retypePerformance is the Iops and Throughput EC2 ModifyVolume gives a
+// volume whose type changes to t without them: "If you change the volume
+// type to io1, io2, or gp3, the default is 3,000" IOPS, and 125 MiB/s for a
+// gp3 target. Other types take none.
+func retypePerformance(t VolumeType) (iops, miBps int64) {
+	l := limitsOf(t)
+	if l.maxIops != 0 {
+		iops = 3000
+	}
+	return iops, l.defMiBps
 }
 
 // gp2Baseline is the IOPS EC2 reports for a gp2 volume: 3 per GiB, at least

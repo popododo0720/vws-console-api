@@ -401,20 +401,28 @@ func (c compute) ModifyVolume(ctx context.Context, m backend.Mutation, req resou
 	if !ok || vol.OwnerID != m.Account {
 		return resource.Accepted[resource.Volume]{}, resource.NotFound(resource.KindVolume, req.ID.String())
 	}
-	if err := vol.CheckGrow(req.SizeGiB); err != nil {
+	item, err := vol.Modify(req)
+	if err != nil {
 		return resource.Accepted[resource.Volume]{}, err
 	}
-	id, size := vol.ID, req.SizeGiB
+	// An operation lands only what its request changed, and a size only
+	// grows, as vws-storage stores max(stored, target): two modifies pending
+	// at once must not undo each other or shrink the volume.
+	id := vol.ID
+	reshaped := item.Type != vol.Type || item.Iops != vol.Iops || item.Throughput != vol.Throughput
 	op, err := c.w.newOp(m.Account, resource.ServiceCompute, resource.ActionModifyVolume, []resource.Ref{id.Ref()}, func(time.Time) {
-		if cur := c.w.vol[id]; cur != nil {
-			cur.SizeGiB = size
+		cur := c.w.vol[id]
+		if cur == nil {
+			return
+		}
+		cur.SizeGiB = max(cur.SizeGiB, item.SizeGiB)
+		if reshaped {
+			cur.Type, cur.Iops, cur.Throughput = item.Type, item.Iops, item.Throughput
 		}
 	})
 	if err != nil {
 		return resource.Accepted[resource.Volume]{}, err
 	}
-	item := *vol
-	item.SizeGiB = size
 	acc := resource.Accepted[resource.Volume]{Operation: op, Items: []resource.Volume{item}}
 	c.w.finish(m.Key, m.Fingerprint, acc)
 	return acc, nil

@@ -315,7 +315,8 @@ func (h *handler) createKeyPair(w http.ResponseWriter, r *http.Request) {
 	writeAccepted(w, acc)
 }
 
-// modifyVolume grows a volume. The body is {"size": N}.
+// modifyVolume changes a volume. The body is {"size": N, "volumeType": T,
+// "iops": N, "throughput": N}, each optional.
 func (h *handler) modifyVolume(w http.ResponseWriter, r *http.Request) {
 	c, token, ok := h.begin(w, r)
 	if !ok {
