@@ -54,6 +54,37 @@ func TestGetSessionToken(t *testing.T) {
 	has(t, call(t, h, session, sigv4.ServiceIAM, url.Values{"Action": {"GetUser"}}), http.StatusForbidden,
 		`<Code>InvalidClientTokenId</Code>`)
 
+	// A user path may spell :assumed-role/; it is still a user's session.
+	if _, err := f.CreateUser(ctx, root.Account, "eve", "/:assumed-role/"); err != nil {
+		t.Fatal(err)
+	}
+	ek, err := f.CreateAccessKey(ctx, root.Account, "eve", backendtest.UserGrant(ctx, t, f, root.Account, "eve"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	eve := sigv4.Credential{AccessKey: ek.AccessKeyID, Secret: ek.Secret}
+	eveRes := call(t, h, eve, sigv4.ServiceSTS, url.Values{"Action": {"GetSessionToken"}})
+	eveSession := sessionCredential(t, eveRes.Body.String())
+	has(t, call(t, h, eveSession, sigv4.ServiceIAM, url.Values{"Action": {"GetUser"}}), http.StatusForbidden,
+		`<Code>InvalidClientTokenId</Code>`)
+
+	// AssumeRole credentials are not GetSessionToken credentials: IAM
+	// authorizes them as usual.
+	trust := `{"Statement":[{"Effect":"Allow","Action":"sts:AssumeRole","Principal":{"AWS":"*"}}]}`
+	if _, err := f.CreateRole(ctx, root.Account, iam.RoleInput{Name: "ops", Path: "/", TrustPolicy: trust}); err != nil {
+		t.Fatal(err)
+	}
+	assumed, err := f.AssumeRole(ctx, iam.Principal{Account: root.Account, ARN: "arn:vws:iam::123456789012:user/bob"},
+		"arn:vws:iam::123456789012:role/ops", "s1", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	roleCred := sigv4.Credential{
+		AccessKey: assumed.Key.AccessKey, Secret: assumed.Key.Secret, SessionToken: assumed.Key.SessionToken,
+	}
+	has(t, call(t, h, roleCred, sigv4.ServiceIAM, url.Values{"Action": {"ListUsers"}}), http.StatusForbidden,
+		`<Code>AccessDenied</Code>`)
+
 	has(t, call(t, h, root, sigv4.ServiceSTS, url.Values{"Action": {"GetSessionToken"}, "DurationSeconds": {"129600"}}),
 		http.StatusOK, `<Expiration>2026-10-09T11:00:00Z</Expiration>`)
 	has(t, call(t, h, bob, sigv4.ServiceSTS, url.Values{"Action": {"GetSessionToken"}, "DurationSeconds": {"900"}}),

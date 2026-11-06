@@ -87,7 +87,7 @@ func (h *handler) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	c.caller = caller
 	if c.service == sigv4.ServiceIAM && sessionTokenOf(r) != "" && !caller.Ref.MFA &&
-		!strings.Contains(caller.Principal, ":assumed-role/") {
+		!isAssumedRole(caller.Principal) {
 		// AWS refuses IAM to GetSessionToken credentials issued without MFA
 		// (https://docs.aws.amazon.com/STS/latest/APIReference/API_GetSessionToken.html).
 		c.fail(resource.Unauthenticated("The security token included in the request is invalid."))
@@ -161,6 +161,13 @@ func sessionTokenOf(r *http.Request) string {
 		return t
 	}
 	return r.URL.Query().Get("X-Amz-Security-Token")
+}
+
+// isAssumedRole reports whether arn is an STS assumed-role ARN. It reads the
+// service and resource type fields, since a user path may hold any text.
+func isAssumedRole(arn string) bool {
+	parts := strings.SplitN(arn, ":", 6)
+	return len(parts) == 6 && parts[0] == "arn" && parts[2] == "sts" && strings.HasPrefix(parts[5], "assumed-role/")
 }
 
 // scopeService reads the service out of the Credential scope.
