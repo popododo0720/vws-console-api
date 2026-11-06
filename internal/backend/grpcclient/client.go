@@ -65,6 +65,7 @@ func Dial(ctx context.Context, addrs Addrs) (*Client, error) {
 		addresses:  networkv1.NewAddressServiceClient(networkConn),
 		snapshots:  storagev1.NewSnapshotServiceClient(storageConn),
 		computeOps: longrunningpb.NewOperationsClient(computeConn),
+		lookup:     computev1.NewOperationLookupServiceClient(computeConn),
 		storageOps: longrunningpb.NewOperationsClient(storageConn),
 		networkOps: longrunningpb.NewOperationsClient(networkConn),
 	}

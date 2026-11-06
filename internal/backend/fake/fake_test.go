@@ -28,6 +28,15 @@ func TestDetachReplayContract(t *testing.T) {
 	})
 }
 
+// TestTagsReplayContract runs the #333 CreateTags client-token table on the
+// fake.
+func TestTagsReplayContract(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0).UTC()
+	backendtest.TagsReplay(t, func() backend.Set {
+		return New(Options{Now: func() time.Time { return now }, Entropy: &Sequence{}}).Set()
+	})
+}
+
 // TestBucketCreateContract runs the #315 CreateBucket table on the fake.
 func TestBucketCreateContract(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0).UTC()

@@ -97,6 +97,7 @@ func (c computeClient) CreateTags(ctx context.Context, m backend.Mutation, req r
 	var op resource.Operation
 	targets := make([]resource.Ref, 0, len(insts))
 	for i, inst := range insts {
+		requestID := requestUUID(m.Key, "tags", hex.EncodeToString([]byte{byte(i)}))
 		updated, _, err := c.writeInstanceLabels(ctx, projectID, inst.ID, func(
 			got *computev1.Instance, model resource.Instance,
 		) (*computev1.UpdateInstanceRequest, error) {
@@ -110,11 +111,14 @@ func (c computeClient) CreateTags(ctx context.Context, m backend.Mutation, req r
 				return nil, err
 			}
 			return &computev1.UpdateInstanceRequest{
-				RequestId:  requestUUID(m.Key, "tags", hex.EncodeToString([]byte{byte(i)})),
+				RequestId:  requestID,
 				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"labels"}},
 				Instance:   &computev1.Instance{Name: got.GetName(), Labels: labels},
 			}, nil
 		})
+		if resource.CodeOf(err) == resource.CodeIdempotencyMismatch {
+			updated, insts[i], err = c.replayTags(ctx, projectID, inst.ID, req.Tags, requestID, err)
+		}
 		if err != nil {
 			return resource.Accepted[resource.Instance]{}, err
 		}
@@ -128,6 +132,52 @@ func (c computeClient) CreateTags(ctx context.Context, m backend.Mutation, req r
 	op.Action = resource.ActionCreateTags
 	op.Targets = targets
 	return resource.Accepted[resource.Instance]{Operation: op, Items: insts}, nil
+}
+
+// replayTags answers a CreateTags retry that compute refused with
+// IDEMPOTENCY_CONFLICT with the operation compute recorded for requestID
+// (#333). Compute replays a request id only for an identical body, and a
+// write since the first call, such as a detach, changed the labels the retry
+// rebuilds. The answer stands only when the instance, read after the
+// refusal, carries every tag of the retry, so it leaves the instance as a
+// new write would. Compute does not return the first body, so a first call
+// whose tags include this retry's is answered as a replay, not a mismatch.
+// Any other outcome returns cause.
+func (c computeClient) replayTags(
+	ctx context.Context, projectID string, id resource.InstanceID, tags map[string]string,
+	requestID string, cause error,
+) (*longrunningpb.Operation, resource.Instance, error) {
+	found, err := c.lookup.LookupOperation(ctx, &computev1.LookupOperationRequest{
+		Parent: "projects/" + projectID, RequestId: requestID,
+	})
+	if code := status.Code(err); code == codes.NotFound || code == codes.Unimplemented {
+		// Past the 24-hour request id window, or a compute without the lookup.
+		return nil, resource.Instance{}, cause
+	} else if err != nil {
+		return nil, resource.Instance{}, fromRPC(err)
+	}
+	op := found.GetOperation()
+	meta := &commonv1.OperationMetadata{}
+	if err := op.GetMetadata().UnmarshalTo(meta); err != nil {
+		return nil, resource.Instance{}, resource.Internal(err)
+	}
+	if meta.GetRequestId() != requestID || meta.GetVerb() != commonv1.OperationVerb_OPERATION_VERB_UPDATE {
+		return nil, resource.Instance{}, resource.Internal(errors.New("operation lookup returned another request"))
+	}
+	if meta.GetResource() != instanceName(projectID, id.String()) || rpcErr(op, nil) != nil {
+		// The token tagged another instance at this position, or its update
+		// failed: not this retry's result.
+		return nil, resource.Instance{}, cause
+	}
+	inst, err := c.getInstance(ctx, projectID, id.String())
+	if err != nil {
+		return nil, resource.Instance{}, err
+	}
+	merged, err := resource.MergeTags(inst.Tags, tags)
+	if err != nil || !maps.Equal(merged, inst.Tags) {
+		return nil, resource.Instance{}, cause
+	}
+	return op, inst, nil
 }
 
 func (c computeClient) changeInstances(ctx context.Context, m backend.Mutation, ids []resource.InstanceID, action resource.Action, power computev1.InstancePower) (resource.Accepted[resource.InstanceStateChange], error) {
