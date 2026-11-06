@@ -559,9 +559,9 @@ func permissionPorts(p IPPermission) (int, int, error) {
 	return from, to, nil
 }
 
-// MaxIngressRules bounds the rules one AuthorizeSecurityGroupIngress adds. It
-// is the default EC2 quota of inbound rules per security group, so a larger
-// request could not fit a group anyway.
+// MaxIngressRules is the default EC2 quota of inbound rules per security
+// group. A group holds at most this many, so one request adds at most this
+// many too.
 const MaxIngressRules = 60
 
 // The ICMP type and code bounds. -1 means every type or every code.
@@ -594,8 +594,7 @@ func (r AuthorizeSecurityGroupIngressRequest) Normalize() (AuthorizeSecurityGrou
 		)
 	}
 	if len(r.Rules) > MaxIngressRules {
-		return AuthorizeSecurityGroupIngressRequest{}, Invalid("ipPermissions",
-			fmt.Sprintf("A request adds at most %d rules.", MaxIngressRules))
+		return AuthorizeSecurityGroupIngressRequest{}, RulesPerSecurityGroupLimitExceeded(r.ID.String())
 	}
 	rules := make([]IngressRule, 0, len(r.Rules))
 	for _, rule := range r.Rules {

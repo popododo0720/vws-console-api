@@ -1407,6 +1407,12 @@ func ec2Refinement(e *resource.Error) (errs.AWSEntry, bool) {
 		if strings.EqualFold(e.Field, "volumeType") {
 			return badRequest("UnknownVolumeType")
 		}
+	case resource.CodeResourceExhausted:
+		// A full security group is a 400 quota error, not the 503 throttle
+		// RequestLimitExceeded a ResourceExhausted otherwise gets.
+		if resource.IsRulesPerSecurityGroupLimitExceeded(e) {
+			return badRequest("RulesPerSecurityGroupLimitExceeded")
+		}
 	case resource.CodeAlreadyExists:
 		// A duplicate security group rule is InvalidPermission.Duplicate,
 		// not the InvalidGroup.Duplicate a duplicate group name gets (#272).

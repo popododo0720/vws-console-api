@@ -152,7 +152,9 @@ func TestAuthorizeIngressRefusesAmbiguousForms(t *testing.T) {
 	}
 }
 
-// #217: one request adds at most resource.MaxIngressRules rules.
+// #217, #219: one request adds at most resource.MaxIngressRules rules, the
+// EC2 quota of a whole group, so a larger one is
+// RulesPerSecurityGroupLimitExceeded.
 func TestAuthorizeIngressBoundsTheRuleCount(t *testing.T) {
 	h, cred, now := harness(t)
 	id := ingressGroup(t, h, cred, now)
@@ -167,7 +169,8 @@ func TestAuthorizeIngressBoundsTheRuleCount(t *testing.T) {
 		}
 	}
 	res := signed(t, h, cred, now, form.Encode())
-	if res.Code != http.StatusBadRequest || !strings.Contains(res.Body.String(), "InvalidParameterValue") {
+	if res.Code != http.StatusBadRequest ||
+		!strings.Contains(res.Body.String(), "<Code>RulesPerSecurityGroupLimitExceeded</Code>") {
 		t.Fatalf("62 rules %d %s", res.Code, res.Body)
 	}
 	form.Del("IpPermissions.2.IpRanges.31.CidrIp")
@@ -234,6 +237,35 @@ func TestICMPTypeAndCodeAreChecked(t *testing.T) {
 		}
 	}
 	if body := describedGroup(t, h, cred, now, id); strings.Contains(body, "10.0.0.0/16") {
+		t.Fatalf("a refused request wrote a rule: %s", body)
+	}
+}
+
+// #219: a group holds at most resource.MaxIngressRules inbound rules. An
+// authorize past it is RulesPerSecurityGroupLimitExceeded and writes nothing.
+func TestRulesPerSecurityGroupLimitExceeded(t *testing.T) {
+	h, cred, now := harness(t)
+	id := ingressGroup(t, h, cred, now)
+	full := url.Values{"Action": {"AuthorizeSecurityGroupIngress"}, "Version": {Version}, "GroupId": {id}}
+	for m := 1; m <= 60; m++ {
+		full.Set("IpPermissions.1.IpRanges."+itoa(m)+".CidrIp", "10."+itoa(m)+".0.0/16")
+	}
+	full.Set("IpPermissions.1.IpProtocol", "tcp")
+	full.Set("IpPermissions.1.FromPort", "22")
+	full.Set("IpPermissions.1.ToPort", "22")
+	if res := signed(t, h, cred, now, full.Encode()); res.Code != http.StatusOK {
+		t.Fatalf("60 rules %d %s", res.Code, res.Body)
+	}
+	over := signed(t, h, cred, now, url.Values{
+		"Action": {"AuthorizeSecurityGroupIngress"}, "Version": {Version}, "GroupId": {id},
+		"IpProtocol": {"tcp"}, "FromPort": {"443"}, "ToPort": {"443"}, "CidrIp": {"10.0.0.0/16"},
+	}.Encode())
+	if over.Code != http.StatusBadRequest ||
+		!strings.Contains(over.Body.String(), "<Code>RulesPerSecurityGroupLimitExceeded</Code>") ||
+		!strings.Contains(over.Body.String(), "The maximum number of rules per security group has been reached.") {
+		t.Fatalf("61st rule %d %s", over.Code, over.Body)
+	}
+	if body := describedGroup(t, h, cred, now, id); strings.Contains(body, "<fromPort>443</fromPort>") {
 		t.Fatalf("a refused request wrote a rule: %s", body)
 	}
 }

@@ -2157,6 +2157,10 @@ func (c networkClient) authorizeIngressOnce(
 			return resource.Accepted[resource.SecurityGroup]{}, resource.DuplicatePermission(current.ID.String())
 		}
 	}
+	if len(current.Rules)+len(req.Rules) > resource.MaxIngressRules {
+		return resource.Accepted[resource.SecurityGroup]{},
+			resource.RulesPerSecurityGroupLimitExceeded(current.ID.String())
+	}
 	rules := append(slices.Clone(current.Rules), req.Rules...)
 	return c.writeGroupRules(ctx, m, projectID, current, rules, current.Etag, "ingress",
 		resource.ActionAuthorizeSecurityGroupIngress)

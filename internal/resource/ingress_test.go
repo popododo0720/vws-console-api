@@ -1,7 +1,6 @@
 package resource
 
 import (
-	"strings"
 	"testing"
 )
 
@@ -75,10 +74,10 @@ func TestAuthorizeIngressNormalize(t *testing.T) {
 	for i := range many {
 		many[i] = IngressRule{Protocol: "tcp", FromPort: i, ToPort: i, Cidr: "10.0.0.0/16"}
 	}
-	if _, err := (AuthorizeSecurityGroupIngressRequest{ID: id, Rules: many}).Normalize(); CodeOf(
-		err,
-	) != CodeInvalidArgument ||
-		!strings.Contains(err.Error(), "at most") {
+	// #219: no group holds more than the EC2 quota, so a larger request is
+	// RulesPerSecurityGroupLimitExceeded.
+	_, err = (AuthorizeSecurityGroupIngressRequest{ID: id, Rules: many}).Normalize()
+	if !IsRulesPerSecurityGroupLimitExceeded(err) || CodeOf(err) != CodeResourceExhausted {
 		t.Errorf("too many: %v", err)
 	}
 	got, err := (AuthorizeSecurityGroupIngressRequest{ID: id, Rules: many[:MaxIngressRules]}).Normalize()

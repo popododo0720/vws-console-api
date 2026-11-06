@@ -462,7 +462,8 @@ func exerciseEC2(ctx context.Context, t *testing.T, set backend.Set, account res
 	}, lastRule); !resource.IsPermissionNotFound(err) {
 		t.Fatalf("missing rule: %v", err)
 	}
-	// #219: ICMP type and code survive the backend.
+	// #219: ICMP type and code survive the backend, and a group holds at
+	// most resource.MaxIngressRules inbound rules.
 	full, err := set.Network.CreateSecurityGroup(ctx, backend.Mutation{
 		Scope: scope, Key: "k-sg-full", Fingerprint: "fp-sg-full",
 	}, resource.CreateSecurityGroupRequest{Name: "full", VpcID: created.Items[0].ID})
@@ -480,6 +481,29 @@ func exerciseEC2(ctx context.Context, t *testing.T, set backend.Set, account res
 	}, resource.AuthorizeSecurityGroupIngressRequest{ID: fullID, Rules: icmp})
 	if err != nil || !slices.Equal(withICMP.Items[0].Rules, icmp) {
 		t.Fatalf("icmp: %v %+v", err, withICMP.Items)
+	}
+	fill := make([]resource.IngressRule, 0, resource.MaxIngressRules-len(icmp))
+	for port := 1; len(fill) < cap(fill); port++ {
+		fill = append(fill, resource.IngressRule{Protocol: "tcp", FromPort: port, ToPort: port, Cidr: "10.0.0.0/16"})
+	}
+	if filled, err := set.Network.AuthorizeSecurityGroupIngress(ctx, backend.Mutation{
+		Scope: scope, Key: "k-auth-fill", Fingerprint: "fp-auth-fill",
+	}, resource.AuthorizeSecurityGroupIngressRequest{ID: fullID, Rules: fill}); err != nil ||
+		len(filled.Items[0].Rules) != resource.MaxIngressRules {
+		t.Fatalf("fill to the limit: %v %+v", err, filled.Items)
+	}
+	overRule := resource.IngressRule{Protocol: "udp", FromPort: 53, ToPort: 53, Cidr: "10.0.0.0/16"}
+	if _, err := set.Network.AuthorizeSecurityGroupIngress(ctx, backend.Mutation{
+		Scope: scope, Key: "k-auth-over", Fingerprint: "fp-auth-over",
+	}, resource.AuthorizeSecurityGroupIngressRequest{
+		ID: fullID, Rules: []resource.IngressRule{overRule},
+	}); !resource.IsRulesPerSecurityGroupLimitExceeded(err) {
+		t.Fatalf("past the limit: %v", err)
+	}
+	if _, err := set.Network.RevokeSecurityGroupIngress(ctx, backend.Mutation{
+		Scope: scope, Key: "k-revoke-over", Fingerprint: "fp-revoke-over",
+	}, resource.RevokeSecurityGroupIngressRequest{ID: fullID, Rule: overRule}); !resource.IsPermissionNotFound(err) {
+		t.Fatalf("a refused authorize past the limit wrote a rule: %v", err)
 	}
 	if _, err := set.Network.DeleteSecurityGroup(ctx, backend.Mutation{
 		Scope: scope, Key: "k-del-sg-full", Fingerprint: "fp-del-sg-full",
