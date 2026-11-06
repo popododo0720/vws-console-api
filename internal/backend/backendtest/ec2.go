@@ -399,6 +399,15 @@ func exerciseEC2(ctx context.Context, t *testing.T, set backend.Set, account res
 	if err != nil || replayedMore.Operation.ID != openedMore.Operation.ID || len(replayedMore.Items[0].Rules) != 3 {
 		t.Fatalf("several rules retry: %v %+v", err, replayedMore)
 	}
+	smtp := resource.IngressRule{Protocol: "tcp", FromPort: 25, ToPort: 25, Cidr: "10.0.0.0/16"}
+	for _, rules := range [][]resource.IngressRule{moreRules.Rules[:1], {moreRules.Rules[0], smtp}} {
+		_, err := set.Network.AuthorizeSecurityGroupIngress(ctx,
+			backend.Mutation{Scope: scope, Key: more.Key, Fingerprint: "fp-auth-3-other"},
+			resource.AuthorizeSecurityGroupIngressRequest{ID: group.Items[0].ID, Rules: rules})
+		if resource.CodeOf(err) != resource.CodeIdempotencyMismatch {
+			t.Fatalf("same token, rules %+v: %v", rules, err)
+		}
+	}
 	if _, err := set.Network.AuthorizeSecurityGroupIngress(ctx, backend.Mutation{
 		Scope: scope, Key: "k-auth-4", Fingerprint: "fp-auth-4",
 	}, resource.AuthorizeSecurityGroupIngressRequest{ID: group.Items[0].ID, Rules: []resource.IngressRule{

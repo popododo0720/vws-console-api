@@ -2,6 +2,7 @@ package grpcclient
 
 import (
 	"fmt"
+	"maps"
 	"sync"
 	"testing"
 	"time"
@@ -196,4 +197,33 @@ func securityGroupForTest(t *testing.T) (backend.Set, backend.Scope, resource.Se
 		t.Fatal(err)
 	}
 	return set, scope, group.Items[0].ID
+}
+
+// #217: the fingerprint label tells a same-token retry from the same token
+// with other rules. A group last written before the label existed replays.
+func TestIngressReplayChecksTheFingerprintLabel(t *testing.T) {
+	m := backend.Mutation{Key: "k-auth", Fingerprint: "fp-auth"}
+	action := resource.ActionAuthorizeSecurityGroupIngress
+	other := "fp-other"
+	labels := map[string]string{
+		labelAction: action.String(), labelRequest: requestUUID(m.Key, "ingress"), labelEtag: "7",
+	}
+	for name, tc := range map[string]struct {
+		fingerprint *string
+		replay      bool
+		code        resource.Code
+	}{
+		"same":   {fingerprint: &m.Fingerprint, replay: true},
+		"other":  {fingerprint: &other, code: resource.CodeIdempotencyMismatch},
+		"legacy": {replay: true},
+	} {
+		group := resource.SecurityGroup{Labels: maps.Clone(labels)}
+		if tc.fingerprint != nil {
+			group.Labels[labelFingerprint] = *tc.fingerprint
+		}
+		etag, replay, err := sameIngressRequest(group, m, action, "ingress")
+		if replay != tc.replay || resource.CodeOf(err) != tc.code || (replay && etag != "7") {
+			t.Errorf("%s: etag %q replay %v err %v", name, etag, replay, err)
+		}
+	}
 }

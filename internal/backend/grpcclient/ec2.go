@@ -2144,20 +2144,18 @@ func (c networkClient) authorizeIngressOnce(
 	if err != nil {
 		return resource.Accepted[resource.SecurityGroup]{}, err
 	}
-	present := 0
+	etag, replay, err := sameIngressRequest(current, m, resource.ActionAuthorizeSecurityGroupIngress, "ingress")
+	if err != nil {
+		return resource.Accepted[resource.SecurityGroup]{}, err
+	}
+	if replay {
+		return c.writeGroupRules(ctx, m, projectID, current, current.Rules, etag, "ingress",
+			resource.ActionAuthorizeSecurityGroupIngress)
+	}
 	for _, rule := range req.Rules {
 		if slices.Contains(current.Rules, rule) {
-			present++
+			return resource.Accepted[resource.SecurityGroup]{}, resource.DuplicatePermission(current.ID.String())
 		}
-	}
-	if present == len(req.Rules) {
-		if etag, ok := sameIngressRequest(current, m, resource.ActionAuthorizeSecurityGroupIngress, "ingress"); ok {
-			return c.writeGroupRules(ctx, m, projectID, current, current.Rules, etag, "ingress",
-				resource.ActionAuthorizeSecurityGroupIngress)
-		}
-	}
-	if present > 0 {
-		return resource.Accepted[resource.SecurityGroup]{}, resource.DuplicatePermission(current.ID.String())
 	}
 	rules := append(slices.Clone(current.Rules), req.Rules...)
 	return c.writeGroupRules(ctx, m, projectID, current, rules, current.Etag, "ingress",
@@ -2205,7 +2203,11 @@ func (c networkClient) revokeIngressOnce(
 		}
 	}
 	if index < 0 {
-		if etag, ok := sameIngressRequest(current, m, resource.ActionRevokeSecurityGroupIngress, "revoke"); ok {
+		etag, replay, err := sameIngressRequest(current, m, resource.ActionRevokeSecurityGroupIngress, "revoke")
+		if err != nil {
+			return resource.Accepted[resource.SecurityGroup]{}, err
+		}
+		if replay {
 			return c.writeGroupRules(ctx, m, projectID, current, current.Rules, etag, "revoke",
 				resource.ActionRevokeSecurityGroupIngress)
 		}
@@ -2221,15 +2223,21 @@ func (c networkClient) revokeIngressOnce(
 // sameIngressRequest reports whether the group's labels name this exact
 // request and returns the etag that request used. A retry resubmits the same
 // request id, etag and labels, so the network service replays it. The reread
-// etag is not that etag, so reusing it would be an idempotency conflict.
+// etag is not that etag, so reusing it would be an idempotency conflict. The
+// same client token with other rules is IdempotencyMismatch: the request id
+// comes from the token alone, so only the fingerprint label tells them apart.
+// A write from before #217 has no fingerprint label and replays as it did.
 func sameIngressRequest(
 	current resource.SecurityGroup, m backend.Mutation, action resource.Action, suffix string,
-) (string, bool) {
+) (string, bool, error) {
 	if current.Labels[labelAction] != action.String() ||
 		current.Labels[labelRequest] != requestUUID(m.Key, suffix) || current.Labels[labelEtag] == "" {
-		return "", false
+		return "", false, nil
 	}
-	return current.Labels[labelEtag], true
+	if saved, ok := current.Labels[labelFingerprint]; ok && saved != clip(m.Fingerprint, 63) {
+		return "", false, resource.IdempotencyMismatch()
+	}
+	return current.Labels[labelEtag], true, nil
 }
 
 // writeGroupRules replaces the rule list with the etag from the read. A stale
@@ -2254,6 +2262,7 @@ func (c networkClient) writeGroupRules(
 	labels[labelAction] = action.String()
 	labels[labelRequest] = requestUUID(m.Key, requestSuffix)
 	labels[labelEtag] = etag
+	labels[labelFingerprint] = clip(m.Fingerprint, 63)
 	updated, callErr := c.groups.UpdateSecurityGroup(ctx, &networkv1.UpdateSecurityGroupRequest{
 		RequestId:  requestUUID(m.Key, requestSuffix),
 		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.rules", "labels"}},
