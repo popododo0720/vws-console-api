@@ -17,7 +17,7 @@ Environment:
 
   VWS_E2E_STRICT   1 makes a skipped step a failure (exit 3). Default is off.
 
-  VWS_E2E_AWS_CLI  The aws CLI v2 the IAM and STS CLI steps run. Default is the
+  VWS_E2E_AWS_CLI  The aws CLI v2 the IAM, STS and DetachVolume CLI steps run. Default is the
                    aws on PATH. Without one those steps are skipped.
 
 A step that needs a missing capability prints skipped(reason). A skipped step
@@ -462,6 +462,7 @@ def vms():
             check(isinstance(det.get("AttachTime"), datetime.datetime), f"attach time {det}")
             ec2.delete_volume(VolumeId=vid)
         step("DetachVolume then DeleteVolume", detach_data_volume, "vm")
+        cli_detach(S["iid"])
         step("StartInstances", lambda: ec2.start_instances(InstanceIds=[S["iid"]]), "vm")
         step("wait for running", lambda: wait_state(S["iid"], "running"), "vm")
         associate()
@@ -1005,9 +1006,10 @@ def identity():
 CONSOLE_URL = os.environ.get("VWS_E2E_CONSOLE", "http://127.0.0.1:8080")
 
 
-def aws_cli(*args, key=KW["aws_access_key_id"], secret=KW["aws_secret_access_key"], token=None):
-    """Runs the aws CLI against the IAM and STS listener with no profile, no
-    retries and JSON output. A failure raises with the CLI's stderr."""
+def aws_cli(*args, key=KW["aws_access_key_id"], secret=KW["aws_secret_access_key"], token=None, url=IAM_URL):
+    """Runs the aws CLI against url, the IAM and STS listener by default, with
+    no profile, no retries and JSON output. A failure raises with the CLI's
+    stderr."""
     env = {k: v for k, v in os.environ.items() if not k.startswith("AWS_")}
     env.update(AWS_ACCESS_KEY_ID=key, AWS_SECRET_ACCESS_KEY=secret, AWS_DEFAULT_REGION="vws-1",
                AWS_CONFIG_FILE=os.devnull, AWS_SHARED_CREDENTIALS_FILE=os.devnull,
@@ -1015,7 +1017,7 @@ def aws_cli(*args, key=KW["aws_access_key_id"], secret=KW["aws_secret_access_key
     if token:
         env["AWS_SESSION_TOKEN"] = token
     try:
-        out = subprocess.run([AWS_CLI, "--endpoint-url", IAM_URL, "--output", "json", *args],
+        out = subprocess.run([AWS_CLI, "--endpoint-url", url, "--output", "json", *args],
                              env=env, capture_output=True, text=True, timeout=60)
     except subprocess.TimeoutExpired as exc:
         raise RuntimeError(f"aws {' '.join(args[:2])} timed out after {exc.timeout}s") from exc
@@ -1031,6 +1033,60 @@ def aws_cli_error(code, *args, **kw):
         check(f"({code})" in str(exc), f"want {code}: {exc}")
         return
     raise AssertionError(f"no error, want {code}")
+
+
+def cli_detach(iid):
+    """#210: the unmodified aws ec2 detach-volume on a data volume of the
+    stopped instance iid, with InstanceId, Device and Force, the AWS error
+    codes before, during and after the attachment, then the volume-available
+    waiter and DeleteVolume."""
+    def ec2_cli(*args):
+        return aws_cli("ec2", *args, url=EC2_URL)
+
+    def cli_error(name, code, *args):
+        step(f"aws ec2 {name} is {code}", lambda: aws_cli_error(code, "ec2", *args, url=EC2_URL), need="aws-cli")
+
+    cli_error("detach-volume of a missing volume", "InvalidVolume.NotFound",
+              "detach-volume", "--volume-id", "vol-0123456789abcdef0")
+    vid = step("aws ec2 create-volume", lambda: ec2_cli(
+        "create-volume", "--availability-zone", "vws-1a", "--size", "1")["VolumeId"], need="aws-cli")
+    if not vid:
+        return
+    try:
+        step("aws ec2 wait volume-available after create", lambda: ec2_cli(
+            "wait", "volume-available", "--volume-ids", vid), need="aws-cli")
+        cli_error("detach-volume of an available volume", "IncorrectState", "detach-volume", "--volume-id", vid)
+        step("aws ec2 attach-volume", lambda: ec2_cli(
+            "attach-volume", "--volume-id", vid, "--instance-id", iid, "--device", "/dev/sdg"), need="aws-cli")
+        step("aws ec2 attach-volume reaches attached", lambda: wait_attached(vid, iid, "/dev/sdg"), need="aws-cli")
+        cli_error("detach-volume on another device", "InvalidAttachment.NotFound",
+                  "detach-volume", "--volume-id", vid, "--instance-id", iid, "--device", "/dev/sdz")
+
+        def detach():
+            det = ec2_cli("detach-volume", "--volume-id", vid, "--instance-id", iid, "--device", "/dev/sdg", "--force")
+            check(det.get("VolumeId") == vid and det.get("InstanceId") == iid and det.get("Device") == "/dev/sdg"
+                  and det.get("State") == "detaching" and det.get("AttachTime"), f"detach {det}")
+        step("aws ec2 detach-volume --force answers the attachment detaching", detach, need="aws-cli")
+        step("aws ec2 wait volume-available after detach", lambda: ec2_cli(
+            "wait", "volume-available", "--volume-ids", vid), need="aws-cli")
+        step("aws ec2 describe-volumes shows no attachment", lambda: check(not ec2_cli(
+            "describe-volumes", "--volume-ids", vid)["Volumes"][0].get("Attachments"), "attachment left"), need="aws-cli")
+        cli_error("detach-volume again", "IncorrectState", "detach-volume", "--volume-id", vid)
+        if step("aws ec2 delete-volume after detach", lambda: ec2_cli("delete-volume", "--volume-id", vid),
+                need="aws-cli") is not None:
+            vid = None
+    finally:
+        if vid:
+            try:
+                ec2.detach_volume(VolumeId=vid, Force=True)
+            except Exception:  # noqa: BLE001 - the sweep frees what an early failure left
+                pass
+            try:
+                ec2.get_waiter("volume_available").wait(VolumeIds=[vid], WaiterConfig={"Delay": 1, "MaxAttempts": 30})
+                ec2.delete_volume(VolumeId=vid)
+            except Exception as exc:  # noqa: BLE001
+                print(f"FAIL  sweep {vid}: {str(exc)[:300]}")
+                results["FAIL"] += 1
 
 
 def cli_identity():
