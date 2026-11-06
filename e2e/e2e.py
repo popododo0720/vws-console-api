@@ -438,6 +438,7 @@ def vms():
             vol = ec2.describe_volumes(VolumeIds=[maps[0]["Ebs"]["VolumeId"]])["Volumes"][0]
             att = vol.get("Attachments") or []
             check(att and isinstance(att[0].get("AttachTime"), datetime.datetime), f"attachment AttachTime {att}")
+            check(att and att[0]["AttachTime"] == maps[0]["Ebs"]["AttachTime"] == inst["LaunchTime"], f"root attach times {att} {maps} {inst.get('LaunchTime')}")
             check(att and att[0]["InstanceId"] == S["iid"] and att[0]["Device"] == "/dev/xvda" and att[0]["DeleteOnTermination"] is True, f"volume {vol}")
             check(any(v["VolumeId"] == vol["VolumeId"] for v in ec2.describe_volumes()["Volumes"]), "root volume not listed")
         step("DescribeInstances RootDeviceName/BlockDeviceMappings and DescribeVolumes root volume", root_device, "vm")
