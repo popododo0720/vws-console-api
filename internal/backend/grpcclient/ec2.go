@@ -84,19 +84,24 @@ func (c computeClient) TerminateInstances(ctx context.Context, m backend.Mutatio
 func (c computeClient) CreateTags(ctx context.Context, m backend.Mutation, req resource.CreateTagsRequest) (resource.Accepted[resource.Instance], error) {
 	projectID := project(m.Account)
 	insts := make([]resource.Instance, 0, len(req.IDs))
+	tagged := make([]bool, 0, len(req.IDs))
 	for _, id := range req.IDs {
 		inst, err := c.getInstance(ctx, projectID, id.String())
 		if err != nil {
 			return resource.Accepted[resource.Instance]{}, err
 		}
-		if inst.Tags, err = resource.MergeTags(inst.Tags, req.Tags); err != nil {
+		merged, err := resource.MergeTags(inst.Tags, req.Tags)
+		if err != nil {
 			return resource.Accepted[resource.Instance]{}, err
 		}
+		tagged = append(tagged, maps.Equal(merged, inst.Tags))
+		inst.Tags = merged
 		insts = append(insts, inst)
 	}
 	var op resource.Operation
 	targets := make([]resource.Ref, 0, len(insts))
 	for i, inst := range insts {
+		requestID := requestUUID(m.Key, "tags", hex.EncodeToString([]byte{byte(i)}))
 		updated, _, err := c.writeInstanceLabels(ctx, projectID, inst.ID, func(
 			got *computev1.Instance, model resource.Instance,
 		) (*computev1.UpdateInstanceRequest, error) {
@@ -110,11 +115,14 @@ func (c computeClient) CreateTags(ctx context.Context, m backend.Mutation, req r
 				return nil, err
 			}
 			return &computev1.UpdateInstanceRequest{
-				RequestId:  requestUUID(m.Key, "tags", hex.EncodeToString([]byte{byte(i)})),
+				RequestId:  requestID,
 				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"labels"}},
 				Instance:   &computev1.Instance{Name: got.GetName(), Labels: labels},
 			}, nil
 		})
+		if tagged[i] && resource.CodeOf(err) == resource.CodeIdempotencyMismatch {
+			updated, err = c.replayTags(ctx, projectID, inst.ID, requestID, err)
+		}
 		if err != nil {
 			return resource.Accepted[resource.Instance]{}, err
 		}
@@ -128,6 +136,42 @@ func (c computeClient) CreateTags(ctx context.Context, m backend.Mutation, req r
 	op.Action = resource.ActionCreateTags
 	op.Targets = targets
 	return resource.Accepted[resource.Instance]{Operation: op, Items: insts}, nil
+}
+
+// replayTags answers a CreateTags retry that compute refused with
+// IDEMPOTENCY_CONFLICT with the operation compute recorded for requestID
+// (#333). Compute replays a request id only for an identical body, and a
+// write since the first call, such as a detach, changed the labels the retry
+// rebuilds. The caller asks only when the instance already carries every tag
+// of the retry, so the answer leaves the instance as a new write would.
+// Compute does not return the first body, so a first call whose tags include
+// this retry's is answered as a replay, not a mismatch. Any other outcome
+// returns cause.
+func (c computeClient) replayTags(
+	ctx context.Context, projectID string, id resource.InstanceID, requestID string, cause error,
+) (*longrunningpb.Operation, error) {
+	found, err := c.lookup.LookupOperation(ctx, &computev1.LookupOperationRequest{
+		Parent: "projects/" + projectID, RequestId: requestID,
+	})
+	if code := status.Code(err); code == codes.NotFound || code == codes.Unimplemented {
+		// Past the 24-hour request id window, or a compute without the lookup.
+		return nil, cause
+	} else if err != nil {
+		return nil, fromRPC(err)
+	}
+	op := found.GetOperation()
+	meta := &commonv1.OperationMetadata{}
+	if err := op.GetMetadata().UnmarshalTo(meta); err != nil {
+		return nil, resource.Internal(err)
+	}
+	if meta.GetRequestId() != requestID || meta.GetResource() != instanceName(projectID, id.String()) ||
+		meta.GetVerb() != commonv1.OperationVerb_OPERATION_VERB_UPDATE {
+		return nil, resource.Internal(errors.New("operation lookup returned another request"))
+	}
+	if err := rpcErr(op, nil); err != nil {
+		return nil, cause
+	}
+	return op, nil
 }
 
 func (c computeClient) changeInstances(ctx context.Context, m backend.Mutation, ids []resource.InstanceID, action resource.Action, power computev1.InstancePower) (resource.Accepted[resource.InstanceStateChange], error) {

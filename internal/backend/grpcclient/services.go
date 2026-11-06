@@ -40,6 +40,7 @@ type api struct {
 	addresses  networkv1.AddressServiceClient
 	snapshots  storagev1.SnapshotServiceClient
 	computeOps longrunningpb.OperationsClient
+	lookup     computev1.OperationLookupServiceClient
 	storageOps longrunningpb.OperationsClient
 	networkOps longrunningpb.OperationsClient
 	log        *slog.Logger

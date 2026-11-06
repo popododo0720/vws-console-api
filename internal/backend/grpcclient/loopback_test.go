@@ -43,6 +43,8 @@ func TestContractOverGRPC(t *testing.T) {
 	backendtest.Run(t, harness)
 	// The #213 DetachVolume client-token table, in its own account.
 	t.Run("DetachReplay", func(t *testing.T) { backendtest.DetachReplay(t, harness) })
+	// The #333 CreateTags client-token table, in its own account.
+	t.Run("TagsReplay", func(t *testing.T) { backendtest.TagsReplay(t, harness) })
 }
 
 // dialLoopback serves world through the loopback resource API on bufconn,
@@ -78,6 +80,7 @@ func dialLoopbackClock(t *testing.T, world *fake.World, now time.Time, clock fun
 	networkv1.RegisterSubnetServiceServer(computeSrv, &subnetSrv{w: loop})
 	networkv1.RegisterSecurityGroupServiceServer(computeSrv, &groupSrv{w: loop})
 	longrunningpb.RegisterOperationsServer(computeSrv, opsGate{opsSrv: opsSrv{w: loop}, volumes: false})
+	computev1.RegisterOperationLookupServiceServer(computeSrv, &lookupSrv{w: loop})
 	storagev1.RegisterVolumeServiceServer(storageSrv, &volumeSrv{w: loop})
 	storagev1.RegisterBucketServiceServer(storageSrv, &bucketSrv{w: loop})
 	storagev1.RegisterObjectServiceServer(storageSrv, &objectSrv{w: loop})
@@ -121,6 +124,7 @@ func dialLoopbackClock(t *testing.T, world *fake.World, now time.Time, clock fun
 		addresses:  networkv1.NewAddressServiceClient(computeConn),
 		snapshots:  storagev1.NewSnapshotServiceClient(storageConn),
 		computeOps: longrunningpb.NewOperationsClient(computeConn),
+		lookup:     computev1.NewOperationLookupServiceClient(computeConn),
 		storageOps: longrunningpb.NewOperationsClient(storageConn),
 		networkOps: longrunningpb.NewOperationsClient(computeConn),
 	}
@@ -180,6 +184,9 @@ type loopWorld struct {
 	actions   map[string]string
 	detach    map[string]map[string]string
 	boots     map[string]*storagev1.Volume
+	// reqOps maps a labels-only update's request id to its operation name,
+	// the record LookupOperation answers from.
+	reqOps map[string]string
 }
 
 type instSnap struct {
@@ -211,6 +218,7 @@ func newLoopWorld(set backend.Set, now time.Time) *loopWorld {
 		actions:   map[string]string{},
 		detach:    map[string]map[string]string{},
 		boots:     map[string]*storagev1.Volume{},
+		reqOps:    map[string]string{},
 	}
 }
 
@@ -726,7 +734,48 @@ func (s *instanceSrv) retag(ctx context.Context, req *computev1.UpdateInstanceRe
 		s.w.rememberAction(id.String(), actionName)
 	}
 	s.w.rememberDetach(id.String(), req.GetInstance().GetLabels())
-	return runningOp(projectID, acc.Operation, instanceName(projectID, id.String()), commonv1.OperationVerb_OPERATION_VERB_UPDATE, s.w.now)
+	msg, err := runningOp(projectID, acc.Operation, instanceName(projectID, id.String()),
+		commonv1.OperationVerb_OPERATION_VERB_UPDATE, s.w.now)
+	if err != nil {
+		return nil, err
+	}
+	s.w.mu.Lock()
+	s.w.reqOps[req.GetRequestId()] = msg.GetName()
+	s.w.mu.Unlock()
+	return msg, nil
+}
+
+// lookupSrv is vws.compute.v1.OperationLookupService over the labels-only
+// updates retag served: the operation in its GetOperation form with the
+// request id it was made under, NOT_FOUND for any other request id or for a
+// parent other than the operation's project.
+type lookupSrv struct {
+	computev1.UnimplementedOperationLookupServiceServer
+	w *loopWorld
+}
+
+func (s *lookupSrv) LookupOperation(
+	ctx context.Context, req *computev1.LookupOperationRequest,
+) (*computev1.LookupOperationResponse, error) {
+	s.w.mu.Lock()
+	name, ok := s.w.reqOps[req.GetRequestId()]
+	s.w.mu.Unlock()
+	if !ok || !strings.HasPrefix(name, req.GetParent()+"/") {
+		return nil, toStatus(resource.NotFound(resource.KindOperation, req.GetRequestId()))
+	}
+	op, err := (&opsSrv{w: s.w}).GetOperation(ctx, &longrunningpb.GetOperationRequest{Name: name})
+	if err != nil {
+		return nil, err
+	}
+	meta := &commonv1.OperationMetadata{}
+	if err := op.GetMetadata().UnmarshalTo(meta); err != nil {
+		return nil, toStatus(resource.Internal(err))
+	}
+	meta.RequestId = req.GetRequestId()
+	if op.Metadata, err = anypb.New(meta); err != nil {
+		return nil, toStatus(resource.Internal(err))
+	}
+	return &computev1.LookupOperationResponse{Operation: op}, nil
 }
 
 func (s *instanceSrv) attachVolume(ctx context.Context, req *computev1.UpdateInstanceRequest, volName, device string) (*longrunningpb.Operation, error) {
