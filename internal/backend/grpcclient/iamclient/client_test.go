@@ -60,6 +60,9 @@ type server struct {
 	sessions    sessionServer // nil: Login, ValidateSession, Logout are unimplemented
 	// sent records every request message, to prove what left console-api.
 	sent []proto.Message
+	// GetSessionToken calls; a nil sessionTokResp answers a full credential.
+	sessionTok     []*iamv1.GetSessionTokenRequest
+	sessionTokResp *iamv1.GetSessionTokenResponse
 	// Policy tag calls.
 	tagPolicy    []*iamv1.TagPolicyRequest
 	untagPolicy  []*iamv1.UntagPolicyRequest
@@ -662,6 +665,29 @@ func (s *server) AssumeRole(ctx context.Context, req *iamv1.AssumeRoleRequest) (
 		AssumedRoleUser: &iamv1.Principal{
 			Type: iamv1.PrincipalType_PRINCIPAL_TYPE_ASSUMED_ROLE, Arn: "arn:vws:sts::123456789012:assumed-role/ops/s1",
 			Project: "123456789012", UniqueId: "AROAOPS:s1", Resource: "projects/123456789012/roles/ops", SessionName: "s1",
+		},
+	}, nil
+}
+
+func (s *server) GetSessionToken(
+	ctx context.Context, req *iamv1.GetSessionTokenRequest,
+) (*iamv1.GetSessionTokenResponse, error) {
+	if err := s.enter(ctx); err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sessionTok = append(s.sessionTok, req)
+	if s.assumeErr != nil {
+		return nil, s.assumeErr
+	}
+	if s.sessionTokResp != nil {
+		return s.sessionTokResp, nil
+	}
+	return &iamv1.GetSessionTokenResponse{
+		Credentials: &iamv1.Credentials{
+			AccessKeyId: "ASIAQRSTUVWXYZ234567", SecretAccessKey: "s3cr3t2", SessionToken: "tok2",
+			ExpireTime: timestamppb.New(authTime.Add(12 * time.Hour)),
 		},
 	}, nil
 }

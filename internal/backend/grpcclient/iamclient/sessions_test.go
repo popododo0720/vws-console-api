@@ -517,6 +517,85 @@ func TestAssumeRoleErrorsAndNoRetry(t *testing.T) {
 	}
 }
 
+func TestGetSessionTokenSendsTheCallersAuthentication(t *testing.T) {
+	c, s := harness(t)
+	bob, err := c.Authenticate(t.Context(), signed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := c.GetSessionToken(t.Context(), bob, iam.SessionTokenRequest{
+		Duration: 2 * time.Hour, SerialNumber: "arn:vws:iam::123456789012:mfa/phone", TokenCode: "123456",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(s.sessionTok) != 1 {
+		t.Fatalf("%d GetSessionToken calls", len(s.sessionTok))
+	}
+	req := s.sessionTok[0]
+	if req.GetDurationSeconds() != 7200 || req.GetSerialNumber() != "arn:vws:iam::123456789012:mfa/phone" ||
+		req.GetTokenCode() != "123456" {
+		t.Errorf("request %v", req)
+	}
+	if req.GetCaller() != nil { //nolint:staticcheck // asserting the deprecated field stays unset.
+		t.Error("the deprecated caller field was sent")
+	}
+	if !proto.Equal(req.GetSigv4(), s.authn[0]) {
+		t.Errorf("sigv4 %v, want the caller's AuthenticateRequest %v", req.GetSigv4(), s.authn[0])
+	}
+	if got.AccessKey != "ASIAQRSTUVWXYZ234567" || got.Secret != "s3cr3t2" || got.SessionToken != "tok2" ||
+		!got.Expires.Equal(authTime.Add(12*time.Hour)) || got.Principal.ARN != bob.ARN || got.Principal.Ref.Proof != "" {
+		t.Errorf("key %+v", got)
+	}
+
+	s.sessions = &stubSessions{
+		valid: &iamv1.ValidateSessionResponse{Principal: bobProto, ExpireTime: timestamppb.New(expires)},
+	}
+	sess, err := c.ValidateSession(t.Context(), "sess-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.GetSessionToken(t.Context(), sess.Principal, iam.SessionTokenRequest{}); err != nil {
+		t.Fatal(err)
+	}
+	if r := s.sessionTok[1]; r.GetConsoleSessionToken() != "sess-1" || r.GetSigv4() != nil || r.GetDurationSeconds() != 0 {
+		t.Errorf("session caller sent %v", r)
+	}
+}
+
+func TestGetSessionTokenFailsClosed(t *testing.T) {
+	c, s := harness(t)
+	root := iam.Principal{Account: account(t), ARN: "arn:vws:iam::123456789012:root", Root: true}
+	if _, err := c.GetSessionToken(t.Context(), root, iam.SessionTokenRequest{}); resource.CodeOf(err) !=
+		resource.CodeUnauthenticated {
+		t.Errorf("static root: %v", err)
+	}
+	if len(s.sessionTok) != 0 {
+		t.Errorf("%d calls for a caller with no vws-iam credential", len(s.sessionTok))
+	}
+	bob, err := c.Authenticate(t.Context(), signed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.sessionTokResp = &iamv1.GetSessionTokenResponse{Credentials: &iamv1.Credentials{AccessKeyId: "ASIAQRSTUVWXYZ234567"}}
+	if k, err := c.GetSessionToken(t.Context(), bob, iam.SessionTokenRequest{}); resource.CodeOf(err) !=
+		resource.CodeUnavailable {
+		t.Errorf("credential without a secret: %+v %v", k, err)
+	}
+	s.assumeErr = awsErr(codes.PermissionDenied, "ACCESS_DENIED", "AccessDenied")
+	if _, err := c.GetSessionToken(t.Context(), bob, iam.SessionTokenRequest{}); resource.CodeOf(err) !=
+		resource.CodePermissionDenied {
+		t.Errorf("denied: %v", err)
+	}
+	s.assumeErr = status.Error(codes.Unavailable, "down")
+	if _, err := c.GetSessionToken(t.Context(), bob, iam.SessionTokenRequest{}); err == nil {
+		t.Error("unavailable succeeded")
+	}
+	if len(s.sessionTok) != 3 {
+		t.Errorf("%d GetSessionToken calls: STS issues credentials and is not retried", len(s.sessionTok))
+	}
+}
+
 // The access-key secret signs the request inside the client and never leaves
 // console-api: nothing sent to vws-iam, and nothing kept on the caller,
 // contains it.

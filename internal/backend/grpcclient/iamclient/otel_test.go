@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"net"
+	"strings"
 	"testing"
 
 	"go.opentelemetry.io/otel"
@@ -22,6 +23,7 @@ import (
 
 	iamv1 "github.com/popododo0720/vws-proto/gen/go/vws/iam/v1"
 
+	"github.com/popododo0720/vws-console-api/internal/iam"
 	"github.com/popododo0720/vws-console-api/internal/service"
 )
 
@@ -69,6 +71,7 @@ func dialFake(t *testing.T) (*Client, *server) {
 	}}
 	g := grpc.NewServer()
 	iamv1.RegisterAuthServiceServer(g, s)
+	iamv1.RegisterTokenServiceServer(g, s)
 	go func() { _ = g.Serve(lis) }()
 	t.Cleanup(g.Stop)
 	c, err := Dial(lis.Addr().String())
@@ -179,5 +182,43 @@ func TestFailedIAMCallsAreTracedAndMeasured(t *testing.T) {
 	}
 	if got := rpcClientCount(t, reader, authenticateMethod, codes.OK.String()); got != 0 {
 		t.Fatalf("%d OK samples for a failed call", got)
+	}
+}
+
+// GetSessionToken leaves a client span and a metric sample, and neither the
+// MFA code nor the issued secret or session token reaches a span.
+func TestGetSessionTokenIsTracedWithoutSecrets(t *testing.T) {
+	rec, reader := observed(t)
+	c, _ := dialFake(t)
+	bob, err := c.Authenticate(t.Context(), signed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const code = "654321"
+	k, err := c.GetSessionToken(t.Context(), bob, iam.SessionTokenRequest{
+		SerialNumber: "arn:vws:iam::123456789012:mfa/phone", TokenCode: code,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const method = "vws.iam.v1.TokenService/GetSessionToken"
+	span := clientSpan(t, rec, method)
+	var seen strings.Builder
+	seen.WriteString(span.Name() + span.Status().Description)
+	for _, kv := range span.Attributes() {
+		seen.WriteString(string(kv.Key) + "=" + kv.Value.String())
+	}
+	for _, ev := range span.Events() {
+		for _, kv := range ev.Attributes {
+			seen.WriteString(kv.Value.String())
+		}
+	}
+	for _, secret := range []string{code, k.Secret, k.SessionToken} {
+		if strings.Contains(seen.String(), secret) {
+			t.Errorf("%q appears in the span: %s", secret, seen.String())
+		}
+	}
+	if got := rpcClientCount(t, reader, method, codes.OK.String()); got != 1 {
+		t.Errorf("%d OK samples of %s, want 1", got, method)
 	}
 }

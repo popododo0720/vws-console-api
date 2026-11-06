@@ -26,6 +26,7 @@ const (
 	minSession           = 15 * time.Minute
 	defaultMaxSession    = 3600
 	maxMaxSession        = 43200
+	maxSessionToken      = 36 * time.Hour
 )
 
 var (
@@ -1924,6 +1925,69 @@ func (f *Fake) AssumeRole(_ context.Context, caller Principal, roleARN, session 
 	f.keys[k.AccessKey] = k
 	f.gcSessions()
 	return AssumedRole{Key: k, AssumedRoleID: role.ID + ":" + session, ARN: arn}, nil
+}
+
+// GetSessionToken implements Admin. A user's session lasts 900s to 36h, 12h
+// by default; the root user's lasts at most 1h, and a longer request is cut
+// to 1h, as in AWS. An assumed role is refused: only long-term credentials
+// may call it, and the surface refuses any request that carried a session
+// token. With a serial number the device must be enabled for the caller and
+// the code must be its current or previous one, newer than any accepted.
+func (f *Fake) GetSessionToken(_ context.Context, caller Principal, req SessionTokenRequest) (Key, error) {
+	if _, assumed := assumedRoleName(caller.ARN); assumed {
+		return Key{}, SessionCredentialsRefused()
+	}
+	if (req.SerialNumber == "") != (req.TokenCode == "") {
+		return Key{}, SessionMFAIncomplete()
+	}
+	d := req.Duration
+	switch {
+	case d == 0 && caller.Root:
+		d = time.Hour
+	case d == 0:
+		d = 12 * time.Hour
+	case d < minSession || d > maxSessionToken:
+		return Key{}, resource.Invalid("durationSeconds", "DurationSeconds must be between 900 and 129600 seconds")
+	case caller.Root && d > time.Hour:
+		d = time.Hour
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	now := f.now()
+	p := Principal{Account: caller.Account, ARN: caller.ARN, Root: caller.Root}
+	if req.SerialNumber != "" {
+		if !f.verifySessionMFA(caller, req, now) {
+			return Key{}, SessionMFAInvalid()
+		}
+		p.Ref = resource.PrincipalRef{MFA: true, AuthTime: now}
+	}
+	k := Key{
+		AccessKey: randID("ASIA", 16), Secret: randSecret(30), SessionToken: randSecret(96),
+		Expires: now.Add(d), Principal: p,
+	}
+	f.keys[k.AccessKey] = k
+	f.gcSessions()
+	return k, nil
+}
+
+// verifySessionMFA checks a GetSessionToken device code and spends it. The
+// caller holds f.mu.
+func (f *Fake) verifySessionMFA(caller Principal, req SessionTokenRequest, now time.Time) bool {
+	st := f.account(caller.Account)
+	d := st.mfa[req.SerialNumber]
+	if d == nil || d.user == "" || caller.Root {
+		return false
+	}
+	u := st.users[d.user]
+	if u == nil || u.ARN != caller.ARN {
+		return false
+	}
+	step, ok := totpStep(d.seed, req.TokenCode, now)
+	if !ok || step <= d.lastStep {
+		return false
+	}
+	d.lastStep = step
+	return true
 }
 
 // gcSessions drops expired temporary keys. The caller holds f.mu.
