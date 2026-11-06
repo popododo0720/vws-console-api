@@ -79,13 +79,10 @@ func TestKeyPairAWSParity(t *testing.T) {
 
 	// Imported RSA in every format and size EC2 takes: MD5 of the PKIX DER.
 	for _, bits := range []int{1024, 2048, 4096} {
-		k, err := rsa.GenerateKey(rand.Reader, bits)
-		if err != nil {
-			t.Fatal(err)
-		}
-		pkix, _ := x509.MarshalPKIXPublicKey(&k.PublicKey)
+		k := rsaPublic(t, bits)
+		pkix, _ := x509.MarshalPKIXPublicKey(k)
 		sum := md5.Sum(pkix) //nolint:gosec // EC2's format
-		line := sshRSA(&k.PublicKey)
+		line := sshRSA(k)
 		formats := map[string]string{
 			"openssh": line + " me@host",
 			"rfc4716": "---- BEGIN SSH2 PUBLIC KEY ----\nComment: \"me@host\"\n" + strings.Fields(line)[1] + "\n---- END SSH2 PUBLIC KEY ----\n",
@@ -101,10 +98,9 @@ func TestKeyPairAWSParity(t *testing.T) {
 	}
 
 	// ECDSA, DSA and RSA outside 1024..4096 are InvalidKey.Format.
-	tooBig, _ := rand.Prime(rand.Reader, 4097)
 	for name, material := range map[string]string{
 		"ecdsa":   "ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBEm0",
-		"rsa4097": sshRSA(&rsa.PublicKey{N: tooBig, E: 65537}),
+		"rsa4097": sshRSA(rsaPublic(t, 4097)),
 	} {
 		if got := imp(name, material, http.StatusBadRequest); !strings.Contains(got, "<Code>InvalidKey.Format</Code>") {
 			t.Fatalf("%s: %s", name, got)
@@ -128,4 +124,18 @@ func TestKeyPairAWSParity(t *testing.T) {
 		}
 	}
 	send(url.Values{"Action": {"CreateKeyPair"}, "KeyName": {"jks"}, "KeyFormat": {"jks"}}, http.StatusBadRequest)
+}
+
+// rsaPublic returns an RSA public key with a random modulus of exactly bits
+// bits. ImportKeyPair reads only the modulus and its size, so the modulus
+// need not be a product of two primes; generating real keys cost CI about 10s
+// under -race (#200).
+func rsaPublic(t *testing.T, bits int) *rsa.PublicKey {
+	t.Helper()
+	n, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), uint(bits-1)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	n.SetBit(n, bits-1, 1).SetBit(n, 0, 1)
+	return &rsa.PublicKey{N: n, E: 65537}
 }
