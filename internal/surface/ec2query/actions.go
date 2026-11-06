@@ -323,8 +323,8 @@ func (h *handler) deleteVolume(w http.ResponseWriter, r *http.Request, c resourc
 	writeXML(w, deleteVolumeXML{RequestID: requestID(r), Return: true})
 }
 
-// modifyVolume grows a volume. VolumeType, Iops and Throughput are not
-// accepted fields, so the request fails before reaching the backend.
+// modifyVolume changes a volume's Size, VolumeType, Iops and Throughput in
+// one request.
 func (h *handler) modifyVolume(w http.ResponseWriter, r *http.Request, c resource.Caller) {
 	token, err := optionalClientToken(r)
 	if err != nil {
@@ -336,10 +336,15 @@ func (h *handler) modifyVolume(w http.ResponseWriter, r *http.Request, c resourc
 		writeErr(w, r, err)
 		return
 	}
-	size, err := strconv.ParseInt(r.Form.Get("Size"), 10, 64)
-	if err != nil {
-		writeErr(w, r, resource.Invalid("Size", "required"))
-		return
+	req := resource.ModifyVolumeRequest{ID: id, Type: resource.VolumeType(r.Form.Get("VolumeType"))}
+	for _, f := range []struct {
+		key string
+		dst *int64
+	}{{"Size", &req.SizeGiB}, {"Iops", &req.Iops}, {"Throughput", &req.Throughput}} {
+		if *f.dst, err = optionalInt(r, f.key); err != nil {
+			writeErr(w, r, err)
+			return
+		}
 	}
 	before, err := h.svc.DescribeVolumes(r.Context(), c, resource.VolumeQuery{IDs: []resource.VolumeID{id}})
 	if err != nil {
@@ -351,7 +356,7 @@ func (h *handler) modifyVolume(w http.ResponseWriter, r *http.Request, c resourc
 		return
 	}
 	orig := before.Items[0]
-	acc, err := h.svc.ModifyVolume(r.Context(), c, token, resource.ModifyVolumeRequest{ID: id, SizeGiB: size})
+	acc, err := h.svc.ModifyVolume(r.Context(), c, token, req)
 	if err != nil {
 		writeErr(w, r, err)
 		return
@@ -361,6 +366,8 @@ func (h *handler) modifyVolume(w http.ResponseWriter, r *http.Request, c resourc
 		VolumeID: item.ID.String(), State: "modifying",
 		TargetSize: item.SizeGiB, OriginalSize: orig.SizeGiB,
 		TargetType: string(item.Type), OriginalType: string(orig.Type),
+		TargetIops: item.ReportedIops(), OriginalIops: orig.ReportedIops(),
+		TargetThroughput: item.Throughput, OriginalThroughput: orig.Throughput,
 		Start: acc.Operation.CreateTime.UTC().Format(time.RFC3339),
 	}})
 }

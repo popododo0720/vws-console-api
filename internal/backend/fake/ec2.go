@@ -401,20 +401,19 @@ func (c compute) ModifyVolume(ctx context.Context, m backend.Mutation, req resou
 	if !ok || vol.OwnerID != m.Account {
 		return resource.Accepted[resource.Volume]{}, resource.NotFound(resource.KindVolume, req.ID.String())
 	}
-	if err := vol.CheckGrow(req.SizeGiB); err != nil {
+	item, err := vol.Modify(req)
+	if err != nil {
 		return resource.Accepted[resource.Volume]{}, err
 	}
-	id, size := vol.ID, req.SizeGiB
+	id := vol.ID
 	op, err := c.w.newOp(m.Account, resource.ServiceCompute, resource.ActionModifyVolume, []resource.Ref{id.Ref()}, func(time.Time) {
 		if cur := c.w.vol[id]; cur != nil {
-			cur.SizeGiB = size
+			cur.SizeGiB, cur.Type, cur.Iops, cur.Throughput = item.SizeGiB, item.Type, item.Iops, item.Throughput
 		}
 	})
 	if err != nil {
 		return resource.Accepted[resource.Volume]{}, err
 	}
-	item := *vol
-	item.SizeGiB = size
 	acc := resource.Accepted[resource.Volume]{Operation: op, Items: []resource.Volume{item}}
 	c.w.finish(m.Key, m.Fingerprint, acc)
 	return acc, nil

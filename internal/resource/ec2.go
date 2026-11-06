@@ -372,25 +372,41 @@ func (r DeleteVolumeRequest) Normalize() (DeleteVolumeRequest, error) {
 	return r, nil
 }
 
-// ModifyVolumeRequest grows a volume. Only the size can change: the storage
-// backend serves no type change and never shrinks a volume.
+// ModifyVolumeRequest changes a volume's size, type and provisioned
+// performance in one request, as EC2 ModifyVolume. A zero field keeps the
+// stored value; Volume.Modify gives the defaults of a type change.
 type ModifyVolumeRequest struct {
-	ID      VolumeID `json:"volumeId"`
-	SizeGiB int64    `json:"size"`
+	ID         VolumeID   `json:"volumeId"`
+	SizeGiB    int64      `json:"size,omitempty"`
+	Type       VolumeType `json:"volumeType,omitempty"`
+	Iops       int64      `json:"iops,omitempty"`
+	Throughput int64      `json:"throughput,omitempty"`
 }
 
 // Action returns ModifyVolume.
 func (ModifyVolumeRequest) Action() Action { return ActionModifyVolume }
 
-// Normalize checks the id and that a target size is given. The size range
-// depends on the volume's type, so the backend checks it with
-// Volume.CheckGrow once it has read the volume.
+// Normalize checks the id, the type and that something is asked for. The
+// ranges depend on the volume's current type and size, so the backend checks
+// them with Volume.Modify once it has read the volume.
 func (r ModifyVolumeRequest) Normalize() (ModifyVolumeRequest, error) {
 	if r.ID.IsZero() {
 		return ModifyVolumeRequest{}, Invalid("volumeId", "required")
 	}
-	if r.SizeGiB < 1 {
-		return ModifyVolumeRequest{}, Invalid("size", fmt.Sprintf("Value (%d) for parameter size is invalid.", r.SizeGiB))
+	for _, f := range []struct {
+		name string
+		v    int64
+	}{{"size", r.SizeGiB}, {"iops", r.Iops}, {"throughput", r.Throughput}} {
+		if f.v < 0 {
+			return ModifyVolumeRequest{}, Invalid(f.name, fmt.Sprintf("Value (%d) for parameter %s is invalid.", f.v, f.name))
+		}
+	}
+	if r.Type != "" && !r.Type.Valid() {
+		return ModifyVolumeRequest{}, Invalid("volumeType", "unsupported")
+	}
+	if r.SizeGiB == 0 && r.Type == "" && r.Iops == 0 && r.Throughput == 0 {
+		return ModifyVolumeRequest{}, MissingParameter("size",
+			"The request must contain at least one of the parameters size, volumeType, iops or throughput.")
 	}
 	return r, nil
 }
