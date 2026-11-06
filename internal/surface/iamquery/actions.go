@@ -1340,7 +1340,80 @@ func stsActions() map[string]spec {
 				}, nil
 			},
 		},
+		// GetSessionToken needs no permission, as in AWS: "You cannot use
+		// policies to control authentication operations"
+		// (https://docs.aws.amazon.com/STS/latest/APIReference/API_GetSessionToken.html).
+		"GetSessionToken": {
+			params: []string{"DurationSeconds", "SerialNumber", "TokenCode"}, needsAdmin: true, public: true,
+			run: func(h *handler, c *exchange) (any, error) {
+				if c.r.Header.Get("X-Amz-Security-Token") != "" || c.r.URL.Query().Has("X-Amz-Security-Token") {
+					return nil, iam.SessionCredentialsRefused()
+				}
+				req, err := sessionTokenRequest(c)
+				if err != nil {
+					return nil, err
+				}
+				caller := iam.Principal{
+					Account: c.caller.Account, ARN: c.caller.Principal, Root: c.caller.Root, Ref: c.caller.Ref,
+				}
+				got, err := h.cfg.Admin.GetSessionToken(c.r.Context(), caller, req)
+				if err != nil {
+					return nil, err
+				}
+				return struct {
+					Credentials credentialsXML `xml:"Credentials"`
+				}{credentialsXML{
+					AccessKeyID:     got.AccessKey,
+					SecretAccessKey: got.Secret,
+					SessionToken:    got.SessionToken,
+					Expiration:      stamp(got.Expires),
+				}}, nil
+			},
+		},
 	}
+}
+
+var (
+	mfaSerial = regexp.MustCompile(`^[\w+=/:,.@-]{9,256}$`)
+	mfaCode   = regexp.MustCompile(`^[0-9]{6}$`)
+)
+
+// sessionTokenRequest reads GetSessionToken's parameters under the AWS
+// constraints. The token code is never echoed.
+func sessionTokenRequest(c *exchange) (iam.SessionTokenRequest, error) {
+	var req iam.SessionTokenRequest
+	if raw := c.form("DurationSeconds"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		switch {
+		case err != nil || n < 900:
+			return req, validation(raw, "durationSeconds", "Member must have value greater than or equal to 900")
+		case n > 129600:
+			return req, validation(raw, "durationSeconds", "Member must have value less than or equal to 129600")
+		}
+		req.Duration = time.Duration(n) * time.Second
+	}
+	req.SerialNumber, req.TokenCode = c.form("SerialNumber"), c.form("TokenCode")
+	if req.SerialNumber != "" && !mfaSerial.MatchString(req.SerialNumber) {
+		return req, validation(req.SerialNumber, "serialNumber",
+			`Member must have length between 9 and 256 and match pattern [\w+=/:,.@-]*`)
+	}
+	if req.TokenCode != "" && !mfaCode.MatchString(req.TokenCode) {
+		return req, validation("", "tokenCode", `Member must have length 6 and match pattern [\d]*`)
+	}
+	if (req.SerialNumber == "") != (req.TokenCode == "") {
+		return req, iam.SessionMFAIncomplete()
+	}
+	return req, nil
+}
+
+// validation is the AWS ValidationError of one field. An empty value is left
+// out of the message, so a secret such as a token code is never echoed.
+func validation(value, field, constraint string) error {
+	at := "Value at '" + field + "'"
+	if value != "" {
+		at = "Value '" + value + "' at '" + field + "'"
+	}
+	return resource.Invalid(field, "1 validation error detected: "+at+" failed to satisfy constraint: "+constraint)
 }
 
 // callerID is the AWS UserId: the account id for root, the user id for a

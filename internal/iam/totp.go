@@ -45,6 +45,21 @@ func totpSequence(seed []byte, code1, code2 string, now time.Time) (int64, bool)
 	return 0, false
 }
 
+// totpStep reports whether code is the code of the current or previous step
+// and returns that step. A device without a seed matches nothing.
+func totpStep(seed []byte, code string, now time.Time) (int64, bool) {
+	if len(seed) == 0 {
+		return 0, false
+	}
+	cur := now.Unix() / int64(totpPeriod/time.Second)
+	for step := cur; step >= cur-1; step-- {
+		if equalCode(totpAt(seed, step), code) {
+			return step, true
+		}
+	}
+	return 0, false
+}
+
 func equalCode(want, got string) bool {
 	return subtle.ConstantTimeCompare([]byte(want), []byte(got)) == 1
 }

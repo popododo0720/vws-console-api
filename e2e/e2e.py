@@ -957,6 +957,22 @@ def identity():
     step("STS AssumeRole by a principal the trust policy does not name is AccessDenied", lambda: aws_error(
         "AccessDenied", lambda: client("sts", creds["AccessKeyId"], creds["SecretAccessKey"], creds["SessionToken"]).assume_role(
             RoleArn=S["role_arn"], RoleSessionName="again")) if creds else None)
+    session = step("STS GetSessionToken needs no policy", lambda: bob_sts.get_session_token(
+        DurationSeconds=900)["Credentials"])
+    if session:
+        session_sts = client("sts", session["AccessKeyId"], session["SecretAccessKey"], session["SessionToken"])
+        step("session token: STS GetCallerIdentity is the user", lambda: check(
+            session_sts.get_caller_identity()["Arn"] == f"arn:aws:iam::{account}:user/e2e/e2e-bob", "bob arn"))
+        step("session token: STS GetSessionToken is AccessDenied", lambda: aws_error(
+            "AccessDenied", lambda: session_sts.get_session_token()))
+    step("STS GetSessionToken with a serial and no code is AccessDenied", lambda: aws_error(
+        "AccessDenied", lambda: bob_sts.get_session_token(SerialNumber=f"arn:aws:iam::{account}:mfa/e2e-phone")))
+    # botocore refuses DurationSeconds below 900 itself; send it unvalidated.
+    loose_sts = boto3.client(
+        "sts", endpoint_url=IAM_URL,
+        config=Config(retries={"total_max_attempts": 1}, parameter_validation=False), **KW)
+    step("STS GetSessionToken below 900 seconds is ValidationError", lambda: aws_error(
+        "ValidationError", lambda: loose_sts.get_session_token(DurationSeconds=60)))
     step("IAM DeleteUser with keys is DeleteConflict", lambda: aws_error(
         "DeleteConflict", lambda: iam.delete_user(UserName="e2e-bob")))
     step("IAM DeleteRolePolicy", lambda: iam.delete_role_policy(RoleName="e2e-ops", PolicyName="vpcs"))
