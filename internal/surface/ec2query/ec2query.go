@@ -751,14 +751,20 @@ func rejectUnknown(r *http.Request, action string) error {
 	default:
 		allow = allowCommon
 	}
+	pastLimit := false
 	for key := range r.Form {
 		if allow(key) {
 			continue
 		}
+		// An unknown key wins over the limit, whatever the map order.
 		if action == resource.ActionAuthorizeSecurityGroupIngress.String() && ruleIndexPastLimit(key) {
-			return resource.RulesPerSecurityGroupLimitExceeded(r.Form.Get("GroupId"))
+			pastLimit = true
+			continue
 		}
 		return resource.Invalid(key, "unsupported")
+	}
+	if pastLimit {
+		return resource.RulesPerSecurityGroupLimitExceeded(r.Form.Get("GroupId"))
 	}
 	return nil
 }

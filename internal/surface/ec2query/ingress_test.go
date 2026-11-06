@@ -287,12 +287,25 @@ func TestRuleIndexPastTheLimitIsTheGroupLimit(t *testing.T) {
 			t.Fatalf("%s: %d %s", key, res.Code, res.Body)
 		}
 	}
-	res := signed(t, h, cred, now, url.Values{
-		"Action": {"AuthorizeSecurityGroupIngress"}, "Version": {Version}, "GroupId": {id},
-		"IpPermissions.1.IpProtocol": {"tcp"}, "IpPermissions.1.Bogus.61.CidrIp": {"10.0.0.0/16"},
-	}.Encode())
-	if res.Code != http.StatusBadRequest || !strings.Contains(res.Body.String(), "<Code>InvalidParameterValue</Code>") {
-		t.Fatalf("unknown key past the index: %d %s", res.Code, res.Body)
+	for _, unknown := range []url.Values{
+		{"IpPermissions.1.Bogus.61.CidrIp": {"10.0.0.0/16"}},
+		{"IpPermissions.1.Bogus": {"x"}, "IpPermissions.61.IpProtocol": {"tcp"}},
+	} {
+		form := url.Values{
+			"Action": {"AuthorizeSecurityGroupIngress"}, "Version": {Version}, "GroupId": {id},
+			"IpPermissions.1.IpProtocol": {"tcp"},
+		}
+		for k, v := range unknown {
+			form[k] = v
+		}
+		// The form is a map, so repeat to catch an answer that hangs on its order.
+		for range 50 {
+			res := signed(t, h, cred, now, form.Encode())
+			if res.Code != http.StatusBadRequest ||
+				!strings.Contains(res.Body.String(), "<Code>InvalidParameterValue</Code>") {
+				t.Fatalf("unknown key %v: %d %s", unknown, res.Code, res.Body)
+			}
+		}
 	}
 	if body := describedGroup(t, h, cred, now, id); strings.Contains(body, "10.0.0.0/16") {
 		t.Fatalf("a refused request wrote a rule: %s", body)
