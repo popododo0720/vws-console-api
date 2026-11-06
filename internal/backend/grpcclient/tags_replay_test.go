@@ -14,6 +14,8 @@ import (
 	commonv1 "github.com/popododo0720/vws-proto/gen/go/vws/common/v1"
 	computev1 "github.com/popododo0720/vws-proto/gen/go/vws/compute/v1"
 
+	"github.com/popododo0720/vws-console-api/internal/backend"
+	"github.com/popododo0720/vws-console-api/internal/backend/fake"
 	"github.com/popododo0720/vws-console-api/internal/resource"
 )
 
@@ -34,10 +36,10 @@ func (s *stubLookup) LookupOperation(
 }
 
 // TestReplayTagsAnswersOnlyItsOwnOperation checks each LookupOperation
-// outcome a refused CreateTags retry can meet (#333): only a succeeded
-// update of this instance under this request id is the answer. An unknown
-// or expired request id and a compute without the lookup keep the
-// mismatch; an outage stays retryable; a foreign answer is internal.
+// outcome a refused CreateTags retry can meet besides its own succeeded
+// update, which backendtest.TagsReplay covers (#333). An unknown or expired
+// request id, a compute without the lookup and a failed first update keep
+// the mismatch; an outage stays retryable; a foreign answer is internal.
 func TestReplayTagsAnswersOnlyItsOwnOperation(t *testing.T) {
 	const projectID = "acct-123456789012"
 	id, err := resource.Parse[resource.InstanceID]("i-0123456789abcdef0")
@@ -69,7 +71,6 @@ func TestReplayTagsAnswersOnlyItsOwnOperation(t *testing.T) {
 		lookup *stubLookup
 		want   resource.Code
 	}{
-		{name: "own update", lookup: &stubLookup{op: op(t, name, requestID, update)}},
 		{
 			name: "unknown or expired request id", lookup: &stubLookup{err: status.Error(codes.NotFound, "no operation")},
 			want: resource.CodeIdempotencyMismatch,
@@ -99,19 +100,92 @@ func TestReplayTagsAnswersOnlyItsOwnOperation(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c := computeClient{&api{lookup: tc.lookup}}
-			got, err := c.replayTags(context.Background(), projectID, id, requestID, resource.IdempotencyMismatch())
+			got, _, err := c.replayTags(context.Background(), projectID, id, map[string]string{"team": "storage"},
+				requestID, resource.IdempotencyMismatch())
 			if tc.lookup.req.GetParent() != "projects/"+projectID || tc.lookup.req.GetRequestId() != requestID {
 				t.Fatalf("lookup asked %v", tc.lookup.req)
-			}
-			if tc.want == resource.CodeUnspecified {
-				if err != nil || got != tc.lookup.op {
-					t.Fatalf("got %v %v, want the looked-up operation", got, err)
-				}
-				return
 			}
 			if code := resource.CodeOf(err); code != tc.want || got != nil {
 				t.Fatalf("got %v %v (%s), want %s", got, err, code, tc.want)
 			}
 		})
+	}
+}
+
+// readHook runs hook before the second GetInstance, the read CreateTags
+// builds its label write from.
+type readHook struct {
+	computev1.InstanceServiceClient
+	reads int
+	hook  func()
+}
+
+func (h *readHook) GetInstance(
+	ctx context.Context, req *computev1.GetInstanceRequest, opts ...grpc.CallOption,
+) (*computev1.Instance, error) {
+	h.reads++
+	if h.reads == 2 {
+		h.hook()
+	}
+	return h.InstanceServiceClient.GetInstance(ctx, req, opts...)
+}
+
+// TestTagsReplayReadsTheTagsAfterTheRefusal is a same-token CreateTags
+// retry that races another CreateTags changing one of its tags and adding
+// one, so compute refuses the rebuilt body. The retry's first read still
+// shows its tags, but the instance no longer carries them when compute
+// refuses the retry, so it is a mismatch and the other value stays (#333
+// review).
+func TestTagsReplayReadsTheTagsAfterTheRefusal(t *testing.T) {
+	ctx := context.Background()
+	now := time.Unix(1_700_000_000, 0).UTC()
+	world := fake.New(fake.Options{Now: func() time.Time { return now }, Entropy: &fake.Sequence{}})
+	set := dialLoopback(t, world, now)()
+	account := mustAccount(t)
+	scope := backend.Scope{Account: account}
+	mut := func(key string) backend.Mutation {
+		return backend.Mutation{Scope: scope, Key: key, Fingerprint: "fp-" + key}
+	}
+	sub, err := set.Network.CreateSubnet(ctx, mut("sub"), resource.CreateSubnetRequest{Cidr: "10.2.0.0/24"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	img, err := resource.Parse[resource.ImageID]("ami-0123456789abcdef0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := set.Compute.RunInstances(ctx, mut("run"), resource.RunInstancesRequest{
+		ImageID: img, InstanceType: "vws.small", SubnetID: sub.Items[0].ID, Count: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := set.Compute.GetOperation(ctx, scope, run.Operation.ID); err != nil {
+		t.Fatal(err)
+	}
+	id := run.Items[0].ID
+	req := resource.CreateTagsRequest{IDs: []resource.InstanceID{id}, Tags: map[string]string{"env": "old"}}
+	if _, err := set.Compute.CreateTags(ctx, mut("tags"), req); err != nil {
+		t.Fatal(err)
+	}
+	base, ok := set.Compute.(computeClient)
+	if !ok {
+		t.Fatalf("compute is %T", set.Compute)
+	}
+	shared := *base.api
+	shared.instances = &readHook{InstanceServiceClient: base.instances, hook: func() {
+		if _, err := base.CreateTags(ctx, mut("concurrent"), resource.CreateTagsRequest{
+			IDs: req.IDs, Tags: map[string]string{"env": "new", "team": "storage"},
+		}); err != nil {
+			t.Errorf("concurrent CreateTags: %v", err)
+		}
+	}}
+	_, err = computeClient{&shared}.CreateTags(ctx, mut("tags"), req)
+	if resource.CodeOf(err) != resource.CodeIdempotencyMismatch {
+		t.Fatalf("retry after its tag changed: %v, want IdempotencyMismatch", err)
+	}
+	current, err := base.getInstance(ctx, project(account), id.String())
+	if err != nil || current.Tags["env"] != "new" {
+		t.Fatalf("env after the retry %q (%v), want new", current.Tags["env"], err)
 	}
 }
