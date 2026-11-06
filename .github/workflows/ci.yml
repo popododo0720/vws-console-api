@@ -93,7 +93,7 @@ jobs:
             go-race-${{ runner.os }}-${{ hashFiles('go.sum') }}-
             go-race-${{ runner.os }}-
       - run: pip install -r e2e/requirements.txt
-      - name: aws CLI v2 for the IAM and STS CLI steps
+      - name: aws CLI v2 for the IAM, STS and DetachVolume CLI steps
         run: aws --version
       - run: e2e/run.sh
         env:

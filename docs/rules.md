@@ -123,8 +123,8 @@ count as a pass. The run ends with a banner that lists every skip and
 it, so the fake run cannot lose a step silently.
 
 `cli_identity()` drives the IAM and STS actions through the aws CLI v2 the same
-way. It runs `VWS_E2E_AWS_CLI`, or the `aws` on `PATH`, with no profile and no
-retries; without one its steps are `skipped(aws-cli not available on this
+way, and `cli_detach()` drives `aws ec2 detach-volume` (#210). They run `VWS_E2E_AWS_CLI`, or the `aws` on `PATH`, with no profile and no
+retries; without one their steps are `skipped(aws-cli not available on this
 host)`, so CI, where the runner image has the CLI, fails rather than skips.
 
 ```sh
