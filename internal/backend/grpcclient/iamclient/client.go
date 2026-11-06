@@ -267,19 +267,17 @@ func (c *Client) AssumeRole(ctx context.Context, caller iam.Principal, roleARN, 
 		return iam.AssumedRole{}, err
 	}
 	req := &iamv1.AssumeRoleRequest{Role: role, RoleSessionName: session, DurationSeconds: int32(duration / time.Second)} //nolint:gosec // the surface bounds duration to 900..43200s.
-	switch caller.Ref.ProofKind {
-	case resource.ProofSigV4:
-		var sig iamv1.AuthenticateRequest
-		if err := proto.Unmarshal([]byte(caller.Ref.Proof), &sig); err != nil {
-			return iam.AssumedRole{}, resource.Unauthenticated("caller credential unreadable")
-		}
-		req.Authentication = &iamv1.AssumeRoleRequest_Sigv4{Sigv4: &sig}
-	case resource.ProofSession:
-		req.Authentication = &iamv1.AssumeRoleRequest_ConsoleSessionToken{ConsoleSessionToken: caller.Ref.Proof}
+	sig, sessionToken, err := authenticationOf(caller)
+	switch {
+	case err != nil:
+		return iam.AssumedRole{}, err
+	case sig != nil:
+		req.Authentication = &iamv1.AssumeRoleRequest_Sigv4{Sigv4: sig}
+	case sessionToken != "":
+		req.Authentication = &iamv1.AssumeRoleRequest_ConsoleSessionToken{ConsoleSessionToken: sessionToken}
+	case caller.Root:
+		return iam.AssumedRole{}, resource.Denied("Roles may not be assumed by root accounts.")
 	default:
-		if caller.Root {
-			return iam.AssumedRole{}, resource.Denied("Roles may not be assumed by root accounts.")
-		}
 		return iam.AssumedRole{}, resource.Unauthenticated("caller has no vws-iam credential")
 	}
 	resp, err := call(ctx, c.tokens.AssumeRole, req)
@@ -298,6 +296,25 @@ func (c *Client) AssumeRole(ctx context.Context, caller iam.Principal, roleARN, 
 		},
 		AssumedRoleID: resp.GetAssumedRoleUser().GetUniqueId(), ARN: p.ARN,
 	}, nil
+}
+
+// authenticationOf is the credential an STS call names its caller by: the
+// SigV4 request it authenticated with, or its console session token. Both
+// are empty for a caller with no vws-iam credential, such as the static root
+// key.
+func authenticationOf(caller iam.Principal) (*iamv1.AuthenticateRequest, string, error) {
+	switch caller.Ref.ProofKind {
+	case resource.ProofSigV4:
+		var sig iamv1.AuthenticateRequest
+		if err := proto.Unmarshal([]byte(caller.Ref.Proof), &sig); err != nil {
+			return nil, "", resource.Unauthenticated("caller credential unreadable")
+		}
+		return &sig, "", nil
+	case resource.ProofSession:
+		return nil, caller.Ref.Proof, nil
+	default:
+		return nil, "", nil
+	}
 }
 
 // roleResource turns arn:vws:iam::{project}:role{path}{name} into
