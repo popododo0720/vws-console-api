@@ -503,25 +503,33 @@ func normalizeIngressRule(id SecurityGroupID, rule IngressRule) (SecurityGroupID
 	if id.IsZero() {
 		return SecurityGroupID{}, IngressRule{}, Invalid("groupId", "required")
 	}
-	protocol, err := canonicalProtocol(rule.Protocol)
+	rule, err := normalizeRule(rule)
 	if err != nil {
 		return SecurityGroupID{}, IngressRule{}, err
+	}
+	return id, rule, nil
+}
+
+func normalizeRule(rule IngressRule) (IngressRule, error) {
+	protocol, err := canonicalProtocol(rule.Protocol)
+	if err != nil {
+		return IngressRule{}, err
 	}
 	rule.Protocol = protocol
 	cidr, err := normalizeCIDR(rule.Cidr)
 	if err != nil {
-		return SecurityGroupID{}, IngressRule{}, err
+		return IngressRule{}, err
 	}
 	rule.Cidr = cidr
 	if protocol == "-1" {
 		rule.FromPort = 0
 		rule.ToPort = 0
-		return id, rule, nil
+		return rule, nil
 	}
 	if rule.FromPort < 0 || rule.ToPort > 65535 || rule.ToPort < 0 || rule.FromPort > rule.ToPort {
-		return SecurityGroupID{}, IngressRule{}, Invalid("fromPort", "malformed")
+		return IngressRule{}, Invalid("fromPort", "malformed")
 	}
-	return id, rule, nil
+	return rule, nil
 }
 
 // canonicalProtocol accepts the names and protocol numbers a query client sends.
