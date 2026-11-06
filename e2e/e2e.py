@@ -17,6 +17,9 @@ Environment:
 
   VWS_E2E_STRICT   1 makes a skipped step a failure (exit 3). Default is off.
 
+  VWS_E2E_AWS_CLI  The aws CLI v2 the IAM and STS CLI steps run. Default is the
+                   aws on PATH. Without one those steps are skipped.
+
 A step that needs a missing capability prints skipped(reason). A skipped step
 is not a pass. The run ends with a banner and a status line: PASS, FAIL, or
 INCOMPLETE (nothing failed, something was skipped). The exit code is 1 on any
@@ -27,7 +30,10 @@ import datetime
 import hashlib
 import json
 import os
+import shutil
+import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -62,6 +68,9 @@ def client(service, key, secret, token=None, url=IAM_URL):
 iam = client("iam", KW["aws_access_key_id"], KW["aws_secret_access_key"])
 sts = client("sts", KW["aws_access_key_id"], KW["aws_secret_access_key"])
 
+AWS_CLI = shutil.which(os.environ.get("VWS_E2E_AWS_CLI", "aws"))
+TOOLS = {"aws-cli"} if AWS_CLI else set()
+
 STRICT = os.environ.get("VWS_E2E_STRICT") == "1"
 results = {"ok": 0, "skipped": 0, "FAIL": 0}
 SKIPPED = []
@@ -69,10 +78,11 @@ S = {}
 
 
 def step(name, fn, need=None):
-    if need and need not in CAPS:
+    if need and need not in CAPS | TOOLS:
         results["skipped"] += 1
         SKIPPED.append(name)
-        print(f"skipped({need} not available on {BACKEND} backend)  {name}")
+        where = "on this host" if need == "aws-cli" else f"on {BACKEND} backend"
+        print(f"skipped({need} not available {where})  {name}")
         return None
     try:
         out = fn()
@@ -995,6 +1005,235 @@ def identity():
 CONSOLE_URL = os.environ.get("VWS_E2E_CONSOLE", "http://127.0.0.1:8080")
 
 
+def aws_cli(*args, key=KW["aws_access_key_id"], secret=KW["aws_secret_access_key"], token=None):
+    """Runs the aws CLI against the IAM and STS listener with no profile, no
+    retries and JSON output. A failure raises with the CLI's stderr."""
+    env = {k: v for k, v in os.environ.items() if not k.startswith("AWS_")}
+    env.update(AWS_ACCESS_KEY_ID=key, AWS_SECRET_ACCESS_KEY=secret, AWS_DEFAULT_REGION="vws-1",
+               AWS_CONFIG_FILE=os.devnull, AWS_SHARED_CREDENTIALS_FILE=os.devnull,
+               AWS_MAX_ATTEMPTS="1", AWS_PAGER="", AWS_EC2_METADATA_DISABLED="true")
+    if token:
+        env["AWS_SESSION_TOKEN"] = token
+    try:
+        out = subprocess.run([AWS_CLI, "--endpoint-url", IAM_URL, "--output", "json", *args],
+                             env=env, capture_output=True, text=True, timeout=60)
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(f"aws {' '.join(args[:2])} timed out after {exc.timeout}s") from exc
+    if out.returncode != 0:
+        raise RuntimeError(f"aws {' '.join(args[:2])} exit {out.returncode}: {out.stderr.strip()}")
+    return json.loads(out.stdout) if out.stdout.strip() else {}
+
+
+def aws_cli_error(code, *args, **kw):
+    try:
+        aws_cli(*args, **kw)
+    except RuntimeError as exc:
+        check(f"({code})" in str(exc), f"want {code}: {exc}")
+        return
+    raise AssertionError(f"no error, want {code}")
+
+
+def cli_identity():
+    """The IAM and STS actions of #122 through the aws CLI v2: users, groups,
+    managed and inline policies on each entity, access keys, a virtual MFA
+    device, roles, then STS with the CLI-made key and the assumed role."""
+    def picked(pick, out):
+        got = pick(out)
+        fields = got.values() if isinstance(got, dict) else got if isinstance(got, tuple) else (got,)
+        check(all(fields), "a required field is empty")
+        return got
+
+    def creds(out):
+        return {k: out["Credentials"][k] for k in ("AccessKeyId", "SecretAccessKey", "SessionToken")}
+
+    def cli(name, *args, pick=None, **kw):
+        return step(f"aws {name}", lambda: picked(pick, aws_cli(*args, **kw)) if pick else aws_cli(*args, **kw),
+                    need="aws-cli")
+
+    def cli_error(name, code, *args, **kw):
+        return step(f"aws {name} is {code}", lambda: aws_cli_error(code, *args, **kw), need="aws-cli")
+
+    me = cli("sts get-caller-identity (root key)", "sts", "get-caller-identity",
+             pick=lambda out: {"Account": out["Account"], "Arn": out["Arn"]})
+    if not me:
+        return
+    account = me["Account"]
+    step("aws sts get-caller-identity is the account root", lambda: check(
+        me["Arn"] == f"arn:aws:iam::{account}:root", me["Arn"]))
+    try:
+        allow = json.dumps({"Version": "2012-10-17", "Statement": [
+            {"Effect": "Allow", "Action": ["ec2:Describe*", "sts:AssumeRole"], "Resource": "*"}]})
+        uarn = cli("iam create-user", "iam", "create-user", "--user-name", "cli-carol", "--path", "/cli/",
+                   pick=lambda out: out["User"]["Arn"])
+        if not uarn:
+            return
+        step("aws iam create-user answers the user ARN", lambda: check(
+            uarn == f"arn:vws:iam::{account}:user/cli/cli-carol", uarn))
+        cli_error("iam create-user again", "EntityAlreadyExists", "iam", "create-user", "--user-name", "cli-carol")
+        cli_error("iam create-user with a bad name", "ValidationError", "iam", "create-user", "--user-name", "cli carol;")
+        cli_error("iam get-user of a missing user", "NoSuchEntity", "iam", "get-user", "--user-name", "cli-nobody")
+        got = cli("iam get-user", "iam", "get-user", "--user-name", "cli-carol")
+        step("aws iam get-user reads the path", lambda: check(got["User"]["Path"] == "/cli/", got))
+        listed = cli("iam list-users --path-prefix", "iam", "list-users", "--path-prefix", "/cli/")
+        step("aws iam list-users finds the user", lambda: check(
+            [u["UserName"] for u in listed["Users"]] == ["cli-carol"], listed))
+
+        cli("iam create-group", "iam", "create-group", "--group-name", "cli-readers")
+        cli("iam add-user-to-group", "iam", "add-user-to-group", "--group-name", "cli-readers", "--user-name", "cli-carol")
+        group = cli("iam get-group", "iam", "get-group", "--group-name", "cli-readers")
+        step("aws iam get-group lists the member", lambda: check(
+            [u["UserName"] for u in group["Users"]] == ["cli-carol"], group))
+        groups = cli("iam list-groups-for-user", "iam", "list-groups-for-user", "--user-name", "cli-carol")
+        step("aws iam list-groups-for-user names the group", lambda: check(
+            [g["GroupName"] for g in groups["Groups"]] == ["cli-readers"], groups))
+
+        policy = cli("iam create-policy", "iam", "create-policy", "--policy-name", "cli-describe", "--path", "/cli/",
+                     "--policy-document", allow, pick=lambda out: out["Policy"]["Arn"])
+        if not policy:
+            return
+        parn = policy
+        cli("iam get-policy", "iam", "get-policy", "--policy-arn", parn)
+        version = cli("iam get-policy-version", "iam", "get-policy-version", "--policy-arn", parn, "--version-id", "v1")
+        step("aws iam get-policy-version returns the document", lambda: check(
+            "ec2:Describe*" in json.dumps(version["PolicyVersion"]["Document"]), version))
+        cli("iam attach-group-policy", "iam", "attach-group-policy", "--group-name", "cli-readers", "--policy-arn", parn)
+        attached = cli("iam list-attached-group-policies", "iam", "list-attached-group-policies",
+                       "--group-name", "cli-readers")
+        step("aws iam list-attached-group-policies names the policy", lambda: check(
+            [p["PolicyArn"] for p in attached["AttachedPolicies"]] == [parn], attached))
+        cli("iam attach-user-policy", "iam", "attach-user-policy", "--user-name", "cli-carol", "--policy-arn", parn)
+        cli("iam list-attached-user-policies", "iam", "list-attached-user-policies", "--user-name", "cli-carol")
+        policies = cli("iam list-policies --scope Local", "iam", "list-policies", "--scope", "Local", "--path-prefix", "/cli/")
+        step("aws iam list-policies finds the policy", lambda: check(
+            [p["Arn"] for p in policies["Policies"]] == [parn], policies))
+        deny = json.dumps({"Version": "2012-10-17", "Statement": [
+            {"Effect": "Deny", "Action": "ec2:DescribeVolumes", "Resource": "*"}]})
+        for kind, flag, name in (("user", "--user-name", "cli-carol"), ("group", "--group-name", "cli-readers")):
+            cli(f"iam put-{kind}-policy", "iam", f"put-{kind}-policy", flag, name, "--policy-name", "cli-deny",
+                "--policy-document", deny)
+            inline = cli(f"iam get-{kind}-policy", "iam", f"get-{kind}-policy", flag, name, "--policy-name", "cli-deny")
+            step(f"aws iam get-{kind}-policy returns the document", lambda inline=inline: check(
+                "ec2:DescribeVolumes" in json.dumps(inline["PolicyDocument"]), inline))
+            names = cli(f"iam list-{kind}-policies", "iam", f"list-{kind}-policies", flag, name)
+            step(f"aws iam list-{kind}-policies names the inline policy", lambda names=names: check(
+                names["PolicyNames"] == ["cli-deny"], names))
+
+        key = cli("iam create-access-key", "iam", "create-access-key", "--user-name", "cli-carol",
+                  pick=lambda out: (out["AccessKey"]["AccessKeyId"], out["AccessKey"]["SecretAccessKey"]))
+        if not key:
+            return
+        kid, ksecret = key
+        keys = cli("iam list-access-keys", "iam", "list-access-keys", "--user-name", "cli-carol")
+        step("aws iam list-access-keys shows the key Active", lambda: check(
+            [(k["AccessKeyId"], k["Status"]) for k in keys["AccessKeyMetadata"]] == [(kid, "Active")], keys))
+        carol = cli("sts get-caller-identity (new key)", "sts", "get-caller-identity", key=kid, secret=ksecret)
+        step("aws sts get-caller-identity names the new user", lambda: check(
+            carol["Arn"] == f"arn:aws:iam::{account}:user/cli/cli-carol", carol))
+        cli_error("iam list-users with the new key", "AccessDenied", "iam", "list-users", key=kid, secret=ksecret)
+        cli_error("sts get-caller-identity with a wrong secret", "SignatureDoesNotMatch",
+                  "sts", "get-caller-identity", key=kid, secret="wrong-secret")
+        session = cli("sts get-session-token", "sts", "get-session-token", "--duration-seconds", "900",
+                      key=kid, secret=ksecret, pick=creds)
+        if session:
+            c = session
+            same = cli("sts get-caller-identity (session token)", "sts", "get-caller-identity",
+                       key=c["AccessKeyId"], secret=c["SecretAccessKey"], token=c["SessionToken"])
+            step("aws session token is the same user", lambda: check(same["Arn"] == carol["Arn"], same))
+            cli_error("iam get-user with a session token issued without MFA", "InvalidClientTokenId",
+                      "iam", "get-user", key=c["AccessKeyId"], secret=c["SecretAccessKey"], token=c["SessionToken"])
+            cli_error("sts get-session-token with session credentials", "AccessDenied", "sts", "get-session-token",
+                      key=c["AccessKeyId"], secret=c["SecretAccessKey"], token=c["SessionToken"])
+
+        trust = json.dumps({"Version": "2012-10-17", "Statement": [{"Effect": "Allow", "Action": "sts:AssumeRole",
+                            "Principal": {"AWS": f"arn:vws:iam::{account}:user/cli/cli-carol"}}]})
+        role = cli("iam create-role", "iam", "create-role", "--role-name", "cli-ops", "--assume-role-policy-document", trust,
+                   pick=lambda out: out["Role"]["Arn"])
+        if not role:
+            return
+        rarn = role
+        cli("iam get-role", "iam", "get-role", "--role-name", "cli-ops")
+        cli("iam attach-role-policy", "iam", "attach-role-policy", "--role-name", "cli-ops", "--policy-arn", parn)
+        cli("iam list-attached-role-policies", "iam", "list-attached-role-policies", "--role-name", "cli-ops")
+        cli("iam put-role-policy", "iam", "put-role-policy", "--role-name", "cli-ops", "--policy-name", "cli-deny",
+            "--policy-document", deny)
+        cli("iam get-role-policy", "iam", "get-role-policy", "--role-name", "cli-ops", "--policy-name", "cli-deny")
+        roles = cli("iam list-roles", "iam", "list-roles")
+        step("aws iam list-roles finds the role", lambda: check(rarn in [r["Arn"] for r in roles["Roles"]], roles))
+        assumed = cli("sts assume-role", "sts", "assume-role", "--role-arn", rarn, "--role-session-name", "cli",
+                      key=kid, secret=ksecret, pick=creds)
+        if assumed:
+            c = assumed
+            who = cli("sts get-caller-identity (assumed role)", "sts", "get-caller-identity",
+                      key=c["AccessKeyId"], secret=c["SecretAccessKey"], token=c["SessionToken"])
+            step("aws assumed role identity is the role session", lambda: check(
+                who["Arn"] == f"arn:aws:sts::{account}:assumed-role/cli-ops/cli", who))
+        cli_error("sts assume-role by the root user is not trusted", "AccessDenied",
+                  "sts", "assume-role", "--role-arn", rarn, "--role-session-name", "cli")
+
+        out = tempfile.mkdtemp(prefix="vws-e2e-mfa-")
+        try:
+            mfa = cli("iam create-virtual-mfa-device", "iam", "create-virtual-mfa-device",
+                      "--virtual-mfa-device-name", "cli-phone", "--outfile", os.path.join(out, "seed"),
+                      "--bootstrap-method", "Base32StringSeed",
+                      pick=lambda out: out["VirtualMFADevice"]["SerialNumber"])
+            if mfa:
+                serial = mfa
+                step("aws iam create-virtual-mfa-device writes the seed", lambda: check(
+                    os.path.getsize(os.path.join(out, "seed")) > 0, "empty seed file"))
+                devices = cli("iam list-virtual-mfa-devices", "iam", "list-virtual-mfa-devices")
+                step("aws iam list-virtual-mfa-devices finds the device", lambda: check(
+                    serial in [d["SerialNumber"] for d in devices["VirtualMFADevices"]], devices))
+                cli("iam delete-virtual-mfa-device", "iam", "delete-virtual-mfa-device", "--serial-number", serial)
+        finally:
+            shutil.rmtree(out, ignore_errors=True)
+
+        cli("iam delete-role-policy", "iam", "delete-role-policy", "--role-name", "cli-ops", "--policy-name", "cli-deny")
+        cli("iam detach-role-policy", "iam", "detach-role-policy", "--role-name", "cli-ops", "--policy-arn", parn)
+        cli("iam delete-role", "iam", "delete-role", "--role-name", "cli-ops")
+        cli("iam delete-access-key", "iam", "delete-access-key", "--user-name", "cli-carol", "--access-key-id", kid)
+        for kind, flag, name in (("user", "--user-name", "cli-carol"), ("group", "--group-name", "cli-readers")):
+            cli(f"iam delete-{kind}-policy", "iam", f"delete-{kind}-policy", flag, name, "--policy-name", "cli-deny")
+            cli(f"iam detach-{kind}-policy", "iam", f"detach-{kind}-policy", flag, name, "--policy-arn", parn)
+        cli("iam remove-user-from-group", "iam", "remove-user-from-group", "--group-name", "cli-readers",
+            "--user-name", "cli-carol")
+        cli("iam delete-policy", "iam", "delete-policy", "--policy-arn", parn)
+        cli("iam delete-group", "iam", "delete-group", "--group-name", "cli-readers")
+        cli("iam delete-user", "iam", "delete-user", "--user-name", "cli-carol")
+        cli_error("iam delete-user again", "NoSuchEntity", "iam", "delete-user", "--user-name", "cli-carol")
+
+    finally:
+        cli_sweep(account)
+
+def cli_sweep(account):
+    """Removes whatever cli_identity() left after an early return, so a re-run
+    against a backend that keeps state starts clean. Every error is ignored."""
+    parn = f"arn:vws:iam::{account}:policy/cli/cli-describe"
+    calls = [
+        ("iam", "delete-virtual-mfa-device", "--serial-number", f"arn:vws:iam::{account}:mfa/cli-phone"),
+        ("iam", "delete-role-policy", "--role-name", "cli-ops", "--policy-name", "cli-deny"),
+        ("iam", "detach-role-policy", "--role-name", "cli-ops", "--policy-arn", parn),
+        ("iam", "delete-role", "--role-name", "cli-ops"),
+        ("iam", "delete-user-policy", "--user-name", "cli-carol", "--policy-name", "cli-deny"),
+        ("iam", "detach-user-policy", "--user-name", "cli-carol", "--policy-arn", parn),
+        ("iam", "delete-group-policy", "--group-name", "cli-readers", "--policy-name", "cli-deny"),
+        ("iam", "detach-group-policy", "--group-name", "cli-readers", "--policy-arn", parn),
+        ("iam", "remove-user-from-group", "--group-name", "cli-readers", "--user-name", "cli-carol"),
+        ("iam", "delete-policy", "--policy-arn", parn),
+        ("iam", "delete-group", "--group-name", "cli-readers"),
+    ]
+    try:
+        keys = aws_cli("iam", "list-access-keys", "--user-name", "cli-carol")["AccessKeyMetadata"]
+    except (RuntimeError, KeyError, ValueError):
+        keys = []
+    calls += [("iam", "delete-access-key", "--user-name", "cli-carol", "--access-key-id", k["AccessKeyId"])
+              for k in keys]
+    calls.append(("iam", "delete-user", "--user-name", "cli-carol"))
+    for args in calls:
+        try:
+            aws_cli(*args)
+        except (RuntimeError, ValueError):
+            pass
+
 def console_call(method, path, body=None, cookies=None, headers=None):
     """One console request. Returns (status, json body or None, Set-Cookie headers)."""
     h = {}
@@ -1137,6 +1376,7 @@ if __name__ == "__main__":
     addresses()
     objects()
     identity()
+    cli_identity()
     console_login()
     console_static()
     cleanup()
