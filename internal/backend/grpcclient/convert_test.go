@@ -191,9 +191,9 @@ func TestDeleteUnderVpcKeepsItsAction(t *testing.T) {
 }
 
 func TestSubnetDeletingRoundTrip(t *testing.T) {
-	state, err := subnetStateOf(commonv1.ReconciliationState_RECONCILIATION_STATE_DELETING)
-	if err != nil || state != resource.SubnetDeleting {
-		t.Fatalf("%v %s", err, state)
+	state := subnetStateOf(commonv1.ReconciliationState_RECONCILIATION_STATE_DELETING)
+	if state != resource.SubnetDeleting {
+		t.Fatalf("state %s", state)
 	}
 	wire := subnetProto(resource.Subnet{ID: mustSubnet(t), State: resource.SubnetDeleting}, "p", "vpc-01234567")
 	if wire.GetStatus().GetObserved().GetState() != commonv1.ReconciliationState_RECONCILIATION_STATE_DELETING {

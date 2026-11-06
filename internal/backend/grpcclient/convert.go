@@ -679,6 +679,8 @@ func subnetProto(sub resource.Subnet, projectID, vpcID string) *networkv1.Subnet
 		obs = commonv1.ReconciliationState_RECONCILIATION_STATE_READY
 	case resource.SubnetDeleting:
 		obs = commonv1.ReconciliationState_RECONCILIATION_STATE_DELETING
+	case resource.SubnetFailed:
+		obs = commonv1.ReconciliationState_RECONCILIATION_STATE_ERROR
 	case resource.SubnetPending:
 	default:
 	}
@@ -710,10 +712,7 @@ func subnetModel(in *networkv1.Subnet) (resource.Subnet, error) {
 	if err != nil {
 		return resource.Subnet{}, err
 	}
-	state, err := subnetStateOf(in.GetStatus().GetObserved().GetState())
-	if err != nil {
-		return resource.Subnet{}, err
-	}
+	state := subnetStateOf(in.GetStatus().GetObserved().GetState())
 	var vpcID resource.VpcID
 	if parsed, parseErr := resource.Parse[resource.VpcID](parts[5]); parseErr == nil {
 		vpcID = parsed
@@ -728,18 +727,18 @@ func subnetModel(in *networkv1.Subnet) (resource.Subnet, error) {
 	}, nil
 }
 
-func subnetStateOf(obs commonv1.ReconciliationState) (resource.SubnetState, error) {
+func subnetStateOf(obs commonv1.ReconciliationState) resource.SubnetState {
 	switch obs {
 	case commonv1.ReconciliationState_RECONCILIATION_STATE_PENDING, commonv1.ReconciliationState_RECONCILIATION_STATE_RECONCILING:
-		return resource.SubnetPending, nil
+		return resource.SubnetPending
 	case commonv1.ReconciliationState_RECONCILIATION_STATE_READY:
-		return resource.SubnetAvailable, nil
+		return resource.SubnetAvailable
 	case commonv1.ReconciliationState_RECONCILIATION_STATE_DELETING:
-		return resource.SubnetDeleting, nil
+		return resource.SubnetDeleting
 	case commonv1.ReconciliationState_RECONCILIATION_STATE_ERROR, commonv1.ReconciliationState_RECONCILIATION_STATE_UNSPECIFIED:
-		return 0, resource.Internal(errors.New("bad subnet state"))
+		return resource.SubnetFailed
 	default:
-		return 0, resource.Internal(errors.New("bad subnet state"))
+		return resource.SubnetFailed
 	}
 }
 
