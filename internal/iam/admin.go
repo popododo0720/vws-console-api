@@ -155,17 +155,25 @@ type PolicyVersionPage struct {
 	Marker      string
 }
 
-// The two AWS access key statuses.
+// The access key statuses VWS stores. AWS also lists Expired, which vws-iam
+// has no state for (#396).
 const (
 	AccessKeyActive   = "Active"
 	AccessKeyInactive = "Inactive"
+	AccessKeyExpired  = "Expired"
 )
+
+// AccessKeyExpiredMessage is the ValidationError message of an UpdateAccessKey
+// that asks for Expired.
+const AccessKeyExpiredMessage = "Status Expired cannot be set: an access key can be set only to Active or Inactive."
 
 // CheckAccessKeyStatus checks the Status member of UpdateAccessKey.
 func CheckAccessKeyStatus(status string) error {
 	switch status {
 	case AccessKeyActive, AccessKeyInactive:
 		return nil
+	case AccessKeyExpired:
+		return resource.Invalid("status", AccessKeyExpiredMessage)
 	case "":
 		return resource.Invalid("status",
 			"1 validation error detected: Value null at 'status' failed to satisfy constraint: Member must not be null")
