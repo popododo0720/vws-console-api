@@ -174,7 +174,7 @@ func (c computeClient) undoLaunch(ctx context.Context, run *launch.Launch, key s
 	defer cancel()
 	plan := run.Record().Plan
 	for _, step := range slices.Backward(plan) {
-		if err := c.undoStep(ctx, key, run.Attempt(), step); err != nil {
+		if err := c.undoStep(ctx, "undo-", key, run.Attempt(), step); err != nil {
 			return fmt.Errorf("undo %s %d: %w", step.Kind, step.Index, err)
 		}
 	}
@@ -186,9 +186,11 @@ const undoAttempts = 3
 
 // undoStep deletes one planned resource and waits until it is gone. Compute
 // deletes an instance's boot volume with it; the volume delete after it
-// covers a volume whose instance was never created.
-func (c computeClient) undoStep(ctx context.Context, key string, attempt int, step launch.Step) error {
-	requestID := requestUUID(append(launchParts(key, "undo-"+string(step.Kind), attempt, step.Index), step.Resource)...)
+// covers a volume whose instance was never created. The request id is
+// derived from verb, the step and the attempt, so a retry of one undo or GC
+// sends the same delete.
+func (c computeClient) undoStep(ctx context.Context, verb, key string, attempt int, step launch.Step) error {
+	requestID := requestUUID(append(launchParts(key, verb+string(step.Kind), attempt, step.Index), step.Resource)...)
 	var err error
 	for try := range undoAttempts {
 		if try > 0 {

@@ -3,6 +3,7 @@ package grpcclient
 import (
 	"context"
 	"maps"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -111,5 +112,46 @@ func TestUnstampedLongDeviceRecordIsBounded(t *testing.T) {
 	got = pruneDetachRecords(expired, now)
 	if _, _, _, stamped, ok := parseDetachRecord(got[labelDetachPrefix+"vol-g"]); !ok || !stamped || len(got) != 1 {
 		t.Fatalf("records once a stamped record expired: %v; want only vol-g, stamped", got)
+	}
+}
+
+// An attachment whose device name no detach record can hold (over 33 bytes,
+// or with a space) is one AttachVolume no longer makes, since it takes only
+// EC2 device names. A client-token detach of one is refused before compute
+// is called, naming the device, rather than sent as a label compute refuses;
+// a retry is refused the same way, and a detach without a client token keeps
+// no record and goes through (#400).
+func TestDetachOfADeviceNoRecordCanHoldIsRefused(t *testing.T) {
+	for _, device := range []string{"/dev/" + strings.Repeat("x", 29), "/dev/sd f"} {
+		t.Run(device, func(t *testing.T) {
+			world, client, name, vols, inst := capacityWorld(t, 1)
+			world.mu.Lock()
+			world.inst[0].Spec.Volumes[1].DeviceName = device
+			world.mu.Unlock()
+			before := maps.Clone(world.labelsOf(name))
+			scope := backend.Scope{Account: mustAccount(t)}
+			ctx := context.Background()
+			req := resource.DetachVolumeRequest{VolumeID: vols[0], InstanceID: inst}
+			m := backend.Mutation{Scope: scope, Key: "k-unholdable", Fingerprint: "fp-unholdable"}
+			for range 2 {
+				_, err := client.DetachVolume(ctx, m, req)
+				e := resource.AsError(err)
+				if e == nil || e.Code != resource.CodeInvalidArgument || e.Field != "VolumeId" ||
+					!strings.Contains(e.Message, strconv.Quote(device)) {
+					t.Fatalf("detach: %v; want InvalidArgument on VolumeId naming %q", err, device)
+				}
+				if n := world.updateCount(); n != 0 {
+					t.Fatalf("refused detach sent %d updates", n)
+				}
+			}
+			if after := world.labelsOf(name); !maps.Equal(after, before) {
+				t.Fatalf("labels changed: %v, want %v", after, before)
+			}
+			minted := backend.Mutation{Scope: scope, Key: "k-minted", Fingerprint: "fp-minted", MintedToken: true}
+			got, err := client.DetachVolume(ctx, minted, req)
+			if err != nil || got.Items[0].Device != device {
+				t.Fatalf("detach without a client token: %+v, %v", got, err)
+			}
+		})
 	}
 }

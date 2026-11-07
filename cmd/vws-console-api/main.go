@@ -121,6 +121,15 @@ func run(ctx context.Context, args []string) (err error) {
 	}
 	fs.IntVar(&requestLimits.MaxKeys, "ec2-limit-max-keys", requestLimits.MaxKeys,
 		"(account, action) buckets the EC2 request limit holds before it evicts (100 to 10000000)")
+	launchLimits := throttle.DefaultLaunchLimits()
+	fs.IntVar(&launchLimits.PerAccount, "launch-inflight-per-account", launchLimits.PerAccount,
+		"instances one account may have in flight in RunInstances, per process (10 to 100000, at most the global cap)")
+	fs.IntVar(&launchLimits.Global, "launch-inflight-global", launchLimits.Global,
+		"instances in flight in RunInstances across all accounts, per process (10 to 100000)")
+	fs.IntVar(&launchLimits.Queue, "launch-queue", launchLimits.Queue,
+		"RunInstances calls that may wait for room at once, all accounts together; past it a launch is refused (0 to 100000)")
+	fs.DurationVar(&launchLimits.Wait, "launch-queue-wait", launchLimits.Wait,
+		"longest a RunInstances call waits for room before RequestLimitExceeded (0 to 30s)")
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("flags: %w", err)
 	}
@@ -143,6 +152,9 @@ func run(ctx context.Context, args []string) (err error) {
 		return fmt.Errorf("-ec2-*: %w", err)
 	}
 	requests := throttle.New(requestLimits, nil)
+	if err := launchLimits.Validate(); err != nil {
+		return fmt.Errorf("-launch-*: %w", err)
+	}
 	trusted, err := console.ParseTrustedProxies(*trustedProxies)
 	if err != nil {
 		return fmt.Errorf("-trusted-proxies: %w", err)
@@ -154,6 +166,8 @@ func run(ctx context.Context, args []string) (err error) {
 	caller := resource.Caller{Account: account, Subject: *accessKey, Principal: iam.RootARN(account), Root: true}
 
 	var set backend.Set
+	// sweep undoes the launches a dead request left behind; nil without a launch store.
+	var sweep func(context.Context)
 	switch *backendKind {
 	case "fake":
 		if *launchNamespace != "" {
@@ -183,13 +197,14 @@ func run(ctx context.Context, args []string) (err error) {
 				return fmt.Errorf("-launch-namespace: %w", openErr)
 			}
 			client.SetLaunches(launch.NewTracker(store, nil))
+			sweep = client.SweepLaunches
 		}
 		set = client.Set()
 	default:
 		return fmt.Errorf("unknown -backend %q", *backendKind)
 	}
 
-	svc := cloud.New(cloud.Config{Backends: set, Audit: logger})
+	svc := cloud.New(cloud.Config{Backends: set, Audit: logger, Launches: throttle.NewLaunches(launchLimits)})
 	// The static key is the account root; with -iam=fake or -iam=grpc it
 	// sits in front of the IAM client through iam.WithRoot.
 	root := iam.NewStatic(*accessKey, *secret, account)
@@ -235,6 +250,9 @@ func run(ctx context.Context, args []string) (err error) {
 
 	ctx, stop := signal.NotifyContext(ctx, stopSignals()...)
 	defer stop()
+	if sweep != nil {
+		go sweep(ctx)
+	}
 	return server.Serve(ctx, server.Options{Logger: logger, OpsAddr: *opsAddr, Surfaces: []server.Surface{
 		{Name: "console", Addr: *consoleAddr, Handler: console.New(console.Config{
 			Service:        svc,

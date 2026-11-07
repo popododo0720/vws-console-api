@@ -9,9 +9,21 @@ import (
 	"github.com/popododo0720/vws-console-api/internal/resource"
 )
 
-// RunInstances accepts a launch and returns the operation.
+// RunInstances accepts a launch and returns the operation. The backend call
+// creates every volume and instance before it returns, so it runs inside the
+// launch cap: past it a launch waits briefly, then is refused with nothing
+// created.
 func (s *Service) RunInstances(ctx context.Context, c resource.Caller, token resource.ClientToken, req resource.RunInstancesRequest) (resource.Accepted[resource.Instance], error) {
-	return mutate(ctx, s, c, token, req, s.backends.Compute.RunInstances)
+	return mutate(ctx, s, c, token, req, func(
+		ctx context.Context, m backend.Mutation, req resource.RunInstancesRequest,
+	) (resource.Accepted[resource.Instance], error) {
+		release, err := s.launches.Acquire(ctx, c.Account, req.Count)
+		if err != nil {
+			return resource.Accepted[resource.Instance]{}, err
+		}
+		defer release()
+		return s.backends.Compute.RunInstances(ctx, m, req)
+	})
 }
 
 // StopInstances accepts a stop and returns the operation.

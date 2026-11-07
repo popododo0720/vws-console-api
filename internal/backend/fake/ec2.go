@@ -122,6 +122,11 @@ func (c compute) changeInstances(ctx context.Context, m backend.Mutation, action
 		}
 		return resource.Accepted[resource.InstanceStateChange]{}, err
 	}
+	if action == resource.ActionTerminateInstances {
+		for _, item := range plans {
+			c.w.releaseAddresses(item.inst.ID)
+		}
+	}
 	acc := resource.Accepted[resource.InstanceStateChange]{Operation: op, Items: changes}
 	c.w.finish(m.Key, m.Fingerprint, acc)
 	return acc, nil
@@ -869,6 +874,16 @@ func (w *World) finishDetach(instID resource.InstanceID, volID resource.VolumeID
 	vol.Device = ""
 	vol.AttachTime = time.Time{}
 	vol.AttachState = ""
+}
+
+// releaseAddresses disassociates the Elastic IPs of a terminating instance,
+// as EC2 does. The addresses stay allocated.
+func (w *World) releaseAddresses(id resource.InstanceID) {
+	for _, addr := range w.addr {
+		if addr.InstanceID == id {
+			addr.InstanceID = resource.InstanceID{}
+		}
+	}
 }
 
 // dropRootVolumes deletes the volumes that go with a terminated instance.

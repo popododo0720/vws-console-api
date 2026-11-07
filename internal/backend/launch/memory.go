@@ -35,6 +35,39 @@ func (m *Memory) Load(_ context.Context, key string) (Record, string, bool, erro
 	return clone(e.rec), strconv.Itoa(e.version), true, nil
 }
 
+// Unfinished returns every record that is running or undoing.
+func (m *Memory) Unfinished(ctx context.Context) ([]Stored, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]Stored, 0, len(m.records))
+	for _, e := range m.records {
+		if e.rec.Phase != Running && e.rec.Phase != Undoing {
+			continue
+		}
+		out = append(out, Stored{Record: clone(e.rec), Version: strconv.Itoa(e.version)})
+	}
+	return out, nil
+}
+
+// Uncollected returns every record with a dead attempt left to collect.
+func (m *Memory) Uncollected(ctx context.Context) ([]Stored, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]Stored, 0, len(m.records))
+	for _, e := range m.records {
+		if e.rec.Uncollected() {
+			out = append(out, Stored{Record: clone(e.rec), Version: strconv.Itoa(e.version)})
+		}
+	}
+	return out, nil
+}
+
 // Create stores rec when its key has no record. Like the Kubernetes API, it
 // refuses a cancelled context.
 func (m *Memory) Create(ctx context.Context, rec Record) (string, error) { return m.put(ctx, rec, "") }

@@ -48,6 +48,13 @@ func (c computeClient) TerminateInstances(ctx context.Context, m backend.Mutatio
 		}
 		prev = append(prev, inst)
 	}
+	// Every release comes before the first delete, so a terminate cut short
+	// while releasing has deleted nothing and its retry reads every instance.
+	for i, inst := range prev {
+		if err := c.releaseAddresses(ctx, m.Key, projectID, i, inst.ID); err != nil {
+			return resource.Accepted[resource.InstanceStateChange]{}, err
+		}
+	}
 	var op resource.Operation
 	items := make([]resource.InstanceStateChange, 0, len(prev))
 	for i, inst := range prev {
@@ -75,6 +82,50 @@ func (c computeClient) TerminateInstances(ctx context.Context, m backend.Mutatio
 	op.Action = resource.ActionTerminateInstances
 	op.Targets = stateRefs(items)
 	return resource.Accepted[resource.InstanceStateChange]{Operation: op, Items: items}, nil
+}
+
+// releaseAddresses clears each Elastic IP association that names the
+// instance at index i of a terminate, as EC2 disassociates on terminate. It
+// runs before any DeleteInstance, which compute refuses while an association
+// names the instance (instance.proto). Compute deletes the boot volume once
+// the instance is gone. Each request id comes from key, the index and the
+// address, so a retry of a cut-short terminate sends the same updates.
+func (c computeClient) releaseAddresses(
+	ctx context.Context, key, projectID string, i int, id resource.InstanceID,
+) error {
+	name := instanceName(projectID, id.String())
+	token := ""
+	for range 50 {
+		out, err := c.addresses.ListAddresses(ctx, &networkv1.ListAddressesRequest{
+			Parent: regionParent(projectID), PageSize: 100, PageToken: token,
+		})
+		if err != nil {
+			return fromRPC(err)
+		}
+		for _, addr := range out.GetAddresses() {
+			if addr.GetSpec().GetAssociation().GetInstance() != name && addr.GetStatus().GetInstance() != name {
+				continue
+			}
+			updated, err := c.addresses.UpdateAddress(ctx, &networkv1.UpdateAddressRequest{
+				Address: &networkv1.Address{
+					Name: addr.GetName(),
+					Spec: &networkv1.AddressSpec{IpVersion: networkv1.IpVersion_IP_VERSION_IPV4},
+				},
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.association"}},
+				RequestId:  requestUUID(key, "terminate-addr", strconv.Itoa(i), addr.GetName()),
+			})
+			if err != nil {
+				return fromNamedRPC(addr.GetName(), err)
+			}
+			if err := rpcErr(updated, nil); err != nil {
+				return err
+			}
+		}
+		if token = out.GetNextPageToken(); token == "" {
+			return nil
+		}
+	}
+	return resource.Internal(errors.New("address listing did not end"))
 }
 
 // CreateTags rewrites each instance's labels with the merged tags. Compute
@@ -775,7 +826,11 @@ func (c computeClient) writeDetach(
 		if detachRecordsInWindow(raw, now, vol.ID.String()) >= backend.MaxDetachReplays {
 			return zero, backend.DetachReplaysExhausted(model.ID)
 		}
-		record = map[string]string{recordKey: detachRecordValue(detachRequestHex(m.Key), device, now)}
+		value := detachRecordValue(detachRequestHex(m.Key), device, now)
+		if _, got, _, _, ok := parseDetachRecord(value); !ok || got != device || len(value) > labelValueMax {
+			return zero, detachDeviceErr(device)
+		}
+		record = map[string]string{recordKey: value}
 	}
 	var labels map[string]string
 	var err error

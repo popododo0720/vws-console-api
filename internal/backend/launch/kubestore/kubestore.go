@@ -39,6 +39,14 @@ const (
 	// managedBy marks the ConfigMaps this package writes.
 	managedBy      = "app.kubernetes.io/managed-by"
 	managedByValue = "vws-console-api"
+	// phaseLabel is the record's phase, so the sweep lists only unfinished
+	// launches instead of every record ever written.
+	phaseLabel = "vws-launch-phase"
+	// gcLabel is pending while the record has a dead attempt the launch GC
+	// has not collected and done after, so the GC lists only those.
+	gcLabel   = "vws-launch-gc"
+	gcDone    = "done"
+	gcPending = "pending"
 	// attemptTimeout bounds one HTTP request to the Kubernetes API.
 	attemptTimeout = 3 * time.Second
 	// callTimeout bounds one Load, Create or Update, every retry included:
@@ -119,6 +127,67 @@ func (s *Store) Load(ctx context.Context, key string) (launch.Record, string, bo
 	return rec, cm.ResourceVersion, true, nil
 }
 
+// listPage bounds the ConfigMaps one List request returns.
+const listPage = 250
+
+// Unfinished reads the records this package wrote whose phase label is not
+// succeeded or failed. A record written before the label existed has none
+// and is read too.
+func (s *Store) Unfinished(ctx context.Context) ([]launch.Stored, error) {
+	return s.list(ctx, fmt.Sprintf("%s=%s,%s notin (%s,%s)",
+		managedBy, managedByValue, phaseLabel, launch.Succeeded, launch.Failed))
+}
+
+// Uncollected reads the records this package wrote whose GC label is
+// pending, and the failed ones written before the label existed, whose
+// attempt is dead. A record of that age that did not fail is not read: one
+// still open gets the label on its next write, and a succeeded one, never
+// written again, would otherwise be read on every pass.
+func (s *Store) Uncollected(ctx context.Context) ([]launch.Stored, error) {
+	pending, err := s.list(ctx, fmt.Sprintf("%s=%s,%s=%s", managedBy, managedByValue, gcLabel, gcPending))
+	legacy, legacyErr := s.list(ctx, fmt.Sprintf("%s=%s,!%s,%s=%s",
+		managedBy, managedByValue, gcLabel, phaseLabel, launch.Failed))
+	return append(pending, legacy...), errors.Join(err, legacyErr)
+}
+
+// list reads the records selector matches, a page at a time, each call
+// within the store's budget. It returns the records it could decode, and an
+// error naming every ConfigMap it could not, so one bad record does not hide
+// the others.
+func (s *Store) list(ctx context.Context, selector string) ([]launch.Stored, error) {
+	var out []launch.Stored
+	var bad []error
+	opts := metav1.ListOptions{LabelSelector: selector, Limit: listPage}
+	for {
+		var page *corev1.ConfigMapList
+		err := retryTransient(ctx, s.budget, func(ctx context.Context) error {
+			var err error
+			page, err = s.maps.List(ctx, opts)
+			return err //nolint:wrapcheck // retryTransient inspects the API error; it is wrapped below
+		})
+		if err != nil {
+			return out, errors.Join(append(bad, fmt.Errorf("list %s: %w", s.namespace, err))...)
+		}
+		for i := range page.Items {
+			cm := &page.Items[i]
+			var rec launch.Record
+			if err := json.Unmarshal([]byte(cm.Data[dataKey]), &rec); err != nil {
+				bad = append(bad, fmt.Errorf("decode %s/%s: %w", s.namespace, cm.Name, err))
+				continue
+			}
+			if Name(rec.Key) != cm.Name {
+				bad = append(bad, fmt.Errorf("%s/%s holds key %q", s.namespace, cm.Name, rec.Key))
+				continue
+			}
+			out = append(out, launch.Stored{Record: rec, Version: cm.ResourceVersion})
+		}
+		if page.Continue == "" {
+			return out, errors.Join(bad...)
+		}
+		opts.Continue = page.Continue
+	}
+}
+
 // Create writes rec when its key has no ConfigMap.
 func (s *Store) Create(ctx context.Context, rec launch.Record) (string, error) {
 	cm, err := s.configMap(rec, "")
@@ -169,12 +238,16 @@ func (s *Store) configMap(rec launch.Record, version string) (*corev1.ConfigMap,
 	if err != nil {
 		return nil, fmt.Errorf("encode %s: %w", Name(rec.Key), err)
 	}
+	gc := gcDone
+	if rec.Uncollected() {
+		gc = gcPending
+	}
 	cm := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:            Name(rec.Key),
 			Namespace:       s.namespace,
 			ResourceVersion: version,
-			Labels:          map[string]string{managedBy: managedByValue},
+			Labels:          map[string]string{managedBy: managedByValue, phaseLabel: string(rec.Phase), gcLabel: gc},
 		},
 		Data: map[string]string{dataKey: string(data)},
 	}
