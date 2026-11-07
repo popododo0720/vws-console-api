@@ -39,13 +39,12 @@ func (c compute) RunInstances(ctx context.Context, m backend.Mutation, req resou
 			return resource.Accepted[resource.Instance]{}, resource.NotFound(resource.KindKeyPair, req.KeyName)
 		}
 	}
-	if !resource.CanLaunchImage(m.Account, req.ImageID) {
-		// A seeded image launches when the caller can read it, the same
-		// visibility DescribeImages applies (#350).
-		img, ok := c.w.img[req.ImageID]
-		if !ok || (img.OwnerID != m.Account && !img.Public) {
-			return resource.Accepted[resource.Instance]{}, resource.ImageNotFound(req.ImageID)
-		}
+	img, err := c.launchImage(m.Account, req.ImageID)
+	if err != nil {
+		return resource.Accepted[resource.Instance]{}, err
+	}
+	if req.RootVolumeSize, err = req.RootSizeFor(img); err != nil {
+		return resource.Accepted[resource.Instance]{}, err
 	}
 	resID, err := resource.Mint[resource.ReservationID](c.w.entropy)
 	if err != nil {
@@ -100,7 +99,7 @@ func (c compute) RunInstances(ctx context.Context, m backend.Mutation, req resou
 			AttachTime: launched,
 		}}
 		roots = append(roots, resource.Volume{
-			ID: volID, OwnerID: m.Account, SizeGiB: resource.RootVolumeSizeGiB, Zone: resource.ZoneName, Type: req.RootType(),
+			ID: volID, OwnerID: m.Account, SizeGiB: req.RootSize(), Zone: resource.ZoneName, Type: req.RootType(),
 			State: resource.VolumeInUse, InstanceID: id, Device: resource.RootDeviceName,
 			CreateTime: launched, AttachTime: launched, DeleteOnTermination: true,
 			AttachState: resource.AttachmentAttached, Iops: iops, Throughput: miBps,
@@ -291,4 +290,20 @@ func vpcOf(sub *resource.Subnet) resource.VpcID {
 		return resource.VpcID{}
 	}
 	return sub.VpcID
+}
+
+// launchImage is the image account launches as id: the catalog image, or a
+// seeded image the caller can read, the same visibility DescribeImages
+// applies (#350).
+func (c compute) launchImage(account resource.AccountID, id resource.ImageID) (resource.Image, error) {
+	for _, img := range resource.KnownImages(account) {
+		if img.ID == id && resource.CanLaunchImage(account, id) {
+			return img, nil
+		}
+	}
+	img, ok := c.w.img[id]
+	if !ok || (img.OwnerID != account && !img.Public) {
+		return resource.Image{}, resource.ImageNotFound(id)
+	}
+	return *img, nil
 }

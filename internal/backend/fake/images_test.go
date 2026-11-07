@@ -130,3 +130,49 @@ func image(t *testing.T, id string, owner resource.AccountID, public bool) resou
 	}
 	return resource.Image{ID: parsed, OwnerID: owner, Name: id, State: "available", Public: public}
 }
+
+// #423: a seeded image with a size is the floor of the root volume, and an
+// omitted root size is the image's.
+func TestRootVolumeFollowsASeededImageSize(t *testing.T) {
+	ctx := context.Background()
+	account, err := resource.Parse[resource.AccountID]("123456789012")
+	if err != nil {
+		t.Fatal(err)
+	}
+	big := image(t, "ami-00000000000000001", account, false)
+	big.SizeGiB = 20
+	w := New(Options{Images: []resource.Image{big}})
+	set := w.Set()
+	scope := backend.Scope{Account: account}
+	vpc, err := set.Network.CreateVpc(ctx, backend.Mutation{Scope: scope, Key: "vpc", Fingerprint: "vpc"},
+		resource.CreateVpcRequest{Cidr: "10.0.0.0/16"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sub, err := set.Network.CreateSubnet(ctx, backend.Mutation{Scope: scope, Key: "sub", Fingerprint: "sub"},
+		resource.CreateSubnetRequest{VpcID: vpc.Items[0].ID, Cidr: "10.0.1.0/24"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := func(key string, size int64) (resource.Accepted[resource.Instance], error) {
+		return set.Compute.RunInstances(ctx, backend.Mutation{Scope: scope, Key: key, Fingerprint: key},
+			resource.RunInstancesRequest{
+				ImageID: big.ID, InstanceType: "vws.small", SubnetID: sub.Items[0].ID, Count: 1, RootVolumeSize: size,
+			})
+	}
+	if _, err := run("below", 19); resource.CodeOf(err) != resource.CodeInvalidArgument {
+		t.Fatalf("a 19 GiB root on a 20 GiB image: %v", err)
+	}
+	for key, c := range map[string]struct{ size, want int64 }{"omitted": {0, 20}, "larger": {25, 25}} {
+		acc, err := run(key, c.size)
+		if err != nil {
+			t.Fatalf("%s: %v", key, err)
+		}
+		vols, err := set.Compute.DescribeVolumes(ctx, scope, resource.VolumeQuery{
+			IDs: []resource.VolumeID{acc.Items[0].BlockDevices[0].VolumeID}, Page: resource.PageRequest{Size: 50},
+		})
+		if err != nil || len(vols.Items) != 1 || vols.Items[0].SizeGiB != c.want {
+			t.Fatalf("%s: %v %+v, want %d GiB", key, err, vols.Items, c.want)
+		}
+	}
+}

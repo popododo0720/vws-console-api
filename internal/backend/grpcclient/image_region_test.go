@@ -40,6 +40,7 @@ const (
 type imageRecord struct {
 	project string
 	region  string
+	sizeGiB int64
 }
 
 type regionalImages struct {
@@ -53,6 +54,7 @@ type regionalImages struct {
 	volumes    int
 	instances  int
 	image      string
+	size       int64
 	labels     map[string]string
 	images     map[string]imageRecord
 	imageReads int
@@ -97,7 +99,7 @@ func (s *regionalImages) GetImage(
 	if !ok || !found || stored.project != projectID || stored.region != region {
 		return nil, status.Error(codes.NotFound, "image "+req.GetName()+" not found")
 	}
-	return &computev1.Image{Name: req.GetName()}, nil
+	return &computev1.Image{Name: req.GetName(), Status: &computev1.ImageStatus{SizeGib: stored.sizeGiB}}, nil
 }
 
 // imagePath splits a compute image resource name into its stored scope.
@@ -115,6 +117,7 @@ func (s *regionalImages) CreateVolume(
 	s.mu.Lock()
 	s.volumes++
 	s.image = req.GetVolume().GetSpec().GetImage()
+	s.size = req.GetVolume().GetSpec().GetSizeGib()
 	s.mu.Unlock()
 	projectID, err := projectOfName(req.GetParent())
 	if err != nil {
