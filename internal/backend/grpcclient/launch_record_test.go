@@ -11,10 +11,10 @@ import (
 	"github.com/popododo0720/vws-console-api/internal/resource"
 )
 
-// launchFixture is a client over the regional test servers with a launch
-// tracker over an in-memory store.
+// launchFixture is a client over a launchWorld with a launch tracker over an
+// in-memory store.
 type launchFixture struct {
-	boot   *regionalImages
+	boot   *launchWorld
 	client computeClient
 	store  *launch.Memory
 	m      backend.Mutation
@@ -22,7 +22,7 @@ type launchFixture struct {
 
 func newLaunch(t *testing.T, key string) launchFixture {
 	t.Helper()
-	boot, client := startRegional(t)
+	boot, client := startLaunchWorld(t)
 	store := &launch.Memory{}
 	client.launches = launch.NewTracker(store, nil)
 	m := backend.Mutation{Scope: backend.Scope{Account: mustAccount(t)}, Key: key, Fingerprint: "fp"}
@@ -57,7 +57,7 @@ func (f launchFixture) plan(count int) []launch.Step {
 func (f launchFixture) created() (volumes, instances int) {
 	f.boot.mu.Lock()
 	defer f.boot.mu.Unlock()
-	return f.boot.volumes, f.boot.instances
+	return f.boot.made["CreateVolume"], f.boot.made["CreateInstance"]
 }
 
 // TestRunInstancesRecordsEachStep pins #392: a launch record holds the client
@@ -82,6 +82,9 @@ func TestRunInstancesRecordsEachStep(t *testing.T) {
 	if got := f.store.Writes(); got != 6 {
 		t.Fatalf("writes %d want 6", got)
 	}
+	if v, i, ips := f.boot.left(); v != 2 || i != 2 || ips != 2 {
+		t.Fatalf("live volumes %d instances %d ips %d want 2 each", v, i, ips)
+	}
 }
 
 // TestRunInstancesFailureRecordsCompletedSteps pins that a launch failing at
@@ -89,7 +92,7 @@ func TestRunInstancesRecordsEachStep(t *testing.T) {
 // retry with the same key resumes it to succeeded.
 func TestRunInstancesFailureRecordsCompletedSteps(t *testing.T) {
 	f := newLaunch(t, "launch-fail")
-	f.boot.failInstance = 2
+	f.boot.failAt("CreateInstance", 2, false)
 	if err := f.run(t, 2); resource.CodeOf(err) != resource.CodeUnavailable {
 		t.Fatalf("err %v, want unavailable", err)
 	}

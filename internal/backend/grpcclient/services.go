@@ -729,6 +729,13 @@ func (c storageClient) finishPut(ctx context.Context, name string, op *longrunni
 // awaitStorage polls a put until the storage service marks it done. The
 // object is not readable until then, so GetObject before that is NotFound.
 func (c storageClient) awaitStorage(ctx context.Context, op *longrunningpb.Operation) (*longrunningpb.Operation, error) {
+	return awaitOperation(ctx, c.storageOps, op)
+}
+
+// awaitOperation polls op on ops until it is done and returns its error.
+func awaitOperation(
+	ctx context.Context, ops longrunningpb.OperationsClient, op *longrunningpb.Operation,
+) (*longrunningpb.Operation, error) {
 	if op.GetDone() {
 		return op, nil
 	}
@@ -739,7 +746,7 @@ func (c storageClient) awaitStorage(ctx context.Context, op *longrunningpb.Opera
 	ticker := time.NewTicker(5 * time.Millisecond)
 	defer ticker.Stop()
 	for {
-		got, err := c.storageOps.GetOperation(ctx, &longrunningpb.GetOperationRequest{Name: name})
+		got, err := ops.GetOperation(ctx, &longrunningpb.GetOperationRequest{Name: name})
 		if err != nil {
 			return nil, fromRPC(err)
 		}
