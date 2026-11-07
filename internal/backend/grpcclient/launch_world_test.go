@@ -2,6 +2,7 @@ package grpcclient
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"strconv"
 	"sync"
@@ -19,27 +20,32 @@ import (
 	storagev1 "github.com/popododo0720/vws-proto/gen/go/vws/storage/v1"
 )
 
-// launchWorld is compute and storage for one launch over the regional
-// subnet: it keeps the live volumes, instances and private IPs, replays a
-// request id the way the services do, deletes an instance's boot volume and
-// IP with it and refuses to delete an attached volume. A delete answers a
-// pending operation that is done on the first poll.
+// launchWorld is compute, storage and addresses for one launch over the
+// regional subnet: it keeps the live volumes, instances, private IPs and
+// Elastic IP associations, replays a request id the way the services do,
+// deletes an instance's boot volume and IP with it, refuses to delete an
+// attached volume, and refuses to delete an instance an address names
+// (instance.proto). A delete answers a pending operation that is done on the
+// first poll.
 type launchWorld struct {
 	*regionalImages
 	longrunningpb.UnimplementedOperationsServer
+	networkv1.UnimplementedAddressServiceServer
 
 	mu sync.Mutex
 	// volumes maps a live volume to the instance it boots, "" before one.
 	volumes map[string]string
 	// ips maps a live instance's private IP to the instance.
-	ips     map[string]string
-	replays map[string]*longrunningpb.Operation
-	pending map[string]bool
-	calls   map[string]int
-	faults  map[string]fault
-	made    map[string]int
-	deletes []string
-	lis     *bufconn.Listener
+	ips map[string]string
+	// addresses maps an address name to the instance it names, "" when free.
+	addresses map[string]string
+	replays   map[string]*longrunningpb.Operation
+	pending   map[string]bool
+	calls     map[string]int
+	faults    map[string]fault
+	made      map[string]int
+	deletes   []string
+	lis       *bufconn.Listener
 }
 
 // fault fails times calls of a method from call number n, counted from 1.
@@ -196,10 +202,18 @@ func (w *launchWorld) remove(method, name string, change func() error) (*longrun
 	if err := change(); err != nil {
 		return nil, err
 	}
+	op, err := doneNamed(name, commonv1.OperationVerb_OPERATION_VERB_DELETE)
+	if err != nil {
+		return nil, err
+	}
+	projectID, err := projectOfName(name)
+	if err != nil {
+		return nil, toStatus(err)
+	}
 	w.deletes = append(w.deletes, name)
-	op := "operations/delete-" + strconv.Itoa(len(w.pending))
-	w.pending[op] = true
-	return &longrunningpb.Operation{Name: op}, nil
+	op.Name, op.Done = operationName(projectID, fmt.Sprintf("%016x", len(w.pending))), false
+	w.pending[op.GetName()] = true
+	return op, nil
 }
 
 func (w *launchWorld) DeleteInstance(
@@ -209,6 +223,11 @@ func (w *launchWorld) DeleteInstance(
 	return w.remove("DeleteInstance", name, func() error {
 		if !w.live(name) {
 			return status.Error(codes.NotFound, name)
+		}
+		for addr, owner := range w.addresses {
+			if owner == name {
+				return status.Error(codes.FailedPrecondition, "DEPENDENCY_MISSING: "+addr+" names "+name)
+			}
 		}
 		for vol, owner := range w.volumes {
 			if owner == name {
@@ -257,7 +276,7 @@ func startLaunchWorld(t *testing.T) (*launchWorld, computeClient) {
 	t.Helper()
 	w := &launchWorld{
 		regionalImages: &regionalImages{},
-		volumes:        map[string]string{}, ips: map[string]string{},
+		volumes:        map[string]string{}, ips: map[string]string{}, addresses: map[string]string{},
 		replays: map[string]*longrunningpb.Operation{}, pending: map[string]bool{},
 		calls: map[string]int{}, faults: map[string]fault{}, made: map[string]int{},
 	}
@@ -267,6 +286,7 @@ func startLaunchWorld(t *testing.T) (*launchWorld, computeClient) {
 	storagev1.RegisterVolumeServiceServer(srv, w)
 	networkv1.RegisterVpcServiceServer(srv, w)
 	networkv1.RegisterSubnetServiceServer(srv, w)
+	networkv1.RegisterAddressServiceServer(srv, w)
 	longrunningpb.RegisterOperationsServer(srv, w)
 	go func() { _ = srv.Serve(lis) }()
 	t.Cleanup(srv.Stop)
@@ -293,6 +313,7 @@ func (w *launchWorld) dial(t *testing.T) (computeClient, *grpc.ClientConn) {
 		volumes:    storagev1.NewVolumeServiceClient(conn),
 		subnets:    networkv1.NewSubnetServiceClient(conn),
 		vpcs:       networkv1.NewVpcServiceClient(conn),
+		addresses:  networkv1.NewAddressServiceClient(conn),
 		computeOps: ops,
 		storageOps: ops,
 	}}, conn

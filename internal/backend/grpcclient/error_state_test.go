@@ -16,6 +16,7 @@ import (
 
 	commonv1 "github.com/popododo0720/vws-proto/gen/go/vws/common/v1"
 	computev1 "github.com/popododo0720/vws-proto/gen/go/vws/compute/v1"
+	networkv1 "github.com/popododo0720/vws-proto/gen/go/vws/network/v1"
 	storagev1 "github.com/popododo0720/vws-proto/gen/go/vws/storage/v1"
 
 	"github.com/popododo0720/vws-console-api/internal/backend"
@@ -33,10 +34,18 @@ const internalErrorMessage = "Server.InternalError: " +
 type errorWorld struct {
 	computev1.UnimplementedInstanceServiceServer
 	storagev1.UnimplementedVolumeServiceServer
+	networkv1.UnimplementedAddressServiceServer
 	mu      sync.Mutex
 	inst    []*computev1.Instance
 	vol     []*storagev1.Volume
 	deletes int
+}
+
+// ListAddresses answers no addresses: no instance here has one.
+func (s *errorWorld) ListAddresses(
+	context.Context, *networkv1.ListAddressesRequest,
+) (*networkv1.ListAddressesResponse, error) {
+	return &networkv1.ListAddressesResponse{}, nil
 }
 
 func (s *errorWorld) ListInstances(
@@ -98,6 +107,7 @@ func dialErrorWorld(t *testing.T, world *errorWorld) computeClient {
 	srv := grpc.NewServer()
 	computev1.RegisterInstanceServiceServer(srv, world)
 	storagev1.RegisterVolumeServiceServer(srv, world)
+	networkv1.RegisterAddressServiceServer(srv, world)
 	go func() { _ = srv.Serve(lis) }()
 	t.Cleanup(srv.Stop)
 	conn, err := grpc.NewClient("passthrough:///compute",
@@ -112,6 +122,7 @@ func dialErrorWorld(t *testing.T, world *errorWorld) computeClient {
 	return computeClient{&api{
 		instances: computev1.NewInstanceServiceClient(conn),
 		volumes:   storagev1.NewVolumeServiceClient(conn),
+		addresses: networkv1.NewAddressServiceClient(conn),
 	}}
 }
 
