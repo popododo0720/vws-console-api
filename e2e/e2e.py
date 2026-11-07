@@ -1465,9 +1465,18 @@ def direct():
     vm = "direct" if "vm" in CAPS else "vm"
 
     def launch(token, nics):
-        return ec2.run_instances(
-            ImageId="ami-0123456789abcdef0", InstanceType="t3.micro", MinCount=1, MaxCount=1,
-            ClientToken=token, NetworkInterfaces=nics)["Instances"][0]["InstanceId"]
+        # RunInstances is throttled per account (5, refilled at 2/s), and these
+        # launches follow others closely. RequestLimitExceeded is retryable, and
+        # the same ClientToken keeps a retry one launch.
+        for attempt in range(5):
+            try:
+                return ec2.run_instances(
+                    ImageId="ami-0123456789abcdef0", InstanceType="t3.micro", MinCount=1, MaxCount=1,
+                    ClientToken=token, NetworkInterfaces=nics)["Instances"][0]["InstanceId"]
+            except ec2.exceptions.ClientError as exc:
+                if exc.response["Error"]["Code"] != "RequestLimitExceeded" or attempt == 4:
+                    raise
+                time.sleep(1)
 
     def mixed():
         nics = [{"DeviceIndex": 1, "SubnetId": DIRECT_SUBNET}, {"DeviceIndex": 0, "SubnetId": S["subnet"]}]
