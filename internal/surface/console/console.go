@@ -19,6 +19,7 @@ import (
 	"github.com/popododo0720/vws-console-api/internal/iam"
 	"github.com/popododo0720/vws-console-api/internal/resource"
 	"github.com/popododo0720/vws-console-api/internal/server"
+	"github.com/popododo0720/vws-console-api/internal/throttle"
 )
 
 // Authenticator maps a bearer token to a caller.
@@ -65,6 +66,9 @@ type Config struct {
 	// LoginLimits are the sign-in rate limits; zero fields take their
 	// defaults.
 	LoginLimits LoginLimits
+	// Requests limits each account's EC2 calls per action, shared with the
+	// EC2 Query surface. Nil limits nothing.
+	Requests *throttle.Limiter
 }
 
 // New returns the console handler.
@@ -84,6 +88,7 @@ func New(cfg Config) http.Handler {
 		logins:   newLimiter(lim.IPBurst, lim.IPRefill, lim.MaxKeys),
 		users:    newLimiter(lim.UserBurst, lim.UserRefill, lim.MaxKeys),
 		loginOff: cfg.LoginDisabled,
+		requests: cfg.Requests,
 	}
 	h.routes(h.mux)
 	return h
@@ -154,6 +159,7 @@ type handler struct {
 	now      func() time.Time
 	logins   *limiter
 	users    *limiter
+	requests *throttle.Limiter
 }
 
 func (h *handler) mutation(action resource.Action) (string, string, http.HandlerFunc) {
