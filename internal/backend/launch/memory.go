@@ -52,6 +52,22 @@ func (m *Memory) Unfinished(ctx context.Context) ([]Stored, error) {
 	return out, nil
 }
 
+// Uncollected returns every record with a dead attempt left to collect.
+func (m *Memory) Uncollected(ctx context.Context) ([]Stored, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]Stored, 0, len(m.records))
+	for _, e := range m.records {
+		if e.rec.Uncollected() {
+			out = append(out, Stored{Record: clone(e.rec), Version: strconv.Itoa(e.version)})
+		}
+	}
+	return out, nil
+}
+
 // Create stores rec when its key has no record. Like the Kubernetes API, it
 // refuses a cancelled context.
 func (m *Memory) Create(ctx context.Context, rec Record) (string, error) { return m.put(ctx, rec, "") }

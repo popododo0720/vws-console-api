@@ -42,6 +42,10 @@ const (
 	// phaseLabel is the record's phase, so the sweep lists only unfinished
 	// launches instead of every record ever written.
 	phaseLabel = "vws-launch-phase"
+	// gcLabel is pending while the record has a dead attempt the launch GC
+	// has not collected and done after, so the GC lists only those.
+	gcLabel = "vws-launch-gc"
+	gcDone  = "done"
 	// attemptTimeout bounds one HTTP request to the Kubernetes API.
 	attemptTimeout = 3 * time.Second
 	// callTimeout bounds one Load, Create or Update, every retry included:
@@ -126,18 +130,27 @@ func (s *Store) Load(ctx context.Context, key string) (launch.Record, string, bo
 const listPage = 250
 
 // Unfinished reads the records this package wrote whose phase label is not
-// succeeded or failed, a page at a time, each call within the store's
-// budget. A record written before the label existed has none and is read
-// too. It returns the records it could decode, and an error naming every
-// ConfigMap it could not, so one bad record does not hide the others.
+// succeeded or failed. A record written before the label existed has none
+// and is read too.
 func (s *Store) Unfinished(ctx context.Context) ([]launch.Stored, error) {
+	return s.list(ctx, fmt.Sprintf("%s=%s,%s notin (%s,%s)",
+		managedBy, managedByValue, phaseLabel, launch.Succeeded, launch.Failed))
+}
+
+// Uncollected reads the records this package wrote whose GC label is not
+// done. A record written before the label existed has none and is read too.
+func (s *Store) Uncollected(ctx context.Context) ([]launch.Stored, error) {
+	return s.list(ctx, fmt.Sprintf("%s=%s,%s!=%s", managedBy, managedByValue, gcLabel, gcDone))
+}
+
+// list reads the records selector matches, a page at a time, each call
+// within the store's budget. It returns the records it could decode, and an
+// error naming every ConfigMap it could not, so one bad record does not hide
+// the others.
+func (s *Store) list(ctx context.Context, selector string) ([]launch.Stored, error) {
 	var out []launch.Stored
 	var bad []error
-	opts := metav1.ListOptions{
-		LabelSelector: fmt.Sprintf("%s=%s,%s notin (%s,%s)",
-			managedBy, managedByValue, phaseLabel, launch.Succeeded, launch.Failed),
-		Limit: listPage,
-	}
+	opts := metav1.ListOptions{LabelSelector: selector, Limit: listPage}
 	for {
 		var page *corev1.ConfigMapList
 		err := retryTransient(ctx, s.budget, func(ctx context.Context) error {
@@ -218,12 +231,16 @@ func (s *Store) configMap(rec launch.Record, version string) (*corev1.ConfigMap,
 	if err != nil {
 		return nil, fmt.Errorf("encode %s: %w", Name(rec.Key), err)
 	}
+	gc := gcDone
+	if rec.Uncollected() {
+		gc = "pending"
+	}
 	cm := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:            Name(rec.Key),
 			Namespace:       s.namespace,
 			ResourceVersion: version,
-			Labels:          map[string]string{managedBy: managedByValue, phaseLabel: string(rec.Phase)},
+			Labels:          map[string]string{managedBy: managedByValue, phaseLabel: string(rec.Phase), gcLabel: gc},
 		},
 		Data: map[string]string{dataKey: string(data)},
 	}

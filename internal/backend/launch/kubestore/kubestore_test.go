@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -327,5 +328,70 @@ func TestUnfinishedReadsEveryOpenRecordAcrossPages(t *testing.T) {
 		if want[s.Record.Key] != s.Version {
 			t.Fatalf("record %s at version %q want %q", s.Record.Key, s.Version, want[s.Record.Key])
 		}
+	}
+}
+
+// TestUncollectedListsRecordsWithADeadAttempt pins the launch GC listing:
+// every write labels vws-launch-gc pending while a dead attempt is left and
+// done after, Uncollected lists the pending records and the unlabeled ones
+// written before the label, and a record collected since drops out.
+func TestUncollectedListsRecordsWithADeadAttempt(t *testing.T) {
+	s, cs, ns := open(t)
+	ctx := context.Background()
+	recs := map[string]launch.Record{
+		"failed":    {Phase: launch.Failed, Attempt: 1},
+		"retried":   {Phase: launch.Running, Attempt: 2},
+		"succeeded": {Phase: launch.Succeeded, Attempt: 1},
+		"collected": {Phase: launch.Succeeded, Attempt: 3, Collected: 2},
+	}
+	wantLabel := map[string]string{"failed": "pending", "retried": "pending", "succeeded": "done", "collected": "done"}
+	versions := map[string]string{}
+	for name, rec := range recs {
+		rec.Key, rec.Account, rec.Count, rec.Steps = name, account(t), 1, []launch.Step{}
+		v, err := s.Create(ctx, rec)
+		if err != nil {
+			t.Fatal(err)
+		}
+		versions[name] = v
+		cm, err := cs.CoreV1().ConfigMaps(ns).Get(ctx, kubestore.Name(name), metav1.GetOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := cm.Labels["vws-launch-gc"]; got != wantLabel[name] {
+			t.Fatalf("%s labeled gc %q want %q", name, got, wantLabel[name])
+		}
+	}
+	if _, err := cs.CoreV1().ConfigMaps(ns).Create(ctx, &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:   kubestore.Name("legacy"),
+			Labels: map[string]string{"app.kubernetes.io/managed-by": "vws-console-api", "vws-launch-phase": "failed"},
+		},
+		Data: map[string]string{"launch.json": `{"key":"legacy","phase":"failed","attempt":1,"count":1}`},
+	}, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	listed := func() []string {
+		t.Helper()
+		got, err := s.Uncollected(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var keys []string
+		for _, st := range got {
+			keys = append(keys, st.Record.Key)
+		}
+		slices.Sort(keys)
+		return keys
+	}
+	if got := listed(); !slices.Equal(got, []string{"failed", "legacy", "retried"}) {
+		t.Fatalf("uncollected %v", got)
+	}
+	done := recs["failed"]
+	done.Key, done.Account, done.Count, done.Steps, done.Collected = "failed", account(t), 1, []launch.Step{}, 1
+	if _, err := s.Update(ctx, done, versions["failed"]); err != nil {
+		t.Fatal(err)
+	}
+	if got := listed(); !slices.Equal(got, []string{"legacy", "retried"}) {
+		t.Fatalf("uncollected after collecting %v", got)
 	}
 }
