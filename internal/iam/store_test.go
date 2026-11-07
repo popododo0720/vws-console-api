@@ -838,6 +838,13 @@ func TestListPolicyVersions(t *testing.T) {
 	if err != nil || len(page.Versions) != 0 || page.IsTruncated {
 		t.Errorf("resume from v1: %+v %v", page, err)
 	}
+	// A Marker this fake never issued is InvalidInput, as in AWS, not page one.
+	for _, marker := range []string{"page2", "v", "vx", "v-1", "v+1", "v0", "v01", "1"} {
+		_, err := f.ListPolicyVersions(ctx, a, p.ARN, marker, 0)
+		if e := resource.AsError(err); e == nil || e.Code != resource.CodeInvalidArgument || e.Field != "Marker" {
+			t.Errorf("marker %q: %v, want InvalidArgument on Marker", marker, err)
+		}
+	}
 	other, err := resource.Parse[resource.AccountID]("210987654321")
 	if err != nil {
 		t.Fatal(err)
