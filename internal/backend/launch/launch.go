@@ -4,7 +4,9 @@
 //
 // A launch moves running -> succeeded, or running -> undoing -> failed when
 // a step fails and its creates are deleted. A retry of a failed launch is a
-// new attempt with a new plan, back to running.
+// new attempt with a new plan, back to running. An attempt that failed or
+// that a later attempt replaced is dead for good; the launch GC deletes what
+// a late create left of it.
 package launch
 
 import (
@@ -54,6 +56,7 @@ type Step struct {
 // create, so a create whose step was never recorded (a crash, a failed record
 // write) is still named. Steps are the attempt's creates that completed.
 // Attempt counts the retries that moved a failed launch back to running.
+// Collected is the last attempt whose resources the launch GC deleted.
 type Record struct {
 	Key         string             `json:"key"`
 	Account     resource.AccountID `json:"account"`
@@ -63,9 +66,23 @@ type Record struct {
 	Attempt     int                `json:"attempt"`
 	Plan        []Step             `json:"plan"`
 	Steps       []Step             `json:"steps"`
+	Collected   int                `json:"collected,omitempty"`
 	Started     time.Time          `json:"started"`
 	Updated     time.Time          `json:"updated"`
 }
+
+// Dead is the last attempt that can create nothing more: every attempt
+// before the latest one, and the latest one too once it failed. A running,
+// undoing or succeeded attempt is never dead.
+func (r Record) Dead() int {
+	if r.Phase == Failed {
+		return r.Attempt
+	}
+	return max(r.Attempt-1, 0)
+}
+
+// Uncollected reports whether a dead attempt is left for the launch GC.
+func (r Record) Uncollected() bool { return r.Collected < r.Dead() }
 
 // ErrExists is a Create of a key that already has a record.
 var ErrExists = errors.New("launch record exists")
@@ -83,12 +100,14 @@ type Plan func(attempt int) []Step
 type Store interface {
 	Load(ctx context.Context, key string) (rec Record, version string, found bool, err error)
 	Unfinished(ctx context.Context) ([]Stored, error)
+	Uncollected(ctx context.Context) ([]Stored, error)
 	Create(ctx context.Context, rec Record) (version string, err error)
 	Update(ctx context.Context, rec Record, version string) (next string, err error)
 }
 
 // Stored is a record with the version it was read at. Unfinished returns
-// every record that is running or undoing, and may return others too.
+// every record that is running or undoing, and Uncollected every record
+// whose Uncollected reports true; each may return others too.
 type Stored struct {
 	Record  Record
 	Version string
@@ -352,6 +371,58 @@ func (t *Tracker) Abandoned(ctx context.Context, idle time.Duration) ([]Launch, 
 		}
 	}
 	return out, listErr
+}
+
+// Collectable returns the launches that ended, failed or succeeded, with a
+// dead attempt left for the launch GC, whose record was last written idle or
+// more ago. A store that could read only some records returns those launches
+// and its error. A running or undoing launch is never returned. A retry may
+// move a returned launch back to running; its dead attempts stay dead.
+func (t *Tracker) Collectable(ctx context.Context, idle time.Duration) ([]Launch, error) {
+	if t == nil {
+		return nil, nil
+	}
+	all, listErr := t.store.Uncollected(ctx)
+	if listErr != nil {
+		listErr = unavailable(listErr)
+	}
+	cutoff := t.now().Add(-idle)
+	var out []Launch
+	errs := []error{listErr}
+	for _, s := range all {
+		r := s.Record
+		if (r.Phase != Failed && r.Phase != Succeeded) || !r.Uncollected() || r.Updated.After(cutoff) {
+			continue
+		}
+		if r.Count < 1 || r.Count > maxCount {
+			// The GC derives every id from Count; one it cannot trust names nothing.
+			errs = append(errs, resource.Internal(fmt.Errorf("launch %s: count %d", r.Key, r.Count)))
+			continue
+		}
+		out = append(out, Launch{t: t, rec: r, version: s.Version, attempt: r.Attempt})
+	}
+	return out, errors.Join(errs...)
+}
+
+// maxCount is the most instances one RunInstances may launch.
+const maxCount = 10
+
+// Collected records that the launch GC deleted every resource of the
+// attempts up to through. An attempt once dead stays dead, so a record a
+// retry moved on since is still written; one already collected that far
+// writes nothing.
+func (l *Launch) Collected(ctx context.Context, through int) error {
+	if l.t == nil {
+		return nil
+	}
+	return l.apply(ctx, func(r *Record) bool {
+		upTo := min(through, r.Dead())
+		if r.Collected >= upTo {
+			return false
+		}
+		r.Collected = upTo
+		return true
+	})
 }
 
 func (t *Tracker) load(ctx context.Context, key string) (Launch, bool, error) {

@@ -67,6 +67,13 @@ func (p *process) Unfinished(ctx context.Context) ([]launch.Stored, error) {
 	return p.store.Unfinished(ctx)
 }
 
+func (p *process) Uncollected(ctx context.Context) ([]launch.Stored, error) {
+	if p.dead.Load() {
+		return nil, errDead
+	}
+	return p.store.Uncollected(ctx)
+}
+
 func (p *process) Create(ctx context.Context, rec launch.Record) (string, error) {
 	if p.dead.Load() {
 		return "", errDead
