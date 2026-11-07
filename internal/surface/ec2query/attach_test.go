@@ -65,6 +65,55 @@ func TestAttachVolumeAnswersAttaching(t *testing.T) {
 	}
 }
 
+// TestAttachVolumeRefusesADeviceNameEC2Refuses pins #400 on the wire. EC2
+// answers a device name outside the ones it lists as available with 400
+// InvalidParameterValue naming the device, and attaches nothing, so the
+// volume stays available and a valid retry still attaches it.
+func TestAttachVolumeRefusesADeviceNameEC2Refuses(t *testing.T) {
+	h, cred, now := harness(t)
+	send := func(f url.Values) string {
+		t.Helper()
+		f.Set("Version", Version)
+		res := signed(t, h, cred, now, f.Encode())
+		if res.Code != http.StatusOK {
+			t.Fatalf("%s %d %s", f.Get("Action"), res.Code, res.Body)
+		}
+		return res.Body.String()
+	}
+	vpc := send(url.Values{"Action": {"CreateVpc"}, "CidrBlock": {"10.6.0.0/16"}})
+	subnet := send(url.Values{
+		"Action": {"CreateSubnet"}, "VpcId": {xmlText(t, vpc, "vpcId")}, "CidrBlock": {"10.6.1.0/24"},
+	})
+	inst := xmlText(t, send(url.Values{
+		"Action": {"RunInstances"}, "ImageId": {"ami-0123456789abcdef0"}, "InstanceType": {"vws.small"},
+		"SubnetId": {xmlText(t, subnet, "subnetId")}, "MinCount": {"1"}, "MaxCount": {"1"}, "ClientToken": {"run-400"},
+	}), "instanceId")
+	vol := xmlText(t, send(url.Values{
+		"Action": {"CreateVolume"}, "AvailabilityZone": {"vws-1a"}, "Size": {"1"}, "ClientToken": {"vol-400"},
+	}), "volumeId")
+	for _, device := range []string{
+		"/dev/sd f", "/dev/sdaa", "/dev/xvdpa", "/dev/" + strings.Repeat("x", 29), "/dev/sdf<x>",
+	} {
+		res := signed(t, h, cred, now, url.Values{
+			"Action": {"AttachVolume"}, "Version": {Version}, "VolumeId": {vol},
+			"InstanceId": {inst}, "Device": {device}, "ClientToken": {"attach-bad"},
+		}.Encode())
+		want := "Value (" + device + ") for parameter device is invalid. " + device + " is not a valid EBS device name."
+		if got := ec2ErrorXML(t, res.Body.Bytes()); res.Code != http.StatusBadRequest ||
+			got.Code != "InvalidParameterValue" || got.Message != want {
+			t.Fatalf("attach on %q: %d %+v, want 400 InvalidParameterValue %q", device, res.Code, got, want)
+		}
+	}
+	described := send(url.Values{"Action": {"DescribeVolumes"}, "VolumeId.1": {vol}})
+	if !strings.Contains(described, "<status>available</status>") {
+		t.Fatalf("a refused attach changed the volume: %s", described)
+	}
+	body := send(url.Values{"Action": {"AttachVolume"}, "VolumeId": {vol}, "InstanceId": {inst}, "Device": {"/dev/xvdba"}})
+	if !strings.Contains(body, "<device>/dev/xvdba</device>") {
+		t.Fatalf("valid attach after the refusals: %s", body)
+	}
+}
+
 // TestVolumeAttachmentStatus pins the attachmentSet status for each backend
 // attachment state. The volume state is in-use for all of them.
 func TestVolumeAttachmentStatus(t *testing.T) {

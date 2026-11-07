@@ -77,6 +77,7 @@ change both files together.
 | EC2 catalog actions are served on both surfaces. | `TestCatalogActionsAreImplemented` |
 | EC2 describe calls take boto3's parameter names. | `TestDescribeStandardParameters` |
 | EC2 instance, image, volume and address behavior. | `exerciseEC2`, `backendtest.AttachLifecycle` |
+| AttachVolume takes only the device names the EC2 User Guide lists as available, any other is `InvalidParameterValue` naming the device before the backend; a client-token detach of a device no detach record can hold is `InvalidParameterValue` before compute (#400). | `TestAttachVolumeDeviceFollowsTheEC2Names`, `TestAttachVolumeRefusesADeviceNameEC2Refuses`, `TestDetachOfADeviceNoRecordCanHoldIsRefused` |
 | A volume or block device is `attached` only when compute reports `ATTACHED` on `InstanceStatus.volumes`; no surface defaults to `attached` (#448). | `TestDescribeVolumesFollowsComputeAttachState`, `TestInstanceBlockDeviceStatus`, `backendtest.AttachLifecycle` |
 | One bad backend record never fails a listing. | `TestErrorRecordDoesNotFailDescribe`, `TestFailedNetworkRecordDoesNotFailDescribe`, `TestInvalidResourceNameIsSkippedInList`, `TestInvalidCatalogNameIsSkippedInList`, `TestBadReferenceIsSkippedInList` |
 | Key pair keys come from `crypto/rand`, are never stored, and names stay unique. | `TestCreatedKeyIsNotDerivedFromTheRequest`, `TestConcurrentCreatesOfOneNameMakeOneKeyPair` |
