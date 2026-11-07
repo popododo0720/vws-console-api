@@ -207,10 +207,17 @@ func (h *handler) runInstances(w http.ResponseWriter, r *http.Request, c resourc
 		writeErr(w, r, err)
 		return
 	}
-	sub, err := resource.Parse[resource.SubnetID](r.Form.Get("SubnetId"))
+	nics, err := networkInterfaces(r)
 	if err != nil {
 		writeErr(w, r, err)
 		return
+	}
+	var sub resource.SubnetID
+	if len(nics) == 0 || r.Form.Has("SubnetId") {
+		if sub, err = resource.Parse[resource.SubnetID](r.Form.Get("SubnetId")); err != nil {
+			writeErr(w, r, err)
+			return
+		}
 	}
 	count, err := exactCount(r)
 	if err != nil {
@@ -236,6 +243,7 @@ func (h *handler) runInstances(w http.ResponseWriter, r *http.Request, c resourc
 		ImageID: img, InstanceType: r.Form.Get("InstanceType"), SubnetID: sub, Count: count, Tags: tags,
 		KeyName: r.Form.Get("KeyName"), UserData: userData,
 		RootVolumeType: root.typ, RootVolumeSize: root.size, RootIops: root.iops, RootThroughput: root.throughput,
+		NetworkInterfaces: nics,
 	})
 	if err != nil {
 		writeErr(w, r, err)
@@ -570,6 +578,40 @@ func rootVolume(r *http.Request) (rootMapping, error) {
 	return root, nil
 }
 
+// networkInterfaceFields are the NetworkInterface.N fields networkInterfaces
+// reads.
+func networkInterfaceFields() []string { return []string{"DeviceIndex", "SubnetId"} }
+
+// networkInterfaces reads the RunInstances NetworkInterface.N members. Each
+// places one interface on a subnet; Normalize checks the device indexes.
+// Every other member field is refused by allowRun rather than ignored.
+func networkInterfaces(r *http.Request) ([]resource.NetworkInterfaceSpec, error) {
+	var out []resource.NetworkInterfaceSpec
+	for i := 1; i <= resource.MaxNetworkInterfaces; i++ {
+		prefix := "NetworkInterface." + strconv.Itoa(i) + "."
+		if !slices.ContainsFunc(networkInterfaceFields(), func(f string) bool { return r.Form.Has(prefix + f) }) {
+			continue
+		}
+		if !r.Form.Has(prefix + "DeviceIndex") {
+			return nil, resource.MissingParameter(prefix+"DeviceIndex", "Each network interface requires a device index.")
+		}
+		raw := r.Form.Get(prefix + "DeviceIndex")
+		index, err := strconv.Atoi(raw)
+		if err != nil {
+			return nil, resource.Invalid(prefix+"DeviceIndex", "Value ("+raw+") for parameter deviceIndex is invalid.")
+		}
+		if !r.Form.Has(prefix + "SubnetId") {
+			return nil, resource.MissingParameter(prefix+"SubnetId", "Each network interface requires a subnet.")
+		}
+		sub, err := resource.Parse[resource.SubnetID](r.Form.Get(prefix + "SubnetId"))
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, resource.NetworkInterfaceSpec{DeviceIndex: index, SubnetID: sub})
+	}
+	return out, nil
+}
+
 // mappingInt reads an optional positive integer mapping field, refused with
 // the CreateVolume message for param.
 func mappingInt(r *http.Request, key, param string) (int64, error) {
@@ -805,8 +847,22 @@ func allowRun(key string) bool {
 	case "Action", "Version", "ImageId", "InstanceType", "SubnetId", "MinCount", "MaxCount", "ClientToken", "KeyName", "UserData":
 		return true
 	default:
-		return tagField(key) || tagSpecField(key) || blockDeviceField(key)
+		return tagField(key) || tagSpecField(key) || blockDeviceField(key) || networkInterfaceField(key)
 	}
+}
+
+// networkInterfaceField is a NetworkInterface.N field networkInterfaces
+// reads. N is written as networkInterfaces reads it, so no member is
+// accepted and then skipped.
+func networkInterfaceField(key string) bool {
+	rest, ok := strings.CutPrefix(key, "NetworkInterface.")
+	if !ok {
+		return false
+	}
+	n, field, ok := strings.Cut(rest, ".")
+	i, err := strconv.Atoi(n)
+	return ok && err == nil && strconv.Itoa(i) == n && inRange(n, resource.MaxNetworkInterfaces) &&
+		slices.Contains(networkInterfaceFields(), field)
 }
 
 // blockDeviceField is a BlockDeviceMapping.N field rootVolume reads.

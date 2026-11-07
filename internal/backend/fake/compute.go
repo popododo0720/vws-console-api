@@ -3,6 +3,7 @@ package fake
 import (
 	"context"
 	"errors"
+	"slices"
 	"time"
 
 	"github.com/popododo0720/vws-console-api/internal/backend"
@@ -21,12 +22,9 @@ func (c compute) RunInstances(ctx context.Context, m backend.Mutation, req resou
 	if acc, ok, err := replay[resource.Accepted[resource.Instance]](c.w, m.Key, m.Fingerprint); err != nil || ok {
 		return acc, err
 	}
-	sub, ok := c.w.sub[req.SubnetID]
-	if !ok || sub.OwnerID != m.Account {
-		return resource.Accepted[resource.Instance]{}, resource.NotFound(resource.KindSubnet, req.SubnetID.String())
-	}
-	if sub.State != resource.SubnetAvailable {
-		return resource.Accepted[resource.Instance]{}, resource.Conflict(resource.KindSubnet, req.SubnetID.String(), "subnet is not available")
+	nics, err := c.w.launchInterfaces(m.Account, req.Interfaces())
+	if err != nil {
+		return resource.Accepted[resource.Instance]{}, err
 	}
 	var key *resource.KeyPair
 	if req.KeyName != "" {
@@ -73,13 +71,15 @@ func (c compute) RunInstances(ctx context.Context, m backend.Mutation, req resou
 			State:         resource.InstancePending,
 			ImageID:       req.ImageID,
 			InstanceType:  req.InstanceType,
-			SubnetID:      req.SubnetID,
-			VpcID:         vpcOf(c.w.sub[req.SubnetID]),
 			Zone:          resource.ZoneName,
-			PrivateIP:     c.w.nextIP(),
 			Tags:          copyTags(req.Tags),
 			UserData:      req.UserData,
 		}
+		placed := slices.Clone(nics)
+		for j := range placed {
+			placed[j].PrivateIP = c.w.nextIP()
+		}
+		inst.SetInterfaces(placed)
 		if key != nil {
 			inst.KeyName, inst.KeyPairID = key.Name, key.ID
 		}
@@ -284,12 +284,37 @@ func sortInstances(items []resource.Instance) {
 	}
 }
 
-// vpcOf is the VPC of a subnet, or empty when the subnet is unknown.
-func vpcOf(sub *resource.Subnet) resource.VpcID {
-	if sub == nil {
-		return resource.VpcID{}
+// launchInterfaces resolves the subnet of each interface of a launch: one
+// account owns, or a direct subnet. Every subnet is checked before anything
+// is minted.
+func (w *World) launchInterfaces(
+	account resource.AccountID, specs []resource.NetworkInterfaceSpec,
+) ([]resource.NetworkInterface, error) {
+	out := make([]resource.NetworkInterface, 0, len(specs))
+	for _, spec := range specs {
+		sub, ok := w.usableSubnet(account, spec.SubnetID)
+		if !ok {
+			return nil, resource.NotFound(resource.KindSubnet, spec.SubnetID.String())
+		}
+		if sub.State != resource.SubnetAvailable {
+			return nil, resource.Conflict(resource.KindSubnet, spec.SubnetID.String(), "subnet is not available")
+		}
+		out = append(out, resource.NetworkInterface{DeviceIndex: spec.DeviceIndex, SubnetID: sub.ID, VpcID: sub.VpcID})
 	}
-	return sub.VpcID
+	return out, nil
+}
+
+// usableSubnet is the subnet id names for account: its own, or a direct one.
+func (w *World) usableSubnet(account resource.AccountID, id resource.SubnetID) (resource.Subnet, bool) {
+	if sub, ok := w.sub[id]; ok && sub.OwnerID == account {
+		return *sub, true
+	}
+	for _, sub := range w.direct {
+		if sub.ID == id {
+			return directFor(sub, account), true
+		}
+	}
+	return resource.Subnet{}, false
 }
 
 // launchImage is the image account launches as id: the catalog image, or a

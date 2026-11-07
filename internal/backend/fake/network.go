@@ -15,6 +15,9 @@ func (n network) CreateSubnet(ctx context.Context, m backend.Mutation, req resou
 	if err := ctx.Err(); err != nil {
 		return resource.Accepted[resource.Subnet]{}, err
 	}
+	if resource.IsDirectVpc(req.VpcID) {
+		return resource.Accepted[resource.Subnet]{}, resource.DirectReadOnly()
+	}
 	n.w.mu.Lock()
 	defer n.w.mu.Unlock()
 	n.w.settle(n.w.now())
@@ -93,6 +96,11 @@ func (n network) DescribeSubnets(ctx context.Context, s backend.Scope, q resourc
 		}
 		items = append(items, *sub)
 	}
+	for _, sub := range n.w.direct {
+		if _, ok := want[sub.ID]; ok || len(want) == 0 {
+			items = append(items, directFor(sub, s.Account))
+		}
+	}
 	sortSubnets(items)
 	if len(q.IDs) == 1 && len(items) == 0 {
 		return resource.Page[resource.Subnet]{}, resource.NotFound(resource.KindSubnet, q.IDs[0].String())
@@ -107,6 +115,14 @@ func (n network) GetOperation(ctx context.Context, s backend.Scope, id resource.
 	n.w.mu.Lock()
 	defer n.w.mu.Unlock()
 	return n.w.getOp(s, id, resource.ServiceNetwork)
+}
+
+// directFor is a direct subnet as account reads it: owned by the caller, as
+// vws-network names it in the caller's project, and tagged direct.
+func directFor(sub resource.Subnet, account resource.AccountID) resource.Subnet {
+	sub.OwnerID = account
+	sub.Tags = map[string]string{resource.DirectNetworkTagKey: resource.DirectNetworkTagValue}
+	return sub
 }
 
 func sortSubnets(items []resource.Subnet) {

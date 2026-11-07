@@ -173,7 +173,11 @@ func run(ctx context.Context, args []string) (err error) {
 		if *launchNamespace != "" {
 			return errors.New("-launch-namespace needs -backend=grpc")
 		}
-		set = fake.New(fake.Options{}).Set()
+		direct, parseErr := resource.Parse[resource.SubnetID]("subnet-direct-prod")
+		if parseErr != nil {
+			return parseErr
+		}
+		set = fake.New(fake.Options{Direct: []fake.DirectNetwork{{ID: direct, Cidr: "192.168.200.0/24"}}}).Set()
 	case "grpc":
 		client, dialErr := grpcclient.Dial(ctx, grpcclient.Addrs{
 			Compute: *computeAddr,

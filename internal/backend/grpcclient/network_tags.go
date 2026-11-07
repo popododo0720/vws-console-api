@@ -2,6 +2,7 @@ package grpcclient
 
 import (
 	"context"
+	"slices"
 	"strings"
 
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
@@ -65,7 +66,12 @@ func (c networkClient) TagVpcs(ctx context.Context, m backend.Mutation, req reso
 }
 
 // TagSubnets merges tags into each subnet with a labels-only UpdateSubnet.
+// vws-network refuses an update of a direct subnet; the client refuses it
+// first, so no other subnet in the batch is written.
 func (c networkClient) TagSubnets(ctx context.Context, m backend.Mutation, req resource.TagSubnetsRequest) (resource.Accepted[resource.Subnet], error) {
+	if slices.ContainsFunc(req.IDs, resource.IsDirectSubnet) {
+		return resource.Accepted[resource.Subnet]{}, resource.DirectReadOnly()
+	}
 	projectID := project(m.Account)
 	type pending struct {
 		name   string

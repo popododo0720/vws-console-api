@@ -20,13 +20,22 @@ import (
 // Options configures a world. Zero values use the wall clock, no settle
 // delay, and crypto/rand. Images seeds the compute image store; the catalog
 // image is always present. Buckets seeds storage with records another path
-// wrote, including names the current create rule refuses (#511).
+// wrote, including names the current create rule refuses (#511). Direct are
+// the direct networks every account sees.
 type Options struct {
 	Now     func() time.Time
 	Latency time.Duration
 	Entropy io.Reader
 	Images  []resource.Image
 	Buckets []resource.Bucket
+	Direct  []DirectNetwork
+}
+
+// DirectNetwork is a provider network shared with every account, as
+// vws-network serves it: a direct subnet id and its CIDR.
+type DirectNetwork struct {
+	ID   resource.SubnetID
+	Cidr string
 }
 
 // World is one account-aware simulation of compute, storage, and network.
@@ -35,21 +44,24 @@ type World struct {
 	latency time.Duration
 	entropy io.Reader
 
-	mu    sync.Mutex
-	idem  map[string]idemRecord
-	ops   map[string]*opRecord
-	inst  map[resource.InstanceID]*resource.Instance
-	sub   map[resource.SubnetID]*resource.Subnet
-	vpc   map[resource.VpcID]*resource.Vpc
-	vol   map[resource.VolumeID]*resource.Volume
-	sg    map[resource.SecurityGroupID]*resource.SecurityGroup
-	key   map[resource.KeyPairID]*resource.KeyPair
-	addr  map[resource.AddressID]*resource.Address
-	snap  map[resource.SnapshotID]*resource.Snapshot
-	img   map[resource.ImageID]*resource.Image
-	buck  map[resource.BucketName]*resource.Bucket
-	obj   map[string]*storedObject
-	seqIP uint32
+	mu   sync.Mutex
+	idem map[string]idemRecord
+	ops  map[string]*opRecord
+	inst map[resource.InstanceID]*resource.Instance
+	sub  map[resource.SubnetID]*resource.Subnet
+	// direct holds the direct subnets with no owner: each account reads
+	// them as its own.
+	direct []resource.Subnet
+	vpc    map[resource.VpcID]*resource.Vpc
+	vol    map[resource.VolumeID]*resource.Volume
+	sg     map[resource.SecurityGroupID]*resource.SecurityGroup
+	key    map[resource.KeyPairID]*resource.KeyPair
+	addr   map[resource.AddressID]*resource.Address
+	snap   map[resource.SnapshotID]*resource.Snapshot
+	img    map[resource.ImageID]*resource.Image
+	buck   map[resource.BucketName]*resource.Bucket
+	obj    map[string]*storedObject
+	seqIP  uint32
 	// detached is when each volume was last detached from each instance
 	// with a client token, for the DetachVolume record budget (#303).
 	detached map[resource.InstanceID]map[resource.VolumeID]time.Time
@@ -105,6 +117,12 @@ func New(opt Options) *World {
 	for _, bucket := range opt.Buckets {
 		world.buck[bucket.Name] = &bucket
 	}
+	for _, d := range opt.Direct {
+		world.direct = append(world.direct, resource.Subnet{
+			ID: d.ID, VpcID: resource.DirectVpcID(), Cidr: d.Cidr, State: resource.SubnetAvailable, Zone: resource.ZoneName,
+		})
+	}
+	sortSubnets(world.direct)
 	return world
 }
 

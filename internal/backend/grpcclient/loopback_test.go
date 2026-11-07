@@ -9,6 +9,7 @@ import (
 	"io"
 	"maps"
 	"net"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -35,14 +36,20 @@ import (
 
 func TestContractOverGRPC(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0).UTC()
+	direct, err := resource.Parse[resource.SubnetID](backendtest.DirectSubnet)
+	if err != nil {
+		t.Fatal(err)
+	}
 	world := fake.New(fake.Options{
 		Now:     func() time.Time { return now },
 		Entropy: &fake.Sequence{},
+		Direct:  []fake.DirectNetwork{{ID: direct, Cidr: backendtest.DirectCidr}},
 	})
 	harness := dialLoopback(t, world, now)
 	backendtest.Run(t, harness)
 	// The #213 DetachVolume client-token table, in its own account.
 	t.Run("DetachReplay", func(t *testing.T) { backendtest.DetachReplay(t, harness) })
+	t.Run("DirectNetworks", func(t *testing.T) { backendtest.DirectNetworks(t, harness) })
 }
 
 // dialLoopback serves world through the loopback resource API on bufconn,
@@ -184,7 +191,6 @@ type loopWorld struct {
 
 type instSnap struct {
 	inst   resource.Instance
-	vpc    string
 	launch string
 	live   bool
 }
@@ -343,6 +349,15 @@ func (w *loopWorld) vpcOf(subnetID string) string {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return w.subnetVPC[subnetID]
+}
+
+// vpcSegment is the VPC segment of the subnet's name. A direct subnet is in
+// vpc-direct, which the loopback never created.
+func (w *loopWorld) vpcSegment(id resource.SubnetID) string {
+	if resource.IsDirectSubnet(id) {
+		return resource.DirectVpcID().String()
+	}
+	return w.vpcOf(id.String())
 }
 
 func (w *loopWorld) rememberSubnet(id, vpc string) {
@@ -542,9 +557,17 @@ func (s *instanceSrv) CreateInstance(ctx context.Context, req *computev1.CreateI
 	if err != nil {
 		return nil, toStatus(err)
 	}
-	subID, err := resource.Parse[resource.SubnetID](lastSegment(spec.GetNetworkInterfaces()[0].GetSubnet()))
-	if err != nil {
-		return nil, toStatus(err)
+	nics := make([]resource.NetworkInterfaceSpec, 0, len(spec.GetNetworkInterfaces()))
+	for _, nic := range spec.GetNetworkInterfaces() {
+		index, ok := nicIndex(nic.GetDeviceName())
+		if !ok {
+			return nil, toStatus(resource.Invalid("deviceName", "not nic<N>"))
+		}
+		subID, err := resource.Parse[resource.SubnetID](lastSegment(nic.GetSubnet()))
+		if err != nil {
+			return nil, toStatus(err)
+		}
+		nics = append(nics, resource.NetworkInterfaceSpec{DeviceIndex: index, SubnetID: subID})
 	}
 	img, err := resource.Parse[resource.ImageID](req.GetInstance().GetLabels()[labelImage])
 	if err != nil {
@@ -588,7 +611,7 @@ func (s *instanceSrv) CreateInstance(ctx context.Context, req *computev1.CreateI
 	acc, err := s.w.set.Compute.RunInstances(ctx, backend.Mutation{
 		Scope: backend.Scope{Account: account}, Key: req.GetRequestId(), Fingerprint: fp,
 	}, resource.RunInstancesRequest{
-		ImageID: img, InstanceType: spec.GetMachineType(), SubnetID: subID, Count: 1,
+		ImageID: img, InstanceType: spec.GetMachineType(), NetworkInterfaces: nics, Count: 1,
 		Tags: tags, KeyName: keyName, UserData: spec.GetUserData(),
 		// The fake creates the root volume itself. It takes the type of the
 		// boot volume the client created, so a type the client drops or
@@ -598,12 +621,11 @@ func (s *instanceSrv) CreateInstance(ctx context.Context, req *computev1.CreateI
 	if err != nil {
 		return nil, toStatus(err)
 	}
-	vpcID := vpcFromSubnet(spec.GetNetworkInterfaces()[0].GetSubnet())
 	launch := req.GetInstance().GetLabels()[labelLaunch]
 	if launch == "" {
 		launch = acc.Operation.ID.String()
 	}
-	s.w.saveInst(instSnap{inst: acc.Items[0], vpc: vpcID, launch: launch, live: true})
+	s.w.saveInst(instSnap{inst: acc.Items[0], launch: launch, live: true})
 	s.w.noteLaunch(acc.Operation.ID.String(), launch)
 	return runningOp(projectID, acc.Operation, instanceName(projectID, acc.Items[0].ID.String()), commonv1.OperationVerb_OPERATION_VERB_CREATE, s.w.now)
 }
@@ -658,6 +680,19 @@ func (s *instanceSrv) changePower(ctx context.Context, req *computev1.UpdateInst
 	id, err := resource.Parse[resource.InstanceID](lastSegment(req.GetInstance().GetName()))
 	if err != nil {
 		return nil, toStatus(err)
+	}
+	if nics := req.GetInstance().GetSpec().GetNetworkInterfaces(); len(nics) > 0 {
+		page, err := s.w.set.Compute.DescribeInstances(ctx, backend.Scope{Account: account}, resource.InstanceQuery{
+			IDs: []resource.InstanceID{id}, Page: resource.PageRequest{Size: 1},
+		})
+		if err != nil {
+			return nil, toStatus(err)
+		}
+		stored := instanceProto(page.Items[0], projectID, s.w.vpcSegment).GetSpec().GetNetworkInterfaces()
+		if !slices.EqualFunc(nics, stored, func(a, b *computev1.NetworkInterface) bool { return proto.Equal(a, b) }) {
+			// A power change must not drop or rename an interface.
+			return nil, toStatus(resource.Invalid("network_interfaces", "a power change cannot change the interfaces"))
+		}
 	}
 	fp, err := protoFingerprint(req)
 	if err != nil {
@@ -948,7 +983,7 @@ func (s *instanceSrv) GetInstance(ctx context.Context, req *computev1.GetInstanc
 			inst.DetachingDevices = page.Items[0].DetachingDevices
 			inst.RootDeviceName = page.Items[0].RootDeviceName
 		}
-		msg := s.observeVolumes(ctx, account, instanceProto(inst, projectID, snap.vpc), inst)
+		msg := s.observeVolumes(ctx, account, instanceProto(inst, projectID, s.w.vpcSegment), inst)
 		return s.stampAction(msg, inst.ID.String()), nil
 	}
 	id, err := resource.Parse[resource.InstanceID](idText)
@@ -965,7 +1000,7 @@ func (s *instanceSrv) GetInstance(ctx context.Context, req *computev1.GetInstanc
 		return nil, toStatus(resource.NotFound(resource.KindInstance, idText))
 	}
 	inst := page.Items[0]
-	msg := s.observeVolumes(ctx, account, instanceProto(inst, projectID, s.w.vpcOf(inst.SubnetID.String())), inst)
+	msg := s.observeVolumes(ctx, account, instanceProto(inst, projectID, s.w.vpcSegment), inst)
 	return s.stampAction(msg, inst.ID.String()), nil
 }
 
@@ -1034,7 +1069,7 @@ func (s *instanceSrv) ListInstances(ctx context.Context, req *computev1.ListInst
 	}
 	items := make([]*computev1.Instance, 0, len(page.Items))
 	for _, inst := range page.Items {
-		msg := s.observeVolumes(ctx, account, instanceProto(inst, projectID, s.w.vpcOf(inst.SubnetID.String())), inst)
+		msg := s.observeVolumes(ctx, account, instanceProto(inst, projectID, s.w.vpcSegment), inst)
 		items = append(items, s.stampAction(msg, inst.ID.String()))
 	}
 	return &computev1.ListInstancesResponse{Instances: items, NextPageToken: page.NextToken}, nil
@@ -1218,7 +1253,7 @@ func (s *subnetSrv) GetSubnet(ctx context.Context, req *networkv1.GetSubnetReque
 	if len(page.Items) == 0 {
 		return nil, toStatus(resource.NotFound(resource.KindSubnet, idText))
 	}
-	return subnetProto(page.Items[0], projectID, s.w.vpcOf(idText)), nil
+	return subnetProto(page.Items[0], projectID, s.w.vpcSegment(page.Items[0].ID)), nil
 }
 
 func (s *subnetSrv) ListSubnets(ctx context.Context, req *networkv1.ListSubnetsRequest) (*networkv1.ListSubnetsResponse, error) {
@@ -1242,7 +1277,7 @@ func (s *subnetSrv) ListSubnets(ctx context.Context, req *networkv1.ListSubnetsR
 	}
 	items := make([]*networkv1.Subnet, 0, len(page.Items))
 	for _, sub := range page.Items {
-		if s.w.vpcOf(sub.ID.String()) != vpcID {
+		if s.w.vpcSegment(sub.ID) != vpcID {
 			continue
 		}
 		items = append(items, subnetProto(sub, projectID, vpcID))
@@ -1598,16 +1633,6 @@ func targetName(projectID string, ref resource.Ref, vpcID string) string {
 	default:
 		return ""
 	}
-}
-
-func vpcFromSubnet(name string) string {
-	parts := splitSlash(name)
-	for i, part := range parts {
-		if part == "vpcs" && i+1 < len(parts) {
-			return parts[i+1]
-		}
-	}
-	return ""
 }
 
 func bucketRef(name string) (string, resource.AccountID, resource.BucketName, error) {
