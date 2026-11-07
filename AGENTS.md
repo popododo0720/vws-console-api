@@ -3,7 +3,9 @@
 The web-only backend of VWS, a private cloud with an AWS-shaped control
 plane. One stateless process serves the console JSON API, an EC2 Query entry
 point and an S3 REST entry point. Compute, storage and network state lives in
-internal services reached over gRPC; this process keeps no copy. Protocol
+internal services reached over gRPC; this process keeps no copy. The one
+record it writes is a RunInstances launch record, a ConfigMap in the
+Kubernetes API (#392). Protocol
 compatibility is behavioral: no logos, image assets or text that claims this
 project is someone else's cloud.
 
@@ -18,6 +20,7 @@ project is someone else's cloud.
 | `internal/backend/backendtest` | The contract as tests. Every backend runs it. |
 | `internal/backend/grpcclient` | The contract over gRPC. The only package that sees protobuf. |
 | `internal/backend/launch` | The RunInstances launch record and the tracker that writes it on transitions. |
+| `internal/backend/launch/kubestore` | Launch records as ConfigMaps. The only package that sees Kubernetes types. |
 | `internal/sigv4` | Signature verification, plus `Sign` for tests. |
 | `internal/surface/*` | `console` (JSON), `ec2query`, `s3rest` codecs; `interop` drives several surfaces against one world. |
 | `internal/server` | One listener per surface, request IDs, shutdown. |
@@ -35,7 +38,8 @@ change both files together.
 | `internal/resource` imports only the standard library. | depguard `model-is-a-leaf` |
 | The kernel never sees HTTP, signatures or a surface. | depguard `kernel-knows-no-wire` |
 | Protobuf and gRPC types stay in `internal/backend/grpcclient`. | depguard `grpc-stays-in-grpcclient` |
-| A RunInstances launch record holds the client token key, the planned resources and each completed step; it is written only on a step or phase transition, by compare-and-swap, and only the latest attempt marks it failed. | `TestRunInstancesRecordsEachStep`, `TestPhaseTransitionsWriteOnce`, `TestPlanNamesACreateWhoseStepWasNotRecorded`, `TestStaleAttemptCannotFailARetry` |
+| Kubernetes types stay in `internal/backend/launch/kubestore`. | depguard `kube-stays-in-kubestore` |
+| A RunInstances launch record, a ConfigMap under `-launch-namespace`, holds the client token key, the planned resources and each completed step; it is written only on a step or phase transition, by compare-and-swap on `resourceVersion`, under 256 KiB, and only the latest attempt marks it failed. | `TestRunInstancesRecordsEachStep`, `TestPhaseTransitionsWriteOnce`, `TestPlanNamesACreateWhoseStepWasNotRecorded`, `TestStaleAttemptCannotFailARetry`, `TestNoOpRetryLeavesResourceVersion`, `TestLargestLaunchFitsTheObjectLimit` |
 | Untrusted strings become IDs only through `resource.Parse` or JSON decoding. | The compiler (unexported ID fields) |
 | Only `internal/backend` mints IDs and operation IDs. | `internal/hygiene` |
 | Every switch over a model enum handles every value. | `exhaustive` |

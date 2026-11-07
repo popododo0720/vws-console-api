@@ -92,6 +92,11 @@ var ownerRules = []struct {
 		[]string{"internal/backend/grpcclient"},
 		"protobuf and gRPC types stay inside internal/backend/grpcclient",
 	},
+	{
+		hasPrefix("k8s.io", "sigs.k8s.io"),
+		[]string{"internal/backend/launch/kubestore"},
+		"Kubernetes types stay inside internal/backend/launch/kubestore",
+	},
 }
 
 func constrainedDirs() []string {
@@ -163,11 +168,14 @@ func TestArchitectureRules(t *testing.T) {
 		"internal/widget/proto.go": `package widget; import _ "` + vwsProto + `/gen/go/vws/common/v1"`,
 		"internal/widget/longrunning.go": `package widget; import _ "` +
 			`cloud.google.com/go/longrunning/autogen/longrunningpb"`,
-		"internal/backend/grpcclient/ok.go":  `package grpcclient; import _ "google.golang.org/grpc"`,
-		"internal/surface/ec2query/ok.go":    `package ec2query; import _ "` + module + `/internal/cloud"`,
-		"internal/resource/std.go":           `package resource; import _ "fmt"`,
-		"internal/cloud/backend.go":          `package cloud; import _ "` + module + `/internal/backend"`,
-		"internal/surface/s3rest/surface.go": `package s3rest; import _ "` + module + `/internal/sigv4"`,
+		"internal/backend/grpcclient/ok.go":       `package grpcclient; import _ "google.golang.org/grpc"`,
+		"internal/widget/kube.go":                 `package widget; import _ "k8s.io/client-go/kubernetes"`,
+		"internal/widget/runtime.go":              `package widget; import _ "sigs.k8s.io/controller-runtime/pkg/client"`,
+		"internal/backend/launch/kubestore/ok.go": `package kubestore; import _ "k8s.io/api/core/v1"`,
+		"internal/surface/ec2query/ok.go":         `package ec2query; import _ "` + module + `/internal/cloud"`,
+		"internal/resource/std.go":                `package resource; import _ "fmt"`,
+		"internal/cloud/backend.go":               `package cloud; import _ "` + module + `/internal/backend"`,
+		"internal/surface/s3rest/surface.go":      `package s3rest; import _ "` + module + `/internal/sigv4"`,
 	} {
 		writeFile(t, filepath.Join(probe, rel), src)
 	}
@@ -196,6 +204,10 @@ func TestArchitectureRules(t *testing.T) {
 			"protobuf and gRPC types stay inside internal/backend/grpcclient",
 		"internal/widget imports google.golang.org/protobuf/proto: " +
 			"protobuf and gRPC types stay inside internal/backend/grpcclient",
+		"internal/widget imports k8s.io/client-go/kubernetes: " +
+			"Kubernetes types stay inside internal/backend/launch/kubestore",
+		"internal/widget imports sigs.k8s.io/controller-runtime/pkg/client: " +
+			"Kubernetes types stay inside internal/backend/launch/kubestore",
 	}
 	sort.Strings(want)
 	if got := archViolations(loadProduction(t, probe)); !reflect.DeepEqual(got, want) {
