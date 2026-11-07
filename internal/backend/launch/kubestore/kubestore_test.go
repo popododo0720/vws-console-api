@@ -120,14 +120,15 @@ func TestNoOpRetryLeavesResourceVersion(t *testing.T) {
 	s, cs, ns := open(t)
 	tr := launch.NewTracker(s, nil)
 	step := launch.Step{Kind: launch.StepVolume, Resource: "v"}
-	l, err := tr.Begin(ctx, key, account(t), "fp", 1, []launch.Step{step})
+	plan := func(int) []launch.Step { return []launch.Step{step} }
+	l, err := tr.Begin(ctx, key, account(t), "fp", 1, plan)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := l.Done(ctx, step); err != nil {
 		t.Fatal(err)
 	}
-	if err := l.Finish(ctx, launch.Succeeded); err != nil {
+	if err := l.Succeed(ctx); err != nil {
 		t.Fatal(err)
 	}
 	before, err := cs.CoreV1().ConfigMaps(ns).Get(ctx, kubestore.Name(key), metav1.GetOptions{})
@@ -135,14 +136,14 @@ func TestNoOpRetryLeavesResourceVersion(t *testing.T) {
 		t.Fatal(err)
 	}
 	for range 5 {
-		again, err := tr.Begin(ctx, key, account(t), "fp", 1, []launch.Step{step})
+		again, err := tr.Begin(ctx, key, account(t), "fp", 1, plan)
 		if err != nil {
 			t.Fatal(err)
 		}
 		if err := again.Done(ctx, step); err != nil {
 			t.Fatal(err)
 		}
-		if err := again.Finish(ctx, launch.Succeeded); err != nil {
+		if err := again.Succeed(ctx); err != nil {
 			t.Fatal(err)
 		}
 	}

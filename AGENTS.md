@@ -40,6 +40,7 @@ change both files together.
 | Protobuf and gRPC types stay in `internal/backend/grpcclient`. | depguard `grpc-stays-in-grpcclient` |
 | Kubernetes types stay in `internal/backend/launch/kubestore`. | depguard `kube-stays-in-kubestore` |
 | A RunInstances launch record, a ConfigMap under `-launch-namespace`, holds the client token key, the planned resources and each completed step; it is written only on a step or phase transition, by compare-and-swap on `resourceVersion`, under 256 KiB, and only the latest attempt marks it failed. | `TestRunInstancesRecordsEachStep`, `TestPhaseTransitionsWriteOnce`, `TestPlanNamesACreateWhoseStepWasNotRecorded`, `TestStaleAttemptCannotFailARetry`, `TestNoOpRetryLeavesResourceVersion`, `TestLargestLaunchFitsTheObjectLimit` |
+| A failed RunInstances step undoes its attempt last step first, after the record says `undoing` and before the error returns; a retry is the next attempt with new ids, and a cut-short undo is finished by the next request. | `TestFailureAtEveryStepIsUndone`, `TestUndoDeletesInReverseOrder`, `TestCutShortUndoIsFinishedByTheRetry`, `TestUndoNeedsTheRecord`, `TestSuccessAfterAnUndoIsRefused` |
 | Untrusted strings become IDs only through `resource.Parse` or JSON decoding. | The compiler (unexported ID fields) |
 | Only `internal/backend` mints IDs and operation IDs. | `internal/hygiene` |
 | Every switch over a model enum handles every value. | `exhaustive` |

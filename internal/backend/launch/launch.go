@@ -1,6 +1,10 @@
 // Package launch records the side effects of one RunInstances, so a failed or
 // interrupted launch can be undone or resumed (#392). A record is written
 // only when a step completes or the phase changes.
+//
+// A launch moves running -> succeeded, or running -> undoing -> failed when
+// a step fails and its creates are deleted. A retry of a failed launch is a
+// new attempt with a new plan, back to running.
 package launch
 
 import (
@@ -17,9 +21,12 @@ import (
 type Phase string
 
 // The launch phases. Succeeded is final: a later failure of a replay does
-// not undo a launch that once succeeded.
+// not undo a launch that once succeeded. Undoing is written before the first
+// delete, so a request that resumes the launch never reuses a deleted
+// resource; Failed is written once every planned resource is gone.
 const (
 	Running   Phase = "running"
+	Undoing   Phase = "undoing"
 	Succeeded Phase = "succeeded"
 	Failed    Phase = "failed"
 )
@@ -43,10 +50,10 @@ type Step struct {
 
 // Record is one launch. Key is the idempotency key of the client token
 // (account, action and token), so the token itself is never stored. Plan is
-// every resource the launch may create, written before the first create, so
-// a create whose step was never recorded (a crash, a failed record write) is
-// still named. Steps are the creates that completed. Attempt counts the
-// retries that moved a failed launch back to running.
+// every resource the current attempt may create, written before its first
+// create, so a create whose step was never recorded (a crash, a failed record
+// write) is still named. Steps are the attempt's creates that completed.
+// Attempt counts the retries that moved a failed launch back to running.
 type Record struct {
 	Key         string             `json:"key"`
 	Account     resource.AccountID `json:"account"`
@@ -65,6 +72,11 @@ var ErrExists = errors.New("launch record exists")
 
 // ErrConflict is an Update whose version is no longer the stored one.
 var ErrConflict = errors.New("launch record changed")
+
+// Plan names the resources attempt may create. The backend derives their
+// ids from the client token and the attempt, so a retry after an undo never
+// names a deleted resource. A nil Plan names none.
+type Plan func(attempt int) []Step
 
 // Store keeps records. Every write is a compare-and-swap: Create fails with
 // ErrExists and Update with ErrConflict instead of overwriting.
@@ -111,13 +123,17 @@ type Launch struct {
 // Record returns the record as last written or read.
 func (l *Launch) Record() Record { return l.rec }
 
+// Attempt is the attempt this request runs as, 0 without a tracker.
+func (l *Launch) Attempt() int { return l.attempt }
+
 // Begin returns the launch for key. An absent record is created Running
-// with plan, the resources of count instances. A retry of a failed launch
-// moves it back to Running as a new attempt; a retry of a running or
-// succeeded launch writes nothing. A record with another fingerprint or
-// count is the client token reused with other parameters.
+// with plan(1), the resources of count instances. A retry of a failed launch
+// moves it back to Running as the next attempt with that attempt's plan and
+// no steps; a retry of a running, undoing or succeeded launch writes nothing.
+// A record with another fingerprint or count is the client token reused with
+// other parameters.
 func (t *Tracker) Begin(
-	ctx context.Context, key string, account resource.AccountID, fingerprint string, count int, plan []Step,
+	ctx context.Context, key string, account resource.AccountID, fingerprint string, count int, plan Plan,
 ) (Launch, error) {
 	if t == nil {
 		return Launch{}, nil
@@ -125,7 +141,7 @@ func (t *Tracker) Begin(
 	now := t.now().UTC()
 	rec := Record{
 		Key: key, Account: account, Fingerprint: fingerprint, Count: count,
-		Phase: Running, Attempt: 1, Plan: slices.Clone(plan), Steps: []Step{}, Started: now, Updated: now,
+		Phase: Running, Attempt: 1, Plan: plan.of(1), Steps: []Step{}, Started: now, Updated: now,
 	}
 	for range conflictRetries {
 		version, err := t.store.Create(ctx, rec)
@@ -151,6 +167,8 @@ func (t *Tracker) Begin(
 			}
 			r.Phase = Running
 			r.Attempt++
+			r.Plan = plan.of(r.Attempt)
+			r.Steps = []Step{}
 			return true
 		})
 		l.attempt = l.rec.Attempt
@@ -160,50 +178,109 @@ func (t *Tracker) Begin(
 }
 
 // Done records a completed step. A step already recorded writes nothing.
+// A step of an attempt that another request began to undo, or that a retry
+// replaced, writes nothing and is ErrUndone: the caller undoes again, so
+// the create it just made is deleted too.
 func (l *Launch) Done(ctx context.Context, step Step) error {
 	if l.t == nil {
 		return nil
 	}
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), writeTimeout)
 	defer cancel()
-	return l.apply(ctx, func(r *Record) bool {
-		if slices.Contains(r.Steps, step) {
+	undone := false
+	err := l.apply(ctx, func(r *Record) bool {
+		undone = r.Attempt != l.attempt || r.Phase == Undoing || r.Phase == Failed
+		if undone || slices.Contains(r.Steps, step) {
 			return false
 		}
 		r.Steps = append(r.Steps, step)
 		return true
 	})
+	if err == nil && undone {
+		return l.undoneErr()
+	}
+	return err
 }
 
-// Finish moves the launch to phase. A launch already in phase, or one that
-// succeeded, writes nothing. Failed is written only by the latest attempt:
-// a stale request never fails a retry that is still running.
-func (l *Launch) Finish(ctx context.Context, phase Phase) error {
+func (p Plan) of(attempt int) []Step {
+	if p == nil {
+		return []Step{}
+	}
+	return slices.Clone(p(attempt))
+}
+
+// Succeed moves this attempt from Running to Succeeded. A launch that
+// already succeeded in this attempt writes nothing. A launch that another
+// request of this attempt began to undo, or that a later attempt replaced,
+// is ErrUndone: the creates this request returns may be gone.
+func (l *Launch) Succeed(ctx context.Context) error {
+	if l.t == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), writeTimeout)
+	defer cancel()
+	undone := false
+	err := l.apply(ctx, func(r *Record) bool {
+		undone = r.Attempt != l.attempt || (r.Phase != Running && r.Phase != Succeeded)
+		if undone || r.Phase == Succeeded {
+			return false
+		}
+		r.Phase = Succeeded
+		return true
+	})
+	if err == nil && undone {
+		return l.undoneErr()
+	}
+	return err
+}
+
+// ErrUndone is a step or success of an attempt whose creates are deleted.
+var ErrUndone = errors.New("launch attempt undone")
+
+// undoneErr is Unavailable, so a client retries and gets the current attempt.
+func (l *Launch) undoneErr() error {
+	return unavailable(fmt.Errorf("launch %s attempt %d: %w", l.rec.Key, l.attempt, ErrUndone))
+}
+
+// Undo moves this attempt from Running to Undoing and reports whether the
+// caller must delete the attempt's plan. An attempt already Undoing or
+// Failed reports true without a write, so a request that finds an undo cut
+// short resumes it, and one whose create landed after the undo deletes it.
+// A launch that succeeded or moved to a later attempt reports false: a
+// stale request never deletes another attempt's resources.
+func (l *Launch) Undo(ctx context.Context) (bool, error) {
+	if l.t == nil {
+		return false, nil
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), writeTimeout)
+	defer cancel()
+	undo := false
+	err := l.apply(ctx, func(r *Record) bool {
+		undo = r.Attempt == l.attempt && r.Phase != Succeeded
+		if !undo || r.Phase != Running {
+			return false
+		}
+		r.Phase = Undoing
+		return true
+	})
+	return undo && err == nil, err
+}
+
+// Undone moves this attempt from Undoing to Failed, once the caller deleted
+// every resource of the plan. Any other phase or attempt writes nothing.
+func (l *Launch) Undone(ctx context.Context) error {
 	if l.t == nil {
 		return nil
 	}
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), writeTimeout)
 	defer cancel()
 	return l.apply(ctx, func(r *Record) bool {
-		if !finishes(r.Phase, phase) || (phase == Failed && r.Attempt != l.attempt) {
+		if r.Attempt != l.attempt || r.Phase != Undoing {
 			return false
 		}
-		r.Phase = phase
+		r.Phase = Failed
 		return true
 	})
-}
-
-// finishes reports whether a launch in from may end in to.
-func finishes(from, to Phase) bool {
-	switch from {
-	case Running:
-		return to == Succeeded || to == Failed
-	case Failed:
-		return to == Succeeded
-	case Succeeded:
-		return false
-	}
-	return false
 }
 
 // apply changes the record with change and writes it when change reports a
