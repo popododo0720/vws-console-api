@@ -353,8 +353,52 @@ func (r AttachVolumeRequest) Normalize() (AttachVolumeRequest, error) {
 	if r.Device == "" {
 		return AttachVolumeRequest{}, Invalid("device", "required")
 	}
+	if !ValidDeviceName(r.Device) {
+		return AttachVolumeRequest{}, Invalid("device",
+			"Value ("+r.Device+") for parameter device is invalid. "+r.Device+" is not a valid EBS device name.")
+	}
 	return r, nil
 }
+
+// ValidDeviceName reports whether name is one of the device names the EC2
+// User Guide lists as available for an EBS volume ("Device names for volumes
+// on Amazon EC2 instances"), on any instance: /dev/sd[a-z] and /dev/hd[a-z]
+// with an optional partition 1 to 15, /dev/xvd[a-z], /dev/xvd[a-c][a-z] and
+// /dev/xvdd[a-x], and the same xvd names without /dev/. The longest is 10
+// bytes, so every name fits a detach record (#400).
+func ValidDeviceName(name string) bool {
+	rest, dev := strings.CutPrefix(name, "/dev/")
+	if xvd, ok := strings.CutPrefix(rest, "xvd"); ok {
+		return xvdSuffix(xvd)
+	}
+	if !dev || len(rest) < 3 || (rest[:2] != "sd" && rest[:2] != "hd") || !lower(rest[2], 'z') {
+		return false
+	}
+	switch part := rest[3:]; len(part) {
+	case 0:
+		return true
+	case 1:
+		return part[0] >= '1' && part[0] <= '9'
+	case 2:
+		return part[0] == '1' && part[1] >= '0' && part[1] <= '5'
+	default:
+		return false
+	}
+}
+
+func xvdSuffix(s string) bool {
+	switch len(s) {
+	case 1:
+		return lower(s[0], 'z')
+	case 2:
+		return (lower(s[0], 'c') && lower(s[1], 'z')) || (s[0] == 'd' && lower(s[1], 'x'))
+	default:
+		return false
+	}
+}
+
+// lower reports whether c is a lowercase letter from a to last.
+func lower(c, last byte) bool { return c >= 'a' && c <= last }
 
 // DeleteVolumeRequest deletes one volume.
 type DeleteVolumeRequest struct {

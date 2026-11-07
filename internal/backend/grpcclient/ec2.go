@@ -829,7 +829,11 @@ func (c computeClient) writeDetach(
 		if detachRecordsInWindow(raw, now, vol.ID.String()) >= backend.MaxDetachReplays {
 			return zero, backend.DetachReplaysExhausted(model.ID)
 		}
-		record = map[string]string{recordKey: detachRecordValue(detachRequestHex(m.Key), device, now)}
+		value := detachRecordValue(detachRequestHex(m.Key), device, now)
+		if _, got, _, _, ok := parseDetachRecord(value); !ok || got != device || len(value) > labelValueMax {
+			return zero, detachDeviceErr(device)
+		}
+		record = map[string]string{recordKey: value}
 	}
 	var labels map[string]string
 	var err error

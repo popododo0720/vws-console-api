@@ -446,6 +446,20 @@ func detachRoomErr() error {
 		"the instance has no room for this detach's replay record (64 compute labels of 63 bytes)")
 }
 
+// detachDeviceErr reports a client-token detach of an attachment whose
+// device name no detach record can hold: too long for a 63-byte label value
+// next to the request id and stamp, or with a space, which separates the
+// record's fields. AttachVolume takes only EC2 device names, which always
+// fit, so only an attachment made some other way gets here. It is refused
+// before compute is called rather than sent as a label compute refuses
+// (#400). A detach without a client token keeps no record and is not
+// refused.
+func detachDeviceErr(device string) error {
+	return resource.Invalid("VolumeId", fmt.Sprintf(
+		"the attachment's device name %q does not fit this detach's replay record (a 63-byte label value); "+
+			"retry without a client token", device))
+}
+
 // splitUTF8 cuts s into pieces of at most n bytes without splitting a rune.
 func splitUTF8(s string, n int) []string {
 	var out []string
