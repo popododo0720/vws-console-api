@@ -158,6 +158,11 @@ func (h *handler) gate(w http.ResponseWriter, r *http.Request) {
 	}
 	if authz != nil {
 		action, arn := authz(r)
+		if wait, err := h.requests.Take(c.Account, action); err != nil {
+			retryAfter(w, wait)
+			writeErr(w, r, err)
+			return
+		}
 		if err := iam.Check(r.Context(), h.iam, c, action, arn); err != nil {
 			writeErr(w, r, err)
 			return

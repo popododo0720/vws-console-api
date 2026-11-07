@@ -92,40 +92,142 @@ func (c computeClient) RunInstances(ctx context.Context, m backend.Mutation, req
 	if err != nil {
 		return resource.Accepted[resource.Instance]{}, err
 	}
-	run, err := c.launches.Begin(ctx, m.Key, m.Account, m.Fingerprint, req.Count, launchPlan(projectID, m.Key, req.Count))
+	plan := func(attempt int) []launch.Step { return launchPlan(projectID, m.Key, attempt, req.Count) }
+	run, err := c.launches.Begin(ctx, m.Key, m.Account, m.Fingerprint, req.Count, plan)
 	if err != nil {
 		return resource.Accepted[resource.Instance]{}, err
+	}
+	if run.Record().Phase == launch.Undoing {
+		// An undo was cut short: finish it, then retry as the next attempt.
+		if err := c.undoLaunch(ctx, &run, m.Key); err != nil {
+			return resource.Accepted[resource.Instance]{}, err
+		}
+		if run, err = c.launches.Begin(ctx, m.Key, m.Account, m.Fingerprint, req.Count, plan); err != nil {
+			return resource.Accepted[resource.Instance]{}, err
+		}
 	}
 	acc, err := c.launchInstances(ctx, &run, m, req, projectID, nics, keyPair, labels)
 	if err != nil {
-		if finishErr := run.Finish(ctx, launch.Failed); finishErr != nil {
+		if undoErr := c.undoLaunch(ctx, &run, m.Key); undoErr != nil {
 			// The launch's own error stays the one callers classify.
-			err = fmt.Errorf("%w (launch record: %v)", err, finishErr) //nolint:errorlint // only err is the cause
+			err = fmt.Errorf("%w (undo: %v)", err, undoErr) //nolint:errorlint // only err is the cause
 		}
 		return resource.Accepted[resource.Instance]{}, err
 	}
-	if err := run.Finish(ctx, launch.Succeeded); err != nil {
+	if err := run.Succeed(ctx); err != nil {
 		return resource.Accepted[resource.Instance]{}, err
 	}
 	return acc, nil
 }
 
-// launchPlan names the boot volume and instance of each index a launch with
-// key may create. The ids are derived from the key, so the plan is the same
-// on every retry.
-func launchPlan(projectID, key string, count int) []launch.Step {
+// launchPlan names the boot volume and instance of each index attempt of a
+// launch with key may create. The ids are derived from the key and the
+// attempt, so the plan is the same on every retry of one attempt, and an
+// attempt after an undo never names a deleted resource.
+func launchPlan(projectID, key string, attempt, count int) []launch.Step {
 	plan := make([]launch.Step, 0, 2*count)
 	for i := range count {
 		plan = append(plan,
-			launch.Step{Kind: launch.StepVolume, Index: i, Resource: volumeName(projectID, bootVolumeID(key, i))},
-			launch.Step{Kind: launch.StepInstance, Index: i, Resource: instanceName(projectID, launchInstanceID(key, i))})
+			launch.Step{Kind: launch.StepVolume, Index: i, Resource: volumeName(projectID, bootVolumeID(key, attempt, i))},
+			launch.Step{
+				Kind: launch.StepInstance, Index: i, Resource: instanceName(projectID, launchInstanceID(key, attempt, i)),
+			})
 	}
 	return plan
 }
 
-func bootVolumeID(key string, i int) string { return derivedID("vol-", key, "vol", strconv.Itoa(i)) }
+// launchParts are the id and request id parts of index i of attempt. The
+// first attempt keeps the parts launches had before attempts, and a launch
+// without a record runs as attempt 0, the same parts.
+func launchParts(key, kind string, attempt, i int) []string {
+	parts := []string{key, kind, strconv.Itoa(i)}
+	if attempt > 1 {
+		parts = append(parts, "attempt", strconv.Itoa(attempt))
+	}
+	return parts
+}
 
-func launchInstanceID(key string, i int) string { return derivedID("i-", key, "inst", strconv.Itoa(i)) }
+func bootVolumeID(key string, attempt, i int) string {
+	return derivedID("vol-", launchParts(key, "vol", attempt, i)...)
+}
+
+func launchInstanceID(key string, attempt, i int) string {
+	return derivedID("i-", launchParts(key, "inst", attempt, i)...)
+}
+
+// undoTimeout bounds one undo with its waits. An undo it cuts short stays
+// recorded undoing, and the next request with the token finishes it.
+const undoTimeout = 2 * time.Minute
+
+// undoLaunch deletes the plan of run's attempt, last step first, and marks
+// the launch failed. It deletes only after the record says undoing, so a
+// request that resumes the attempt never uses a deleted resource. The plan
+// names creates whose step was never recorded, and a delete of a resource
+// that does not exist succeeds. A launch without a record, or one that
+// moved on, deletes nothing.
+func (c computeClient) undoLaunch(ctx context.Context, run *launch.Launch, key string) error {
+	undo, err := run.Undo(ctx)
+	if err != nil || !undo {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), undoTimeout)
+	defer cancel()
+	plan := run.Record().Plan
+	for _, step := range slices.Backward(plan) {
+		if err := c.undoStep(ctx, key, run.Attempt(), step); err != nil {
+			return fmt.Errorf("undo %s %d: %w", step.Kind, step.Index, err)
+		}
+	}
+	return run.Undone(ctx)
+}
+
+// undoAttempts bounds the tries of one delete on a transient error.
+const undoAttempts = 3
+
+// undoStep deletes one planned resource and waits until it is gone. Compute
+// deletes an instance's boot volume with it; the volume delete after it
+// covers a volume whose instance was never created.
+func (c computeClient) undoStep(ctx context.Context, key string, attempt int, step launch.Step) error {
+	requestID := requestUUID(append(launchParts(key, "undo-"+string(step.Kind), attempt, step.Index), step.Resource)...)
+	var err error
+	for try := range undoAttempts {
+		if try > 0 {
+			select {
+			case <-ctx.Done():
+				return errors.Join(err, ctx.Err())
+			case <-time.After(time.Duration(50<<try) * time.Millisecond):
+			}
+		}
+		err = c.deleteStep(ctx, requestID, step)
+		if resource.CodeOf(err) == resource.CodeNotFound {
+			return nil
+		}
+		if resource.CodeOf(err) != resource.CodeUnavailable {
+			return err
+		}
+	}
+	return err
+}
+
+func (c computeClient) deleteStep(ctx context.Context, requestID string, step launch.Step) error {
+	var op *longrunningpb.Operation
+	var err error
+	ops := c.computeOps
+	switch step.Kind {
+	case launch.StepInstance:
+		op, err = c.instances.DeleteInstance(ctx, &computev1.DeleteInstanceRequest{Name: step.Resource, RequestId: requestID})
+	case launch.StepVolume:
+		op, err = c.volumes.DeleteVolume(ctx, &storagev1.DeleteVolumeRequest{Name: step.Resource, RequestId: requestID})
+		ops = c.storageOps
+	default:
+		return resource.Internal(fmt.Errorf("launch step kind %q", step.Kind))
+	}
+	if err := rpcErr(op, err); err != nil {
+		return err
+	}
+	_, err = awaitOperation(ctx, ops, op)
+	return err
+}
 
 // launchInstances creates the boot volume and then the instance for each
 // index, and records each completed create in run.
@@ -136,11 +238,12 @@ func (c computeClient) launchInstances(
 	items := make([]resource.Instance, 0, req.Count)
 	var op resource.Operation
 	for i := 0; i < req.Count; i++ {
-		volID, instID := bootVolumeID(m.Key, i), launchInstanceID(m.Key, i)
+		attempt := run.Attempt()
+		volID, instID := bootVolumeID(m.Key, attempt, i), launchInstanceID(m.Key, attempt, i)
 		volOp, err := c.volumes.CreateVolume(ctx, &storagev1.CreateVolumeRequest{
 			Parent:    volumeParent(projectID),
 			VolumeId:  volID,
-			RequestId: requestUUID(m.Key, "vol", strconv.Itoa(i)),
+			RequestId: requestUUID(launchParts(m.Key, "vol", attempt, i)...),
 			Volume:    bootVolume(projectID, m.Fingerprint, req, instID),
 		})
 		if err := rpcErr(volOp, err); err != nil {
@@ -154,7 +257,7 @@ func (c computeClient) launchInstances(
 		created, err := c.instances.CreateInstance(ctx, &computev1.CreateInstanceRequest{
 			Parent:     instanceParent(projectID),
 			InstanceId: instID,
-			RequestId:  requestUUID(m.Key, "inst", strconv.Itoa(i)),
+			RequestId:  requestUUID(launchParts(m.Key, "inst", attempt, i)...),
 			Instance: &computev1.Instance{
 				Labels: labels,
 				Spec: &computev1.InstanceSpec{
@@ -757,6 +860,13 @@ func (c storageClient) finishPut(ctx context.Context, name string, op *longrunni
 // awaitStorage polls a put until the storage service marks it done. The
 // object is not readable until then, so GetObject before that is NotFound.
 func (c storageClient) awaitStorage(ctx context.Context, op *longrunningpb.Operation) (*longrunningpb.Operation, error) {
+	return awaitOperation(ctx, c.storageOps, op)
+}
+
+// awaitOperation polls op on ops until it is done and returns its error.
+func awaitOperation(
+	ctx context.Context, ops longrunningpb.OperationsClient, op *longrunningpb.Operation,
+) (*longrunningpb.Operation, error) {
 	if op.GetDone() {
 		return op, nil
 	}
@@ -767,7 +877,7 @@ func (c storageClient) awaitStorage(ctx context.Context, op *longrunningpb.Opera
 	ticker := time.NewTicker(5 * time.Millisecond)
 	defer ticker.Stop()
 	for {
-		got, err := c.storageOps.GetOperation(ctx, &longrunningpb.GetOperationRequest{Name: name})
+		got, err := ops.GetOperation(ctx, &longrunningpb.GetOperationRequest{Name: name})
 		if err != nil {
 			return nil, fromRPC(err)
 		}

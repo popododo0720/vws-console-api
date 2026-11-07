@@ -31,6 +31,7 @@ import (
 	"github.com/popododo0720/vws-console-api/internal/surface/ec2query"
 	"github.com/popododo0720/vws-console-api/internal/surface/iamquery"
 	"github.com/popododo0720/vws-console-api/internal/surface/s3rest"
+	"github.com/popododo0720/vws-console-api/internal/throttle"
 )
 
 func stopSignals() []os.Signal {
@@ -106,6 +107,20 @@ func run(ctx context.Context, args []string) (err error) {
 		"time for one account user name to earn one more failed sign-in (100ms to 24h)")
 	fs.IntVar(&limits.MaxKeys, "login-max-keys", limits.MaxKeys,
 		"addresses and user names each sign-in limit table holds before it evicts (100 to 1000000)")
+	requestLimits := throttle.DefaultLimits()
+	for _, c := range []struct {
+		name string
+		rate *throttle.Rate
+	}{
+		{"describe", &requestLimits.Describe}, {"mutate", &requestLimits.Mutate}, {"launch", &requestLimits.Launch},
+	} {
+		fs.IntVar(&c.rate.Burst, "ec2-"+c.name+"-burst", c.rate.Burst,
+			"EC2 "+c.name+" requests one account may make at once per action (1 to 100000); see docs/rules.md")
+		fs.Float64Var(&c.rate.PerSecond, "ec2-"+c.name+"-rate", c.rate.PerSecond,
+			"EC2 "+c.name+" requests one account earns back per action each second (0.01 to 100000)")
+	}
+	fs.IntVar(&requestLimits.MaxKeys, "ec2-limit-max-keys", requestLimits.MaxKeys,
+		"(account, action) buckets the EC2 request limit holds before it evicts (100 to 10000000)")
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("flags: %w", err)
 	}
@@ -124,6 +139,10 @@ func run(ctx context.Context, args []string) (err error) {
 	if err := limits.Validate(); err != nil {
 		return fmt.Errorf("-login-*: %w", err)
 	}
+	if err := requestLimits.Validate(); err != nil {
+		return fmt.Errorf("-ec2-*: %w", err)
+	}
+	requests := throttle.New(requestLimits, nil)
 	trusted, err := console.ParseTrustedProxies(*trustedProxies)
 	if err != nil {
 		return fmt.Errorf("-trusted-proxies: %w", err)
@@ -226,8 +245,11 @@ func run(ctx context.Context, args []string) (err error) {
 			TrustedProxies: trusted,
 			LoginDisabled:  !signInEnabled(*iamMode),
 			LoginLimits:    limits,
+			Requests:       requests,
 		})},
-		{Name: "ec2", Addr: *ec2Addr, Handler: ec2query.New(ec2query.Config{Service: svc, Verifier: ec2, Authorizer: auth})},
+		{Name: "ec2", Addr: *ec2Addr, Handler: ec2query.New(ec2query.Config{
+			Service: svc, Verifier: ec2, Authorizer: auth, Requests: requests,
+		})},
 		{Name: "s3", Addr: *s3Addr, Handler: s3rest.New(s3rest.Config{Service: svc, Verifier: s3, Authorizer: auth})},
 		{Name: "iam", Addr: *iamAddr, Handler: iamquery.New(iamquery.Config{
 			Admin: admin, Authorizer: auth, IAM: verifier(sigv4.ServiceIAM), STS: verifier(sigv4.ServiceSTS),

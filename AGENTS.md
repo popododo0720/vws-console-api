@@ -40,6 +40,7 @@ change both files together.
 | Protobuf and gRPC types stay in `internal/backend/grpcclient`. | depguard `grpc-stays-in-grpcclient` |
 | Kubernetes types stay in `internal/backend/launch/kubestore`. | depguard `kube-stays-in-kubestore` |
 | A RunInstances launch record, a ConfigMap under `-launch-namespace`, holds the client token key, the planned resources and each completed step; it is written only on a step or phase transition, by compare-and-swap on `resourceVersion`, under 256 KiB, and only the latest attempt marks it failed. | `TestRunInstancesRecordsEachStep`, `TestPhaseTransitionsWriteOnce`, `TestPlanNamesACreateWhoseStepWasNotRecorded`, `TestStaleAttemptCannotFailARetry`, `TestNoOpRetryLeavesResourceVersion`, `TestLargestLaunchFitsTheObjectLimit` |
+| A failed RunInstances step undoes its attempt last step first, after the record says `undoing` and before the error returns; a retry is the next attempt with new ids, and a cut-short undo is finished by the next request. | `TestFailureAtEveryStepIsUndone`, `TestUndoDeletesInReverseOrder`, `TestCutShortUndoIsFinishedByTheRetry`, `TestUndoNeedsTheRecord`, `TestSuccessAfterAnUndoIsRefused` |
 | Untrusted strings become IDs only through `resource.Parse` or JSON decoding. | The compiler (unexported ID fields) |
 | Only `internal/backend` mints IDs and operation IDs. | `internal/hygiene` |
 | Every switch over a model enum handles every value. | `exhaustive` |
@@ -97,6 +98,7 @@ change both files together.
 | `//nolint` names one linter and a reason. | `nolintlint` |
 | No swallowed errors. | `errcheck`, `wrapcheck`, `errorlint` |
 | Every `resource.Code` has a status and wire code on each surface. | `TestEveryCodeHasAnEC2Error` |
+| EC2 requests are rate limited per account and IAM action with EC2's bucket classes (describe 100/20 s, mutate 50/5 s, RunInstances and StartInstances 5/2 s), set by `-ec2-<class>-burst` and `-ec2-<class>-rate`; over the limit EC2 Query is 503 `RequestLimitExceeded`, the console 429 with `Retry-After`, and nothing reaches vws-iam or a backend. | `TestRequestLimitExceededIsAWSShaped`, `TestBucketsArePerAccountAndAction`, `TestConsoleSharesTheEC2RequestLimit` |
 | `NotFound` has each surface's HTTP status; a vws-iam `InvalidClientTokenId` is HTTP 403 even on gRPC `NOT_FOUND`. | `TestMissingResourceStatusIsPerSurface`, `TestInvalidClientTokenIDIsHTTP403` |
 | A handler panic is a bare 500. | `TestPanicIsABare500` |
 | Ambiguous requests and bad names or sizes are refused before the backend; a key repeated across IAM `Tags` members is last-wins, and a field sent twice is still refused. | `TestMalformedNamesAndBodies`, `TestPolicyTagRepeatedKeyLastWins`, `TestMFADeviceTagRepeatedKeyLastWins` |
