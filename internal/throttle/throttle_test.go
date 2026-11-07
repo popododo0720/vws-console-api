@@ -144,6 +144,25 @@ func TestTableIsBounded(t *testing.T) {
 	}
 }
 
+// A full table prunes to 90% of MaxKeys, so the next MaxKeys/10 new keys
+// insert without another scan under the lock.
+func TestFullTablePrunesBelowTheCap(t *testing.T) {
+	limits := DefaultLimits()
+	limits.MaxKeys = 100
+	l := New(limits, newClock().now)
+	for i := range 100 {
+		if _, err := l.Take(account(t, fmt.Sprintf("%012d", i+1)), "ec2:RunInstances"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := l.Take(account(t, "999999999999"), "ec2:RunInstances"); err != nil {
+		t.Fatal(err)
+	}
+	if l.size() != 91 {
+		t.Errorf("after one prune the table holds %d buckets, want 91", l.size())
+	}
+}
+
 func TestValidateBounds(t *testing.T) {
 	if err := DefaultLimits().Validate(); err != nil {
 		t.Fatalf("defaults: %v", err)

@@ -185,16 +185,19 @@ func (l *Limiter) size() int {
 }
 
 // prune drops full buckets, which act the same as a new one, then arbitrary
-// ones until there is room. Dropping a partly drained bucket refills it, so
-// pruning only ever errs toward letting a request through.
+// ones until the table is at 90% of MaxKeys. Dropping a partly drained
+// bucket refills it, so pruning only ever errs toward letting a request
+// through. Pruning below the cap makes one scan, under the lock, pay for
+// MaxKeys/10 new keys instead of one.
 func (l *Limiter) prune(now time.Time) {
+	target := l.limits.MaxKeys - l.limits.MaxKeys/10
 	for k, b := range l.buckets {
 		if b.TokensAt(now) >= float64(b.Burst()) {
 			delete(l.buckets, k)
 		}
 	}
 	for k := range l.buckets {
-		if len(l.buckets) < l.limits.MaxKeys {
+		if len(l.buckets) <= target {
 			break
 		}
 		delete(l.buckets, k)
