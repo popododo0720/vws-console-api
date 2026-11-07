@@ -235,7 +235,7 @@ func (h *handler) runInstances(w http.ResponseWriter, r *http.Request, c resourc
 	acc, err := h.svc.RunInstances(r.Context(), c, token, resource.RunInstancesRequest{
 		ImageID: img, InstanceType: r.Form.Get("InstanceType"), SubnetID: sub, Count: count, Tags: tags,
 		KeyName: r.Form.Get("KeyName"), UserData: userData,
-		RootVolumeType: root.typ, RootIops: root.iops, RootThroughput: root.throughput,
+		RootVolumeType: root.typ, RootVolumeSize: root.size, RootIops: root.iops, RootThroughput: root.throughput,
 	})
 	if err != nil {
 		writeErr(w, r, err)
@@ -520,19 +520,20 @@ const maxBlockDeviceMappings = 100
 // rootMapping is what the RunInstances block device mapping sets on the
 // root volume.
 type rootMapping struct {
-	typ              resource.VolumeType
-	iops, throughput int64
+	typ                    resource.VolumeType
+	size, iops, throughput int64
 }
 
 // rootDeviceFields are the BlockDeviceMapping.N fields rootVolume reads.
 func rootDeviceFields() []string {
-	return []string{"DeviceName", "Ebs.VolumeType", "Ebs.Iops", "Ebs.Throughput"}
+	return []string{"DeviceName", "Ebs.VolumeType", "Ebs.VolumeSize", "Ebs.Iops", "Ebs.Throughput"}
 }
 
 // rootVolume reads the RunInstances block device mapping. VWS creates only
 // the root volume, so the one mapping it takes names the root device and
-// may set Ebs.VolumeType, Ebs.Iops and Ebs.Throughput; Normalize checks them
-// with the CreateVolume rules. A mapping for any other device would add a
+// may set Ebs.VolumeType, Ebs.VolumeSize, Ebs.Iops and Ebs.Throughput;
+// Normalize checks them with the CreateVolume rules and the backend checks
+// the size against the image. A mapping for any other device would add a
 // volume, which VWS does not support yet (#323 follow-up), so it is refused
 // rather than ignored. The other mapping fields are refused by allowRun.
 func rootVolume(r *http.Request) (rootMapping, error) {
@@ -556,6 +557,9 @@ func rootVolume(r *http.Request) (rootMapping, error) {
 		mapped = true
 		root.typ = resource.VolumeType(r.Form.Get(prefix + "Ebs.VolumeType"))
 		var err error
+		if root.size, err = mappingInt(r, prefix+"Ebs.VolumeSize", "size"); err != nil {
+			return rootMapping{}, err
+		}
 		if root.iops, err = mappingInt(r, prefix+"Ebs.Iops", "iops"); err != nil {
 			return rootMapping{}, err
 		}

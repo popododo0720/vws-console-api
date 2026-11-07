@@ -201,10 +201,35 @@ type RunInstancesRequest struct {
 	// Ebs.Throughput (MiB/s). Zero means omitted; see RootPerformance.
 	RootIops       int64 `json:"rootIops,omitempty"`
 	RootThroughput int64 `json:"rootThroughput,omitempty"`
+	// RootVolumeSize is the root mapping's Ebs.VolumeSize in GiB. Zero means
+	// omitted; see RootSize.
+	RootVolumeSize int64 `json:"rootVolumeSize,omitempty"`
 }
 
-// RootVolumeSizeGiB is the size of the root volume RunInstances creates.
+// RootVolumeSizeGiB is the size of the root volume RunInstances creates when
+// the request names none, and the size of the catalog image.
 const RootVolumeSizeGiB = 8
+
+// RootSize is the size in GiB RunInstances gives the root volume: the
+// mapping's Ebs.VolumeSize, or RootVolumeSizeGiB when it is omitted.
+func (r RunInstancesRequest) RootSize() int64 {
+	if r.RootVolumeSize == 0 {
+		return RootVolumeSizeGiB
+	}
+	return r.RootVolumeSize
+}
+
+// CheckRootFits refuses a root volume smaller than img, as EC2 refuses a
+// VolumeSize below the AMI's root snapshot with InvalidBlockDeviceMapping
+// (EbsBlockDevice VolumeSize: "equal to or larger than the snapshot size").
+// An image of unknown size (zero) is left to storage.
+func (r RunInstancesRequest) CheckRootFits(img Image) error {
+	if img.SizeGiB == 0 || r.RootSize() >= img.SizeGiB {
+		return nil
+	}
+	return Invalid("blockDeviceMapping", fmt.Sprintf(
+		"Volume of size %dGB is smaller than image '%s', expect size >= %dGB", r.RootSize(), img.ID, img.SizeGiB))
+}
 
 // RootType is the EBS type RunInstances gives the root volume. A VWS image
 // carries no block device mapping, so an omitted type is gp2, the EC2
@@ -269,25 +294,28 @@ func (r RunInstancesRequest) Normalize() (RunInstancesRequest, error) {
 	default:
 		return RunInstancesRequest{}, Invalid("volumeType", "unsupported")
 	}
-	if err := r.checkRootPerformance(); err != nil {
+	if err := r.checkRootShape(); err != nil {
 		return RunInstancesRequest{}, err
 	}
 	return r, nil
 }
 
-// checkRootPerformance applies the CreateVolume per-type rules (EC2 API
-// Reference, EbsBlockDevice Iops and Throughput) to the root volume with
-// the values it will have. The gp3 defaults change no outcome: gp3 takes
+// checkRootShape applies the CreateVolume per-type rules (EC2 API
+// Reference, EbsBlockDevice VolumeSize, Iops and Throughput) to the root
+// volume with the values it will have. The gp3 defaults change no outcome: gp3 takes
 // both parameters.
-func (r RunInstancesRequest) checkRootPerformance() error {
+func (r RunInstancesRequest) checkRootShape() error {
 	if r.RootIops < 0 {
 		return Invalid("iops", fmt.Sprintf("Value (%d) for parameter iops is invalid.", r.RootIops))
 	}
 	if r.RootThroughput < 0 {
 		return Invalid("throughput", fmt.Sprintf("Value (%d) for parameter throughput is invalid.", r.RootThroughput))
 	}
+	if r.RootVolumeSize < 0 {
+		return Invalid("size", fmt.Sprintf("Value (%d) for parameter size is invalid.", r.RootVolumeSize))
+	}
 	iops, miBps := r.RootPerformance()
-	return CheckVolumeShape(r.RootType(), RootVolumeSizeGiB, iops, miBps)
+	return CheckVolumeShape(r.RootType(), r.RootSize(), iops, miBps)
 }
 
 // StopInstancesRequest stops instances that are running.
