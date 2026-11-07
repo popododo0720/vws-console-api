@@ -1,6 +1,7 @@
 package ec2query
 
 import (
+	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
@@ -82,5 +83,42 @@ func TestRequestLimitExceededIsAWSShaped(t *testing.T) {
 	}
 	if n := strings.Count(callEC2(t, h, a, now, url.Values{"Action": {"DescribeInstances"}}), "<instanceId>"); n != 6 {
 		t.Errorf("account A holds %d instances after two retries of one token, want 6", n)
+	}
+}
+
+// An account sending many unknown action names cannot evict its own drained
+// RunInstances bucket: every name it does not dispatch shares one key.
+func TestUnknownActionsCannotResetALaunchBucket(t *testing.T) {
+	now := time.Date(2026, 11, 7, 9, 0, 0, 0, time.UTC)
+	account, err := resource.Parse[resource.AccountID]("123456789012")
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := iam.NewStatic("AKIDEXAMPLE", "secret", account)
+	limits := throttle.DefaultLimits()
+	limits.MaxKeys = 100
+	h := New(Config{
+		Service:    cloud.New(cloud.Config{Backends: fake.New(fake.Options{}).Set()}),
+		Authorizer: client,
+		Verifier: sigv4.NewVerifier(sigv4.Verifier{
+			Service: sigv4.ServiceEC2, Region: resource.RegionName,
+			Now: func() time.Time { return now }, Auth: iam.Authenticator(client),
+		}),
+		Requests: throttle.New(limits, func() time.Time { return now }),
+	})
+	cred := sigv4.Credential{AccessKey: "AKIDEXAMPLE", Secret: "secret", Account: account}
+	subnet := newSubnet(t, func(f url.Values) string { return callEC2(t, h, cred, now, f) })
+	for i := range 5 {
+		res := signed(t, h, cred, now, launchForm(subnet, fmt.Sprintf("tok-%d", i), nil).Encode())
+		if res.Code != http.StatusOK {
+			t.Fatalf("launch %d in the burst: %d %s", i, res.Code, res.Body)
+		}
+	}
+	for i := range 1000 {
+		signed(t, h, cred, now, url.Values{"Action": {fmt.Sprintf("Bogus%d", i)}, "Version": {Version}}.Encode())
+	}
+	res := signed(t, h, cred, now, launchForm(subnet, "tok-after", nil).Encode())
+	if res.Code != http.StatusServiceUnavailable {
+		t.Errorf("launch after 1000 unknown actions, no refill: %d %s", res.Code, res.Body)
 	}
 }

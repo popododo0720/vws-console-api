@@ -92,7 +92,7 @@ func (h *handler) serve(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	if _, err := h.requests.Take(caller.Account, "ec2:"+action); err != nil {
+	if _, err := h.requests.Take(caller.Account, "ec2:"+limitedAction(action)); err != nil {
 		writeErr(w, r, err)
 		return
 	}
@@ -1312,6 +1312,16 @@ func ec2Action(r *http.Request) string {
 	if action == "" {
 		action = r.URL.Query().Get("Action")
 	}
+	if !dispatchedAction(action) {
+		return "unknown"
+	}
+	return action
+}
+
+// limitedAction is the request-limit key for action. Every action serve does
+// not dispatch shares "unknown", so one account cannot fill the table with
+// names and evict its own drained buckets.
+func limitedAction(action string) string {
 	if !dispatchedAction(action) {
 		return "unknown"
 	}
