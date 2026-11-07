@@ -57,18 +57,32 @@ func (c *Client) SweepLaunches(ctx context.Context) {
 
 // sweepLaunches undoes every launch left running or undoing for launchIdle,
 // as its latest attempt, sweepParallel at a time, and returns how many it
-// marked failed. Once ctx ends it starts no further undo; an undo it cut
-// short stays undoing for the next sweep. Each failure names the launch key
-// and the error code only, because a backend error names the account's
-// resources.
+// marked failed. An undo it cut short stays undoing for the next sweep.
 func (c computeClient) sweepLaunches(ctx context.Context) (int, error) {
 	abandoned, err := c.launches.Abandoned(ctx, launchIdle)
-	errs := []error{err}
-	undone := 0
+	return forEachLaunch(ctx, abandoned, err, func(run *launch.Launch) (bool, error) {
+		rec := run.Record()
+		if err := c.undoLaunch(ctx, run, rec.Key); err != nil {
+			return false, fmt.Errorf("undo launch %s attempt %d: %s", rec.Key, rec.Attempt, resource.CodeOf(err))
+		}
+		return run.Record().Phase == launch.Failed, nil
+	})
+}
+
+// forEachLaunch runs each on every launch, sweepParallel at a time, and
+// returns how many reported true, with listErr and every error each
+// returned. Once ctx ends it starts no further launch. Each error names the
+// launch key and the error code only, because a backend error names the
+// account's resources.
+func forEachLaunch(
+	ctx context.Context, launches []launch.Launch, listErr error, each func(*launch.Launch) (bool, error),
+) (int, error) {
+	errs := []error{listErr}
+	done := 0
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 	slots := make(chan struct{}, sweepParallel)
-	for i := range abandoned {
+	for i := range launches {
 		select {
 		case <-ctx.Done():
 		case slots <- struct{}{}:
@@ -76,21 +90,20 @@ func (c computeClient) sweepLaunches(ctx context.Context) (int, error) {
 		if ctx.Err() != nil {
 			break
 		}
-		run := &abandoned[i]
+		run := &launches[i]
 		wg.Go(func() {
 			defer func() { <-slots }()
-			rec := run.Record()
-			err := c.undoLaunch(ctx, run, rec.Key)
+			ok, err := each(run)
 			mu.Lock()
 			defer mu.Unlock()
-			switch {
-			case err != nil:
-				errs = append(errs, fmt.Errorf("undo launch %s attempt %d: %s", rec.Key, rec.Attempt, resource.CodeOf(err)))
-			case run.Record().Phase == launch.Failed:
-				undone++
+			if err != nil {
+				errs = append(errs, err)
+			}
+			if ok {
+				done++
 			}
 		})
 	}
 	wg.Wait()
-	return undone, errors.Join(errs...)
+	return done, errors.Join(errs...)
 }
