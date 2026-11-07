@@ -22,6 +22,7 @@ import (
 	"github.com/popododo0720/vws-console-api/internal/service"
 	"github.com/popododo0720/vws-console-api/internal/sigv4"
 	"github.com/popododo0720/vws-console-api/internal/surface/awscode"
+	"github.com/popododo0720/vws-console-api/internal/throttle"
 )
 
 // Version is the query version this entry point accepts.
@@ -33,11 +34,13 @@ type Config struct {
 	Verifier *sigv4.Verifier
 	// Authorizer decides each request. Nil denies every request.
 	Authorizer iam.Authorizer
+	// Requests limits each account's calls per action. Nil limits nothing.
+	Requests *throttle.Limiter
 }
 
 // New returns the query handler.
 func New(cfg Config) http.Handler {
-	h := &handler{svc: cfg.Service, verifier: cfg.Verifier, authz: cfg.Authorizer}
+	h := &handler{svc: cfg.Service, verifier: cfg.Verifier, authz: cfg.Authorizer, requests: cfg.Requests}
 	return http.HandlerFunc(h.serve)
 }
 
@@ -45,6 +48,7 @@ type handler struct {
 	svc      *cloud.Service
 	verifier *sigv4.Verifier
 	authz    iam.Authorizer
+	requests *throttle.Limiter
 }
 
 func (h *handler) serve(w http.ResponseWriter, r *http.Request) {
@@ -87,6 +91,10 @@ func (h *handler) serve(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
+	}
+	if _, err := h.requests.Take(caller.Account, "ec2:"+action); err != nil {
+		writeErr(w, r, err)
+		return
 	}
 	// Resource-level ARNs (arn:vws:ec2:<region>:<account>:instance/<id>) are a
 	// follow-up; every action is authorized on "*" for now.

@@ -168,3 +168,15 @@ func TestBadLoginLimitsAreRejected(t *testing.T) {
 		}
 	}
 }
+
+func TestBadRequestLimitsAreRejected(t *testing.T) {
+	for _, flag := range []string{
+		"-ec2-launch-burst=0", "-ec2-describe-burst=100001", "-ec2-mutate-rate=0",
+		"-ec2-launch-rate=-1", "-ec2-describe-rate=NaN", "-ec2-limit-max-keys=5",
+	} {
+		err := run(t.Context(), []string{flag, "-ops-addr="})
+		if err == nil || !strings.Contains(err.Error(), "-ec2-*") {
+			t.Errorf("%s: err %v", flag, err)
+		}
+	}
+}

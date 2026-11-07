@@ -380,6 +380,12 @@ func Denied(message string) *Error {
 	return &Error{Code: CodePermissionDenied, Message: message}
 }
 
+// RequestLimitExceeded reports a request over its account's rate for the
+// action. The message is the one EC2 sends with RequestLimitExceeded.
+func RequestLimitExceeded() *Error {
+	return &Error{Code: CodeResourceExhausted, Message: "Request limit exceeded."}
+}
+
 // TooLarge reports a body or object that exceeds the size this process accepts.
 // It is not a quota, so callers must not retry it unchanged.
 func TooLarge(message string) *Error {

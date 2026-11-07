@@ -96,6 +96,7 @@ change both files together.
 | `//nolint` names one linter and a reason. | `nolintlint` |
 | No swallowed errors. | `errcheck`, `wrapcheck`, `errorlint` |
 | Every `resource.Code` has a status and wire code on each surface. | `TestEveryCodeHasAnEC2Error` |
+| EC2 requests are rate limited per account and IAM action with EC2's bucket classes (describe 100/20 s, mutate 50/5 s, RunInstances and StartInstances 5/2 s), set by `-ec2-<class>-burst` and `-ec2-<class>-rate`; over the limit EC2 Query is 503 `RequestLimitExceeded`, the console 429 with `Retry-After`, and nothing reaches vws-iam or a backend. | `TestRequestLimitExceededIsAWSShaped`, `TestBucketsArePerAccountAndAction`, `TestConsoleSharesTheEC2RequestLimit` |
 | `NotFound` has each surface's HTTP status; a vws-iam `InvalidClientTokenId` is HTTP 403 even on gRPC `NOT_FOUND`. | `TestMissingResourceStatusIsPerSurface`, `TestInvalidClientTokenIDIsHTTP403` |
 | A handler panic is a bare 500. | `TestPanicIsABare500` |
 | Ambiguous requests and bad names or sizes are refused before the backend; a key repeated across IAM `Tags` members is last-wins, and a field sent twice is still refused. | `TestMalformedNamesAndBodies`, `TestPolicyTagRepeatedKeyLastWins`, `TestMFADeviceTagRepeatedKeyLastWins` |
