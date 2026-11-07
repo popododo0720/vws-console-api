@@ -122,7 +122,7 @@ func iamAccessKeyRows() []iamRow {
 				"The Access Key with name not-a-vws-key-id cannot be found.")
 			wantKeys(ctx, t, a, "alice", alices.AccessKeyID)
 		}},
-		{"UpdateAccessKey sets Inactive and back to Active; a missing user or key is NoSuchEntity", func(
+		{"UpdateAccessKey sets Inactive and back to Active, refuses Expired; a missing user or key is NoSuchEntity", func(
 			ctx context.Context, t *testing.T, a iam.Directory,
 		) {
 			k, err := a.CreateAccessKey(ctx, iamAccount(), "bob", UserGrant(ctx, t, a, iamAccount(), "bob"))
@@ -140,6 +140,14 @@ func iamAccessKeyRows() []iamRow {
 			wantErr(t, "UpdateAccessKey with an unknown status", err, resource.CodeInvalidArgument,
 				"1 validation error detected: Value 'Paused' at 'status' failed to satisfy constraint: "+
 					"Member must satisfy enum value set: [Active, Inactive]")
+			err = a.UpdateAccessKey(
+				ctx, iamAccount(), "bob", k.AccessKeyID, iam.AccessKeyExpired,
+				UserGrant(ctx, t, a, iamAccount(), "bob"),
+			)
+			wantErr(t, "UpdateAccessKey Expired", err, resource.CodeInvalidArgument, iam.AccessKeyExpiredMessage)
+			if ks := wantKeys(ctx, t, a, "bob", k.AccessKeyID); ks[0].Status != iam.AccessKeyActive {
+				t.Fatalf("status after a refused Expired: %q", ks[0].Status)
+			}
 			wantOK(t, "UpdateAccessKey Inactive", a.UpdateAccessKey(
 				ctx, iamAccount(), "bob", k.AccessKeyID, iam.AccessKeyInactive,
 				UserGrant(ctx, t, a, iamAccount(), "bob"),

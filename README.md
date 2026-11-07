@@ -149,7 +149,9 @@ through the `spec.state` mask, carries a `request_id`, is retried, and
 sends the authorized ARN as `expected_user_arn`, which vws-iam checks in the
 same transaction as the write, so a user that moved in between is `409
 ConcurrentModification` and the key is unchanged (the user is also read again
-after the call); an inactive key stops authenticating.
+after the call); an inactive key stops authenticating. vws-iam has no
+expired state, so `Status=Expired` is `ValidationError` and the key keeps its
+status.
 `DeleteAccessKey` carries a `request_id`, is retried, and sends
 `expected_user_arn` the same way, so a moved user keeps the key.
 The user and group policy actions (`Attach`, `Detach`, `ListAttached`, `Put`,

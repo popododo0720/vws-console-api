@@ -385,6 +385,9 @@ func TestAccessKeyActionsThroughTheQuerySurfaceOverGRPC(t *testing.T) {
 	expect(t, queryCall(t, h, list), http.StatusOK, "<Status>Active</Status>")
 	expect(t, queryCall(t, h, update(second, "Paused")), http.StatusBadRequest,
 		"<Code>ValidationError</Code>", "enum value set: [Active, Inactive]")
+	expect(t, queryCall(t, h, update(second, "Expired")), http.StatusBadRequest,
+		"<Code>ValidationError</Code>", iam.AccessKeyExpiredMessage)
+	expect(t, queryCall(t, h, list), http.StatusOK, "<Status>Active</Status>")
 	expect(t, queryCall(t, h, update(second, "")), http.StatusBadRequest,
 		"<Code>ValidationError</Code>", "Member must not be null")
 	expect(t, queryCall(t, h, update("AKIAAAAAAAAAAAAAAAAA", "Active")), http.StatusNotFound,
@@ -395,7 +398,7 @@ func TestAccessKeyActionsThroughTheQuerySurfaceOverGRPC(t *testing.T) {
 		t.Errorf("%d DeleteAccessKey calls, want 2 (the malformed id is refused first)", n)
 	}
 	if n := len(d.sent("UpdateAccessKey")); n != 3 {
-		t.Errorf("%d UpdateAccessKey calls, want 3 (the invalid status and missing key are refused first)", n)
+		t.Errorf("%d UpdateAccessKey calls, want 3 (bad statuses, Expired too, and the missing key are refused first)", n)
 	}
 }
 
