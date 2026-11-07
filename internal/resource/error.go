@@ -386,6 +386,13 @@ func RequestLimitExceeded() *Error {
 	return &Error{Code: CodeResourceExhausted, Message: "Request limit exceeded."}
 }
 
+// LaunchLimitExceeded reports a RunInstances that found no room among the
+// launches this process lets run at once, after the wait. A retry can
+// succeed, and the backend saw nothing.
+func LaunchLimitExceeded() *Error {
+	return &Error{Code: CodeResourceExhausted, Message: "Too many instance launches in flight; retry later."}
+}
+
 // TooLarge reports a body or object that exceeds the size this process accepts.
 // It is not a quota, so callers must not retry it unchanged.
 func TooLarge(message string) *Error {

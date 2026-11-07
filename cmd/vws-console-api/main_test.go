@@ -169,6 +169,18 @@ func TestBadLoginLimitsAreRejected(t *testing.T) {
 	}
 }
 
+func TestBadLaunchLimitsAreRejected(t *testing.T) {
+	for _, flag := range []string{
+		"-launch-inflight-per-account=9", "-launch-inflight-global=100001", "-launch-inflight-per-account=101",
+		"-launch-queue=-1", "-launch-queue=100001", "-launch-queue-wait=-1s", "-launch-queue-wait=51s",
+	} {
+		err := run(t.Context(), []string{flag, "-ops-addr="})
+		if err == nil || !strings.Contains(err.Error(), "-launch-*") {
+			t.Errorf("%s: err %v", flag, err)
+		}
+	}
+}
+
 func TestBadRequestLimitsAreRejected(t *testing.T) {
 	for _, flag := range []string{
 		"-ec2-launch-burst=0", "-ec2-describe-burst=100001", "-ec2-mutate-rate=0",
