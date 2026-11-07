@@ -333,8 +333,9 @@ func TestUnfinishedReadsEveryOpenRecordAcrossPages(t *testing.T) {
 
 // TestUncollectedListsRecordsWithADeadAttempt pins the launch GC listing:
 // every write labels vws-launch-gc pending while a dead attempt is left and
-// done after, Uncollected lists the pending records and the unlabeled ones
-// written before the label, and a record collected since drops out.
+// done after, Uncollected lists the pending records and the unlabeled
+// failed ones written before the label, never an unlabeled succeeded one,
+// and a record collected since drops out.
 func TestUncollectedListsRecordsWithADeadAttempt(t *testing.T) {
 	s, cs, ns := open(t)
 	ctx := context.Background()
@@ -361,14 +362,16 @@ func TestUncollectedListsRecordsWithADeadAttempt(t *testing.T) {
 			t.Fatalf("%s labeled gc %q want %q", name, got, wantLabel[name])
 		}
 	}
-	if _, err := cs.CoreV1().ConfigMaps(ns).Create(ctx, &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:   kubestore.Name("legacy"),
-			Labels: map[string]string{"app.kubernetes.io/managed-by": "vws-console-api", "vws-launch-phase": "failed"},
-		},
-		Data: map[string]string{"launch.json": `{"key":"legacy","phase":"failed","attempt":1,"count":1}`},
-	}, metav1.CreateOptions{}); err != nil {
-		t.Fatal(err)
+	for key, phase := range map[string]string{"legacy": "failed", "legacy-succeeded": "succeeded"} {
+		if _, err := cs.CoreV1().ConfigMaps(ns).Create(ctx, &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:   kubestore.Name(key),
+				Labels: map[string]string{"app.kubernetes.io/managed-by": "vws-console-api", "vws-launch-phase": phase},
+			},
+			Data: map[string]string{"launch.json": `{"key":"` + key + `","phase":"` + phase + `","attempt":1,"count":1}`},
+		}, metav1.CreateOptions{}); err != nil {
+			t.Fatal(err)
+		}
 	}
 	listed := func() []string {
 		t.Helper()

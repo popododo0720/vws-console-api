@@ -204,3 +204,42 @@ func TestGCCutShortIsFinishedByTheNextPass(t *testing.T) {
 		})
 	}
 }
+
+// TestRetryAfterTheGCListedALaunchKeepsTheRunningAttempt pins the race the
+// GC cannot exclude: a retry moves a listed failed launch back to running
+// before the GC deletes. The GC deletes the dead attempt only, and the
+// running attempt's volume is left.
+func TestRetryAfterTheGCListedALaunchKeepsTheRunningAttempt(t *testing.T) {
+	f := newLaunch(t, "gc-race")
+	f.boot.failAt("CreateInstance", 1, false)
+	if _, err := f.launch(t, 1); err == nil {
+		t.Fatal("the failing launch succeeded")
+	}
+	f.lateCreate(t, 1, 0)
+	f.idle(1)
+	ctx := context.Background()
+	listed, err := f.client.launches.Collectable(ctx, launchIdle)
+	if err != nil || len(listed) != 1 {
+		t.Fatalf("listed %d err %v", len(listed), err)
+	}
+	p, dying := f.process(t)
+	p.dieAfter = 2
+	if _, err := dying.launch(t, 1); err == nil {
+		t.Fatal("the killed retry succeeded")
+	}
+	if err := f.client.collectAttempts(ctx, &listed[0]); err != nil {
+		t.Fatal(err)
+	}
+	if v, i, _ := f.boot.left(); v != 1 || i != 0 {
+		t.Fatalf("left volumes %d instances %d want the running attempt's volume only", v, i)
+	}
+	f.boot.mu.Lock()
+	_, kept := f.boot.volumes[volumeName(project(f.m.Account), bootVolumeID(f.m.Key, 2, 0))]
+	f.boot.mu.Unlock()
+	if !kept {
+		t.Fatal("the GC deleted the running attempt's volume")
+	}
+	if rec := f.record(t); rec.Phase != launch.Running || rec.Attempt != 2 || rec.Collected != 1 {
+		t.Fatalf("record %+v", rec)
+	}
+}

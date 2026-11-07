@@ -376,8 +376,8 @@ func (t *Tracker) Abandoned(ctx context.Context, idle time.Duration) ([]Launch, 
 // Collectable returns the launches that ended, failed or succeeded, with a
 // dead attempt left for the launch GC, whose record was last written idle or
 // more ago. A store that could read only some records returns those launches
-// and its error. A running or undoing launch is never returned, so the GC
-// never touches a launch a request or the sweep may still be working on.
+// and its error. A running or undoing launch is never returned. A retry may
+// move a returned launch back to running; its dead attempts stay dead.
 func (t *Tracker) Collectable(ctx context.Context, idle time.Duration) ([]Launch, error) {
 	if t == nil {
 		return nil, nil

@@ -44,8 +44,9 @@ const (
 	phaseLabel = "vws-launch-phase"
 	// gcLabel is pending while the record has a dead attempt the launch GC
 	// has not collected and done after, so the GC lists only those.
-	gcLabel = "vws-launch-gc"
-	gcDone  = "done"
+	gcLabel   = "vws-launch-gc"
+	gcDone    = "done"
+	gcPending = "pending"
 	// attemptTimeout bounds one HTTP request to the Kubernetes API.
 	attemptTimeout = 3 * time.Second
 	// callTimeout bounds one Load, Create or Update, every retry included:
@@ -137,10 +138,16 @@ func (s *Store) Unfinished(ctx context.Context) ([]launch.Stored, error) {
 		managedBy, managedByValue, phaseLabel, launch.Succeeded, launch.Failed))
 }
 
-// Uncollected reads the records this package wrote whose GC label is not
-// done. A record written before the label existed has none and is read too.
+// Uncollected reads the records this package wrote whose GC label is
+// pending, and the failed ones written before the label existed, whose
+// attempt is dead. A record of that age that did not fail is not read: one
+// still open gets the label on its next write, and a succeeded one, never
+// written again, would otherwise be read on every pass.
 func (s *Store) Uncollected(ctx context.Context) ([]launch.Stored, error) {
-	return s.list(ctx, fmt.Sprintf("%s=%s,%s!=%s", managedBy, managedByValue, gcLabel, gcDone))
+	pending, err := s.list(ctx, fmt.Sprintf("%s=%s,%s=%s", managedBy, managedByValue, gcLabel, gcPending))
+	legacy, legacyErr := s.list(ctx, fmt.Sprintf("%s=%s,!%s,%s=%s",
+		managedBy, managedByValue, gcLabel, phaseLabel, launch.Failed))
+	return append(pending, legacy...), errors.Join(err, legacyErr)
 }
 
 // list reads the records selector matches, a page at a time, each call
@@ -233,7 +240,7 @@ func (s *Store) configMap(rec launch.Record, version string) (*corev1.ConfigMap,
 	}
 	gc := gcDone
 	if rec.Uncollected() {
-		gc = "pending"
+		gc = gcPending
 	}
 	cm := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
