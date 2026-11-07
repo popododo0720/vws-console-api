@@ -192,3 +192,18 @@ func TestPermissionNotFoundCode(t *testing.T) {
 		t.Fatalf("missing group = %+v", got)
 	}
 }
+
+// #398: tags EC2 accepts that VWS cannot store are TagLimitExceeded with the
+// reason, and every other invalid tag stays InvalidParameterValue.
+func TestTagLimitExceededCode(t *testing.T) {
+	e := resource.TagLimitExceeded("tags", "the reason")
+	rec := httptest.NewRecorder()
+	writeErr(rec, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/", nil), e)
+	body := ec2ErrorXML(t, rec.Body.Bytes())
+	if rec.Code != http.StatusBadRequest || body.Code != "TagLimitExceeded" || body.Message != "the reason" {
+		t.Fatalf("%d %+v", rec.Code, body)
+	}
+	if got := ec2Wire(t, resource.Invalid("tags", "malformed key")); got != (wireErr{400, "InvalidParameterValue"}) {
+		t.Fatalf("malformed tag = %+v", got)
+	}
+}

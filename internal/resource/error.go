@@ -106,6 +106,7 @@ const (
 	invalidMissing
 	invalidCombination
 	invalidUnsupported
+	invalidTagLimit
 )
 
 func (e *Error) Error() string {
@@ -192,6 +193,16 @@ func InvalidCombination(field, message string) *Error {
 func Unsupported(field, message string) *Error {
 	return &Error{Code: CodeInvalidArgument, Field: field, Message: message, invalid: invalidUnsupported}
 }
+
+// TagLimitExceeded reports tags that are within the EC2 limits but do not
+// fit in what the backend stores for one resource. EC2 answers
+// TagLimitExceeded, and message says what does not fit.
+func TagLimitExceeded(field, message string) *Error {
+	return &Error{Code: CodeInvalidArgument, Field: field, Message: message, invalid: invalidTagLimit}
+}
+
+// IsTagLimitExceeded reports whether e came from TagLimitExceeded.
+func IsTagLimitExceeded(e *Error) bool { return e != nil && e.invalid == invalidTagLimit }
 
 // IsMissingParameter reports whether e came from MissingParameter.
 func IsMissingParameter(e *Error) bool { return e != nil && e.invalid == invalidMissing }

@@ -424,8 +424,18 @@ func withInternalLabels(tags map[string]string, extra map[string]string) (map[st
 	return out, nil
 }
 
+// tagCapacityErr is the answer for tags EC2 accepts that the labels cannot
+// hold. EC2 allows 50 tags of 128 and 256 characters, up to 76 800 bytes of
+// UTF-8, and the user tags get labelMax-labelReserve labels of 63 bytes, so
+// no encoding holds every legal set (#398).
 func tagCapacityErr() error {
-	return resource.Invalid("TagSpecification", "tags exceed what the compute backend can store (64 labels of 63 bytes)")
+	return resource.TagLimitExceeded("tags", fmt.Sprintf(
+		"The tags exceed what VWS can store for one resource: each tag whose key is lowercase "+
+			"letters, digits, '_' or '-' and whose value is at most %d bytes takes one label, "+
+			"the other tags are packed as JSON into labels of %d bytes, and all of them must fit "+
+			"in at most %d labels, fewer while an instance holds detach records. "+
+			"Shorten or remove tags of the second kind.",
+		labelValueMax, labelValueMax, labelMax-labelReserve))
 }
 
 // detachRoomErr is tagCapacityErr for a client-token DetachVolume, which

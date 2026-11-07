@@ -3,10 +3,14 @@ package grpcclient
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
 	"log/slog"
 	"maps"
 	"net"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -250,5 +254,118 @@ func TestUndecodableVpcTagChunksAreSkippedInList(t *testing.T) {
 	_, err = client.DescribeVpcs(ctx, scope, resource.VpcQuery{IDs: []resource.VpcID{id}})
 	if resource.CodeOf(err) != resource.CodeInternal {
 		t.Fatalf("an id read of the bad record: %v; want Internal", err)
+	}
+}
+
+// packedTags returns tags that labelOK refuses, whose JSON is exactly n bytes:
+// `{` and `}`, plus `"Kdd":"` value `"` per tag, plus a comma between tags.
+func packedTags(t *testing.T, n int) map[string]string {
+	t.Helper()
+	const count = 15
+	room := n - 2 - (count - 1) - count*len(`"K00":""`)
+	if room < 0 || room > count*256 {
+		t.Fatalf("no %d tags make %d JSON bytes", count, n)
+	}
+	tags := map[string]string{}
+	for i := range count {
+		size := min(room, 256)
+		room -= size
+		tags[fmt.Sprintf("K%02d", i)] = strings.Repeat("v", size)
+	}
+	raw, err := json.Marshal(tags)
+	if err != nil || len(raw) != n {
+		t.Fatalf("packed JSON is %d bytes, want %d: %v", len(raw), n, err)
+	}
+	return tags
+}
+
+// TestPackedTagBudget pins the user tag budget: plain tags and packed chunks
+// together take at most labelMax-labelReserve (58) labels, and one more is
+// TagLimitExceeded, not a write compute would refuse (#398).
+func TestPackedTagBudget(t *testing.T) {
+	budget := labelMax - labelReserve
+	for _, plain := range []int{0, 10, 35} {
+		chunks := budget - plain
+		for _, tc := range []struct {
+			name  string
+			bytes int
+			fits  bool
+		}{
+			{"under", (chunks - 1) * labelValueMax, true},
+			{"at", chunks * labelValueMax, true},
+			{"over", chunks*labelValueMax + 1, false},
+		} {
+			tags := packedTags(t, tc.bytes)
+			for i := range plain {
+				tags[fmt.Sprintf("p%02d", i)] = "v"
+			}
+			labels, err := withInternalLabels(tags, map[string]string{labelImage: "ami-0123456789abcdef0"})
+			if !tc.fits {
+				var e *resource.Error
+				if !errors.As(err, &e) || !resource.IsTagLimitExceeded(e) {
+					t.Fatalf("%d plain, %s: %v; want TagLimitExceeded", plain, tc.name, err)
+				}
+				if !strings.Contains(e.Message, strconv.Itoa(budget)) {
+					t.Fatalf("%d plain, %s: %q does not name the budget", plain, tc.name, e.Message)
+				}
+				continue
+			}
+			if err != nil {
+				t.Fatalf("%d plain, %s: %v", plain, tc.name, err)
+			}
+			checkLabels(t, labels)
+			if used := len(labels) - 1; used > budget {
+				t.Fatalf("%d plain, %s: %d user labels, budget %d", plain, tc.name, used, budget)
+			}
+			if got, err := userTags(labels); err != nil || len(got) != len(tags) {
+				t.Fatalf("%d plain, %s: round trip %d tags, %v", plain, tc.name, len(got), err)
+			}
+		}
+	}
+}
+
+// TestCreateTagsOverTheBudgetIsTagLimitExceeded merges onto stored tags, as
+// CreateTags does, and is refused as a whole with nothing returned.
+func TestCreateTagsOverTheBudgetIsTagLimitExceeded(t *testing.T) {
+	budget := labelMax - labelReserve
+	stored, err := withInternalLabels(packedTags(t, budget*labelValueMax-100), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	labels, tags, err := mergedLabels(stored, map[string]string{"Extra Key": strings.Repeat("x", 120)})
+	var e *resource.Error
+	if !errors.As(err, &e) || !resource.IsTagLimitExceeded(e) || labels != nil || tags != nil {
+		t.Fatalf("CreateTags past the budget: %v, %d labels; want TagLimitExceeded", err, len(labels))
+	}
+}
+
+// TestCreateTagsAtThePackedBudget sends CreateTags to a compute stub that
+// holds 64 labels: tags at the budget are stored and read back, and one more
+// packed tag is TagLimitExceeded with the stored tags left as they were (#398).
+func TestCreateTagsAtThePackedBudget(t *testing.T) {
+	world, client, name, _, inst := capacityWorld(t, 1)
+	scope := backend.Scope{Account: mustAccount(t)}
+	budget := labelMax - labelReserve
+	at := packedTags(t, budget*labelValueMax)
+	m := backend.Mutation{Scope: scope, Key: "k-at", Fingerprint: "fp-at"}
+	if _, err := client.CreateTags(t.Context(), m, resource.CreateTagsRequest{
+		IDs: []resource.InstanceID{inst}, Tags: at,
+	}); err != nil {
+		t.Fatalf("tags at the budget: %v", err)
+	}
+	stored := world.labelsOf(name)
+	if got, err := userTags(stored); err != nil || !maps.Equal(got, at) {
+		t.Fatalf("stored %d tags, %v; want the %d sent", len(got), err, len(at))
+	}
+	m = backend.Mutation{Scope: scope, Key: "k-over", Fingerprint: "fp-over"}
+	_, err := client.CreateTags(t.Context(), m, resource.CreateTagsRequest{
+		IDs: []resource.InstanceID{inst}, Tags: map[string]string{"K99": "v"},
+	})
+	var e *resource.Error
+	if !errors.As(err, &e) || !resource.IsTagLimitExceeded(e) {
+		t.Fatalf("one packed tag past the budget: %v; want TagLimitExceeded", err)
+	}
+	if after := world.labelsOf(name); !maps.Equal(after, stored) {
+		t.Fatal("a refused CreateTags changed the stored labels")
 	}
 }
