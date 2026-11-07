@@ -163,6 +163,31 @@ func TestSameAccountKeepsArrivalOrder(t *testing.T) {
 	idle(t, l)
 }
 
+// Small launches that keep fitting around a queued large launch do not
+// starve it: the first waiter that only the global cap holds back reserves
+// the room, so a later small launch queues behind it.
+func TestLargeLaunchReservesTheGlobalRoom(t *testing.T) {
+	l := NewLaunches(limits(10, 10, 5, 5*time.Second))
+	a, b := account(t, "111111111111"), account(t, "222222222222")
+	var holds []func()
+	for range 9 {
+		holds = append(holds, mustAcquire(t, l, a, 1))
+	}
+	large := acquireAsync(t.Context(), t, l, b, 10)
+	holds[0]()
+	small := acquireAsync(t.Context(), t, l, a, 1)
+	stillWaiting(t, large)
+	stillWaiting(t, small)
+	for _, release := range holds[1:] {
+		release()
+	}
+	releaseLarge := admitted(t, large)
+	stillWaiting(t, small)
+	releaseLarge()
+	admitted(t, small)()
+	idle(t, l)
+}
+
 func TestQueueBoundRefusesAtOnce(t *testing.T) {
 	l := NewLaunches(limits(10, 100, 2, 5*time.Second))
 	a := account(t, "111111111111")
@@ -223,13 +248,13 @@ func TestCancelReturnsPromptlyAndLeaksNothing(t *testing.T) {
 	cancel()
 	select {
 	case r := <-waiting:
-		if !errors.Is(r.err, context.Canceled) {
-			t.Fatalf("cancelled waiter: %v", r.err)
+		if !isLimit(r.err) || !errors.Is(r.err, context.Canceled) {
+			t.Fatalf("cancelled waiter: %v, want a resource exhausted caused by the cancel", r.err)
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("cancelled waiter did not return")
 	}
-	if _, err := l.Acquire(ctx, a, 1); !errors.Is(err, context.Canceled) {
+	if _, err := l.Acquire(ctx, a, 1); !isLimit(err) || !errors.Is(err, context.Canceled) {
 		t.Fatalf("Acquire on a cancelled context: %v", err)
 	}
 	hold()
@@ -336,15 +361,15 @@ func TestLaunchValidateBounds(t *testing.T) {
 		t.Fatalf("defaults: %v", err)
 	}
 	for name, lim := range map[string]LaunchLimits{
-		"per account under a launch":  limits(9, 100, 5, time.Second),
-		"global under a launch":       limits(10, 9, 5, time.Second),
-		"per account over global":     limits(50, 40, 5, time.Second),
-		"per account too large":       limits(100001, 100001, 5, time.Second),
-		"global too large":            limits(10, 100001, 5, time.Second),
-		"negative queue":              limits(10, 100, -1, time.Second),
-		"queue too large":             limits(10, 100, 100001, time.Second),
-		"negative wait":               limits(10, 100, 5, -time.Second),
-		"wait past the write timeout": limits(10, 100, 5, 51*time.Second),
+		"per account under a launch": limits(9, 100, 5, time.Second),
+		"global under a launch":      limits(10, 9, 5, time.Second),
+		"per account over global":    limits(50, 40, 5, time.Second),
+		"per account too large":      limits(100001, 100001, 5, time.Second),
+		"global too large":           limits(10, 100001, 5, time.Second),
+		"negative queue":             limits(10, 100, -1, time.Second),
+		"queue too large":            limits(10, 100, 100001, time.Second),
+		"negative wait":              limits(10, 100, 5, -time.Second),
+		"wait too long":              limits(10, 100, 5, 31*time.Second),
 	} {
 		if lim.Validate() == nil {
 			t.Errorf("%s: accepted", name)
@@ -352,7 +377,7 @@ func TestLaunchValidateBounds(t *testing.T) {
 	}
 	for name, lim := range map[string]LaunchLimits{
 		"smallest": limits(10, 10, 0, 0),
-		"largest":  limits(100000, 100000, 100000, 50*time.Second),
+		"largest":  limits(100000, 100000, 100000, 30*time.Second),
 	} {
 		if err := lim.Validate(); err != nil {
 			t.Errorf("%s: %v", name, err)

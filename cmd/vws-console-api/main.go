@@ -129,7 +129,7 @@ func run(ctx context.Context, args []string) (err error) {
 	fs.IntVar(&launchLimits.Queue, "launch-queue", launchLimits.Queue,
 		"RunInstances calls that may wait for room at once, all accounts together; past it a launch is refused (0 to 100000)")
 	fs.DurationVar(&launchLimits.Wait, "launch-queue-wait", launchLimits.Wait,
-		"longest a RunInstances call waits for room before RequestLimitExceeded (0 to 50s)")
+		"longest a RunInstances call waits for room before RequestLimitExceeded (0 to 30s)")
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("flags: %w", err)
 	}

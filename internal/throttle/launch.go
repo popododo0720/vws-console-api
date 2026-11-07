@@ -29,9 +29,9 @@ const (
 	minLaunchCap = 10
 	maxLaunchCap = 100000
 	maxQueue     = 100000
-	// maxWait stays under the 60 s HTTP write timeout, so a queued launch is
-	// answered before the listener gives up on the connection.
-	maxWait = 50 * time.Second
+	// maxWait leaves most of the 60 s HTTP write timeout, which counts from
+	// the request's start, to reading, authorizing and the backend call.
+	maxWait = 30 * time.Second
 )
 
 // DefaultLaunchLimits returns 20 instances in flight per account, 100 in all,
@@ -42,7 +42,7 @@ func DefaultLaunchLimits() LaunchLimits {
 
 // Validate reports the first field outside its bounds: PerAccount and Global
 // 10 to 100000 with PerAccount at most Global, Queue 0 to 100000, Wait 0 to
-// 50s.
+// 30s.
 func (l LaunchLimits) Validate() error {
 	if l.PerAccount < minLaunchCap || l.PerAccount > maxLaunchCap {
 		return fmt.Errorf("per-account in flight %d: want %d to %d", l.PerAccount, minLaunchCap, maxLaunchCap)
@@ -70,10 +70,12 @@ type waiter struct {
 }
 
 // Launches admits RunInstances calls against LaunchLimits. A launch that does
-// not fit waits in a bounded FIFO queue. When room frees, every waiter that
-// fits is admitted in order and one that does not is skipped, so an account at
-// its own cap never holds up another account's launch. Within one account
-// launches stay in arrival order. State is per process.
+// not fit waits in a bounded FIFO queue. When room frees, waiters are admitted
+// in order. A waiter over its own account's cap is skipped, so an account at
+// its cap never holds up another account's launch. The first waiter that fits
+// its account but not the global cap reserves the global room: no later
+// waiter or new launch takes it, so small launches cannot starve a large one.
+// Within one account launches stay in arrival order. State is per process.
 type Launches struct {
 	limits LaunchLimits
 
@@ -82,6 +84,8 @@ type Launches struct {
 	byAccount map[resource.AccountID]int
 	queued    map[resource.AccountID]int
 	queue     []*waiter
+	// reserved is set while a waiter holds the global room in reserve.
+	reserved bool
 }
 
 // NewLaunches returns a table. limits must pass Validate.
@@ -95,8 +99,9 @@ func NewLaunches(limits LaunchLimits) *Launches {
 
 // Acquire admits n instances for account, waiting in the queue up to Wait or
 // until ctx ends. The release func returns the room and is safe to call more
-// than once. Past the queue or the wait it returns LaunchLimitExceeded. A nil
-// Launches admits everything.
+// than once. Past the queue or the wait, or when ctx ends first, it returns
+// LaunchLimitExceeded; a caller that went away is a throttle, not a server
+// fault. A nil Launches admits everything.
 func (l *Launches) Acquire(ctx context.Context, account resource.AccountID, n int) (func(), error) {
 	if l == nil {
 		return func() {}, nil
@@ -105,10 +110,10 @@ func (l *Launches) Acquire(ctx context.Context, account resource.AccountID, n in
 		return nil, resource.Internal(fmt.Errorf("launch of %d instances against a cap of %d", n, l.limits.PerAccount))
 	}
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return nil, resource.LaunchLimitExceeded().WithCause(err)
 	}
 	l.mu.Lock()
-	if l.queued[account] == 0 && l.fits(account, n) {
+	if !l.reserved && l.queued[account] == 0 && l.fits(account, n) {
 		l.take(account, n)
 		l.mu.Unlock()
 		return l.releaser(account, n), nil
@@ -120,6 +125,7 @@ func (l *Launches) Acquire(ctx context.Context, account resource.AccountID, n in
 	w := &waiter{account: account, n: n, ready: make(chan struct{})}
 	l.queue = append(l.queue, w)
 	l.queued[account]++
+	l.dispatch()
 	l.mu.Unlock()
 
 	timer := time.NewTimer(l.limits.Wait)
@@ -129,7 +135,7 @@ func (l *Launches) Acquire(ctx context.Context, account resource.AccountID, n in
 	case <-w.ready:
 		return l.releaser(account, n), nil
 	case <-ctx.Done():
-		cause = ctx.Err()
+		cause = resource.LaunchLimitExceeded().WithCause(ctx.Err())
 	case <-timer.C:
 		cause = resource.LaunchLimitExceeded()
 	}
@@ -190,29 +196,32 @@ func (l *Launches) unqueue(account resource.AccountID) {
 	}
 }
 
-// dispatch admits every waiter that fits, in queue order. Once an account has
-// a waiter that does not fit, its later waiters stay behind it. The caller
-// holds mu.
+// dispatch admits waiters in queue order. It skips a waiter over its
+// account's cap, and every later waiter of that account, and stops at the
+// first waiter that only the global cap holds back, which reserves the global
+// room for it. The caller holds mu.
 func (l *Launches) dispatch() {
 	var blocked map[resource.AccountID]bool
 	kept := l.queue[:0]
+	l.reserved = false
 	for i, w := range l.queue {
-		if l.inFlight >= l.limits.Global {
+		if blocked[w.account] || l.byAccount[w.account]+w.n > l.limits.PerAccount {
+			if blocked == nil {
+				blocked = map[resource.AccountID]bool{}
+			}
+			blocked[w.account] = true
+			kept = append(kept, w)
+			continue
+		}
+		if l.inFlight+w.n > l.limits.Global {
+			l.reserved = true
 			kept = append(kept, l.queue[i:]...)
 			break
 		}
-		if !blocked[w.account] && l.fits(w.account, w.n) {
-			l.take(w.account, w.n)
-			l.unqueue(w.account)
-			w.granted = true
-			close(w.ready)
-			continue
-		}
-		if blocked == nil {
-			blocked = map[resource.AccountID]bool{}
-		}
-		blocked[w.account] = true
-		kept = append(kept, w)
+		l.take(w.account, w.n)
+		l.unqueue(w.account)
+		w.granted = true
+		close(w.ready)
 	}
 	clear(l.queue[len(kept):])
 	l.queue = kept
