@@ -78,7 +78,11 @@ func (c computeClient) RunInstances(ctx context.Context, m backend.Mutation, req
 		}
 		keyPair = keyPairName(projectID, key.ID.String())
 	}
-	if err := c.requireImage(ctx, m.Account, req.ImageID); err != nil {
+	img, err := c.launchImage(ctx, m.Account, req.ImageID)
+	if err != nil {
+		return resource.Accepted[resource.Instance]{}, err
+	}
+	if req.RootVolumeSize, err = req.RootSizeFor(img); err != nil {
 		return resource.Accepted[resource.Instance]{}, err
 	}
 	// One launch is one reservation. A retry with the same key derives the same id.
@@ -310,32 +314,38 @@ func (c computeClient) launchInstances(
 	return resource.Accepted[resource.Instance]{Operation: op, Items: items}, nil
 }
 
-// requireImage checks that the caller can launch id in this region. The
+// launchImage is the image the caller launches as id in this region. The
 // catalog image launches without a read. Any other id is read from compute
 // under the caller's regional name; compute resolves it against the image's
 // stored project and region, so another project's or region's image is not
-// found. The console does not infer the region from the name it sent.
-func (c computeClient) requireImage(ctx context.Context, account resource.AccountID, id resource.ImageID) error {
-	if resource.CanLaunchImage(account, id) {
-		return nil
+// found. The console does not infer the region from the name it sent. Only
+// the id and the size are read: the size is the floor of the root volume.
+func (c computeClient) launchImage(
+	ctx context.Context, account resource.AccountID, id resource.ImageID,
+) (resource.Image, error) {
+	for _, img := range resource.KnownImages(account) {
+		if img.ID == id && resource.CanLaunchImage(account, id) {
+			return img, nil
+		}
 	}
-	_, err := c.images.GetImage(ctx, &computev1.GetImageRequest{
+	got, err := c.images.GetImage(ctx, &computev1.GetImageRequest{
 		Name: imageName(project(account), id.String()),
 	})
 	if err == nil {
-		return nil
+		return resource.Image{ID: id, SizeGiB: got.GetStatus().GetSizeGib()}, nil
 	}
 	err = fromRPC(err)
 	if resource.CodeOf(err) == resource.CodeNotFound {
-		return resource.ImageNotFound(id)
+		return resource.Image{}, resource.ImageNotFound(id)
 	}
-	return err
+	return resource.Image{}, err
 }
 
 // bootVolume is the disk RunInstances creates from the machine image.
 // Its type is req.RootType(), gp2 when the request names none: a VWS image
 // carries no block device mapping, and gp2 is the CreateVolume default
-// (#323). Its Iops and Throughput are req.RootPerformance().
+// (#323). Its size is req.RootSize() and its Iops and Throughput are
+// req.RootPerformance().
 // volume.proto sources a volume from a compute image. InstanceSpec has no
 // image field; the instance attaches this volume and marks it boot.
 func bootVolume(projectID, fingerprint string, req resource.RunInstancesRequest, instance string) *storagev1.Volume {
@@ -343,7 +353,7 @@ func bootVolume(projectID, fingerprint string, req resource.RunInstancesRequest,
 	return &storagev1.Volume{
 		Labels: map[string]string{labelFingerprint: clip(fingerprint, 63), labelInstance: instance},
 		Spec: &storagev1.VolumeSpec{
-			SizeGib: resource.RootVolumeSizeGiB,
+			SizeGib: req.RootSize(),
 			Type:    storageType(req.RootType()),
 			Iops:    iops, ThroughputMibps: miBps,
 			Source: &storagev1.VolumeSpec_Image{Image: imageName(projectID, req.ImageID.String())},

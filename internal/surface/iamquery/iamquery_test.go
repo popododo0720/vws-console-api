@@ -779,6 +779,10 @@ func TestListPolicyVersions(t *testing.T) {
 	has(t, call(t, h, root, sigv4.ServiceIAM, url.Values{
 		"Action": {"ListPolicyVersions"}, "PolicyArn": {p.ARN}, "Marker": {"\x01"},
 	}), http.StatusBadRequest, `<Code>InvalidInput</Code>`)
+	// A Marker the listing never issued is InvalidInput, not the first page.
+	has(t, call(t, h, root, sigv4.ServiceIAM, url.Values{
+		"Action": {"ListPolicyVersions"}, "PolicyArn": {p.ARN}, "Marker": {"page2"},
+	}), http.StatusBadRequest, `<Code>InvalidInput</Code>`, `The Marker value is invalid.`)
 	// PathPrefix is not an input of this action.
 	has(t, call(t, h, root, sigv4.ServiceIAM, url.Values{
 		"Action": {"ListPolicyVersions"}, "PolicyArn": {p.ARN}, "PathPrefix": {"/"},

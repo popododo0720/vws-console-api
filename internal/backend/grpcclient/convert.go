@@ -461,7 +461,7 @@ func imageModel(in *computev1.Image, caller resource.AccountID) (resource.Image,
 	}
 	return resource.Image{
 		ID: id, OwnerID: owner, Name: name, State: imageStateOf(in.GetStatus().GetObserved().GetState()),
-		Public: owner != caller,
+		Public: owner != caller, SizeGiB: in.GetStatus().GetSizeGib(),
 	}, nil
 }
 

@@ -102,7 +102,14 @@ func TestRunInstancesBlockDeviceMappingRefusals(t *testing.T) {
 		{"extra volume is not supported", url.Values{
 			"BlockDeviceMapping.1.DeviceName": {"/dev/sdf"}, "BlockDeviceMapping.1.Ebs.VolumeType": {"gp3"},
 		}, "InvalidParameterValue"},
-		{"volume size is not supported", root("Ebs.VolumeSize", "20"), "InvalidParameterValue"},
+		{"root below the image", root("Ebs.VolumeSize", "7"), "InvalidBlockDeviceMapping"},
+		{"zero size", root("Ebs.VolumeSize", "0"), "InvalidParameterValue"},
+		{"size not a number", root("Ebs.VolumeSize", "big"), "InvalidParameterValue"},
+		{"gp2 above 16 TiB", root("Ebs.VolumeSize", "16385"), "InvalidParameterValue"},
+		{"standard above 1 TiB", url.Values{
+			"BlockDeviceMapping.1.DeviceName": {"/dev/xvda"}, "BlockDeviceMapping.1.Ebs.VolumeType": {"standard"},
+			"BlockDeviceMapping.1.Ebs.VolumeSize": {"1025"},
+		}, "InvalidParameterValue"},
 		{"index past the cap", url.Values{"BlockDeviceMapping.101.DeviceName": {"/dev/xvda"}}, "InvalidParameterValue"},
 	} {
 		f := launchForm(subnet, "refuse", c.extra)
@@ -142,5 +149,38 @@ func TestRunInstancesRootVolumeTypeIsFingerprinted(t *testing.T) {
 	if res.Code != http.StatusBadRequest ||
 		!strings.Contains(res.Body.String(), "<Code>IdempotentParameterMismatch</Code>") {
 		t.Fatalf("%d %s", res.Code, res.Body)
+	}
+}
+
+// #423: the root mapping's Ebs.VolumeSize is the root volume size, within
+// the per-type range, and DescribeVolumes reads it back.
+func TestRunInstancesRootVolumeSizeRoundTrips(t *testing.T) {
+	h, cred, now := harness(t)
+	send := func(f url.Values) string {
+		t.Helper()
+		f.Set("Version", Version)
+		res := signed(t, h, cred, now, f.Encode())
+		if res.Code != http.StatusOK {
+			t.Fatalf("%s %d %s", f.Get("Action"), res.Code, res.Body)
+		}
+		return res.Body.String()
+	}
+	subnet := newSubnet(t, send)
+	for _, c := range []struct{ typ, size string }{{"gp2", "8"}, {"gp3", "30"}, {"standard", "1024"}, {"io2", "65536"}} {
+		extra := url.Values{
+			"BlockDeviceMapping.1.DeviceName": {"/dev/xvda"}, "BlockDeviceMapping.1.Ebs.VolumeType": {c.typ},
+			"BlockDeviceMapping.1.Ebs.VolumeSize": {c.size},
+		}
+		if c.typ == "io2" {
+			extra.Set("BlockDeviceMapping.1.Ebs.Iops", "3000")
+		}
+		run := send(launchForm(subnet, "root-size-"+c.typ, extra))
+		got := send(url.Values{"Action": {"DescribeInstances"}, "InstanceId.1": {xmlText(t, run, "instanceId")}})
+		_, mapping, _ := strings.Cut(got, "<blockDeviceMapping>")
+		vols := send(url.Values{"Action": {"DescribeVolumes"}, "VolumeId.1": {xmlText(t, mapping, "volumeId")}})
+		size := strings.Contains(vols, "<size>"+c.size+"</size>")
+		if !size || !strings.Contains(vols, "<volumeType>"+c.typ+"</volumeType>") {
+			t.Fatalf("%s root of %s GiB: %s", c.typ, c.size, vols)
+		}
 	}
 }

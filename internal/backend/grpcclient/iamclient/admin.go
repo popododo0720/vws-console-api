@@ -728,7 +728,9 @@ func (a STSAdmin) ListVirtualMFADevices(
 // ConcurrentModification with no device (#331).
 func (a STSAdmin) ListMFADevices(
 	ctx context.Context, account resource.AccountID, user, marker string, maxItems int, want iam.AuthorizedPrincipal,
-) (iam.MFADevicePage, error) {
+) (_ iam.MFADevicePage, err error) {
+	ctx, end := a.observe(ctx, "ListMFADevices", false, account, user, "")
+	defer func() { end(err) }()
 	if err := want.Require(); err != nil {
 		return iam.MFADevicePage{}, err
 	}

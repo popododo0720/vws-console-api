@@ -592,15 +592,16 @@ func (s *instanceSrv) CreateInstance(ctx context.Context, req *computev1.CreateI
 		keyName = keys.Items[0].Name
 	}
 	var rootType resource.VolumeType
-	var rootIops, rootMiBps int64
+	var rootSize, rootIops, rootMiBps int64
 	if boot := s.w.boot(spec.GetVolumes()[0].GetVolume()); boot != nil {
 		rootType = volumeTypeOf(boot.GetSpec().GetType())
 		if rootType == "" {
 			return nil, toStatus(resource.Invalid("volumeType", "unsupported"))
 		}
-		// The fake creates the root volume with the boot volume's own Iops
-		// and Throughput, so a client that drops or changes them reads back
-		// other values in the contract.
+		// The fake creates the root volume with the boot volume's own size,
+		// Iops and Throughput, so a client that drops or changes them reads
+		// back other values in the contract.
+		rootSize = boot.GetSpec().GetSizeGib()
 		rootIops, rootMiBps = boot.GetSpec().GetIops(), boot.GetSpec().GetThroughputMibps()
 	}
 	tags, err := userTags(req.GetInstance().GetLabels())
@@ -615,7 +616,7 @@ func (s *instanceSrv) CreateInstance(ctx context.Context, req *computev1.CreateI
 		// The fake creates the root volume itself. It takes the type of the
 		// boot volume the client created, so a type the client drops or
 		// changes on the way to vws-storage shows in the contract (#323).
-		RootVolumeType: rootType, RootIops: rootIops, RootThroughput: rootMiBps,
+		RootVolumeType: rootType, RootVolumeSize: rootSize, RootIops: rootIops, RootThroughput: rootMiBps,
 	})
 	if err != nil {
 		return nil, toStatus(err)

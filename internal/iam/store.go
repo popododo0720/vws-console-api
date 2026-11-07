@@ -1117,6 +1117,14 @@ func (f *Fake) ListPolicyVersions(
 	if maxItems > MaxTagPageSize {
 		maxItems = MaxTagPageSize
 	}
+	after := 0
+	if marker != "" {
+		n, ok := policyVersionMarker(marker)
+		if !ok {
+			return PolicyVersionPage{}, resource.Invalid("Marker", "The Marker value is invalid.")
+		}
+		after = n
+	}
 	f.mu.RLock()
 	defer f.mu.RUnlock()
 	p, err := f.readAccount(a).policy(arn)
@@ -1132,12 +1140,9 @@ func (f *Fake) ListPolicyVersions(
 	sort.Slice(versions, func(i, j int) bool {
 		return policyVersionNumber(versions[i].ID) < policyVersionNumber(versions[j].ID)
 	})
-	start := 0
-	if marker != "" {
-		start = sort.Search(len(versions), func(i int) bool {
-			return policyVersionNumber(versions[i].ID) > policyVersionNumber(marker)
-		})
-	}
+	start := sort.Search(len(versions), func(i int) bool {
+		return policyVersionNumber(versions[i].ID) > after
+	})
 	end := min(start+maxItems, len(versions))
 	page := PolicyVersionPage{Versions: versions[start:end]}
 	if end < len(versions) {
@@ -1155,6 +1160,18 @@ func policyVersionNumber(id string) int {
 		return 0
 	}
 	return n
+}
+
+// policyVersionMarker is the version number of a Marker this fake issued, a
+// version id v<n> with n at least 1 and no leading zero. Any other Marker is
+// not ok, so the caller answers InvalidInput as AWS does rather than paging
+// from the start.
+func policyVersionMarker(marker string) (int, bool) {
+	n, err := strconv.Atoi(strings.TrimPrefix(marker, "v"))
+	if err != nil || n < 1 || marker != "v"+strconv.Itoa(n) {
+		return 0, false
+	}
+	return n, true
 }
 
 // CreatePolicyVersion implements Admin. It stores the document as the next
