@@ -129,6 +129,8 @@ func (h *handler) routes(mux *http.ServeMux) {
 	handle("GET /api/v1/vpcs/{id}", h.getVpc)
 	handle("POST /api/v1/vpcs/{id}/tags", h.tagVpc)
 	handle("POST /api/v1/subnets/{id}/tags", h.tagSubnet)
+	handle("POST /api/v1/vpcs/{id}/tags/delete", h.untagVpc)
+	handle("POST /api/v1/subnets/{id}/tags/delete", h.untagSubnet)
 	handle("GET /api/v1/volumes", h.listVolumes)
 	handle("GET /api/v1/volumes/{id}", h.getVolume)
 	handle("GET /api/v1/images", h.listImages)
@@ -214,6 +216,8 @@ func (h *handler) mutation(action resource.Action) (string, string, http.Handler
 		return http.MethodPost, "/api/v1/volumes/{id}/modify", h.modifyVolume
 	case resource.ActionCreateTags:
 		return http.MethodPost, "/api/v1/instances/{id}/tags", h.createTags
+	case resource.ActionDeleteTags:
+		return http.MethodPost, "/api/v1/instances/{id}/tags/delete", h.deleteTags
 	case resource.ActionDisassociateAddress:
 		return http.MethodPost, "/api/v1/addresses/{id}/disassociate", h.disassociateAddress
 	default:

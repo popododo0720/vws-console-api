@@ -169,6 +169,12 @@ func (foreignCompute) CreateTags(context.Context, backend.Mutation, resource.Cre
 	return resource.Accepted[resource.Instance]{}, errors.New("unused")
 }
 
+func (foreignCompute) DeleteTags(
+	context.Context, backend.Mutation, resource.DeleteTagsRequest,
+) (resource.Accepted[resource.Instance], error) {
+	return resource.Accepted[resource.Instance]{}, errors.New("unused")
+}
+
 func (foreignCompute) DeleteVolume(context.Context, backend.Mutation, resource.DeleteVolumeRequest) (resource.Accepted[resource.Volume], error) {
 	return resource.Accepted[resource.Volume]{}, errors.New("unused")
 }

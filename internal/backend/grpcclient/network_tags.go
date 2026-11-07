@@ -15,14 +15,28 @@ import (
 // TagVpcs merges tags into each VPC with a labels-only UpdateVpc. Internal
 // labels the VPC already carries stay.
 func (c networkClient) TagVpcs(ctx context.Context, m backend.Mutation, req resource.TagVpcsRequest) (resource.Accepted[resource.Vpc], error) {
+	return c.editVpcTags(ctx, m, req.IDs, resource.ActionCreateTags, mergeEdit(req.Tags))
+}
+
+// UntagVpcs deletes the selected tags from each VPC with the same labels-only
+// UpdateVpc.
+func (c networkClient) UntagVpcs(
+	ctx context.Context, m backend.Mutation, req resource.UntagVpcsRequest,
+) (resource.Accepted[resource.Vpc], error) {
+	return c.editVpcTags(ctx, m, req.IDs, resource.ActionDeleteTags, removeEdit(req.Tags))
+}
+
+func (c networkClient) editVpcTags(
+	ctx context.Context, m backend.Mutation, ids []resource.VpcID, action resource.Action, edit tagEdit,
+) (resource.Accepted[resource.Vpc], error) {
 	projectID := project(m.Account)
 	type pending struct {
 		name   string
 		labels map[string]string
 		model  resource.Vpc
 	}
-	work := make([]pending, 0, len(req.IDs))
-	for _, id := range req.IDs {
+	work := make([]pending, 0, len(ids))
+	for _, id := range ids {
 		name := vpcName(projectID, id.String())
 		got, err := c.vpcs.GetVpc(ctx, &networkv1.GetVpcRequest{Name: name})
 		if err != nil {
@@ -32,7 +46,7 @@ func (c networkClient) TagVpcs(ctx context.Context, m backend.Mutation, req reso
 		if err != nil {
 			return resource.Accepted[resource.Vpc]{}, err
 		}
-		labels, tags, err := mergedLabels(got.GetLabels(), req.Tags)
+		labels, tags, err := editedLabels(got.GetLabels(), edit)
 		if err != nil {
 			return resource.Accepted[resource.Vpc]{}, err
 		}
@@ -59,21 +73,35 @@ func (c networkClient) TagVpcs(ctx context.Context, m backend.Mutation, req reso
 		items = append(items, w.model)
 		targets = append(targets, w.model.ID.Ref())
 	}
-	op.Action = resource.ActionCreateTags
+	op.Action = action
 	op.Targets = targets
 	return resource.Accepted[resource.Vpc]{Operation: op, Items: items}, nil
 }
 
 // TagSubnets merges tags into each subnet with a labels-only UpdateSubnet.
 func (c networkClient) TagSubnets(ctx context.Context, m backend.Mutation, req resource.TagSubnetsRequest) (resource.Accepted[resource.Subnet], error) {
+	return c.editSubnetTags(ctx, m, req.IDs, resource.ActionCreateTags, mergeEdit(req.Tags))
+}
+
+// UntagSubnets deletes the selected tags from each subnet with the same
+// labels-only UpdateSubnet.
+func (c networkClient) UntagSubnets(
+	ctx context.Context, m backend.Mutation, req resource.UntagSubnetsRequest,
+) (resource.Accepted[resource.Subnet], error) {
+	return c.editSubnetTags(ctx, m, req.IDs, resource.ActionDeleteTags, removeEdit(req.Tags))
+}
+
+func (c networkClient) editSubnetTags(
+	ctx context.Context, m backend.Mutation, ids []resource.SubnetID, action resource.Action, edit tagEdit,
+) (resource.Accepted[resource.Subnet], error) {
 	projectID := project(m.Account)
 	type pending struct {
 		name   string
 		labels map[string]string
 		model  resource.Subnet
 	}
-	work := make([]pending, 0, len(req.IDs))
-	for _, id := range req.IDs {
+	work := make([]pending, 0, len(ids))
+	for _, id := range ids {
 		got, err := c.findSubnet(ctx, projectID, id.String())
 		if err != nil {
 			return resource.Accepted[resource.Subnet]{}, err
@@ -82,7 +110,7 @@ func (c networkClient) TagSubnets(ctx context.Context, m backend.Mutation, req r
 		if err != nil {
 			return resource.Accepted[resource.Subnet]{}, err
 		}
-		labels, tags, err := mergedLabels(got.GetLabels(), req.Tags)
+		labels, tags, err := editedLabels(got.GetLabels(), edit)
 		if err != nil {
 			return resource.Accepted[resource.Subnet]{}, err
 		}
@@ -109,7 +137,7 @@ func (c networkClient) TagSubnets(ctx context.Context, m backend.Mutation, req r
 		items = append(items, w.model)
 		targets = append(targets, w.model.ID.Ref())
 	}
-	op.Action = resource.ActionCreateTags
+	op.Action = action
 	op.Targets = targets
 	return resource.Accepted[resource.Subnet]{Operation: op, Items: items}, nil
 }
@@ -152,14 +180,25 @@ func (c networkClient) findSubnet(ctx context.Context, projectID, id string) (*n
 	return nil, resource.NotFound(resource.KindSubnet, id)
 }
 
-// mergedLabels writes add over the tags stored in labels and re-encodes them,
+// tagEdit turns a resource's tags into the tags it has after the request.
+type tagEdit func(map[string]string) (map[string]string, error)
+
+func mergeEdit(add map[string]string) tagEdit {
+	return func(base map[string]string) (map[string]string, error) { return resource.MergeTags(base, add) }
+}
+
+func removeEdit(sel []resource.TagSelector) tagEdit {
+	return func(base map[string]string) (map[string]string, error) { return resource.RemoveTags(base, sel), nil }
+}
+
+// editedLabels applies edit to the tags stored in labels and re-encodes them,
 // keeping every internal label except the old tag chunks.
-func mergedLabels(labels, add map[string]string) (map[string]string, map[string]string, error) {
+func editedLabels(labels map[string]string, edit tagEdit) (map[string]string, map[string]string, error) {
 	stored, err := userTags(labels)
 	if err != nil {
 		return nil, nil, err
 	}
-	tags, err := resource.MergeTags(stored, add)
+	tags, err := edit(stored)
 	if err != nil {
 		return nil, nil, err
 	}

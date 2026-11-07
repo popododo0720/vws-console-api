@@ -133,14 +133,28 @@ func (c computeClient) releaseAddresses(
 // Compute replaces the whole label map, so the write keeps the internal
 // labels and detach records the instance carries (writeInstanceLabels).
 func (c computeClient) CreateTags(ctx context.Context, m backend.Mutation, req resource.CreateTagsRequest) (resource.Accepted[resource.Instance], error) {
+	return c.editInstanceTags(ctx, m, req.IDs, resource.ActionCreateTags, mergeEdit(req.Tags))
+}
+
+// DeleteTags rewrites each instance's labels without the selected tags, the
+// same labels-only UpdateInstance as CreateTags.
+func (c computeClient) DeleteTags(
+	ctx context.Context, m backend.Mutation, req resource.DeleteTagsRequest,
+) (resource.Accepted[resource.Instance], error) {
+	return c.editInstanceTags(ctx, m, req.IDs, resource.ActionDeleteTags, removeEdit(req.Tags))
+}
+
+func (c computeClient) editInstanceTags(
+	ctx context.Context, m backend.Mutation, ids []resource.InstanceID, action resource.Action, edit tagEdit,
+) (resource.Accepted[resource.Instance], error) {
 	projectID := project(m.Account)
-	insts := make([]resource.Instance, 0, len(req.IDs))
-	for _, id := range req.IDs {
+	insts := make([]resource.Instance, 0, len(ids))
+	for _, id := range ids {
 		inst, err := c.getInstance(ctx, projectID, id.String())
 		if err != nil {
 			return resource.Accepted[resource.Instance]{}, err
 		}
-		if inst.Tags, err = resource.MergeTags(inst.Tags, req.Tags); err != nil {
+		if inst.Tags, err = edit(inst.Tags); err != nil {
 			return resource.Accepted[resource.Instance]{}, err
 		}
 		insts = append(insts, inst)
@@ -151,12 +165,12 @@ func (c computeClient) CreateTags(ctx context.Context, m backend.Mutation, req r
 		updated, _, err := c.writeInstanceLabels(ctx, projectID, inst.ID, func(
 			got *computev1.Instance, model resource.Instance,
 		) (*computev1.UpdateInstanceRequest, error) {
-			tags, err := resource.MergeTags(model.Tags, req.Tags)
+			tags, err := edit(model.Tags)
 			if err != nil {
 				return nil, err
 			}
 			model.Tags = tags
-			labels, err := instanceUpdateLabels(model, got.GetLabels(), resource.ActionCreateTags, m.Fingerprint, nil, c.clock())
+			labels, err := instanceUpdateLabels(model, got.GetLabels(), action, m.Fingerprint, nil, c.clock())
 			if err != nil {
 				return nil, err
 			}
@@ -176,7 +190,7 @@ func (c computeClient) CreateTags(ctx context.Context, m backend.Mutation, req r
 		}
 		targets = append(targets, inst.ID.Ref())
 	}
-	op.Action = resource.ActionCreateTags
+	op.Action = action
 	op.Targets = targets
 	return resource.Accepted[resource.Instance]{Operation: op, Items: insts}, nil
 }
