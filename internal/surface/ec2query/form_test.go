@@ -223,6 +223,56 @@ func TestRevokeSecurityGroupIngressRemovesTheRule(t *testing.T) {
 	}
 }
 
+// #425: AWS answers a revoke that matches no rule with unknownIpPermissionSet
+// only in a default VPC; in a non-default VPC it is InvalidPermission.NotFound
+// and no rule is revoked. VWS has no default VPC, so every group takes the
+// non-default answer.
+func TestNonDefaultVPCRevokeOfAMissingRuleIsNotFound(t *testing.T) {
+	h, cred, now := harness(t)
+	vpc := signed(t, h, cred, now, url.Values{
+		"Action": {"CreateVpc"}, "Version": {Version}, "CidrBlock": {"10.7.0.0/16"},
+	}.Encode())
+	vpcID := xmlText(t, vpc.Body.String(), "vpcId")
+	vpcs := signed(t, h, cred, now, url.Values{
+		"Action": {"DescribeVpcs"}, "Version": {Version}, "VpcId.1": {vpcID},
+	}.Encode())
+	if vpcs.Code != http.StatusOK || xmlText(t, vpcs.Body.String(), "isDefault") != "false" {
+		t.Fatalf("describe vpcs %d %s", vpcs.Code, vpcs.Body)
+	}
+	group := signed(t, h, cred, now, url.Values{
+		"Action": {"CreateSecurityGroup"}, "Version": {Version},
+		"GroupName": {"web"}, "GroupDescription": {"web"}, "VpcId": {vpcID},
+	}.Encode())
+	id := xmlText(t, group.Body.String(), "groupId")
+	opened := signed(t, h, cred, now, url.Values{
+		"Action": {"AuthorizeSecurityGroupIngress"}, "Version": {Version}, "GroupId": {id},
+		"IpProtocol": {"tcp"}, "FromPort": {"22"}, "ToPort": {"22"}, "CidrIp": {"10.0.0.0/16"},
+	}.Encode())
+	if opened.Code != http.StatusOK {
+		t.Fatalf("authorize %d %s", opened.Code, opened.Body)
+	}
+	missing := signed(t, h, cred, now, url.Values{
+		"Action": {"RevokeSecurityGroupIngress"}, "Version": {Version}, "GroupId": {id},
+		"IpPermissions.1.IpProtocol": {"tcp"}, "IpPermissions.1.FromPort": {"80"}, "IpPermissions.1.ToPort": {"80"},
+		"IpPermissions.1.IpRanges.1.CidrIp": {"10.0.0.0/16"},
+	}.Encode())
+	body := missing.Body.String()
+	if missing.Code != http.StatusBadRequest || xmlText(t, body, "Code") != "InvalidPermission.NotFound" {
+		t.Fatalf("revoke of a missing rule %d %s", missing.Code, body)
+	}
+	for _, set := range []string{"unknownIpPermissionSet", "revokedSecurityGroupRuleSet", "<return>"} {
+		if strings.Contains(body, set) {
+			t.Fatalf("non-default VPC error carries %s: %s", set, body)
+		}
+	}
+	described := signed(t, h, cred, now, url.Values{
+		"Action": {"DescribeSecurityGroups"}, "Version": {Version}, "GroupId.1": {id},
+	}.Encode())
+	if !strings.Contains(described.Body.String(), "<fromPort>22</fromPort>") {
+		t.Fatalf("a failed revoke removed a rule %d %s", described.Code, described.Body)
+	}
+}
+
 func subnetIDOf(t *testing.T, body string) string {
 	t.Helper()
 	return xmlText(t, body, "subnetId")
