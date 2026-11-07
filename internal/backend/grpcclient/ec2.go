@@ -48,14 +48,18 @@ func (c computeClient) TerminateInstances(ctx context.Context, m backend.Mutatio
 		}
 		prev = append(prev, inst)
 	}
+	// Every release comes before the first delete, so a terminate cut short
+	// while releasing has deleted nothing and its retry reads every instance.
+	for i, inst := range prev {
+		if err := c.releaseAddresses(ctx, m.Key, projectID, i, inst.ID); err != nil {
+			return resource.Accepted[resource.InstanceStateChange]{}, err
+		}
+	}
 	var op resource.Operation
 	items := make([]resource.InstanceStateChange, 0, len(prev))
 	for i, inst := range prev {
 		mid, _, err := resource.NextInstanceState(resource.ActionTerminateInstances, inst.State)
 		if err != nil {
-			return resource.Accepted[resource.InstanceStateChange]{}, err
-		}
-		if err := c.releaseAddresses(ctx, m.Key, projectID, i, inst.ID); err != nil {
 			return resource.Accepted[resource.InstanceStateChange]{}, err
 		}
 		deleted, err := c.instances.DeleteInstance(ctx, &computev1.DeleteInstanceRequest{
@@ -82,7 +86,7 @@ func (c computeClient) TerminateInstances(ctx context.Context, m backend.Mutatio
 
 // releaseAddresses clears each Elastic IP association that names the
 // instance at index i of a terminate, as EC2 disassociates on terminate. It
-// runs before DeleteInstance, which compute refuses while an association
+// runs before any DeleteInstance, which compute refuses while an association
 // names the instance (instance.proto). Compute deletes the boot volume once
 // the instance is gone. Each request id comes from key, the index and the
 // address, so a retry of a cut-short terminate sends the same updates.

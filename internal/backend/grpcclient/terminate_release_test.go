@@ -189,3 +189,43 @@ func TestTerminateWithoutAnAddressSendsNoRelease(t *testing.T) {
 		t.Fatalf("left %d %d %d, updates %d", v, i, ips, f.boot.madeCount("UpdateAddress"))
 	}
 }
+
+// TestTerminateOfTwoReleasesBothBeforeEitherDelete pins that a terminate of
+// two instances releases both addresses before it deletes either, so a
+// release that fails for the second leaves both instances for the retry,
+// which finishes both.
+func TestTerminateOfTwoReleasesBothBeforeEitherDelete(t *testing.T) {
+	f := newLaunch(t, "two")
+	ids, err := f.launch(t, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	projectID := project(f.m.Account)
+	addrs := []string{
+		addressName(projectID, "eipalloc-0000000000000000a"), addressName(projectID, "eipalloc-0000000000000000b"),
+	}
+	for i, id := range ids {
+		f.boot.associate(addrs[i], instanceName(projectID, id.String()))
+	}
+	f.boot.failAt("UpdateAddress", 2, false)
+	f.m.Key = "term-two"
+	req := resource.TerminateInstancesRequest{IDs: ids}
+	_, err = f.client.TerminateInstances(context.Background(), f.m, req)
+	if resource.CodeOf(err) != resource.CodeUnavailable {
+		t.Fatalf("err %v, want unavailable", err)
+	}
+	if _, i, _ := f.boot.left(); i != 2 {
+		t.Fatalf("instances %d after a failed release, want 2", i)
+	}
+	if _, err := f.client.TerminateInstances(context.Background(), f.m, req); err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+	if v, i, ips := f.boot.left(); v != 0 || i != 0 || ips != 0 {
+		t.Fatalf("left volumes %d instances %d ips %d, want none", v, i, ips)
+	}
+	for _, addr := range addrs {
+		if owner := f.boot.owner(addr); owner != "" {
+			t.Fatalf("address %s still names %s", addr, owner)
+		}
+	}
+}
