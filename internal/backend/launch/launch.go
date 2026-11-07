@@ -82,8 +82,16 @@ type Plan func(attempt int) []Step
 // ErrExists and Update with ErrConflict instead of overwriting.
 type Store interface {
 	Load(ctx context.Context, key string) (rec Record, version string, found bool, err error)
+	Unfinished(ctx context.Context) ([]Stored, error)
 	Create(ctx context.Context, rec Record) (version string, err error)
 	Update(ctx context.Context, rec Record, version string) (next string, err error)
+}
+
+// Stored is a record with the version it was read at. Unfinished returns
+// every record that is running or undoing, and may return others too.
+type Stored struct {
+	Record  Record
+	Version string
 }
 
 // writeTimeout bounds a Done or Finish write, which outlives the request:
@@ -118,6 +126,9 @@ type Launch struct {
 	// attempt is the Record.Attempt this request runs as. A request whose
 	// attempt a retry has replaced cannot mark the launch failed.
 	attempt int
+	// idleSince is set on a launch the sweep found abandoned: Undo claims
+	// it only while its record was last written at or before idleSince.
+	idleSince time.Time
 }
 
 // Record returns the record as last written or read.
@@ -247,7 +258,8 @@ func (l *Launch) undoneErr() error {
 // Failed reports true without a write, so a request that finds an undo cut
 // short resumes it, and one whose create landed after the undo deletes it.
 // A launch that succeeded or moved to a later attempt reports false: a
-// stale request never deletes another attempt's resources.
+// stale request never deletes another attempt's resources. A launch from
+// Abandoned that was written since it went idle reports false too.
 func (l *Launch) Undo(ctx context.Context) (bool, error) {
 	if l.t == nil {
 		return false, nil
@@ -256,7 +268,8 @@ func (l *Launch) Undo(ctx context.Context) (bool, error) {
 	defer cancel()
 	undo := false
 	err := l.apply(ctx, func(r *Record) bool {
-		undo = r.Attempt == l.attempt && r.Phase != Succeeded
+		undo = r.Attempt == l.attempt && r.Phase != Succeeded &&
+			(l.idleSince.IsZero() || !r.Updated.After(l.idleSince))
 		if !undo || r.Phase != Running {
 			return false
 		}
@@ -313,6 +326,32 @@ func (l *Launch) apply(ctx context.Context, change func(*Record) bool) error {
 		l.rec, l.version = fresh.rec, fresh.version
 	}
 	return unavailable(fmt.Errorf("launch %s: %w", l.rec.Key, ErrConflict))
+}
+
+// Abandoned returns the launches left running or undoing whose record was
+// last written idle or more ago, each as its latest attempt. A store that
+// could read only some records returns those launches and its error. A live request
+// writes its record on every step, so a launch that idle is one whose request
+// died. Undoing one is safe even when its request still runs: that request
+// cannot record a step or succeed once the record says undoing.
+func (t *Tracker) Abandoned(ctx context.Context, idle time.Duration) ([]Launch, error) {
+	if t == nil {
+		return nil, nil
+	}
+	all, listErr := t.store.Unfinished(ctx)
+	if listErr != nil {
+		listErr = unavailable(listErr)
+	}
+	cutoff := t.now().Add(-idle)
+	var out []Launch
+	for _, s := range all {
+		if (s.Record.Phase == Running || s.Record.Phase == Undoing) && !s.Record.Updated.After(cutoff) {
+			out = append(out, Launch{
+				t: t, rec: s.Record, version: s.Version, attempt: s.Record.Attempt, idleSince: cutoff,
+			})
+		}
+	}
+	return out, listErr
 }
 
 func (t *Tracker) load(ctx context.Context, key string) (Launch, bool, error) {

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -256,6 +257,75 @@ func TestCorruptRecordIsAnError(t *testing.T) {
 		}
 		if _, _, found, err := s.Load(ctx, name); err == nil || found {
 			t.Fatalf("%s: found %v err %v", data, found, err)
+		}
+	}
+}
+
+// TestUnfinishedReadsEveryOpenRecordAcrossPages pins that Unfinished
+// returns every running or undoing record this package wrote, over more than
+// one page, at the version Load reads, and a record written before the phase
+// label. It leaves out a succeeded or failed record and a ConfigMap this
+// package did not write, and names a corrupt record in its error without
+// hiding the others.
+func TestUnfinishedReadsEveryOpenRecordAcrossPages(t *testing.T) {
+	ctx := context.Background()
+	s, cs, ns := open(t)
+	want := map[string]string{}
+	for i := range kubestore.ListPage + 1 {
+		k := fmt.Sprintf("%064x", i)
+		phase := launch.Running
+		if i%2 == 1 {
+			phase = launch.Undoing
+		}
+		v, err := s.Create(ctx, launch.Record{Key: k, Account: account(t), Phase: phase, Steps: []launch.Step{}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		want[k] = v
+	}
+	for i, phase := range []launch.Phase{launch.Succeeded, launch.Failed} {
+		rec := launch.Record{Key: strings.Repeat(strconv.Itoa(i+1), 64), Phase: phase, Steps: []launch.Step{}}
+		if _, err := s.Create(ctx, rec); err != nil {
+			t.Fatal(err)
+		}
+	}
+	managed := map[string]string{"app.kubernetes.io/managed-by": "vws-console-api"}
+	legacy := strings.Repeat("e", 64)
+	for name, data := range map[string]string{
+		kubestore.Name(strings.Repeat("f", 64)): "{not json",
+		kubestore.Name(legacy):                  `{"key":"` + legacy + `","phase":"running"}`,
+	} {
+		if _, err := cs.CoreV1().ConfigMaps(ns).Create(ctx, &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Labels: managed},
+			Data:       map[string]string{"launch.json": data},
+		}, metav1.CreateOptions{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	legacyCM, err := cs.CoreV1().ConfigMaps(ns).Get(ctx, kubestore.Name(legacy), metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want[legacy] = legacyCM.ResourceVersion
+	if _, err := cs.CoreV1().ConfigMaps(ns).Create(ctx, &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Name: "someone-else"},
+		Data:       map[string]string{"launch.json": "{not json"},
+	}, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Unfinished(ctx)
+	if err == nil || !strings.Contains(err.Error(), kubestore.Name(strings.Repeat("f", 64))) {
+		t.Fatalf("corrupt record not named: %v", err)
+	}
+	if strings.Contains(err.Error(), "someone-else") {
+		t.Fatalf("listed a ConfigMap this package did not write: %v", err)
+	}
+	if len(got) != len(want) {
+		t.Fatalf("listed %d records want %d", len(got), len(want))
+	}
+	for _, s := range got {
+		if want[s.Record.Key] != s.Version {
+			t.Fatalf("record %s at version %q want %q", s.Record.Key, s.Version, want[s.Record.Key])
 		}
 	}
 }

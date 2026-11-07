@@ -39,14 +39,21 @@ type launchWorld struct {
 	faults  map[string]fault
 	made    map[string]int
 	deletes []string
+	lis     *bufconn.Listener
 }
 
 // fault fails times calls of a method from call number n, counted from 1.
 // A lost fault makes the change and then fails, a response lost on the way
-// back.
+// back. A crash fault is a lost one that also runs crash, the caller's
+// process dying before it reads the answer.
 type fault struct {
 	n, times int
 	lost     bool
+	crash    func()
+}
+
+func (w *launchWorld) crashAt(method string, n int, crash func()) {
+	w.fail(method, fault{n: n, times: 1, lost: true, crash: crash})
 }
 
 func (w *launchWorld) failAt(method string, n int, lost bool) {
@@ -62,14 +69,14 @@ func (w *launchWorld) fail(method string, f fault) {
 }
 
 // enter counts a call of method and reports whether it fails before or after
-// its change.
-func (w *launchWorld) enter(method string) (before, after bool) {
+// its change, and the crash to run after it.
+func (w *launchWorld) enter(method string) (before, after bool, crash func()) {
 	w.calls[method]++
 	f, ok := w.faults[method]
 	if call := w.calls[method]; !ok || call < f.n || call >= f.n+f.times {
-		return false, false
+		return false, false, nil
 	}
-	return !f.lost, f.lost
+	return !f.lost, f.lost, f.crash
 }
 
 func errDown() error { return status.Error(codes.Unavailable, "backend down") }
@@ -94,12 +101,15 @@ func (w *launchWorld) create(method, requestID, name string, change func() error
 	if op, ok := w.replays[requestID]; ok {
 		return op, nil
 	}
-	before, after := w.enter(method)
+	before, after, crash := w.enter(method)
 	if before {
 		return nil, errDown()
 	}
 	if err := change(); err != nil {
 		return nil, err
+	}
+	if crash != nil {
+		crash()
 	}
 	w.made[method]++
 	op, err := doneNamed(name, commonv1.OperationVerb_OPERATION_VERB_CREATE)
@@ -164,7 +174,7 @@ func (w *launchWorld) live(name string) bool {
 
 func (w *launchWorld) GetInstance(ctx context.Context, req *computev1.GetInstanceRequest) (*computev1.Instance, error) {
 	w.mu.Lock()
-	before, _ := w.enter("GetInstance")
+	before, _, _ := w.enter("GetInstance")
 	live := w.live(req.GetName())
 	w.mu.Unlock()
 	if before {
@@ -180,7 +190,7 @@ func (w *launchWorld) GetInstance(ctx context.Context, req *computev1.GetInstanc
 func (w *launchWorld) remove(method, name string, change func() error) (*longrunningpb.Operation, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if before, _ := w.enter(method); before {
+	if before, _, _ := w.enter(method); before {
 		return nil, errDown()
 	}
 	if err := change(); err != nil {
@@ -260,9 +270,17 @@ func startLaunchWorld(t *testing.T) (*launchWorld, computeClient) {
 	longrunningpb.RegisterOperationsServer(srv, w)
 	go func() { _ = srv.Serve(lis) }()
 	t.Cleanup(srv.Stop)
+	w.lis = lis
+	client, _ := w.dial(t)
+	return w, client
+}
+
+// dial returns a client over its own connection to w, one process's view.
+func (w *launchWorld) dial(t *testing.T) (computeClient, *grpc.ClientConn) {
+	t.Helper()
 	conn, err := grpc.NewClient("passthrough:///launch",
 		append(dialOptions(), grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) {
-			return lis.DialContext(ctx)
+			return w.lis.DialContext(ctx)
 		}))...,
 	)
 	if err != nil {
@@ -270,12 +288,12 @@ func startLaunchWorld(t *testing.T) (*launchWorld, computeClient) {
 	}
 	t.Cleanup(func() { _ = conn.Close() })
 	ops := longrunningpb.NewOperationsClient(conn)
-	return w, computeClient{&api{
+	return computeClient{&api{
 		instances:  computev1.NewInstanceServiceClient(conn),
 		volumes:    storagev1.NewVolumeServiceClient(conn),
 		subnets:    networkv1.NewSubnetServiceClient(conn),
 		vpcs:       networkv1.NewVpcServiceClient(conn),
 		computeOps: ops,
 		storageOps: ops,
-	}}
+	}}, conn
 }
