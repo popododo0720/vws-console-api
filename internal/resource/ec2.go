@@ -766,9 +766,9 @@ type Image struct {
 	Name    string    `json:"name"`
 	State   string    `json:"state"`
 	Public  bool      `json:"public"`
-	// SizeGiB is the smallest root volume the image boots from. Zero means
-	// unknown.
-	SizeGiB int64 `json:"sizeGiB,omitempty"`
+	// SizeGiB is the smallest root volume the image boots from, and the
+	// root size of a launch that names none. Zero means unknown.
+	SizeGiB int64 `json:"size,omitempty"`
 }
 
 // Owner returns the account that owns the image.

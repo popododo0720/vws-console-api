@@ -82,7 +82,7 @@ func (c computeClient) RunInstances(ctx context.Context, m backend.Mutation, req
 	if err != nil {
 		return resource.Accepted[resource.Instance]{}, err
 	}
-	if err := req.CheckRootFits(img); err != nil {
+	if req.RootVolumeSize, err = req.RootSizeFor(img); err != nil {
 		return resource.Accepted[resource.Instance]{}, err
 	}
 	// One launch is one reservation. A retry with the same key derives the same id.

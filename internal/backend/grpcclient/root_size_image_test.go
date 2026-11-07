@@ -11,8 +11,8 @@ import (
 )
 
 // #423: a root volume below the size compute reports for a registered image
-// is InvalidBlockDeviceMapping before any volume or instance, and one at the
-// image size is sent to vws-storage as asked.
+// is InvalidBlockDeviceMapping before any volume or instance. A size at the
+// image is sent to vws-storage as asked, and an omitted one is the image's.
 func TestRootVolumeBelowARegisteredImageIsRefused(t *testing.T) {
 	sub, err := resource.Parse[resource.SubnetID]("subnet-01234567")
 	if err != nil {
@@ -30,7 +30,7 @@ func TestRootVolumeBelowARegisteredImageIsRefused(t *testing.T) {
 		})
 		return err
 	}
-	for _, size := range []int64{0, 19} {
+	for _, size := range []int64{8, 19} {
 		err := run(fmt.Sprintf("below-%d", size), size)
 		var re *resource.Error
 		if !errors.As(err, &re) || re.Code != resource.CodeInvalidArgument || re.Field != "blockDeviceMapping" {
@@ -43,12 +43,18 @@ func TestRootVolumeBelowARegisteredImageIsRefused(t *testing.T) {
 	if volumes != 0 || instances != 0 {
 		t.Fatalf("a refused root created %d volumes and %d instances", volumes, instances)
 	}
-	if err := run("fits", 20); err != nil {
-		t.Fatalf("a 20 GiB root on a 20 GiB image: %v", err)
-	}
-	boot.mu.Lock()
-	defer boot.mu.Unlock()
-	if boot.size != 20 {
-		t.Fatalf("storage got a %d GiB boot volume, want 20", boot.size)
+	for _, c := range []struct {
+		key        string
+		size, want int64
+	}{{"fits", 20, 20}, {"larger", 30, 30}, {"omitted", 0, 20}} {
+		if err := run(c.key, c.size); err != nil {
+			t.Fatalf("a %d GiB root on a 20 GiB image: %v", c.size, err)
+		}
+		boot.mu.Lock()
+		got := boot.size
+		boot.mu.Unlock()
+		if got != c.want {
+			t.Fatalf("a %d GiB root on a 20 GiB image: storage got %d GiB, want %d", c.size, got, c.want)
+		}
 	}
 }

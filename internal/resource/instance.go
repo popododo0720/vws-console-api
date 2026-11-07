@@ -206,12 +206,13 @@ type RunInstancesRequest struct {
 	RootVolumeSize int64 `json:"rootVolumeSize,omitempty"`
 }
 
-// RootVolumeSizeGiB is the size of the root volume RunInstances creates when
-// the request names none, and the size of the catalog image.
+// RootVolumeSizeGiB is the smallest root volume RunInstances creates when
+// the request names no size, and the size of the catalog image.
 const RootVolumeSizeGiB = 8
 
-// RootSize is the size in GiB RunInstances gives the root volume: the
-// mapping's Ebs.VolumeSize, or RootVolumeSizeGiB when it is omitted.
+// RootSize is the mapping's Ebs.VolumeSize in GiB, or RootVolumeSizeGiB when
+// it is omitted. Normalize checks this size; the backend resolves an omitted
+// one against the image with RootSizeFor.
 func (r RunInstancesRequest) RootSize() int64 {
 	if r.RootVolumeSize == 0 {
 		return RootVolumeSizeGiB
@@ -219,16 +220,27 @@ func (r RunInstancesRequest) RootSize() int64 {
 	return r.RootVolumeSize
 }
 
-// CheckRootFits refuses a root volume smaller than img, as EC2 refuses a
-// VolumeSize below the AMI's root snapshot with InvalidBlockDeviceMapping
-// (EbsBlockDevice VolumeSize: "equal to or larger than the snapshot size").
-// An image of unknown size (zero) is left to storage.
-func (r RunInstancesRequest) CheckRootFits(img Image) error {
-	if img.SizeGiB == 0 || r.RootSize() >= img.SizeGiB {
-		return nil
+// RootSizeFor is the root volume size in GiB RunInstances gives a launch of
+// img. An omitted size is the image's size when that is above
+// RootVolumeSizeGiB, as EC2 defaults VolumeSize to the snapshot size. A size
+// below the image is refused as EC2 refuses it, with InvalidBlockDeviceMapping
+// (EbsBlockDevice VolumeSize: "equal to or larger than the snapshot size"),
+// and the size is checked again with the CreateVolume per-type rules. An image
+// of unknown size (zero) is left to storage.
+func (r RunInstancesRequest) RootSizeFor(img Image) (int64, error) {
+	size := r.RootSize()
+	if r.RootVolumeSize == 0 && img.SizeGiB > size {
+		size = img.SizeGiB
 	}
-	return Invalid("blockDeviceMapping", fmt.Sprintf(
-		"Volume of size %dGB is smaller than image '%s', expect size >= %dGB", r.RootSize(), img.ID, img.SizeGiB))
+	if size < img.SizeGiB {
+		return 0, Invalid("blockDeviceMapping", fmt.Sprintf(
+			"Volume of size %dGB is smaller than image '%s', expect size >= %dGB", size, img.ID, img.SizeGiB))
+	}
+	iops, miBps := r.RootPerformance()
+	if err := CheckVolumeShape(r.RootType(), size, iops, miBps); err != nil {
+		return 0, err
+	}
+	return size, nil
 }
 
 // RootType is the EBS type RunInstances gives the root volume. A VWS image

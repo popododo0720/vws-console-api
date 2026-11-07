@@ -43,7 +43,7 @@ func (c compute) RunInstances(ctx context.Context, m backend.Mutation, req resou
 	if err != nil {
 		return resource.Accepted[resource.Instance]{}, err
 	}
-	if err := req.CheckRootFits(img); err != nil {
+	if req.RootVolumeSize, err = req.RootSizeFor(img); err != nil {
 		return resource.Accepted[resource.Instance]{}, err
 	}
 	resID, err := resource.Mint[resource.ReservationID](c.w.entropy)
