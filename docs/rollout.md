@@ -24,6 +24,16 @@ token rule).
   label. `TestAnOldReplicaCannotTakeAPendingOperationIDsLabel`
   (`internal/backend/grpcclient/detach_rollout_test.go`) proves it, and it
   fails when the binding is only counted, not stored.
+- **A build before #362 reading the binding.** Such a build (for example
+  `c09cba3`) reads a pending binding `- <token>` as a saved operation id
+  `-`. A same-token retry it served between the detach's two writes would
+  answer `InternalError` (HTTP 500) and write nothing; a retry with other
+  parameters gets `IdempotentParameterMismatch`, as from a current build.
+  Once the id is saved, the old read replays it. With `Recreate` this needs
+  no step: the old pod has exited before the new one writes a binding.
+  `TestAPre362ReplicaMisreadsOnlyAPendingBinding`
+  (`internal/backend/grpcclient/detach_rollout_test.go`) pins what the old
+  read answers (#413).
 
 A build from `99c95e3` (#327) up to but not including `a17a090` (#367)
 counts the reservation without storing it. Next to a build before #327 it
@@ -40,7 +50,10 @@ a rollout target.
    ```
 
    Every commit on `main` since `a17a090` (2026-10-24) passes. A target that fails is not
-   used.
+   used. This holds for a rollback too: a binding left pending by a detach
+   whose second write failed outlives the pod, so a rollback to a build
+   before `a17a090` would answer `InternalError` to that detach's retries
+   for as long as the record is kept, not only during a surge (#413).
 
 2. Check the cross-service rules in vws-deploy `docs/image-pins.md` and move
    any other pin they name in the same PR.
