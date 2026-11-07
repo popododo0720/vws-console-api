@@ -8,13 +8,15 @@ import (
 	"time"
 )
 
-// attachTimeOK checks an attachTime is present and in EC2's ISO 8601 UTC form.
-func attachTimeOK(t *testing.T, body string) {
+// attachTimeOK returns the attachTime in body after checking it is in EC2's
+// ISO 8601 UTC form.
+func attachTimeOK(t *testing.T, body string) string {
 	t.Helper()
 	got := xmlText(t, body, "attachTime")
 	if _, err := time.Parse("2006-01-02T15:04:05.000Z", got); err != nil {
 		t.Fatalf("attachTime %q: %v in %s", got, err, body)
 	}
+	return got
 }
 
 // #127: DescribeInstances names the root device and its EBS volume, and
@@ -48,7 +50,10 @@ func TestRootDeviceAndVolume(t *testing.T) {
 		}
 	}
 	_, mapping, _ := strings.Cut(got, "<blockDeviceMapping>")
-	attachTimeOK(t, mapping)
+	launched := xmlText(t, got, "launchTime")
+	if mapped := attachTimeOK(t, mapping); mapped != launched {
+		t.Fatalf("mapping attachTime %s, launchTime %s", mapped, launched)
+	}
 	vol := xmlText(t, mapping, "volumeId")
 	vols := send(url.Values{"Action": {"DescribeVolumes"}, "VolumeId.1": {vol}})
 	for _, want := range []string{"<instanceId>" + id + "</instanceId>", "<device>/dev/xvda</device>", "<status>in-use</status>", "<deleteOnTermination>true</deleteOnTermination>"} {
@@ -57,5 +62,7 @@ func TestRootDeviceAndVolume(t *testing.T) {
 		}
 	}
 	_, att, _ := strings.Cut(vols, "<attachmentSet>")
-	attachTimeOK(t, att)
+	if attached := attachTimeOK(t, att); attached != launched {
+		t.Fatalf("volume attachTime %s, launchTime %s", attached, launched)
+	}
 }

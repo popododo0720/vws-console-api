@@ -1651,6 +1651,11 @@ func (c computeClient) markAttachState(ctx context.Context, account resource.Acc
 		switch {
 		case ok && view.bind.InstanceID == v.InstanceID:
 			v.AttachState = view.state
+			if view.bind.Boot && v.AttachTime.IsZero() {
+				// A root volume attaches at launch, the time the block
+				// device mapping reports (#127).
+				v.AttachTime = view.launched
+			}
 			if v.Device == "" {
 				v.Device = view.bind.Device
 			}
@@ -1667,9 +1672,10 @@ func (c computeClient) markAttachState(ctx context.Context, account resource.Acc
 
 // attachView is compute's view of one volume on one live instance.
 type attachView struct {
-	bind   backend.VolumeBind
-	inSpec bool
-	state  resource.AttachmentStatus
+	bind     backend.VolumeBind
+	inSpec   bool
+	state    resource.AttachmentStatus
+	launched time.Time
 }
 
 // attachViews maps each volume a live instance spec names, or compute still
@@ -1742,7 +1748,7 @@ func addAttachViews(out map[resource.VolumeID]attachView, in *computev1.Instance
 		if !ok {
 			continue
 		}
-		staged[block.VolumeID] = attachView{bind: bind, inSpec: true, state: block.Status}
+		staged[block.VolumeID] = attachView{bind: bind, inSpec: true, state: block.Status, launched: model.LaunchTime}
 	}
 	for id, o := range observed {
 		if _, ok := staged[id]; ok {
