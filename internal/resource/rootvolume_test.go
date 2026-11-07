@@ -80,3 +80,49 @@ func TestRunInstancesRootVolumeType(t *testing.T) {
 		}
 	}
 }
+
+// #429: the Iops-per-GiB ratio is checked on the size the root volume gets.
+// A size the request names is checked in Normalize; an omitted one is the
+// image's, so RootSizeFor checks the ratio on the image size.
+func TestRootIopsRatioFollowsTheRootSize(t *testing.T) {
+	img, err := Parse[ImageID]("ami-0123456789abcdef0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sub, err := Parse[SubnetID]("subnet-0123456789abcdef0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	io1 := RunInstancesRequest{
+		ImageID: img, InstanceType: "vws.small", SubnetID: sub, RootVolumeType: VolumeIO1, RootIops: 1000,
+	}
+	ratio := func(err error) bool {
+		var e *Error
+		return errors.As(err, &e) && e.Code == CodeInvalidArgument && e.Field == "iops"
+	}
+	named := io1
+	named.RootVolumeSize = 19
+	if _, err := named.Normalize(); !ratio(err) {
+		t.Fatalf("1,000 IOPS on 19 GiB: %v, want the ratio refused", err)
+	}
+	named.RootVolumeSize = 20
+	if _, err := named.Normalize(); err != nil {
+		t.Fatalf("1,000 IOPS on 20 GiB: %v", err)
+	}
+	omitted, err := io1.Normalize()
+	if err != nil {
+		t.Fatalf("1,000 IOPS on an omitted size: %v", err)
+	}
+	if size, err := omitted.RootSizeFor(Image{ID: img, SizeGiB: 20}); err != nil || size != 20 {
+		t.Fatalf("on a 20 GiB image: %d %v", size, err)
+	}
+	if _, err := omitted.RootSizeFor(Image{ID: img, SizeGiB: RootVolumeSizeGiB}); !ratio(err) {
+		t.Fatalf("on an 8 GiB image: %v, want the ratio refused", err)
+	}
+	// Ranges that need no size are still refused before the backend.
+	high := io1
+	high.RootIops = 64001
+	if _, err := high.Normalize(); !ratio(err) {
+		t.Fatalf("64,001 io1 IOPS: %v, want refused", err)
+	}
+}

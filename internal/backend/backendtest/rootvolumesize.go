@@ -10,8 +10,9 @@ import (
 	"github.com/popododo0720/vws-console-api/internal/resource"
 )
 
-// exerciseRootVolumeSize covers #423: the root mapping's Ebs.VolumeSize is
-// the size of the root volume, and a size below the catalog image is
+// exerciseRootVolumeSize covers #423 and #429: the root mapping's
+// Ebs.VolumeSize is the size of the root volume, and a size below the
+// catalog image, or an Iops ratio the image's size does not allow, is
 // refused before any volume or instance is created.
 func exerciseRootVolumeSize(
 	ctx context.Context, t *testing.T, set backend.Set,
@@ -50,6 +51,17 @@ func exerciseRootVolumeSize(
 	var re *resource.Error
 	if !errors.As(err, &re) || re.Code != resource.CodeInvalidArgument || re.Field != "blockDeviceMapping" {
 		t.Fatalf("a root below the image: %v", err)
+	}
+	// #429: an omitted size is the image's, and the Iops-per-GiB ratio is
+	// checked on it: 1,000 io1 IOPS are above 50 per GiB on the 8 GiB image.
+	key = "k-root-ratio-on-image"
+	_, err = set.Compute.RunInstances(ctx, backend.Mutation{Scope: scope, Key: key, Fingerprint: "fp-" + key},
+		resource.RunInstancesRequest{
+			ImageID: img, InstanceType: "vws.small", SubnetID: subnet, Count: 1,
+			RootVolumeType: resource.VolumeIO1, RootIops: 1000,
+		})
+	if !errors.As(err, &re) || re.Code != resource.CodeInvalidArgument || re.Field != "iops" {
+		t.Fatalf("1,000 io1 IOPS on the 8 GiB image: %v", err)
 	}
 	if after := countLaunched(ctx, t, set, scope); after != before {
 		t.Fatalf("a refused root size created resources: %v, then %v", before, after)

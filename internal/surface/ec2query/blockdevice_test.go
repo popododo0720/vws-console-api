@@ -110,6 +110,11 @@ func TestRunInstancesBlockDeviceMappingRefusals(t *testing.T) {
 			"BlockDeviceMapping.1.DeviceName": {"/dev/xvda"}, "BlockDeviceMapping.1.Ebs.VolumeType": {"standard"},
 			"BlockDeviceMapping.1.Ebs.VolumeSize": {"1025"},
 		}, "InvalidParameterValue"},
+		// #429: the Iops-per-GiB ratio is checked on the mapping's size.
+		{"io1 ratio on the mapping's size", url.Values{
+			"BlockDeviceMapping.1.DeviceName": {"/dev/xvda"}, "BlockDeviceMapping.1.Ebs.VolumeType": {"io1"},
+			"BlockDeviceMapping.1.Ebs.VolumeSize": {"19"}, "BlockDeviceMapping.1.Ebs.Iops": {"1000"},
+		}, "InvalidParameterValue"},
 		{"index past the cap", url.Values{"BlockDeviceMapping.101.DeviceName": {"/dev/xvda"}}, "InvalidParameterValue"},
 	} {
 		f := launchForm(subnet, "refuse", c.extra)
@@ -166,13 +171,16 @@ func TestRunInstancesRootVolumeSizeRoundTrips(t *testing.T) {
 		return res.Body.String()
 	}
 	subnet := newSubnet(t, send)
-	for _, c := range []struct{ typ, size string }{{"gp2", "8"}, {"gp3", "30"}, {"standard", "1024"}, {"io2", "65536"}} {
+	// #429: 1,000 io1 IOPS are above 50 per GiB at 8 GiB and within it at 20.
+	for _, c := range []struct{ typ, size, iops string }{
+		{"gp2", "8", ""}, {"gp3", "30", ""}, {"standard", "1024", ""}, {"io2", "65536", "3000"}, {"io1", "20", "1000"},
+	} {
 		extra := url.Values{
 			"BlockDeviceMapping.1.DeviceName": {"/dev/xvda"}, "BlockDeviceMapping.1.Ebs.VolumeType": {c.typ},
 			"BlockDeviceMapping.1.Ebs.VolumeSize": {c.size},
 		}
-		if c.typ == "io2" {
-			extra.Set("BlockDeviceMapping.1.Ebs.Iops", "3000")
+		if c.iops != "" {
+			extra.Set("BlockDeviceMapping.1.Ebs.Iops", c.iops)
 		}
 		run := send(launchForm(subnet, "root-size-"+c.typ, extra))
 		got := send(url.Values{"Action": {"DescribeInstances"}, "InstanceId.1": {xmlText(t, run, "instanceId")}})
