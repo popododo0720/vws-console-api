@@ -165,3 +165,11 @@ func TestLaunchNamespaceNeedsAKubeconfig(t *testing.T) {
 		t.Fatalf("err %v", err)
 	}
 }
+
+func TestLaunchNamespaceNeedsTheGRPCBackend(t *testing.T) {
+	clearCredentialEnv(t)
+	err := run(t.Context(), []string{"-backend=fake", "-ops-addr=", "-launch-namespace=vws-system"})
+	if err == nil || !strings.Contains(err.Error(), "-launch-namespace needs -backend=grpc") {
+		t.Fatalf("err %v", err)
+	}
+}

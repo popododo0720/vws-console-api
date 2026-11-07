@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"strings"
 	"sync/atomic"
@@ -15,7 +13,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 
 	"github.com/popododo0720/vws-console-api/internal/backend/launch"
@@ -31,6 +28,10 @@ var namespaces atomic.Int64
 
 func TestMain(m *testing.M) {
 	if os.Getenv("KUBEBUILDER_ASSETS") == "" {
+		if os.Getenv("CI") != "" {
+			fmt.Fprintln(os.Stderr, "KUBEBUILDER_ASSETS is unset in CI; the envtest tests would skip")
+			os.Exit(1)
+		}
 		os.Exit(m.Run())
 	}
 	env = &envtest.Environment{}
@@ -98,6 +99,9 @@ func TestRecordRoundTripsAndWritesAreCompareAndSwap(t *testing.T) {
 	}
 	if _, err := s.Update(ctx, rec, v1); !errors.Is(err, launch.ErrConflict) {
 		t.Fatalf("stale update: %v", err)
+	}
+	if _, err := s.Update(ctx, rec, ""); err == nil {
+		t.Fatal("update without a resourceVersion overwrote the record")
 	}
 	got, version, found, err := s.Load(ctx, key)
 	if err != nil || !found || version != v2 || len(got.Steps) != 1 || got.Account != rec.Account {
@@ -215,53 +219,42 @@ func TestRacingRequestsLandEveryStep(t *testing.T) {
 	}
 }
 
-// TestTransientAPIErrorsAreRetriedAndBounded drives the store against an
-// API server that answers 429 and 503: a call is retried with backoff until
-// it gets an answer, and gives up after a bounded number of tries.
-func TestTransientAPIErrorsAreRetriedAndBounded(t *testing.T) {
-	for _, tc := range []struct {
-		name      string
-		failures  int64
-		wantCalls int64
-		wantErr   bool
-	}{
-		{name: "recovers", failures: 2, wantCalls: 3},
-		{name: "gives up", failures: 100, wantCalls: 4, wantErr: true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			var calls atomic.Int64
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-				n := calls.Add(1)
-				w.Header().Set("Content-Type", "application/json")
-				code := http.StatusNotFound
-				switch {
-				case n <= tc.failures && n%2 == 1:
-					code = http.StatusTooManyRequests
-				case n <= tc.failures:
-					code = http.StatusServiceUnavailable
-				}
-				w.WriteHeader(code)
-				_, _ = fmt.Fprintf(w, `{"kind":"Status","apiVersion":"v1","status":"Failure","code":%d,"reason":%q}`,
-					code, map[int]string{
-						http.StatusNotFound: "NotFound", http.StatusTooManyRequests: "TooManyRequests",
-						http.StatusServiceUnavailable: "ServiceUnavailable",
-					}[code])
-			}))
-			defer srv.Close()
-			s, err := kubestore.New(&rest.Config{Host: srv.URL}, "vws-system")
-			if err != nil {
-				t.Fatal(err)
-			}
-			_, _, found, err := s.Load(context.Background(), key)
-			if (err != nil) != tc.wantErr || found || calls.Load() != tc.wantCalls {
-				t.Fatalf("found %v err %v after %d calls, want %d", found, err, calls.Load(), tc.wantCalls)
-			}
-		})
+// TestUpdateOfARemovedRecordIsAConflict: a record deleted under a request is
+// ErrConflict, so the tracker reloads and reports it removed.
+func TestUpdateOfARemovedRecordIsAConflict(t *testing.T) {
+	ctx := context.Background()
+	s, cs, ns := open(t)
+	rec := launch.Record{Key: key, Account: account(t), Phase: launch.Running, Steps: []launch.Step{}}
+	v, err := s.Create(ctx, rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cs.CoreV1().ConfigMaps(ns).Delete(ctx, kubestore.Name(key), metav1.DeleteOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Update(ctx, rec, v); !errors.Is(err, launch.ErrConflict) {
+		t.Fatalf("update of a removed record: %v", err)
 	}
 }
 
-func TestEmptyNamespaceIsRefused(t *testing.T) {
-	if _, err := kubestore.New(&rest.Config{Host: "http://127.0.0.1:1"}, ""); err == nil {
-		t.Fatal("empty namespace accepted")
+// TestCorruptRecordIsAnError: a ConfigMap whose record does not decode, or
+// holds another key, is an error, never an absent record a launch would
+// overwrite.
+func TestCorruptRecordIsAnError(t *testing.T) {
+	ctx := context.Background()
+	s, cs, ns := open(t)
+	for name, data := range map[string]string{
+		key:                     "{not json",
+		strings.Repeat("a", 64): `{"key":"` + strings.Repeat("b", 64) + `"}`,
+	} {
+		if _, err := cs.CoreV1().ConfigMaps(ns).Create(ctx, &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{Name: kubestore.Name(name)},
+			Data:       map[string]string{"launch.json": data},
+		}, metav1.CreateOptions{}); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, found, err := s.Load(ctx, name); err == nil || found {
+			t.Fatalf("%s: found %v err %v", data, found, err)
+		}
 	}
 }

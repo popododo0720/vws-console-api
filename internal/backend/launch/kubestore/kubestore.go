@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -28,24 +29,37 @@ const (
 	// dataKey is the ConfigMap key that holds the record as JSON.
 	dataKey = "launch.json"
 	// MaxRecordBytes is the vws-deploy#478 cap on one VWS-written object.
-	// A launch of the most instances RunInstances takes stays far under it.
+	// It counts the whole ConfigMap as sent plus metadataHeadroom for what
+	// the API server adds. A launch of the most instances RunInstances takes
+	// stays far under it.
 	MaxRecordBytes = 256 << 10
+	// metadataHeadroom is kept free for the uid, timestamps and
+	// managedFields the API server adds to a written ConfigMap.
+	metadataHeadroom = 16 << 10
 	// managedBy marks the ConfigMaps this package writes.
 	managedBy      = "app.kubernetes.io/managed-by"
 	managedByValue = "vws-console-api"
-	// requestTimeout bounds one call to the Kubernetes API.
-	requestTimeout = 10 * time.Second
+	// attemptTimeout bounds one HTTP request to the Kubernetes API.
+	attemptTimeout = 3 * time.Second
+	// callTimeout bounds one Load, Create or Update, every retry included:
+	// ours and the ones client-go makes on its own for a Retry-After answer.
+	callTimeout = 10 * time.Second
+	// clientQPS and clientBurst bound this process's request rate to the
+	// Kubernetes API.
+	clientQPS   = 50
+	clientBurst = 100
 )
 
 // Store is a launch.Store over the ConfigMaps of one namespace.
 type Store struct {
 	maps      corev1client.ConfigMapInterface
 	namespace string
+	budget    time.Duration
 }
 
-// Open connects to the cluster. An empty kubeconfig uses the in-cluster
-// service account, then $KUBECONFIG, then the default kubeconfig path. It
-// does not create the namespace.
+// Open connects to the cluster. An empty kubeconfig uses $KUBECONFIG, then
+// the default kubeconfig path, then the in-cluster service account when
+// neither names a cluster. It does not create the namespace.
 func Open(kubeconfig, namespace string) (*Store, error) {
 	rules := clientcmd.NewDefaultClientConfigLoadingRules()
 	rules.ExplicitPath = kubeconfig
@@ -58,16 +72,24 @@ func Open(kubeconfig, namespace string) (*Store, error) {
 
 // New returns a Store that writes to namespace through cfg.
 func New(cfg *rest.Config, namespace string) (*Store, error) {
+	return newStore(cfg, namespace, attemptTimeout, callTimeout)
+}
+
+func newStore(cfg *rest.Config, namespace string, attempt, budget time.Duration) (*Store, error) {
 	if namespace == "" {
 		return nil, errors.New("launch store: empty namespace")
 	}
 	cfg = rest.CopyConfig(cfg)
-	cfg.Timeout = requestTimeout
+	cfg.Timeout = attempt
+	// client-go's default of 5 requests a second would throttle a few
+	// concurrent launches, about 22 writes each at 10 instances, inside
+	// this process.
+	cfg.QPS, cfg.Burst = clientQPS, clientBurst
 	cs, err := kubernetes.NewForConfig(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("kubernetes client: %w", err)
 	}
-	return &Store{maps: cs.CoreV1().ConfigMaps(namespace), namespace: namespace}, nil
+	return &Store{maps: cs.CoreV1().ConfigMaps(namespace), namespace: namespace, budget: budget}, nil
 }
 
 // Name is the ConfigMap that holds the record for key.
@@ -76,7 +98,7 @@ func Name(key string) string { return "launch-" + key }
 // Load reads the record for key.
 func (s *Store) Load(ctx context.Context, key string) (launch.Record, string, bool, error) {
 	var cm *corev1.ConfigMap
-	err := retryTransient(ctx, func() error {
+	err := retryTransient(ctx, s.budget, func(ctx context.Context) error {
 		var err error
 		cm, err = s.maps.Get(ctx, Name(key), metav1.GetOptions{})
 		return err //nolint:wrapcheck // retryTransient inspects the API error; it is wrapped below
@@ -104,7 +126,7 @@ func (s *Store) Create(ctx context.Context, rec launch.Record) (string, error) {
 		return "", err
 	}
 	var out *corev1.ConfigMap
-	err = retryTransient(ctx, func() error {
+	err = retryTransient(ctx, s.budget, func(ctx context.Context) error {
 		var err error
 		out, err = s.maps.Create(ctx, cm, metav1.CreateOptions{})
 		return err //nolint:wrapcheck // retryTransient inspects the API error; it is wrapped below
@@ -128,7 +150,7 @@ func (s *Store) Update(ctx context.Context, rec launch.Record, version string) (
 		return "", err
 	}
 	var out *corev1.ConfigMap
-	err = retryTransient(ctx, func() error {
+	err = retryTransient(ctx, s.budget, func(ctx context.Context) error {
 		var err error
 		out, err = s.maps.Update(ctx, cm, metav1.UpdateOptions{})
 		return err //nolint:wrapcheck // retryTransient inspects the API error; it is wrapped below
@@ -147,10 +169,7 @@ func (s *Store) configMap(rec launch.Record, version string) (*corev1.ConfigMap,
 	if err != nil {
 		return nil, fmt.Errorf("encode %s: %w", Name(rec.Key), err)
 	}
-	if len(data) > MaxRecordBytes {
-		return nil, fmt.Errorf("%s is %d bytes, over the %d byte limit", Name(rec.Key), len(data), MaxRecordBytes)
-	}
-	return &corev1.ConfigMap{
+	cm := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:            Name(rec.Key),
 			Namespace:       s.namespace,
@@ -158,18 +177,35 @@ func (s *Store) configMap(rec launch.Record, version string) (*corev1.ConfigMap,
 			Labels:          map[string]string{managedBy: managedByValue},
 		},
 		Data: map[string]string{dataKey: string(data)},
-	}, nil
+	}
+	whole, err := json.Marshal(cm)
+	if err != nil {
+		return nil, fmt.Errorf("encode %s: %w", Name(rec.Key), err)
+	}
+	if len(whole)+metadataHeadroom > MaxRecordBytes {
+		return nil, fmt.Errorf("%s is %d bytes with %d bytes of server metadata, over the %d byte limit",
+			Name(rec.Key), len(whole), metadataHeadroom, MaxRecordBytes)
+	}
+	return cm, nil
 }
 
 // retryTransient runs call again with bounded backoff while the API server
-// answers with an error a retry can clear. A conflict, a missing object or a
-// refusal returns at once.
-func retryTransient(ctx context.Context, call func() error) error {
+// answers with an error a retry can clear, or a request times out. A
+// conflict, a missing object or a refusal returns at once. The whole call,
+// every retry included, ends within budget.
+func retryTransient(ctx context.Context, budget time.Duration, call func(context.Context) error) error {
+	ctx, cancel := context.WithTimeout(ctx, budget)
+	defer cancel()
 	err := retry.OnError(wait.Backoff{Steps: 4, Duration: 50 * time.Millisecond, Factor: 2, Jitter: 0.1},
-		func(err error) bool {
-			return ctx.Err() == nil && (apierrors.IsServerTimeout(err) || apierrors.IsTimeout(err) ||
-				apierrors.IsTooManyRequests(err) || apierrors.IsServiceUnavailable(err) ||
-				apierrors.IsInternalError(err))
-		}, call)
+		func(err error) bool { return ctx.Err() == nil && transient(err) },
+		func() error { return call(ctx) })
 	return err //nolint:wrapcheck // the caller wraps it with the object name
+}
+
+// transient reports whether a retry can clear err.
+func transient(err error) bool {
+	var netErr net.Error
+	return apierrors.IsServerTimeout(err) || apierrors.IsTimeout(err) || apierrors.IsTooManyRequests(err) ||
+		apierrors.IsServiceUnavailable(err) || apierrors.IsInternalError(err) ||
+		(errors.As(err, &netErr) && netErr.Timeout())
 }

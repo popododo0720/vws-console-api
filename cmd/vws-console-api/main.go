@@ -77,7 +77,7 @@ func run(ctx context.Context, args []string) (err error) {
 	launchNamespace := fs.String("launch-namespace", "", "Kubernetes namespace that holds the RunInstances launch "+
 		"records as ConfigMaps, with -backend=grpc; empty records no launches")
 	kubeconfig := fs.String("kubeconfig", "", "kubeconfig path for -launch-namespace; "+
-		"empty uses the in-cluster service account, then $KUBECONFIG and the default path")
+		"empty uses $KUBECONFIG, then the default path, then the in-cluster service account")
 	iamMode := fs.String("iam", "static", "static: only the -access-key root key, no IAM/STS management; "+
 		"fake: in-memory IAM users, groups, roles, policies and STS sessions, lost on restart; "+
 		"grpc: vws-iam at -iam-endpoint authenticates keys, authorizes requests and serves console sign-in and STS AssumeRole")
@@ -137,6 +137,9 @@ func run(ctx context.Context, args []string) (err error) {
 	var set backend.Set
 	switch *backendKind {
 	case "fake":
+		if *launchNamespace != "" {
+			return errors.New("-launch-namespace needs -backend=grpc")
+		}
 		set = fake.New(fake.Options{}).Set()
 	case "grpc":
 		client, dialErr := grpcclient.Dial(ctx, grpcclient.Addrs{
