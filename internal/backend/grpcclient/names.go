@@ -430,12 +430,13 @@ func withInternalLabels(tags map[string]string, extra map[string]string) (map[st
 // no encoding holds every legal set (#398).
 func tagCapacityErr() error {
 	return resource.TagLimitExceeded("tags", fmt.Sprintf(
-		"The tags exceed what VWS can store for one resource: each tag whose key is lowercase "+
-			"letters, digits, '_' or '-' and whose value is at most %d bytes takes one label, "+
-			"the other tags are packed as JSON into labels of %d bytes, and all of them must fit "+
-			"in at most %d labels, fewer while an instance holds detach records. "+
+		"The tags exceed what VWS can store for one resource: a tag whose key is at most %d "+
+			"lowercase letters, digits, '_' or '-', starting with a letter, and whose value is at "+
+			"most %d bytes with no control character takes one label; the other tags are packed "+
+			"as JSON into labels of at most %d bytes; all of them must fit in at most %d labels, "+
+			"fewer while the resource holds more internal labels, such as detach records. "+
 			"Shorten or remove tags of the second kind.",
-		labelValueMax, labelValueMax, labelMax-labelReserve))
+		labelValueMax, labelValueMax, labelValueMax, labelMax-labelReserve))
 }
 
 // detachRoomErr is tagCapacityErr for a client-token DetachVolume, which

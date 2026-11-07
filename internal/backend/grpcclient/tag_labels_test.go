@@ -314,8 +314,9 @@ func TestPackedTagBudget(t *testing.T) {
 				t.Fatalf("%d plain, %s: %v", plain, tc.name, err)
 			}
 			checkLabels(t, labels)
-			if used := len(labels) - 1; used > budget {
-				t.Fatalf("%d plain, %s: %d user labels, budget %d", plain, tc.name, used, budget)
+			want := plain + tc.bytes/labelValueMax
+			if used := len(labels) - 1; used != want || used > budget {
+				t.Fatalf("%d plain, %s: %d user labels, want %d of budget %d", plain, tc.name, used, want, budget)
 			}
 			if got, err := userTags(labels); err != nil || len(got) != len(tags) {
 				t.Fatalf("%d plain, %s: round trip %d tags, %v", plain, tc.name, len(got), err)
