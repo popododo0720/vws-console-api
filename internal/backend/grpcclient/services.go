@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"slices"
@@ -22,6 +23,7 @@ import (
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	"github.com/popododo0720/vws-console-api/internal/backend"
+	"github.com/popododo0720/vws-console-api/internal/backend/launch"
 	"github.com/popododo0720/vws-console-api/internal/resource"
 )
 
@@ -45,6 +47,8 @@ type api struct {
 	log        *slog.Logger
 	// now stamps and prunes DetachVolume records. Nil is the wall clock.
 	now func() time.Time
+	// launches records each RunInstances step. Nil records nothing.
+	launches *launch.Tracker
 }
 
 // clock is the time detach records are stamped and pruned with.
@@ -77,8 +81,6 @@ func (c computeClient) RunInstances(ctx context.Context, m backend.Mutation, req
 	if err := c.requireImage(ctx, m.Account, req.ImageID); err != nil {
 		return resource.Accepted[resource.Instance]{}, err
 	}
-	items := make([]resource.Instance, 0, req.Count)
-	var op resource.Operation
 	// One launch is one reservation. A retry with the same key derives the same id.
 	reservation := derivedID("r-", m.Key, "reservation")
 	labels, err := withInternalLabels(req.Tags, map[string]string{
@@ -90,9 +92,51 @@ func (c computeClient) RunInstances(ctx context.Context, m backend.Mutation, req
 	if err != nil {
 		return resource.Accepted[resource.Instance]{}, err
 	}
+	run, err := c.launches.Begin(ctx, m.Key, m.Account, m.Fingerprint, req.Count, launchPlan(projectID, m.Key, req.Count))
+	if err != nil {
+		return resource.Accepted[resource.Instance]{}, err
+	}
+	acc, err := c.launchInstances(ctx, &run, m, req, projectID, nics, keyPair, labels)
+	if err != nil {
+		if finishErr := run.Finish(ctx, launch.Failed); finishErr != nil {
+			// The launch's own error stays the one callers classify.
+			err = fmt.Errorf("%w (launch record: %v)", err, finishErr) //nolint:errorlint // only err is the cause
+		}
+		return resource.Accepted[resource.Instance]{}, err
+	}
+	if err := run.Finish(ctx, launch.Succeeded); err != nil {
+		return resource.Accepted[resource.Instance]{}, err
+	}
+	return acc, nil
+}
+
+// launchPlan names the boot volume and instance of each index a launch with
+// key may create. The ids are derived from the key, so the plan is the same
+// on every retry.
+func launchPlan(projectID, key string, count int) []launch.Step {
+	plan := make([]launch.Step, 0, 2*count)
+	for i := range count {
+		plan = append(plan,
+			launch.Step{Kind: launch.StepVolume, Index: i, Resource: volumeName(projectID, bootVolumeID(key, i))},
+			launch.Step{Kind: launch.StepInstance, Index: i, Resource: instanceName(projectID, launchInstanceID(key, i))})
+	}
+	return plan
+}
+
+func bootVolumeID(key string, i int) string { return derivedID("vol-", key, "vol", strconv.Itoa(i)) }
+
+func launchInstanceID(key string, i int) string { return derivedID("i-", key, "inst", strconv.Itoa(i)) }
+
+// launchInstances creates the boot volume and then the instance for each
+// index, and records each completed create in run.
+func (c computeClient) launchInstances(
+	ctx context.Context, run *launch.Launch, m backend.Mutation, req resource.RunInstancesRequest,
+	projectID string, nics []*computev1.NetworkInterface, keyPair string, labels map[string]string,
+) (resource.Accepted[resource.Instance], error) {
+	items := make([]resource.Instance, 0, req.Count)
+	var op resource.Operation
 	for i := 0; i < req.Count; i++ {
-		volID := derivedID("vol-", m.Key, "vol", strconv.Itoa(i))
-		instID := derivedID("i-", m.Key, "inst", strconv.Itoa(i))
+		volID, instID := bootVolumeID(m.Key, i), launchInstanceID(m.Key, i)
 		volOp, err := c.volumes.CreateVolume(ctx, &storagev1.CreateVolumeRequest{
 			Parent:    volumeParent(projectID),
 			VolumeId:  volID,
@@ -101,6 +145,11 @@ func (c computeClient) RunInstances(ctx context.Context, m backend.Mutation, req
 		})
 		if err := rpcErr(volOp, err); err != nil {
 			return resource.Accepted[resource.Instance]{}, unsupportedVolumeType(err)
+		}
+		if err := run.Done(ctx, launch.Step{
+			Kind: launch.StepVolume, Index: i, Resource: volumeName(projectID, volID),
+		}); err != nil {
+			return resource.Accepted[resource.Instance]{}, err
 		}
 		created, err := c.instances.CreateInstance(ctx, &computev1.CreateInstanceRequest{
 			Parent:     instanceParent(projectID),
@@ -123,6 +172,11 @@ func (c computeClient) RunInstances(ctx context.Context, m backend.Mutation, req
 			},
 		})
 		if err := rpcErr(created, err); err != nil {
+			return resource.Accepted[resource.Instance]{}, err
+		}
+		if err := run.Done(ctx, launch.Step{
+			Kind: launch.StepInstance, Index: i, Resource: instanceName(projectID, instID),
+		}); err != nil {
 			return resource.Accepted[resource.Instance]{}, err
 		}
 		metaName, err := metadataResource(created)

@@ -3,7 +3,9 @@
 The web-only backend of VWS, a private cloud with an AWS-shaped control
 plane. One stateless process serves the console JSON API, an EC2 Query entry
 point and an S3 REST entry point. Compute, storage and network state lives in
-internal services reached over gRPC; this process keeps no copy. Protocol
+internal services reached over gRPC; this process keeps no copy. The one
+record it writes is a RunInstances launch record, a ConfigMap in the
+Kubernetes API (#392). Protocol
 compatibility is behavioral: no logos, image assets or text that claims this
 project is someone else's cloud.
 
@@ -17,6 +19,8 @@ project is someone else's cloud.
 | `internal/backend/fake` | In-memory backends that honor the contract. |
 | `internal/backend/backendtest` | The contract as tests. Every backend runs it. |
 | `internal/backend/grpcclient` | The contract over gRPC. The only package that sees protobuf. |
+| `internal/backend/launch` | The RunInstances launch record and the tracker that writes it on transitions. |
+| `internal/backend/launch/kubestore` | Launch records as ConfigMaps. The only package that sees Kubernetes types. |
 | `internal/sigv4` | Signature verification, plus `Sign` for tests. |
 | `internal/surface/*` | `console` (JSON), `ec2query`, `s3rest` codecs; `interop` drives several surfaces against one world. |
 | `internal/server` | One listener per surface, request IDs, shutdown. |
@@ -34,6 +38,8 @@ change both files together.
 | `internal/resource` imports only the standard library. | depguard `model-is-a-leaf` |
 | The kernel never sees HTTP, signatures or a surface. | depguard `kernel-knows-no-wire` |
 | Protobuf and gRPC types stay in `internal/backend/grpcclient`. | depguard `grpc-stays-in-grpcclient` |
+| Kubernetes types stay in `internal/backend/launch/kubestore`. | depguard `kube-stays-in-kubestore` |
+| A RunInstances launch record, a ConfigMap under `-launch-namespace`, holds the client token key, the planned resources and each completed step; it is written only on a step or phase transition, by compare-and-swap on `resourceVersion`, under 256 KiB, and only the latest attempt marks it failed. | `TestRunInstancesRecordsEachStep`, `TestPhaseTransitionsWriteOnce`, `TestPlanNamesACreateWhoseStepWasNotRecorded`, `TestStaleAttemptCannotFailARetry`, `TestNoOpRetryLeavesResourceVersion`, `TestLargestLaunchFitsTheObjectLimit` |
 | Untrusted strings become IDs only through `resource.Parse` or JSON decoding. | The compiler (unexported ID fields) |
 | Only `internal/backend` mints IDs and operation IDs. | `internal/hygiene` |
 | Every switch over a model enum handles every value. | `exhaustive` |
@@ -69,7 +75,7 @@ change both files together.
 | EC2 instance, image, volume and address behavior. | `exerciseEC2`, `backendtest.AttachLifecycle` |
 | A direct subnet `subnet-direct-<name>` in `vpc-direct` is shared and read-only: every account sees it, tagged `vws:network-type=direct`; a create in it, a delete or a tag is `UnauthorizedOperation`; RunInstances `NetworkInterface.N` may put any device, 0 included, on it, and more than one interface needs one on it; AssociateAddress to a direct primary interface is `InvalidParameterCombination` (#60). | `backendtest.DirectNetworks`, `TestDirectNetworkWritesAreUnauthorizedOperation`, `TestRunInstancesTakesNetworkInterfaces`, `TestRunInstancesRefusesBadNetworkInterfaces`, `TestAssociateAddressRefusesADirectPrimaryInterface` |
 | A volume or block device is `attached` only when compute reports `ATTACHED` on `InstanceStatus.volumes`; no surface defaults to `attached` (#448). | `TestDescribeVolumesFollowsComputeAttachState`, `TestInstanceBlockDeviceStatus`, `backendtest.AttachLifecycle` |
-| One bad backend record never fails a listing. | `TestErrorRecordDoesNotFailDescribe`, `TestInvalidResourceNameIsSkippedInList`, `TestInvalidCatalogNameIsSkippedInList`, `TestBadReferenceIsSkippedInList` |
+| One bad backend record never fails a listing. | `TestErrorRecordDoesNotFailDescribe`, `TestFailedNetworkRecordDoesNotFailDescribe`, `TestInvalidResourceNameIsSkippedInList`, `TestInvalidCatalogNameIsSkippedInList`, `TestBadReferenceIsSkippedInList` |
 | Key pair keys come from `crypto/rand`, are never stored, and names stay unique. | `TestCreatedKeyIsNotDerivedFromTheRequest`, `TestConcurrentCreatesOfOneNameMakeOneKeyPair` |
 | A missing resource is `NotFound` of its own kind; an EC2, EBS or VPC resource and an S3 bucket carry the AWS message for that kind, naming the id where AWS does. | `TestMissingResourceKeepsItsKind`, `TestNotFoundMessagesMatchAWS`, `TestNoSuchBucketMessagesMatchAWS` |
 | A malformed instance ID is `InvalidInstanceID.Malformed` on every EC2 action that takes one. | `TestMalformedInstanceIDIsInvalidInstanceIDMalformed` |
@@ -77,8 +83,10 @@ change both files together.
 | A `DetachVolume` client token lives for `backend.ClientTokenWindow`, 24 hours, the vws-compute `request_id` window (`vws/common/v1/operation.proto`, "A request_id is remembered for 24 hours"). Over gRPC its replay records are pruned on that window (`backend.ClientTokenExpired`: past the window and `backend.ClientTokenGrace`); what a retry after it answers is in `docs/rules.md` (#305). | `backendtest.DetachWindow`, `TestPruneDetachRecords` |
 | A `DetachVolume` saved operation is bound to its request by a 64-bit token, `sha256(request id, fingerprint)[:8]` as 16 hex digits, and is not widened (#304). A collision only matters for two parameter sets sent with one client token, and the token is bound to the request id, which is derived from the account and the client token, so only that caller can make one. Because the caller picks both parameter sets, a wider token does not stop a deliberate collision: the 22 hex digits left beside a 40-digit operation id in a 63-byte label value still give 88 bits, about 2^44 hashes by the birthday bound. The worst outcome is that caller's own earlier detach coming back instead of `IdempotentParameterMismatch`, with no other account or volume affected. An accidental collision is about 2^-64 per pair within the 24-hour token window. Widening would add a second token format to read for no gain. | `TestDetachOpTokenRules` |
 | The detach recovery path matches `docs/formal/detach.tla` (pstack `create-formal-verification-skill` 0.15.30). | CI workflow `tla` (job `detach`) |
+| IAM authorize, then read or write, matches `docs/formal/iamauth.tla`. | CI workflow `tla-iam` (job `iam`) |
 | Volume types map one to one; an unknown type is refused. | `TestVolumeTypeRefusesUnknown` |
-| ModifyVolume refuses every explicit Size on a volume already above its type's EC2 maximum: EC2 takes a target at least the existing size and within the current type's limits, so the volume has no valid target, not even its current size (#436). | `TestCheckGrowRefusesAboveTypeMaximum`, `TestModifyVolumeAboveTypeMaximumNeverReachesStorage` |
+| ModifyVolume refuses every explicit Size on a volume already above its type's EC2 maximum: EC2 takes a target at least the existing size and within the current type's limits, so the volume has no valid target, not even its current size (#436). | `TestModifyRefusesSizeAboveTypeMaximum`, `TestModifyVolumeAboveTypeMaximumNeverReachesStorage` |
+| One ModifyVolume is one storage `UpdateVolume` whose mask names exactly the Size, VolumeType, Iops and Throughput it sets (vws-storage#87); the target follows the EC2 type-change defaults and per-type rules, checked against the target type and size together before the backend. | `TestModifyChangesTypeAndPerformance`, `TestModifyRefusesAnIllegalTarget`, `TestModifyVolumeSendsOneMaskWithTheNamedFields`, `TestModifyVolumeTakesTypeIopsAndThroughput`, `backendtest.Run` (`exerciseVolumeTypes`) |
 | RunInstances creates the root volume with the root device mapping's type (gp2 when omitted), Ebs.Iops and Ebs.Throughput under the CreateVolume per-type rules on the 8 GiB root, with the gp3 defaults when omitted; any other device mapping is refused. | `TestRunInstancesRootVolumeTypeRoundTrips`, `TestRunInstancesRootIopsAndThroughput`, `exerciseRootVolumeType` |
 | SigV4 runs before the body is trusted; each S3 failure has its own code. | `TestUnsignedPayloadAndUnreadBody`, `TestSigV4FailuresUseS3ErrorCodes` |
 | A resource is the same on every surface. | `internal/surface/interop` |

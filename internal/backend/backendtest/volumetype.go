@@ -2,6 +2,7 @@ package backendtest
 
 import (
 	"context"
+	"strconv"
 	"testing"
 
 	"github.com/popododo0720/vws-console-api/internal/backend"
@@ -106,6 +107,66 @@ func exerciseVolumeTypes(ctx context.Context, t *testing.T, set backend.Set, acc
 		if _, err := set.Compute.DeleteVolume(ctx, mut("perf-delete", want.Type), del); err != nil {
 			t.Fatalf("delete %s: %v", want.Type, err)
 		}
+	}
+	// #324 AC1: one ModifyVolume changes size, type, Iops and Throughput
+	// together, and the result reads back. A gp2 volume of 10 GiB becomes st1
+	// only with the 125 GiB grow in the same call.
+	created, err := set.Compute.CreateVolume(ctx, mut("retype", resource.VolumeGP2), resource.CreateVolumeRequest{
+		SizeGiB: 10, Zone: resource.ZoneName, Type: resource.VolumeGP2,
+	})
+	if err != nil {
+		t.Fatalf("create gp2 to retype: %v", err)
+	}
+	id := created.Items[0].ID
+	shape := func(v resource.Volume) resource.Volume {
+		return resource.Volume{Type: v.Type, SizeGiB: v.SizeGiB, Iops: v.Iops, Throughput: v.Throughput}
+	}
+	for _, step := range []struct {
+		req  resource.ModifyVolumeRequest
+		want resource.Volume
+	}{
+		{
+			resource.ModifyVolumeRequest{ID: id, Type: resource.VolumeST1, SizeGiB: 125},
+			resource.Volume{Type: resource.VolumeST1, SizeGiB: 125},
+		},
+		{
+			resource.ModifyVolumeRequest{ID: id, Type: resource.VolumeGP3},
+			resource.Volume{Type: resource.VolumeGP3, SizeGiB: 125, Iops: 3000, Throughput: 125},
+		},
+		{
+			resource.ModifyVolumeRequest{ID: id, Iops: 6000, Throughput: 500},
+			resource.Volume{Type: resource.VolumeGP3, SizeGiB: 125, Iops: 6000, Throughput: 500},
+		},
+		{
+			resource.ModifyVolumeRequest{ID: id, Type: resource.VolumeIO2, SizeGiB: 200, Iops: 20000},
+			resource.Volume{Type: resource.VolumeIO2, SizeGiB: 200, Iops: 20000},
+		},
+	} {
+		key := string(step.want.Type) + "-" + strconv.FormatInt(step.want.Iops, 10)
+		acc, err := set.Compute.ModifyVolume(ctx, mut("retype-"+key, step.want.Type), step.req)
+		if err != nil {
+			t.Fatalf("modify %+v: %v", step.req, err)
+		}
+		if got := shape(acc.Items[0]); got != step.want {
+			t.Fatalf("modify %+v returned %+v, want %+v", step.req, got, step.want)
+		}
+		if got := describe(id); len(got) != 1 || shape(got[0]) != step.want {
+			t.Fatalf("after modify %+v: %+v, want %+v", step.req, got, step.want)
+		}
+	}
+	illegal := resource.ModifyVolumeRequest{ID: id, Type: resource.VolumeGP2, Throughput: 200}
+	_, err = set.Compute.ModifyVolume(ctx, mut("retype-illegal", resource.VolumeGP2), illegal)
+	if resource.CodeOf(err) != resource.CodeInvalidArgument {
+		t.Fatalf("modify to gp2 with throughput: %v, want InvalidArgument", err)
+	}
+	if got := describe(id); len(got) != 1 || shape(got[0]) != shape(resource.Volume{
+		Type: resource.VolumeIO2, SizeGiB: 200, Iops: 20000,
+	}) {
+		t.Fatalf("a refused modify changed the volume: %+v", got)
+	}
+	del := resource.DeleteVolumeRequest{ID: id}
+	if _, err := set.Compute.DeleteVolume(ctx, mut("retype-delete", resource.VolumeIO2), del); err != nil {
+		t.Fatalf("delete retyped volume: %v", err)
 	}
 	for _, typ := range []resource.VolumeType{"", "ssd", "GP3", "io3"} {
 		_, err := set.Compute.CreateVolume(ctx, mut("bad", typ), resource.CreateVolumeRequest{

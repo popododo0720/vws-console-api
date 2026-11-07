@@ -11,6 +11,9 @@ const (
 	SubnetPending
 	SubnetAvailable
 	SubnetDeleting
+	// SubnetFailed is the EC2 state of a subnet whose infrastructure failed
+	// to provision.
+	SubnetFailed
 )
 
 // String returns the wire name.
@@ -22,6 +25,8 @@ func (s SubnetState) String() string {
 		return "available"
 	case SubnetDeleting:
 		return "deleting"
+	case SubnetFailed:
+		return "failed"
 	case subnetStateNone:
 		return ""
 	default:
@@ -46,6 +51,8 @@ func (s *SubnetState) UnmarshalText(b []byte) error {
 		*s = SubnetAvailable
 	case SubnetDeleting.String():
 		*s = SubnetDeleting
+	case SubnetFailed.String():
+		*s = SubnetFailed
 	default:
 		return Invalid("state", "unknown")
 	}

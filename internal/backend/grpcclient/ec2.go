@@ -1456,36 +1456,55 @@ func (c computeClient) DeleteVolume(ctx context.Context, m backend.Mutation, req
 	return resource.Accepted[resource.Volume]{Operation: op, Items: []resource.Volume{vol}}, nil
 }
 
-// ModifyVolume grows a volume with UpdateVolume on spec.size_gib, the only
-// volume update vws-storage serves.
+// ModifyVolume sends one UpdateVolume whose mask names the fields the
+// request sets: spec.size_gib, spec.type, spec.iops and spec.throughput_mibps.
+// vws-storage applies them together as one operation and fills the EC2
+// type-change defaults for a field left out (vws-storage#87), the same
+// target Volume.Modify checks and returns here.
 func (c computeClient) ModifyVolume(ctx context.Context, m backend.Mutation, req resource.ModifyVolumeRequest) (resource.Accepted[resource.Volume], error) {
 	projectID := project(m.Account)
 	vol, err := c.getTypedVolume(ctx, projectID, req.ID.String(), resource.ActionModifyVolume.String())
 	if err != nil {
 		return resource.Accepted[resource.Volume]{}, err
 	}
-	if err := vol.CheckGrow(req.SizeGiB); err != nil {
+	to, err := vol.Modify(req)
+	if err != nil {
 		return resource.Accepted[resource.Volume]{}, err
+	}
+	var mask []string
+	for _, f := range []struct {
+		set  bool
+		path string
+	}{
+		{req.SizeGiB != 0, "spec.size_gib"},
+		{req.Type != "", "spec.type"},
+		{req.Iops != 0, "spec.iops"},
+		{req.Throughput != 0, "spec.throughput_mibps"},
+	} {
+		if f.set {
+			mask = append(mask, f.path)
+		}
 	}
 	updated, err := c.volumes.UpdateVolume(ctx, &storagev1.UpdateVolumeRequest{
 		Volume: &storagev1.Volume{
 			Name: volumeName(projectID, req.ID.String()),
-			Spec: &storagev1.VolumeSpec{SizeGib: req.SizeGiB, Type: storageType(vol.Type)},
+			Spec: &storagev1.VolumeSpec{
+				SizeGib: to.SizeGiB, Type: storageType(to.Type), Iops: to.Iops, ThroughputMibps: to.Throughput,
+			},
 		},
-		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.size_gib"}},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: mask},
 		RequestId:  requestUUID(m.Key, "modify-vol"),
 	})
 	if err := rpcErr(updated, err); err != nil {
-		return resource.Accepted[resource.Volume]{}, err
+		return resource.Accepted[resource.Volume]{}, unsupportedVolumeType(err)
 	}
 	op, err := operationFrom(updated, resource.ServiceCompute)
 	if err != nil {
 		return resource.Accepted[resource.Volume]{}, err
 	}
-	vol.SizeGiB = req.SizeGiB
 	op.Action = resource.ActionModifyVolume
-	op.Targets = []resource.Ref{vol.ID.Ref()}
-	return resource.Accepted[resource.Volume]{Operation: op, Items: []resource.Volume{vol}}, nil
+	op.Targets = []resource.Ref{to.ID.Ref()}
+	return resource.Accepted[resource.Volume]{Operation: op, Items: []resource.Volume{to}}, nil
 }
 
 func (c computeClient) DescribeVolumes(ctx context.Context, s backend.Scope, q resource.VolumeQuery) (resource.Page[resource.Volume], error) {
@@ -2564,10 +2583,7 @@ func vpcModel(in *networkv1.Vpc) (resource.Vpc, error) {
 	if err != nil {
 		return resource.Vpc{}, err
 	}
-	state, err := vpcStateOf(in.GetStatus().GetObserved().GetState())
-	if err != nil {
-		return resource.Vpc{}, err
-	}
+	state := vpcStateOf(in.GetStatus().GetObserved().GetState())
 	tags, err := userTags(in.GetLabels())
 	if err != nil {
 		return resource.Vpc{}, err
@@ -2575,18 +2591,21 @@ func vpcModel(in *networkv1.Vpc) (resource.Vpc, error) {
 	return resource.Vpc{ID: id, OwnerID: owner, Cidr: in.GetSpec().GetIpv4Cidr(), State: state, Tags: tags}, nil
 }
 
-func vpcStateOf(obs commonv1.ReconciliationState) (string, error) {
+// vpcStateOf maps a VPC reconciliation state. EC2 documents only pending and
+// available for a VPC, so a failed VPC is pending: it never claims to be usable.
+func vpcStateOf(obs commonv1.ReconciliationState) string {
 	switch obs {
-	case commonv1.ReconciliationState_RECONCILIATION_STATE_PENDING, commonv1.ReconciliationState_RECONCILIATION_STATE_RECONCILING:
-		return resource.VpcPending, nil
 	case commonv1.ReconciliationState_RECONCILIATION_STATE_READY:
-		return resource.VpcAvailable, nil
+		return resource.VpcAvailable
 	case commonv1.ReconciliationState_RECONCILIATION_STATE_DELETING:
-		return resource.VpcDeleting, nil
-	case commonv1.ReconciliationState_RECONCILIATION_STATE_ERROR, commonv1.ReconciliationState_RECONCILIATION_STATE_UNSPECIFIED:
-		return "", resource.Internal(errors.New("bad vpc state"))
+		return resource.VpcDeleting
+	case commonv1.ReconciliationState_RECONCILIATION_STATE_PENDING,
+		commonv1.ReconciliationState_RECONCILIATION_STATE_RECONCILING,
+		commonv1.ReconciliationState_RECONCILIATION_STATE_ERROR,
+		commonv1.ReconciliationState_RECONCILIATION_STATE_UNSPECIFIED:
+		return resource.VpcPending
 	default:
-		return "", resource.Internal(errors.New("bad vpc state"))
+		return resource.VpcPending
 	}
 }
 

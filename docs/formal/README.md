@@ -9,6 +9,9 @@ restarts at any step, and the client-token window passing.
 Run it with `scripts/tla-detach.sh` (needs Java 11+; about 5 minutes on 8
 cores). CI runs it in `.github/workflows/tla.yml`.
 
+The IAM authorize, then read or write model is `iamauth.tla`, described in
+`iamauth.md` (#373).
+
 Last confirmed against the code at commit `6fd3fcb` with the #334 change. When a file in
 "Coverage" changes after that commit, read the change against the model
 before trusting a pass, and move this commit forward only once the model

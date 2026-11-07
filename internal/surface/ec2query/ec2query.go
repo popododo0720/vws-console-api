@@ -906,7 +906,12 @@ func allowDeleteVolume(key string) bool {
 }
 
 func allowModifyVolume(key string) bool {
-	return key == "Action" || key == "Version" || key == "ClientToken" || key == "VolumeId" || key == "Size"
+	switch key {
+	case "Action", "Version", "ClientToken", "VolumeId", "Size", "VolumeType", "Iops", "Throughput":
+		return true
+	default:
+		return false
+	}
 }
 
 func allowCreateTags(key string) bool {

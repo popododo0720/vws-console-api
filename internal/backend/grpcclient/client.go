@@ -18,6 +18,7 @@ import (
 	storagev1 "github.com/popododo0720/vws-proto/gen/go/vws/storage/v1"
 
 	"github.com/popododo0720/vws-console-api/internal/backend"
+	"github.com/popododo0720/vws-console-api/internal/backend/launch"
 	"github.com/popododo0720/vws-console-api/internal/service"
 )
 
@@ -82,6 +83,10 @@ func Dial(ctx context.Context, addrs Addrs) (*Client, error) {
 // SetLogger sets the logger for records a listing leaves out. Call it after
 // Dial and before serving. Without one, the messages are dropped.
 func (c *Client) SetLogger(log *slog.Logger) { c.shared.log = log }
+
+// SetLaunches sets the tracker that records each RunInstances step. Call it
+// after Dial and before serving. Without one, launches are not recorded.
+func (c *Client) SetLaunches(t *launch.Tracker) { c.shared.launches = t }
 
 func (a *api) logger() *slog.Logger {
 	if a.log == nil {

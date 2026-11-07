@@ -302,7 +302,13 @@ type volumeModificationXML struct {
 	OriginalSize int64  `xml:"originalSize"`
 	TargetType   string `xml:"targetVolumeType"`
 	OriginalType string `xml:"originalVolumeType"`
-	Start        string `xml:"startTime"`
+	// Iops and Throughput are left out for a type that has none, as EC2
+	// leaves them out.
+	TargetIops         int64  `xml:"targetIops,omitempty"`
+	OriginalIops       int64  `xml:"originalIops,omitempty"`
+	TargetThroughput   int64  `xml:"targetThroughput,omitempty"`
+	OriginalThroughput int64  `xml:"originalThroughput,omitempty"`
+	Start              string `xml:"startTime"`
 }
 
 type createTagsXML struct {

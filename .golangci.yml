@@ -105,6 +105,15 @@ linters:
               desc: long-running types stay inside the gRPC client
             - pkg: google.golang.org/genproto
               desc: generated API types stay inside the gRPC client
+        kube-stays-in-kubestore:
+          files:
+            - "$all"
+            - "!**/internal/backend/launch/kubestore/**"
+          deny:
+            - pkg: k8s.io
+              desc: only internal/backend/launch/kubestore speaks to the Kubernetes API
+            - pkg: sigs.k8s.io
+              desc: only internal/backend/launch/kubestore speaks to the Kubernetes API
     exhaustive:
       default-signifies-exhaustive: false
     tagliatelle:
