@@ -11,10 +11,10 @@ import (
 	"github.com/popododo0720/vws-console-api/internal/resource"
 )
 
-// launchFixture is a client over the regional test servers with a launch
-// tracker over an in-memory store.
+// launchFixture is a client over a launchWorld with a launch tracker over an
+// in-memory store.
 type launchFixture struct {
-	boot   *regionalImages
+	boot   *launchWorld
 	client computeClient
 	store  *launch.Memory
 	m      backend.Mutation
@@ -22,7 +22,7 @@ type launchFixture struct {
 
 func newLaunch(t *testing.T, key string) launchFixture {
 	t.Helper()
-	boot, client := startRegional(t)
+	boot, client := startLaunchWorld(t)
 	store := &launch.Memory{}
 	client.launches = launch.NewTracker(store, nil)
 	m := backend.Mutation{Scope: backend.Scope{Account: mustAccount(t)}, Key: key, Fingerprint: "fp"}
@@ -50,14 +50,22 @@ func (f launchFixture) record(t *testing.T) launch.Record {
 	return rec
 }
 
-func (f launchFixture) plan(count int) []launch.Step {
-	return launchPlan(project(f.m.Account), f.m.Key, count)
+func (f launchFixture) plan(attempt, count int) []launch.Step {
+	return launchPlan(project(f.m.Account), f.m.Key, attempt, count)
 }
 
 func (f launchFixture) created() (volumes, instances int) {
 	f.boot.mu.Lock()
 	defer f.boot.mu.Unlock()
-	return f.boot.volumes, f.boot.instances
+	return f.boot.madeVolumes, f.boot.madeInstances
+}
+
+// assertNothingLeft fails when a volume, instance or private IP is live.
+func (f launchFixture) assertNothingLeft(t *testing.T) {
+	t.Helper()
+	if v, i, ips := f.boot.left(); v != 0 || i != 0 || ips != 0 {
+		t.Fatalf("left volumes %d instances %d ips %d", v, i, ips)
+	}
 }
 
 // TestRunInstancesRecordsEachStep pins #392: a launch record holds the client
@@ -75,7 +83,7 @@ func TestRunInstancesRecordsEachStep(t *testing.T) {
 	if rec.Phase != launch.Succeeded || rec.Account != f.m.Account || rec.Fingerprint != "fp" || rec.Count != 2 {
 		t.Fatalf("record %+v", rec)
 	}
-	if want := f.plan(2); !slices.Equal(rec.Steps, want) || !slices.Equal(rec.Plan, want) {
+	if want := f.plan(1, 2); !slices.Equal(rec.Steps, want) || !slices.Equal(rec.Plan, want) {
 		t.Fatalf("steps %+v plan %+v want %+v", rec.Steps, rec.Plan, want)
 	}
 	// The first launch only: one create, four steps and the phase.
@@ -85,21 +93,23 @@ func TestRunInstancesRecordsEachStep(t *testing.T) {
 }
 
 // TestRunInstancesFailureRecordsCompletedSteps pins that a launch failing at
-// its second instance is recorded failed with the steps it completed, and a
-// retry with the same key resumes it to succeeded.
+// its second instance is recorded failed with the steps it completed, after
+// they are undone, and a retry with the same key is a second attempt that
+// succeeds.
 func TestRunInstancesFailureRecordsCompletedSteps(t *testing.T) {
 	f := newLaunch(t, "launch-fail")
-	f.boot.failInstance = 2
+	f.boot.failAt("CreateInstance", 2, false)
 	if err := f.run(t, 2); resource.CodeOf(err) != resource.CodeUnavailable {
 		t.Fatalf("err %v, want unavailable", err)
 	}
-	if rec, want := f.record(t), f.plan(2)[:3]; rec.Phase != launch.Failed || !slices.Equal(rec.Steps, want) {
+	if rec, want := f.record(t), f.plan(1, 2)[:3]; rec.Phase != launch.Failed || !slices.Equal(rec.Steps, want) {
 		t.Fatalf("record %+v want failed with %+v", rec, want)
 	}
+	f.assertNothingLeft(t)
 	if err := f.run(t, 2); err != nil {
 		t.Fatal(err)
 	}
-	if rec := f.record(t); rec.Phase != launch.Succeeded || rec.Attempt != 2 || !slices.Equal(rec.Steps, f.plan(2)) {
+	if rec := f.record(t); rec.Phase != launch.Succeeded || rec.Attempt != 2 || !slices.Equal(rec.Steps, f.plan(2, 2)) {
 		t.Fatalf("retried record %+v", rec)
 	}
 }
@@ -136,20 +146,21 @@ func TestRunInstancesTokenReuseIsAMismatch(t *testing.T) {
 }
 
 // TestPlanNamesACreateWhoseStepWasNotRecorded pins that a volume created
-// while its step write failed is still named by the record, so cleanup finds
-// it.
+// while its step write failed is still named by the record, so the undo
+// deletes it.
 func TestPlanNamesACreateWhoseStepWasNotRecorded(t *testing.T) {
 	f := newLaunch(t, "launch-lost-step")
 	f.store.FailAfter(1, errors.New("api server down"))
 	if err := f.run(t, 1); resource.CodeOf(err) != resource.CodeUnavailable {
 		t.Fatalf("err %v, want unavailable", err)
 	}
-	if rec := f.record(t); rec.Phase != launch.Failed || len(rec.Steps) != 0 || !slices.Equal(rec.Plan, f.plan(1)) {
-		t.Fatalf("record %+v want failed, no steps, plan %+v", rec, f.plan(1))
+	if rec := f.record(t); rec.Phase != launch.Failed || len(rec.Steps) != 0 || !slices.Equal(rec.Plan, f.plan(1, 1)) {
+		t.Fatalf("record %+v want failed, no steps, plan %+v", rec, f.plan(1, 1))
 	}
 	if v, i := f.created(); v != 1 || i != 0 {
 		t.Fatalf("volumes %d instances %d", v, i)
 	}
+	f.assertNothingLeft(t)
 }
 
 // TestFailedSuccessWriteLeavesTheLaunchRunning pins that a launch whose
