@@ -3,6 +3,8 @@ package launch_test
 import (
 	"context"
 	"errors"
+	"slices"
+	"strconv"
 	"testing"
 	"time"
 
@@ -25,47 +27,95 @@ func TestPhaseTransitionsWriteOnce(t *testing.T) {
 	ctx := context.Background()
 	store := &launch.Memory{}
 	tr := launch.NewTracker(store, fixed)
-	l, err := tr.Begin(ctx, "k", account(t), "fp", 1, nil)
+	plan := func(attempt int) []launch.Step {
+		return []launch.Step{{Kind: launch.StepVolume, Resource: "v" + strconv.Itoa(attempt)}}
+	}
+	l, err := tr.Begin(ctx, "k", account(t), "fp", 1, plan)
 	if err != nil {
 		t.Fatal(err)
 	}
-	step := launch.Step{Kind: launch.StepVolume, Index: 0, Resource: "v"}
 	for range 2 {
-		if err := l.Done(ctx, step); err != nil {
+		if err := l.Done(ctx, plan(1)[0]); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := l.Finish(ctx, launch.Failed); err != nil {
-		t.Fatal(err)
+	for range 2 {
+		if undo, err := l.Undo(ctx); err != nil || !undo {
+			t.Fatalf("undo %v err %v", undo, err)
+		}
 	}
-	if err := l.Finish(ctx, launch.Failed); err != nil {
-		t.Fatal(err)
+	for range 2 {
+		if err := l.Undone(ctx); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if got := store.Writes(); got != 3 {
-		t.Fatalf("writes %d want 3: create, step, failed", got)
+	if got := store.Writes(); got != 4 {
+		t.Fatalf("writes %d want 4: create, step, undoing, failed", got)
 	}
-	again, err := tr.Begin(ctx, "k", account(t), "fp", 1, nil)
+	again, err := tr.Begin(ctx, "k", account(t), "fp", 1, plan)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if again.Record().Phase != launch.Running || len(again.Record().Steps) != 1 {
-		t.Fatalf("retried record %+v", again.Record())
+	rec := again.Record()
+	if rec.Phase != launch.Running || rec.Attempt != 2 || len(rec.Steps) != 0 || !slices.Equal(rec.Plan, plan(2)) {
+		t.Fatalf("retried record %+v", rec)
 	}
-	if err := again.Finish(ctx, launch.Succeeded); err != nil {
+	for range 2 {
+		if err := again.Succeed(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if undo, err := again.Undo(ctx); err != nil || undo {
+		t.Fatalf("undo of a success: %v err %v", undo, err)
+	}
+	if _, err := tr.Begin(ctx, "k", account(t), "fp", 1, plan); err != nil {
 		t.Fatal(err)
 	}
-	if err := again.Finish(ctx, launch.Failed); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := tr.Begin(ctx, "k", account(t), "fp", 1, nil); err != nil {
-		t.Fatal(err)
-	}
-	rec, _, _, err := store.Load(ctx, "k")
+	rec, _, _, err = store.Load(ctx, "k")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rec.Phase != launch.Succeeded || store.Writes() != 5 {
+	if rec.Phase != launch.Succeeded || store.Writes() != 6 {
 		t.Fatalf("phase %s writes %d: succeeded is final", rec.Phase, store.Writes())
+	}
+}
+
+// TestSuccessAfterAnUndoIsRefused pins that a request whose attempt another
+// request of the same token began to undo cannot record a step or report
+// success, and is told to undo again, so a create it made late is deleted.
+func TestSuccessAfterAnUndoIsRefused(t *testing.T) {
+	ctx := context.Background()
+	store := &launch.Memory{}
+	tr := launch.NewTracker(store, fixed)
+	failing, err := tr.Begin(ctx, "k", account(t), "fp", 1, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	slow, err := tr.Begin(ctx, "k", account(t), "fp", 1, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if undo, err := failing.Undo(ctx); err != nil || !undo {
+		t.Fatalf("undo %v err %v", undo, err)
+	}
+	err = slow.Succeed(ctx)
+	if resource.CodeOf(err) != resource.CodeUnavailable || !errors.Is(err, launch.ErrUndone) {
+		t.Fatalf("success during an undo: %v", err)
+	}
+	if undo, err := slow.Undo(ctx); err != nil || !undo {
+		t.Fatalf("a second request of the attempt resumes the undo: %v err %v", undo, err)
+	}
+	if err := slow.Done(ctx, launch.Step{Kind: launch.StepVolume, Resource: "late"}); !errors.Is(err, launch.ErrUndone) {
+		t.Fatalf("step during an undo: %v", err)
+	}
+	if err := failing.Undone(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if undo, err := slow.Undo(ctx); err != nil || !undo {
+		t.Fatalf("a request whose create landed after the undo deletes it: %v err %v", undo, err)
+	}
+	if rec := failing.Record(); rec.Phase != launch.Failed || len(rec.Steps) != 0 || store.Writes() != 3 {
+		t.Fatalf("record %+v writes %d", rec, store.Writes())
 	}
 }
 
@@ -90,8 +140,8 @@ func TestStoreFailureIsUnavailable(t *testing.T) {
 	}
 }
 
-// TestStaleAttemptCannotFailARetry pins that a request a retry replaced cannot
-// mark the retry's launch failed.
+// TestStaleAttemptCannotFailARetry pins that a request a retry replaced
+// cannot undo, record a step in or succeed the retry's attempt.
 func TestStaleAttemptCannotFailARetry(t *testing.T) {
 	ctx := context.Background()
 	store := &launch.Memory{}
@@ -104,7 +154,10 @@ func TestStaleAttemptCannotFailARetry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := first.Finish(ctx, launch.Failed); err != nil {
+	if _, err := first.Undo(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := first.Undone(ctx); err != nil {
 		t.Fatal(err)
 	}
 	retry, err := tr.Begin(ctx, "k", account(t), "fp", 1, nil)
@@ -114,15 +167,25 @@ func TestStaleAttemptCannotFailARetry(t *testing.T) {
 	if retry.Record().Attempt != 2 || retry.Record().Phase != launch.Running {
 		t.Fatalf("retry record %+v", retry.Record())
 	}
-	if err := slow.Finish(ctx, launch.Failed); err != nil {
+	writes := store.Writes()
+	if undo, err := slow.Undo(ctx); err != nil || undo {
+		t.Fatalf("stale undo %v err %v", undo, err)
+	}
+	if err := slow.Undone(ctx); err != nil {
 		t.Fatal(err)
+	}
+	if err := slow.Done(ctx, launch.Step{Kind: launch.StepVolume, Resource: "v"}); !errors.Is(err, launch.ErrUndone) {
+		t.Fatalf("stale step: %v", err)
+	}
+	if err := slow.Succeed(ctx); !errors.Is(err, launch.ErrUndone) {
+		t.Fatalf("stale success: %v", err)
 	}
 	rec, _, _, err := store.Load(ctx, "k")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rec.Phase != launch.Running || rec.Attempt != 2 {
-		t.Fatalf("record %+v: the stale attempt failed the retry", rec)
+	if rec.Phase != launch.Running || rec.Attempt != 2 || len(rec.Steps) != 0 || store.Writes() != writes {
+		t.Fatalf("record %+v writes %d: the stale attempt changed the retry", rec, store.Writes()-writes)
 	}
 }
 
@@ -170,7 +233,7 @@ func TestWritesOutliveACancelledRequest(t *testing.T) {
 	if err := l.Done(ctx, launch.Step{Kind: launch.StepVolume, Resource: "v"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := l.Finish(ctx, launch.Succeeded); err != nil {
+	if err := l.Succeed(ctx); err != nil {
 		t.Fatal(err)
 	}
 	if rec := l.Record(); rec.Phase != launch.Succeeded || len(rec.Steps) != 1 || store.Writes() != 3 {

@@ -21,9 +21,12 @@ import (
 
 // launchWorld is compute and storage for one launch over the regional
 // subnet: it keeps the live volumes, instances and private IPs, replays a
-// request id the way the services do and fails the calls a test names.
+// request id the way the services do, deletes an instance's boot volume and
+// IP with it and refuses to delete an attached volume. A delete answers a
+// pending operation that is done on the first poll.
 type launchWorld struct {
 	*regionalImages
+	longrunningpb.UnimplementedOperationsServer
 
 	mu sync.Mutex
 	// volumes maps a live volume to the instance it boots, "" before one.
@@ -31,9 +34,11 @@ type launchWorld struct {
 	// ips maps a live instance's private IP to the instance.
 	ips     map[string]string
 	replays map[string]*longrunningpb.Operation
+	pending map[string]bool
 	calls   map[string]int
 	faults  map[string]fault
 	made    map[string]int
+	deletes []string
 }
 
 // fault fails times calls of a method from call number n, counted from 1.
@@ -47,6 +52,8 @@ type fault struct {
 func (w *launchWorld) failAt(method string, n int, lost bool) {
 	w.fail(method, fault{n: n, times: 1, lost: lost})
 }
+
+func (w *launchWorld) failFor(method string, n, times int) { w.fail(method, fault{n: n, times: times}) }
 
 func (w *launchWorld) fail(method string, f fault) {
 	w.mu.Lock()
@@ -169,14 +176,80 @@ func (w *launchWorld) GetInstance(ctx context.Context, req *computev1.GetInstanc
 	return w.regionalImages.GetInstance(ctx, req)
 }
 
+// remove deletes name with change and answers a pending operation.
+func (w *launchWorld) remove(method, name string, change func() error) (*longrunningpb.Operation, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if before, _ := w.enter(method); before {
+		return nil, errDown()
+	}
+	if err := change(); err != nil {
+		return nil, err
+	}
+	w.deletes = append(w.deletes, name)
+	op := "operations/delete-" + strconv.Itoa(len(w.pending))
+	w.pending[op] = true
+	return &longrunningpb.Operation{Name: op}, nil
+}
+
+func (w *launchWorld) DeleteInstance(
+	_ context.Context, req *computev1.DeleteInstanceRequest,
+) (*longrunningpb.Operation, error) {
+	name := req.GetName()
+	return w.remove("DeleteInstance", name, func() error {
+		if !w.live(name) {
+			return status.Error(codes.NotFound, name)
+		}
+		for vol, owner := range w.volumes {
+			if owner == name {
+				delete(w.volumes, vol)
+			}
+		}
+		for ip, owner := range w.ips {
+			if owner == name {
+				delete(w.ips, ip)
+			}
+		}
+		return nil
+	})
+}
+
+func (w *launchWorld) DeleteVolume(
+	_ context.Context, req *storagev1.DeleteVolumeRequest,
+) (*longrunningpb.Operation, error) {
+	name := req.GetName()
+	return w.remove("DeleteVolume", name, func() error {
+		owner, ok := w.volumes[name]
+		switch {
+		case !ok:
+			return status.Error(codes.NotFound, name)
+		case owner != "":
+			return status.Error(codes.FailedPrecondition, name+" is attached to "+owner)
+		}
+		delete(w.volumes, name)
+		return nil
+	})
+}
+
+func (w *launchWorld) GetOperation(
+	_ context.Context, req *longrunningpb.GetOperationRequest,
+) (*longrunningpb.Operation, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if !w.pending[req.GetName()] {
+		return nil, status.Error(codes.NotFound, req.GetName())
+	}
+	return &longrunningpb.Operation{Name: req.GetName(), Done: true}, nil
+}
+
 // startLaunchWorld serves a launchWorld and returns a client over it.
 func startLaunchWorld(t *testing.T) (*launchWorld, computeClient) {
 	t.Helper()
 	w := &launchWorld{
 		regionalImages: &regionalImages{},
 		volumes:        map[string]string{}, ips: map[string]string{},
-		replays: map[string]*longrunningpb.Operation{},
-		calls:   map[string]int{}, faults: map[string]fault{}, made: map[string]int{},
+		replays: map[string]*longrunningpb.Operation{}, pending: map[string]bool{},
+		calls: map[string]int{}, faults: map[string]fault{}, made: map[string]int{},
 	}
 	lis := bufconn.Listen(MaxMessageBytes())
 	srv := grpc.NewServer()
@@ -184,6 +257,7 @@ func startLaunchWorld(t *testing.T) (*launchWorld, computeClient) {
 	storagev1.RegisterVolumeServiceServer(srv, w)
 	networkv1.RegisterVpcServiceServer(srv, w)
 	networkv1.RegisterSubnetServiceServer(srv, w)
+	longrunningpb.RegisterOperationsServer(srv, w)
 	go func() { _ = srv.Serve(lis) }()
 	t.Cleanup(srv.Stop)
 	conn, err := grpc.NewClient("passthrough:///launch",
@@ -195,10 +269,13 @@ func startLaunchWorld(t *testing.T) (*launchWorld, computeClient) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = conn.Close() })
+	ops := longrunningpb.NewOperationsClient(conn)
 	return w, computeClient{&api{
-		instances: computev1.NewInstanceServiceClient(conn),
-		volumes:   storagev1.NewVolumeServiceClient(conn),
-		subnets:   networkv1.NewSubnetServiceClient(conn),
-		vpcs:      networkv1.NewVpcServiceClient(conn),
+		instances:  computev1.NewInstanceServiceClient(conn),
+		volumes:    storagev1.NewVolumeServiceClient(conn),
+		subnets:    networkv1.NewSubnetServiceClient(conn),
+		vpcs:       networkv1.NewVpcServiceClient(conn),
+		computeOps: ops,
+		storageOps: ops,
 	}}
 }
