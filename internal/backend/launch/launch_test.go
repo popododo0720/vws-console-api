@@ -240,3 +240,139 @@ func TestWritesOutliveACancelledRequest(t *testing.T) {
 		t.Fatalf("record %+v writes %d", rec, store.Writes())
 	}
 }
+
+// TestAbandonedIsAnIdleRunningOrUndoingLaunch pins that the sweep sees a
+// launch left running or undoing for the idle time, as its latest attempt,
+// and never a launch written since, one that succeeded or one already failed.
+func TestAbandonedIsAnIdleRunningOrUndoingLaunch(t *testing.T) {
+	ctx := context.Background()
+	store := &launch.Memory{}
+	idle := 10 * time.Minute
+	old := launch.NewTracker(store, func() time.Time { return fixed().Add(-idle) })
+	fresh := launch.NewTracker(store, fixed)
+	begin := func(tr *launch.Tracker, key string) launch.Launch {
+		t.Helper()
+		l, err := tr.Begin(ctx, key, account(t), "fp", 1, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return l
+	}
+	begin(old, "running")
+	begin(fresh, "live")
+	undoing := begin(old, "undoing")
+	if _, err := undoing.Undo(ctx); err != nil {
+		t.Fatal(err)
+	}
+	failed := begin(old, "failed")
+	if _, err := failed.Undo(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := failed.Undone(ctx); err != nil {
+		t.Fatal(err)
+	}
+	retried := begin(old, "failed")
+	if retried.Attempt() != 2 {
+		t.Fatalf("retry attempt %d want 2", retried.Attempt())
+	}
+	succeeded := begin(old, "succeeded")
+	if err := succeeded.Succeed(ctx); err != nil {
+		t.Fatal(err)
+	}
+	got, err := fresh.Abandoned(ctx, idle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys := map[string]int{}
+	for _, l := range got {
+		keys[l.Record().Key] = l.Attempt()
+	}
+	want := map[string]int{"running": 1, "undoing": 1, "failed": 2}
+	if len(keys) != len(want) {
+		t.Fatalf("abandoned %v want %v", keys, want)
+	}
+	for k, attempt := range want {
+		if keys[k] != attempt {
+			t.Fatalf("abandoned %v want %v", keys, want)
+		}
+	}
+	if got, err := old.Abandoned(ctx, idle); err != nil || len(got) != 0 {
+		t.Fatalf("abandoned before the idle time %d err %v", len(got), err)
+	}
+}
+
+// TestAbandonedLaunchIsUndoneOnce pins that undoing an abandoned launch
+// writes undoing and failed once, and a request of that attempt can no
+// longer record a step or succeed.
+func TestAbandonedLaunchIsUndoneOnce(t *testing.T) {
+	ctx := context.Background()
+	store := &launch.Memory{}
+	plan := func(int) []launch.Step { return []launch.Step{{Kind: launch.StepVolume, Resource: "v"}} }
+	live, err := launch.NewTracker(store, fixed).Begin(ctx, "k", account(t), "fp", 1, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	later := launch.NewTracker(store, func() time.Time { return fixed().Add(time.Hour) })
+	got, err := later.Abandoned(ctx, time.Minute)
+	if err != nil || len(got) != 1 {
+		t.Fatalf("abandoned %d err %v", len(got), err)
+	}
+	writes := store.Writes()
+	if undo, err := got[0].Undo(ctx); err != nil || !undo {
+		t.Fatalf("undo %v err %v", undo, err)
+	}
+	if err := got[0].Undone(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if n := store.Writes() - writes; n != 2 {
+		t.Fatalf("writes %d want 2: undoing, failed", n)
+	}
+	if err := live.Done(ctx, plan(1)[0]); !errors.Is(err, launch.ErrUndone) {
+		t.Fatalf("step after the sweep: %v", err)
+	}
+	if err := live.Succeed(ctx); !errors.Is(err, launch.ErrUndone) {
+		t.Fatalf("success after the sweep: %v", err)
+	}
+}
+
+// TestAbandonedLaunchWrittenSinceIsLeftAlone pins that the sweep does not
+// claim a launch a retry wrote after the listing: its Undo reports false and
+// writes nothing, and the retry goes on.
+func TestAbandonedLaunchWrittenSinceIsLeftAlone(t *testing.T) {
+	ctx := context.Background()
+	store := &launch.Memory{}
+	plan := func(int) []launch.Step {
+		return []launch.Step{{Kind: launch.StepVolume, Resource: "v"}, {Kind: launch.StepInstance, Resource: "i"}}
+	}
+	now := fixed()
+	clock := func() time.Time { return now }
+	if _, err := launch.NewTracker(store, clock).Begin(ctx, "k", account(t), "fp", 1, plan); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(time.Hour)
+	tr := launch.NewTracker(store, clock)
+	got, err := tr.Abandoned(ctx, time.Minute)
+	if err != nil || len(got) != 1 {
+		t.Fatalf("abandoned %d err %v", len(got), err)
+	}
+	retry, err := tr.Begin(ctx, "k", account(t), "fp", 1, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := retry.Done(ctx, plan(1)[0]); err != nil {
+		t.Fatal(err)
+	}
+	writes := store.Writes()
+	if undo, err := got[0].Undo(ctx); err != nil || undo {
+		t.Fatalf("undo of a launch written since: %v err %v", undo, err)
+	}
+	if store.Writes() != writes {
+		t.Fatal("the refused undo wrote the record")
+	}
+	if err := retry.Done(ctx, plan(1)[1]); err != nil {
+		t.Fatal(err)
+	}
+	if err := retry.Succeed(ctx); err != nil {
+		t.Fatal(err)
+	}
+}

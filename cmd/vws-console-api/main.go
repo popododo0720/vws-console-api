@@ -166,6 +166,8 @@ func run(ctx context.Context, args []string) (err error) {
 	caller := resource.Caller{Account: account, Subject: *accessKey, Principal: iam.RootARN(account), Root: true}
 
 	var set backend.Set
+	// sweep undoes the launches a dead request left behind; nil without a launch store.
+	var sweep func(context.Context)
 	switch *backendKind {
 	case "fake":
 		if *launchNamespace != "" {
@@ -191,6 +193,7 @@ func run(ctx context.Context, args []string) (err error) {
 				return fmt.Errorf("-launch-namespace: %w", openErr)
 			}
 			client.SetLaunches(launch.NewTracker(store, nil))
+			sweep = client.SweepLaunches
 		}
 		set = client.Set()
 	default:
@@ -243,6 +246,9 @@ func run(ctx context.Context, args []string) (err error) {
 
 	ctx, stop := signal.NotifyContext(ctx, stopSignals()...)
 	defer stop()
+	if sweep != nil {
+		go sweep(ctx)
+	}
 	return server.Serve(ctx, server.Options{Logger: logger, OpsAddr: *opsAddr, Surfaces: []server.Surface{
 		{Name: "console", Addr: *consoleAddr, Handler: console.New(console.Config{
 			Service:        svc,
