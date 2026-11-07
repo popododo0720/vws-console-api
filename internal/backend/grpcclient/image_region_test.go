@@ -58,6 +58,8 @@ type regionalImages struct {
 	imageReads int
 	imageName  string
 	imageDown  bool
+	// failInstance makes the nth CreateInstance, counted from 1, fail.
+	failInstance int
 }
 
 func (s *regionalImages) ListVpcs(
@@ -126,8 +128,12 @@ func (s *regionalImages) CreateInstance(
 ) (*longrunningpb.Operation, error) {
 	s.mu.Lock()
 	s.instances++
+	failed := s.instances == s.failInstance
 	s.labels = req.GetInstance().GetLabels()
 	s.mu.Unlock()
+	if failed {
+		return nil, status.Error(codes.Unavailable, "compute down")
+	}
 	projectID, err := projectOfName(req.GetParent())
 	if err != nil {
 		return nil, toStatus(err)

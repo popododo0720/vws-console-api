@@ -17,6 +17,7 @@ project is someone else's cloud.
 | `internal/backend/fake` | In-memory backends that honor the contract. |
 | `internal/backend/backendtest` | The contract as tests. Every backend runs it. |
 | `internal/backend/grpcclient` | The contract over gRPC. The only package that sees protobuf. |
+| `internal/backend/launch` | The RunInstances launch record and the tracker that writes it on transitions. |
 | `internal/sigv4` | Signature verification, plus `Sign` for tests. |
 | `internal/surface/*` | `console` (JSON), `ec2query`, `s3rest` codecs; `interop` drives several surfaces against one world. |
 | `internal/server` | One listener per surface, request IDs, shutdown. |
@@ -34,6 +35,7 @@ change both files together.
 | `internal/resource` imports only the standard library. | depguard `model-is-a-leaf` |
 | The kernel never sees HTTP, signatures or a surface. | depguard `kernel-knows-no-wire` |
 | Protobuf and gRPC types stay in `internal/backend/grpcclient`. | depguard `grpc-stays-in-grpcclient` |
+| A RunInstances launch record holds the client token key, the planned resources and each completed step; it is written only on a step or phase transition, by compare-and-swap, and only the latest attempt marks it failed. | `TestRunInstancesRecordsEachStep`, `TestPhaseTransitionsWriteOnce`, `TestPlanNamesACreateWhoseStepWasNotRecorded`, `TestStaleAttemptCannotFailARetry` |
 | Untrusted strings become IDs only through `resource.Parse` or JSON decoding. | The compiler (unexported ID fields) |
 | Only `internal/backend` mints IDs and operation IDs. | `internal/hygiene` |
 | Every switch over a model enum handles every value. | `exhaustive` |
