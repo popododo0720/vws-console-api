@@ -107,6 +107,7 @@ const (
 	invalidCombination
 	invalidUnsupported
 	invalidTagLimit
+	invalidTaggedID
 )
 
 func (e *Error) Error() string {
@@ -212,6 +213,22 @@ func IsInvalidCombination(e *Error) bool { return e != nil && e.invalid == inval
 
 // IsUnsupported reports whether e came from Unsupported.
 func IsUnsupported(e *Error) bool { return e != nil && e.invalid == invalidUnsupported }
+
+// InvalidTaggedID reports a resource ID a tagging call cannot read. EC2
+// answers InvalidID, whatever kind the ID names, in its own sentence (#438).
+// https://docs.aws.amazon.com/AWSEC2/latest/APIReference/errors-overview.html
+func InvalidTaggedID(id string) *Error {
+	return &Error{
+		Code:    CodeInvalidArgument,
+		Field:   "ResourceId",
+		ID:      id,
+		Message: "The ID '" + id + "' is not valid",
+		invalid: invalidTaggedID,
+	}
+}
+
+// IsInvalidTaggedID reports whether e came from InvalidTaggedID.
+func IsInvalidTaggedID(e *Error) bool { return e != nil && e.invalid == invalidTaggedID }
 
 // Malformed reports an identifier that failed validation. EC2 names a
 // malformed instance ID in its own sentence.
