@@ -185,3 +185,43 @@ func TestDenyOnTheVWSARNHoldsForTheAWSSpelling(t *testing.T) {
 		has(t, call(t, h, bob, sigv4.ServiceIAM, form), http.StatusForbidden, `<Code>AccessDenied</Code>`)
 	}
 }
+
+// A policy document that names an arn:aws ARN is refused before anything is
+// written: it would match nothing, so a Deny in it would fail open (#681).
+func TestPolicyDocumentNamingTheAWSPartitionIsRefused(t *testing.T) {
+	h, _, rec, root := harness(t)
+	deny := `{"Statement":[{"Effect":"Allow","Action":"*","Resource":"*"},` +
+		`{"Effect":"Deny","Action":"sts:AssumeRole","Resource":"arn:aws:iam::123456789012:role/admin"}]}`
+	escaped := `{"Statement":[{"Effect":"Deny","Action":"*","Resource":"arn:aws:s3:::b"}]}`
+	trust := `{"Statement":[{"Effect":"Allow","Action":"sts:AssumeRole",` +
+		`"Principal":{"AWS":["arn:aws:iam::123456789012:user/bob"]}}]}`
+	for _, form := range []url.Values{
+		{"Action": {"CreatePolicy"}, "PolicyName": {"deny"}, "PolicyDocument": {deny}},
+		{"Action": {"CreatePolicy"}, "PolicyName": {"escaped"}, "PolicyDocument": {escaped}},
+		{"Action": {"CreateUser"}, "UserName": {"carol"}},
+		{"Action": {"PutUserPolicy"}, "UserName": {"carol"}, "PolicyName": {"deny"}, "PolicyDocument": {deny}},
+		{"Action": {"CreateRole"}, "RoleName": {"ops"}, "AssumeRolePolicyDocument": {trust}},
+	} {
+		res := call(t, h, root, sigv4.ServiceIAM, form)
+		if form.Get("Action") == "CreateUser" {
+			has(t, res, http.StatusOK)
+			continue
+		}
+		has(t, res, http.StatusBadRequest, `<Code>MalformedPolicyDocument</Code>`, `Partition &#34;aws&#34; is not valid`)
+	}
+	has(t, call(t, h, root, sigv4.ServiceIAM, url.Values{
+		"Action": {"GetPolicy"}, "PolicyArn": {"arn:aws:iam::123456789012:policy/deny"},
+	}), http.StatusNotFound, `<Code>NoSuchEntity</Code>`)
+	has(t, call(t, h, root, sigv4.ServiceIAM, url.Values{"Action": {"GetRole"}, "RoleName": {"ops"}}),
+		http.StatusNotFound, `<Code>NoSuchEntity</Code>`)
+	for _, s := range rec.seen {
+		if strings.HasPrefix(s, "iam:CreatePolicy") || strings.HasPrefix(s, "iam:PutUserPolicy") ||
+			strings.HasPrefix(s, "iam:CreateRole") {
+			t.Errorf("a refused document was authorized: %v", rec.seen)
+		}
+	}
+	ok := `{"Statement":[{"Effect":"Allow","Action":"s3:GetObject","Resource":"arn:vws:s3:::b/*"}]}`
+	has(t, call(t, h, root, sigv4.ServiceIAM, url.Values{
+		"Action": {"CreatePolicy"}, "PolicyName": {"vws"}, "PolicyDocument": {ok},
+	}), http.StatusOK)
+}

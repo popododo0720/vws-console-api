@@ -6,6 +6,7 @@
 package iamquery
 
 import (
+	"encoding/json"
 	"encoding/xml"
 	"net/http"
 	"net/url"
@@ -107,6 +108,13 @@ func (h *handler) serve(w http.ResponseWriter, r *http.Request) {
 	for _, k := range [...]string{"PolicyArn", "RoleArn", "SerialNumber"} {
 		if vs := r.Form[k]; len(vs) == 1 {
 			vs[0] = iam.VWSPartition(vs[0])
+		}
+	}
+	for _, k := range [...]string{"PolicyDocument", "AssumeRolePolicyDocument"} {
+		if arn, ok := awsARNIn(r.Form.Get(k)); ok {
+			c.fail(resource.Invalid("PolicyDocument", `Partition "aws" is not valid for resource "`+arn+
+				`": policies are evaluated in the vws partition (#681).`))
+			return
 		}
 	}
 	want := IAMVersion
@@ -239,6 +247,38 @@ type errorXML struct {
 	Code      string   `xml:"Error>Code"`
 	Message   string   `xml:"Error>Message"`
 	RequestID string   `xml:"RequestId"`
+}
+
+// awsARNIn reports the first arn:aws ARN a policy document names. Until
+// documents match the aws partition (#681), such a statement would match
+// nothing, and a Deny or NotResource written with it would fail open, so the
+// document is refused. A document that is not JSON is left to the backend.
+func awsARNIn(doc string) (string, bool) {
+	var v any
+	if doc == "" || json.Unmarshal([]byte(doc), &v) != nil {
+		return "", false
+	}
+	stack := []any{v}
+	for len(stack) > 0 {
+		n := len(stack) - 1
+		switch x := stack[n].(type) {
+		case string:
+			if strings.HasPrefix(x, "arn:aws:") {
+				return x, true
+			}
+			stack = stack[:n]
+		case []any:
+			stack = append(stack[:n], x...)
+		case map[string]any:
+			stack = stack[:n]
+			for _, e := range x {
+				stack = append(stack, e)
+			}
+		default:
+			stack = stack[:n]
+		}
+	}
+	return "", false
 }
 
 // messageARNRE finds an ARN that begins a word of an error message, so an

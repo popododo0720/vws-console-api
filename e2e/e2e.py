@@ -879,6 +879,11 @@ def identity():
     step("IAM PutUserPolicy malformed is MalformedPolicyDocument", lambda: aws_error(
         "MalformedPolicyDocument", lambda: iam.put_user_policy(
             UserName="e2e-bob", PolicyName="bad", PolicyDocument=json.dumps({"Version": "2012-10-17", "Statement": []}))))
+    aws_deny = json.dumps({"Version": "2012-10-17", "Statement": [
+        {"Effect": "Deny", "Action": "s3:GetObject", "Resource": "arn:aws:s3:::e2e-none/*"}]})
+    step("IAM PutUserPolicy naming the aws partition is MalformedPolicyDocument (#681)", lambda: aws_error(
+        "MalformedPolicyDocument", lambda: iam.put_user_policy(
+            UserName="e2e-bob", PolicyName="aws-deny", PolicyDocument=aws_deny)))
     big = json.dumps({"Version": "2012-10-17", "Statement": [
         {"Effect": "Allow", "Action": "s3:GetObject", "Resource": "arn:vws:s3:::" + "x" * 2048}]})
     step("IAM PutUserPolicy over the 2,048 character user limit is LimitExceeded", lambda: aws_error(
