@@ -49,7 +49,7 @@ func newLoginEnv(t *testing.T, opts ...fake.Options) loginEnv {
 		t.Fatal(err)
 	}
 	if _, err := f.CreateLoginProfile(
-		ctx, account, "bob", "correct horse 1", backendtest.UserGrant(ctx, t, f, account, "bob"),
+		ctx, account, "bob", "correct horse 1", false, backendtest.UserGrant(ctx, t, f, account, "bob"),
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -434,5 +434,28 @@ func TestReloginWithAnUnknownCookieSucceeds(t *testing.T) {
 	fresh := cookie(t, rec, SessionCookie)
 	if got := e.do(t, http.MethodGet, "/api/v1/auth/session", "", nil, fresh); got.Code != http.StatusOK {
 		t.Errorf("new session: %d %s", got.Code, got.Body)
+	}
+}
+
+// The console has no password-change flow yet, so a user whose password must
+// be reset is refused with 403 and gets no session cookie, on the fake as
+// over vws-iam.
+func TestPasswordResetRequiredSetsNoCookie(t *testing.T) {
+	e := newLoginEnv(t)
+	ctx := t.Context()
+	yes := true
+	if err := e.fake.UpdateLoginProfile(
+		ctx, e.account, "bob", iam.LoginProfileUpdate{ResetRequired: &yes},
+		backendtest.UserGrant(ctx, t, e.fake, e.account, "bob"),
+	); err != nil {
+		t.Fatal(err)
+	}
+	body := `{"account":"123456789012","userName":"bob","password":"correct horse 1"}`
+	rec := e.do(t, http.MethodPost, "/api/v1/auth/login", body, nil)
+	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "must be reset") {
+		t.Fatalf("login %d %s", rec.Code, rec.Body)
+	}
+	if c := rec.Header().Values("Set-Cookie"); len(c) != 0 {
+		t.Errorf("cookies set: %v", c)
 	}
 }

@@ -494,7 +494,9 @@ func TestUpdateUserKeepsKeysAndSessions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.CreateLoginProfile(ctx, a, "bob", "correct horse 1", testUserGrant(ctx, t, f, a, "bob")); err != nil {
+	if _, err := f.CreateLoginProfile(
+		ctx, a, "bob", "correct horse 1", false, testUserGrant(ctx, t, f, a, "bob"),
+	); err != nil {
 		t.Fatal(err)
 	}
 	sess, err := f.Login(ctx, LoginRequest{Account: a, UserName: "bob", Password: "correct horse 1"})

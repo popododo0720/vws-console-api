@@ -9,8 +9,13 @@ import (
 )
 
 type loginRec struct {
-	hash    string
-	created time.Time
+	hash          string
+	created       time.Time
+	resetRequired bool
+}
+
+func (l *loginRec) profile(user string) LoginProfile {
+	return LoginProfile{UserName: user, Created: l.created, ResetRequired: l.resetRequired}
 }
 
 // --- login profiles (Admin) ---
@@ -32,10 +37,11 @@ func guardedVerify(ctx context.Context, g *guard, hash, pw string) (bool, error)
 	return ok, err
 }
 
-// CreateLoginProfile implements Admin: it gives user a console password. want
-// must be the user's ARN.
+// CreateLoginProfile implements Admin: it gives user a console password,
+// which must be changed at the first sign-in when resetRequired. want must be
+// the user's ARN.
 func (f *Fake) CreateLoginProfile(
-	ctx context.Context, a resource.AccountID, user, password string, want AuthorizedPrincipal,
+	ctx context.Context, a resource.AccountID, user, password string, resetRequired bool, want AuthorizedPrincipal,
 ) (LoginProfile, error) {
 	if err := want.Require(); err != nil {
 		return LoginProfile{}, err
@@ -59,8 +65,8 @@ func (f *Fake) CreateLoginProfile(
 	if u.login != nil {
 		return LoginProfile{}, exists("Login Profile for User", user)
 	}
-	u.login = &loginRec{hash: hash, created: f.now()}
-	return LoginProfile{UserName: user, Created: u.login.created}, nil
+	u.login = &loginRec{hash: hash, created: f.now(), resetRequired: resetRequired}
+	return u.login.profile(user), nil
 }
 
 // GetLoginProfile implements Admin. want must be the user's ARN.
@@ -81,24 +87,27 @@ func (f *Fake) GetLoginProfile(
 	if u == nil || u.login == nil {
 		return LoginProfile{}, notFound("Login Profile for User", user)
 	}
-	return LoginProfile{UserName: user, Created: u.login.created}, nil
+	return u.login.profile(user), nil
 }
 
-// UpdateLoginProfile implements Admin: it sets a new password and clears any
-// lockout. Existing sessions stay valid until they expire or sign out. want
-// must be the user's ARN.
+// UpdateLoginProfile implements Admin: it sets what change names. A new
+// password clears any lockout. Existing sessions stay valid until they
+// expire or sign out. want must be the user's ARN.
 func (f *Fake) UpdateLoginProfile(
-	ctx context.Context, a resource.AccountID, user, password string, want AuthorizedPrincipal,
+	ctx context.Context, a resource.AccountID, user string, change LoginProfileUpdate, want AuthorizedPrincipal,
 ) error {
 	if err := want.Require(); err != nil {
 		return err
 	}
-	if err := checkPassword(password); err != nil {
-		return err
-	}
-	hash, err := guardedHash(ctx, f.guard, password)
-	if err != nil {
-		return err
+	var hash string
+	if change.Password != "" {
+		if err := checkPassword(change.Password); err != nil {
+			return err
+		}
+		var err error
+		if hash, err = guardedHash(ctx, f.guard, change.Password); err != nil {
+			return err
+		}
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -111,8 +120,13 @@ func (f *Fake) UpdateLoginProfile(
 	if u == nil || u.login == nil {
 		return notFound("Login Profile for User", user)
 	}
-	u.login.hash = hash
-	f.guard.forget(a, user)
+	if change.ResetRequired != nil {
+		u.login.resetRequired = *change.ResetRequired
+	}
+	if hash != "" {
+		u.login.hash = hash
+		f.guard.forget(a, user)
+	}
 	return nil
 }
 
@@ -154,7 +168,8 @@ func (st *store) user(name string) *userRec {
 // slots; when they are full the answer is busy (503) before any work.
 // MaxLoginFailures in a row from one address lock the user from that
 // address only, with exponential backoff. Users have no MFA devices yet
-// (vws-iam#6), so any MFA code fails.
+// (vws-iam#6), so any MFA code fails. A right password that must be reset
+// opens no session, as over vws-iam.
 func (f *Fake) Login(ctx context.Context, req LoginRequest) (Session, error) {
 	now := f.now()
 	if f.guard.locked(lockKey(req.Account, req.UserName, req.SourceIP), now) {
@@ -188,6 +203,9 @@ func (f *Fake) Login(ctx context.Context, req LoginRequest) (Session, error) {
 	current := f.accounts[req.Account].user(req.UserName)
 	if current == nil || current.login == nil || current.login.hash != hash {
 		return Session{}, errLogin()
+	}
+	if current.login.resetRequired {
+		return Session{}, PasswordResetRequired()
 	}
 	return f.sessions.open(Principal{Account: req.Account, ARN: current.ARN}, now)
 }

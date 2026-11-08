@@ -217,7 +217,7 @@ func boundActionHarness(t *testing.T, mover *boundMover) (http.Handler, sigv4.Cr
 	must(f.AttachPolicy(ctx, acct, iam.EntityGroup, "mover", p2, movers))
 	must(f.PutInlinePolicy(ctx, acct, iam.EntityUser, "erin", "inline", doc, erin))
 	must(f.PutInlinePolicy(ctx, acct, iam.EntityGroup, "mover", "inline", doc, movers))
-	_, err = f.CreateLoginProfile(ctx, acct, "erin", "correct horse battery 7", erin)
+	_, err = f.CreateLoginProfile(ctx, acct, "erin", "correct horse battery 7", false, erin)
 	must(err)
 	must(f.AddUserToGroup(ctx, acct, "mover", "erin", movers))
 	arn := "arn:vws:iam::" + acct.String() + ":"

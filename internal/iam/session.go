@@ -119,6 +119,13 @@ func (t *sessionTable) rename(a resource.AccountID, oldARN, newARN string) {
 // vws-iam: it never says which part was wrong or whether the user exists.
 func LoginFailed() error { return errLogin() }
 
+// PasswordResetRequired refuses a sign-in whose password is right but must
+// be changed first. The console has no password-change flow yet (#691), so
+// no session is handed out.
+func PasswordResetRequired() error {
+	return resource.Denied("Your password must be reset before you can sign in to the console.")
+}
+
 // SessionInvalid is the failure for an expired, revoked or unknown session.
 func SessionInvalid() error { return errSession() }
 

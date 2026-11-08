@@ -517,11 +517,15 @@ func iamActions() map[string]spec {
 			return nil, h.cfg.Admin.DeleteUser(c.r.Context(), c.caller.Account, c.form("UserName"), c.authorized)
 		}),
 		"CreateLoginProfile": admin([]string{"UserName", "Password", "PasswordResetRequired"}, userARN, func(h *handler, c *exchange) (any, error) {
-			if err := loginProfileInput(c); err != nil {
+			if err := required(c, "UserName", "Password"); err != nil {
+				return nil, err
+			}
+			reset, _, err := resetRequired(c)
+			if err != nil {
 				return nil, err
 			}
 			p, err := h.cfg.Admin.CreateLoginProfile(
-				c.r.Context(), c.caller.Account, c.form("UserName"), c.form("Password"), c.authorized)
+				c.r.Context(), c.caller.Account, c.form("UserName"), c.form("Password"), reset, c.authorized)
 			return struct {
 				LoginProfile loginProfileXML `xml:"LoginProfile"`
 			}{toLoginProfile(p)}, err
@@ -536,11 +540,22 @@ func iamActions() map[string]spec {
 			}{toLoginProfile(p)}, err
 		}),
 		"UpdateLoginProfile": admin([]string{"UserName", "Password", "PasswordResetRequired"}, userARN, func(h *handler, c *exchange) (any, error) {
-			if err := loginProfileInput(c); err != nil {
+			if err := required(c, "UserName"); err != nil {
 				return nil, err
 			}
+			if err := rejectEmpty(c, "Password"); err != nil {
+				return nil, err
+			}
+			reset, given, err := resetRequired(c)
+			if err != nil {
+				return nil, err
+			}
+			change := iam.LoginProfileUpdate{Password: c.form("Password")}
+			if given {
+				change.ResetRequired = &reset
+			}
 			return nil, h.cfg.Admin.UpdateLoginProfile(
-				c.r.Context(), c.caller.Account, c.form("UserName"), c.form("Password"), c.authorized)
+				c.r.Context(), c.caller.Account, c.form("UserName"), change, c.authorized)
 		}),
 		"DeleteLoginProfile": admin([]string{"UserName"}, userARN, func(h *handler, c *exchange) (any, error) {
 			if err := required(c, "UserName"); err != nil {
@@ -1439,14 +1454,19 @@ func xmlEscape(s string) string {
 	return b.String()
 }
 
-// loginProfileInput requires UserName and Password. PasswordResetRequired=true
-// needs the sign-in password change flow, which is not built yet.
-func loginProfileInput(c *exchange) error {
-	if err := required(c, "UserName", "Password"); err != nil {
-		return err
+// resetRequired reads PasswordResetRequired as the SDKs spell it. given is
+// false when it is absent; an empty value is refused, not ignored.
+func resetRequired(c *exchange) (v, given bool, err error) {
+	if !c.r.Form.Has("PasswordResetRequired") {
+		return false, false, nil
 	}
-	if v := c.form("PasswordResetRequired"); v != "" && v != "false" {
-		return resource.Invalid("PasswordResetRequired", "PasswordResetRequired=true is not supported yet")
+	switch c.form("PasswordResetRequired") {
+	case "true":
+		return true, true, nil
+	case "false":
+		return false, true, nil
+	default:
+		return false, false, resource.Invalid("PasswordResetRequired",
+			"The specified value for passwordResetRequired is invalid.")
 	}
-	return nil
 }

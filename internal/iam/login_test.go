@@ -20,7 +20,7 @@ func loginFake(t *testing.T) (*Fake, resource.AccountID) {
 		t.Fatal(err)
 	}
 	if _, err := f.CreateLoginProfile(
-		t.Context(), a, "bob", "correct horse 1", testUserGrant(t.Context(), t, f, a, "bob"),
+		t.Context(), a, "bob", "correct horse 1", false, testUserGrant(t.Context(), t, f, a, "bob"),
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -31,7 +31,7 @@ func TestLoginProfiles(t *testing.T) {
 	ctx := t.Context()
 	f, a := loginFake(t)
 	if _, err := f.CreateLoginProfile(
-		ctx, a, "bob", "another pass 2", testUserGrant(ctx, t, f, a, "bob"),
+		ctx, a, "bob", "another pass 2", false, testUserGrant(ctx, t, f, a, "bob"),
 	); resource.CodeOf(err) != resource.CodeAlreadyExists {
 		t.Errorf("second profile: %v", err)
 	}
@@ -39,12 +39,12 @@ func TestLoginProfiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := f.CreateLoginProfile(
-		ctx, a, "eve", "short", testUserGrant(ctx, t, f, a, "eve"),
+		ctx, a, "eve", "short", false, testUserGrant(ctx, t, f, a, "eve"),
 	); resource.CodeOf(err) != resource.CodeInvalidArgument {
 		t.Errorf("weak password: %v", err)
 	}
 	if _, err := f.CreateLoginProfile(
-		ctx, a, "nobody", "correct horse 1", testUserGrant(ctx, t, f, a, "nobody"),
+		ctx, a, "nobody", "correct horse 1", false, testUserGrant(ctx, t, f, a, "nobody"),
 	); resource.CodeOf(err) != resource.CodeNotFound {
 		t.Errorf("missing user: %v", err)
 	}
@@ -57,7 +57,8 @@ func TestLoginProfiles(t *testing.T) {
 	); resource.CodeOf(err) != resource.CodeConflict {
 		t.Errorf("delete user with a login profile: %v", err)
 	}
-	must(t, f.UpdateLoginProfile(ctx, a, "bob", "brand new pass 3", testUserGrant(ctx, t, f, a, "bob")))
+	newPassword := LoginProfileUpdate{Password: "brand new pass 3"}
+	must(t, f.UpdateLoginProfile(ctx, a, "bob", newPassword, testUserGrant(ctx, t, f, a, "bob")))
 	if _, err := f.Login(ctx, LoginRequest{Account: a, UserName: "bob", Password: "correct horse 1"}); resource.CodeOf(err) != resource.CodeUnauthenticated {
 		t.Errorf("old password still works: %v", err)
 	}
@@ -208,7 +209,7 @@ func TestHashingIsBounded(t *testing.T) {
 		t.Fatalf("full hashing slots: %v", err)
 	}
 	if _, err := f.CreateLoginProfile(
-		ctx, a, "bob", "x long enough 1", testUserGrant(ctx, t, f, a, "bob"),
+		ctx, a, "bob", "x long enough 1", false, testUserGrant(ctx, t, f, a, "bob"),
 	); !IsBusy(err) && resource.CodeOf(err) != resource.CodeAlreadyExists {
 		t.Fatalf("profile hashing while full: %v", err)
 	}
@@ -334,5 +335,77 @@ func TestLoginAfterPasswordChangeUsesTheVerifiedHash(t *testing.T) {
 	})
 	if resource.CodeOf(err) != resource.CodeUnauthenticated {
 		t.Fatalf("old password opened a session after the profile changed: %v", err)
+	}
+}
+
+// A profile made with PasswordResetRequired keeps the flag until an update
+// names it, and an update of only the flag keeps the password. A right
+// password that must be reset opens no session; a wrong one still gets the
+// uniform failure.
+func TestPasswordResetRequired(t *testing.T) {
+	ctx := t.Context()
+	f, a := loginFake(t)
+	if _, err := f.CreateUser(ctx, a, "eve", "/"); err != nil {
+		t.Fatal(err)
+	}
+	created, err := f.CreateLoginProfile(ctx, a, "eve", "correct horse 1", true, testUserGrant(ctx, t, f, a, "eve"))
+	if err != nil || !created.ResetRequired {
+		t.Fatalf("create %+v %v", created, err)
+	}
+	get := func() bool {
+		t.Helper()
+		p, err := f.GetLoginProfile(ctx, a, "eve", testUserGrant(ctx, t, f, a, "eve"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return p.ResetRequired
+	}
+	login := func(pw string) error {
+		_, err := f.Login(ctx, LoginRequest{Account: a, UserName: "eve", Password: pw, SourceIP: "192.0.2.1"})
+		return err
+	}
+	update := func(c LoginProfileUpdate) {
+		t.Helper()
+		must(t, f.UpdateLoginProfile(ctx, a, "eve", c, testUserGrant(ctx, t, f, a, "eve")))
+	}
+	yes, no := true, false
+	if !get() {
+		t.Error("get lost the flag")
+	}
+	if err := login("correct horse 1"); resource.CodeOf(err) != resource.CodePermissionDenied {
+		t.Errorf("reset-required sign-in: %v", err)
+	}
+	if err := login("wrong horse 1"); resource.CodeOf(err) != resource.CodeUnauthenticated {
+		t.Errorf("wrong password: %v", err)
+	}
+	update(LoginProfileUpdate{Password: "brand new pass 3"})
+	if !get() {
+		t.Error("a password change without the flag cleared it")
+	}
+	update(LoginProfileUpdate{ResetRequired: &no})
+	if get() {
+		t.Error("flag not cleared")
+	}
+	if err := login("brand new pass 3"); err != nil {
+		t.Errorf("a flag-only update lost the password: %v", err)
+	}
+	update(LoginProfileUpdate{ResetRequired: &yes})
+	update(LoginProfileUpdate{})
+	if !get() {
+		t.Error("an empty update changed the flag")
+	}
+	if err := login("brand new pass 3"); resource.CodeOf(err) != resource.CodePermissionDenied {
+		t.Errorf("flag set again: %v", err)
+	}
+	if err := f.UpdateLoginProfile(
+		ctx, a, "bob", LoginProfileUpdate{Password: "short"}, testUserGrant(ctx, t, f, a, "bob"),
+	); resource.CodeOf(err) != resource.CodeInvalidArgument {
+		t.Errorf("weak password: %v", err)
+	}
+	must(t, f.DeleteLoginProfile(ctx, a, "bob", testUserGrant(ctx, t, f, a, "bob")))
+	if err := f.UpdateLoginProfile(
+		ctx, a, "bob", LoginProfileUpdate{ResetRequired: &yes}, testUserGrant(ctx, t, f, a, "bob"),
+	); resource.CodeOf(err) != resource.CodeNotFound {
+		t.Errorf("flag-only update without a profile: %v", err)
 	}
 }
