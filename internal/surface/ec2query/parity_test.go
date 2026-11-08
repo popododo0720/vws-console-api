@@ -303,7 +303,7 @@ func TestDescribeAvailabilityZonesReturnsTheZone(t *testing.T) {
 		t.Fatalf("group-long-name %d %s", byGroup.Code, byGroup.Body)
 	}
 	other := signed(t, h, cred, now, parityForm("DescribeAvailabilityZones", "ZoneName.1", "vws-9z").Encode())
-	if other.Code != http.StatusOK || strings.Contains(other.Body.String(), "<zoneName>") {
+	if other.Code != http.StatusBadRequest || !strings.Contains(other.Body.String(), "InvalidParameterValue") {
 		t.Fatalf("other zone %d %s", other.Code, other.Body)
 	}
 }
