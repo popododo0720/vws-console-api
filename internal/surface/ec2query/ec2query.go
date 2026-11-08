@@ -1318,9 +1318,12 @@ func indexed(key, prefix string, max int) bool {
 	return inRange(rest, max)
 }
 
+// inRange reports an index from 1 to max spelled as the readers spell it,
+// strconv.Itoa(n). Another spelling, such as 01 or +1, names a key no reader
+// takes, so it must not pass the allow-list.
 func inRange(raw string, max int) bool {
 	n, err := strconv.Atoi(raw)
-	return err == nil && n >= 1 && n <= max
+	return err == nil && n >= 1 && n <= max && strconv.Itoa(n) == raw
 }
 
 func requestID(r *http.Request) string { return obs.RequestID(r.Context()) }
