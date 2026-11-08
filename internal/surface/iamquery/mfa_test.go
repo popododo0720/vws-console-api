@@ -36,7 +36,7 @@ func TestGetMFADevice(t *testing.T) {
 	// The virtual device exists and is enabled: ListVirtualMFADevices shows it.
 	has(t, call(t, h, root, sigv4.ServiceIAM, url.Values{
 		"Action": {"ListVirtualMFADevices"}, "AssignmentStatus": {"Assigned"},
-	}), http.StatusOK, `<SerialNumber>`+virtual+`</SerialNumber>`, `<UserName>alice</UserName>`)
+	}), http.StatusOK, `<SerialNumber>`+iam.AWSPartition(virtual)+`</SerialNumber>`, `<UserName>alice</UserName>`)
 	fido := "arn:vws:iam::" + root.Account.String() + ":u2f/alice/testFidoKey-R1234"
 	for _, tc := range []struct {
 		name, serial, user, authorized string
@@ -68,7 +68,7 @@ func TestGetMFADeviceResultShape(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := `<UserName>Bob</UserName><SerialNumber>arn:vws:iam::123456789012:u2f/root/testFidoKey-R1234</SerialNumber>` +
+	want := `<UserName>Bob</UserName><SerialNumber>arn:aws:iam::123456789012:u2f/root/testFidoKey-R1234</SerialNumber>` +
 		`<EnableDate>2023-04-27T20:58:13Z</EnableDate><Certifications></Certifications>`
 	if !strings.Contains(string(out), want) {
 		t.Fatalf("result %s, want %s", out, want)

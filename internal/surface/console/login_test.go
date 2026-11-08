@@ -124,7 +124,8 @@ func TestLoginSetsHardenedCookies(t *testing.T) {
 		ExpiresAt time.Time `json:"expiresAt"`
 		CSRFToken string    `json:"csrfToken"`
 	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil || body.Principal != "arn:vws:iam::123456789012:user/bob" || body.Account != "123456789012" || body.CSRFToken == "" {
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil ||
+		body.Principal != "arn:aws:iam::123456789012:user/bob" || body.Account != "123456789012" || body.CSRFToken == "" {
 		t.Fatalf("login body %s %v", rec.Body, err)
 	}
 	if strings.Contains(rec.Body.String(), "correct horse") {
@@ -178,7 +179,8 @@ func TestSessionIsAuthorizedPerRequest(t *testing.T) {
 		t.Errorf("allowed list: %d %s", rec.Code, rec.Body)
 	}
 	rec := e.do(t, http.MethodGet, "/api/v1/auth/session", "", nil, session)
-	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"principal":"arn:vws:iam::123456789012:user/bob"`) {
+	if rec.Code != http.StatusOK ||
+		!strings.Contains(rec.Body.String(), `"principal":"arn:aws:iam::123456789012:user/bob"`) {
 		t.Errorf("session: %d %s", rec.Code, rec.Body)
 	}
 	if rec := e.do(t, http.MethodGet, "/api/v1/buckets/b1", "", nil, session); rec.Code != http.StatusForbidden {

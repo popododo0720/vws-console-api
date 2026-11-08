@@ -48,11 +48,11 @@ func TestListVirtualMFADevices(t *testing.T) {
 		t.Fatalf("result %+v", body.Result)
 	}
 	first, second := body.Result.Devices[0], body.Result.Devices[1]
-	if first.SerialNumber != assigned || second.SerialNumber != spare {
+	if first.SerialNumber != iam.AWSPartition(assigned) || second.SerialNumber != iam.AWSPartition(spare) {
 		t.Fatalf("serials %q %q, want %q %q", first.SerialNumber, second.SerialNumber, assigned, spare)
 	}
 	if first.User == nil || first.User.UserName != "alice" || first.User.Path != "/eng/" ||
-		first.User.Arn != "arn:vws:iam::123456789012:user/eng/alice" || first.User.UserID == "" {
+		first.User.Arn != "arn:aws:iam::123456789012:user/eng/alice" || first.User.UserID == "" {
 		t.Errorf("assigned user %+v", first.User)
 	}
 	if first.EnableDate != "2026-10-09T10:00:00Z" {
@@ -80,7 +80,7 @@ func TestListVirtualMFADevices(t *testing.T) {
 		if err := xml.Unmarshal(res.Body.Bytes(), &page); err != nil {
 			t.Fatal(err)
 		}
-		if len(page.Result.Devices) != 1 || page.Result.Devices[0].SerialNumber != tc.want {
+		if len(page.Result.Devices) != 1 || page.Result.Devices[0].SerialNumber != iam.AWSPartition(tc.want) {
 			t.Errorf("%s gave %+v", tc.assignment, page.Result.Devices)
 		}
 	}
@@ -95,8 +95,8 @@ func TestListVirtualMFADevicesPaging(t *testing.T) {
 		"Action": {"ListVirtualMFADevices"}, "MaxItems": {"2"},
 	})
 	has(t, res, http.StatusOK, `<IsTruncated>true</IsTruncated>`,
-		`<SerialNumber>arn:vws:iam::123456789012:mfa/a-phone</SerialNumber>`,
-		`<SerialNumber>arn:vws:iam::123456789012:mfa/b-phone</SerialNumber>`)
+		`<SerialNumber>arn:aws:iam::123456789012:mfa/a-phone</SerialNumber>`,
+		`<SerialNumber>arn:aws:iam::123456789012:mfa/b-phone</SerialNumber>`)
 	var first virtualMFADevicesXML
 	if err := xml.Unmarshal(res.Body.Bytes(), &first); err != nil {
 		t.Fatal(err)
@@ -108,7 +108,7 @@ func TestListVirtualMFADevicesPaging(t *testing.T) {
 		"Action": {"ListVirtualMFADevices"}, "MaxItems": {"2"}, "Marker": {first.Result.Marker},
 	})
 	has(t, res, http.StatusOK, `<IsTruncated>false</IsTruncated>`,
-		`<SerialNumber>arn:vws:iam::123456789012:mfa/c-phone</SerialNumber>`)
+		`<SerialNumber>arn:aws:iam::123456789012:mfa/c-phone</SerialNumber>`)
 }
 
 func TestListVirtualMFADevicesParameterErrors(t *testing.T) {
@@ -210,11 +210,11 @@ func TestListMFADevices(t *testing.T) {
 	has(t, res, http.StatusOK,
 		`<ListMFADevicesResponse><ListMFADevicesResult><MFADevices><member>`+
 			`<UserName>alice</UserName>`+
-			`<SerialNumber>arn:vws:iam::123456789012:mfa/alice-phone</SerialNumber>`+
+			`<SerialNumber>arn:aws:iam::123456789012:mfa/alice-phone</SerialNumber>`+
 			`<EnableDate>2026-10-09T10:00:00Z</EnableDate></member></MFADevices>`+
 			`<IsTruncated>false</IsTruncated></ListMFADevicesResult>`+
 			`<ResponseMetadata><RequestId>`)
-	if strings.Contains(res.Body.String(), bobPhone) {
+	if strings.Contains(res.Body.String(), iam.AWSPartition(bobPhone)) {
 		t.Errorf("listed another user's device: %s", res.Body.String())
 	}
 	var body mfaDevicesXML
@@ -222,7 +222,7 @@ func TestListMFADevices(t *testing.T) {
 		t.Fatalf("decode response: %v\n%s", err, res.Body.String())
 	}
 	if len(body.Result.Devices) != 1 || body.Result.Devices[0].UserName != "alice" ||
-		body.Result.Devices[0].SerialNumber != alicePhone ||
+		body.Result.Devices[0].SerialNumber != iam.AWSPartition(alicePhone) ||
 		body.Result.Devices[0].EnableDate != "2026-10-09T10:00:00Z" {
 		t.Fatalf("result %+v", body.Result)
 	}
@@ -260,8 +260,8 @@ func TestListMFADevicesPaging(t *testing.T) {
 		"Action": {"ListMFADevices"}, "UserName": {"alice"}, "MaxItems": {"2"},
 	})
 	has(t, res, http.StatusOK, `<IsTruncated>true</IsTruncated>`,
-		`<SerialNumber>arn:vws:iam::123456789012:mfa/a-phone</SerialNumber>`,
-		`<SerialNumber>arn:vws:iam::123456789012:mfa/b-phone</SerialNumber>`)
+		`<SerialNumber>arn:aws:iam::123456789012:mfa/a-phone</SerialNumber>`,
+		`<SerialNumber>arn:aws:iam::123456789012:mfa/b-phone</SerialNumber>`)
 	var page mfaDevicesXML
 	if err := xml.Unmarshal(res.Body.Bytes(), &page); err != nil {
 		t.Fatal(err)
@@ -269,7 +269,7 @@ func TestListMFADevicesPaging(t *testing.T) {
 	if page.Result.Marker != "arn:vws:iam::123456789012:mfa/b-phone" {
 		t.Fatalf("marker %q", page.Result.Marker)
 	}
-	if len(page.Result.Devices) != 2 || page.Result.Devices[0].SerialNumber != first {
+	if len(page.Result.Devices) != 2 || page.Result.Devices[0].SerialNumber != iam.AWSPartition(first) {
 		t.Fatalf("first page %+v", page.Result)
 	}
 	res = call(t, h, root, sigv4.ServiceIAM, url.Values{
@@ -277,7 +277,7 @@ func TestListMFADevicesPaging(t *testing.T) {
 		"MaxItems": {"2"}, "Marker": {page.Result.Marker},
 	})
 	has(t, res, http.StatusOK, `<IsTruncated>false</IsTruncated>`,
-		`<SerialNumber>arn:vws:iam::123456789012:mfa/c-phone</SerialNumber>`)
+		`<SerialNumber>arn:aws:iam::123456789012:mfa/c-phone</SerialNumber>`)
 }
 
 func TestListMFADevicesParameterErrors(t *testing.T) {
@@ -371,7 +371,7 @@ func TestListMFADevicesDefaultsToCaller(t *testing.T) {
 		t.Fatal(err)
 	}
 	has(t, call(t, h, bob, sigv4.ServiceIAM, url.Values{"Action": {"ListMFADevices"}}),
-		http.StatusOK, `<UserName>bob</UserName>`, `<SerialNumber>`+serial+`</SerialNumber>`)
+		http.StatusOK, `<UserName>bob</UserName>`, `<SerialNumber>`+iam.AWSPartition(serial)+`</SerialNumber>`)
 }
 
 // AWS authorizes ListMFADevices on the user whose devices are listed (the
@@ -422,15 +422,15 @@ func TestListMFADevicesIsScopedToTheUser(t *testing.T) {
 	t.Run("an Allow on the caller's own ARN lists the caller's devices", func(t *testing.T) {
 		put(`{"Statement":[{"Effect":"Allow","Action":"iam:ListMFADevices","Resource":"` + alice.ARN + `"}]}`)
 		has(t, call(t, h, caller, sigv4.ServiceIAM, self), http.StatusOK,
-			`<UserName>alice</UserName>`, `<SerialNumber>`+alicePhone+`</SerialNumber>`)
+			`<UserName>alice</UserName>`, `<SerialNumber>`+iam.AWSPartition(alicePhone)+`</SerialNumber>`)
 		if want := "iam:ListMFADevices " + alice.ARN; len(rec.seen) == 0 || rec.seen[len(rec.seen)-1] != want {
 			t.Errorf("authorized %v, want last %q", rec.seen, want)
 		}
 		has(t, call(t, h, caller, sigv4.ServiceIAM, named), http.StatusOK,
-			`<SerialNumber>`+alicePhone+`</SerialNumber>`)
+			`<SerialNumber>`+iam.AWSPartition(alicePhone)+`</SerialNumber>`)
 		res := call(t, h, caller, sigv4.ServiceIAM, forBob)
 		has(t, res, http.StatusForbidden, `<Code>AccessDenied</Code>`)
-		if strings.Contains(res.Body.String(), bobPhone) {
+		if strings.Contains(res.Body.String(), iam.AWSPartition(bobPhone)) {
 			t.Errorf("a denied call leaked another user's device: %s", res.Body.String())
 		}
 	})
@@ -440,7 +440,7 @@ func TestListMFADevicesIsScopedToTheUser(t *testing.T) {
 		has(t, call(t, h, caller, sigv4.ServiceIAM, self), http.StatusForbidden, `<Code>AccessDenied</Code>`)
 		has(t, call(t, h, caller, sigv4.ServiceIAM, named), http.StatusForbidden, `<Code>AccessDenied</Code>`)
 		has(t, call(t, h, caller, sigv4.ServiceIAM, forBob), http.StatusOK,
-			`<SerialNumber>`+bobPhone+`</SerialNumber>`)
+			`<SerialNumber>`+iam.AWSPartition(bobPhone)+`</SerialNumber>`)
 	})
 
 	t.Run("a Deny on the user's ARN refuses", func(t *testing.T) {
@@ -449,7 +449,7 @@ func TestListMFADevicesIsScopedToTheUser(t *testing.T) {
 		has(t, call(t, h, caller, sigv4.ServiceIAM, self), http.StatusForbidden, `<Code>AccessDenied</Code>`)
 		has(t, call(t, h, caller, sigv4.ServiceIAM, named), http.StatusForbidden, `<Code>AccessDenied</Code>`)
 		has(t, call(t, h, caller, sigv4.ServiceIAM, forBob), http.StatusOK,
-			`<SerialNumber>`+bobPhone+`</SerialNumber>`)
+			`<SerialNumber>`+iam.AWSPartition(bobPhone)+`</SerialNumber>`)
 	})
 }
 
@@ -539,7 +539,8 @@ func TestListMFADevicesActsOnTheAuthorizedARN(t *testing.T) {
 	t.Run("not moved", func(t *testing.T) {
 		h, f, account, bob := authorizedPrincipalHarness(t, nil)
 		serial := seed(t, f, account)
-		has(t, call(t, h, bob, sigv4.ServiceIAM, form), http.StatusOK, `<SerialNumber>`+serial+`</SerialNumber>`)
+		has(t, call(t, h, bob, sigv4.ServiceIAM, form), http.StatusOK,
+			`<SerialNumber>`+iam.AWSPartition(serial)+`</SerialNumber>`)
 	})
 	t.Run("moved after authorization", func(t *testing.T) {
 		h, f, account, bob := authorizedPrincipalHarness(t, &movingAdmin{tb: t, user: "erin"})

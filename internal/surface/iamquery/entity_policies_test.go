@@ -170,7 +170,7 @@ func TestEntityPolicyListsPage(t *testing.T) {
 		attached := "ListAttached" + e.word + "Policies"
 		res := call(t, h, bob, sigv4.ServiceIAM, list(attached, "MaxItems", "2"))
 		has(t, res, http.StatusOK, "<"+attached+"Result>", "<AttachedPolicies><member><PolicyName>A</PolicyName>",
-			"<PolicyArn>arn:vws:iam::"+account.String()+":policy/x/B</PolicyArn>", "<IsTruncated>true</IsTruncated>",
+			"<PolicyArn>arn:aws:iam::"+account.String()+":policy/x/B</PolicyArn>", "<IsTruncated>true</IsTruncated>",
 			"<Marker>B</Marker>")
 		m := marker.FindStringSubmatch(res.Body.String())
 		if m == nil {
@@ -218,7 +218,7 @@ func TestEntityPolicyListsPage(t *testing.T) {
 // documents URL-encoded.
 func TestEntityPolicyErrorsAndShapes(t *testing.T) {
 	h, f, account, bob := authorizedPrincipalHarness(t, nil)
-	arn := "arn:vws:iam::" + account.String() + ":"
+	arn := "arn:aws:iam::" + account.String() + ":"
 	var managed []string
 	for i := range 11 {
 		managed = append(managed, seedManaged(t, f, account, "M"+string(rune('a'+i)), "/"))
@@ -257,7 +257,7 @@ func TestEntityPolicyErrorsAndShapes(t *testing.T) {
 		},
 		{
 			form("Action", "DetachGroupPolicy", "GroupName", "devs", "PolicyArn", managed[0]), 404,
-			[]string{"<Code>NoSuchEntity</Code>", "Policy " + managed[0] + " was not found."},
+			[]string{"<Code>NoSuchEntity</Code>", "Policy " + iam.AWSPartition(managed[0]) + " was not found."},
 		},
 		{
 			form("Action", "AttachGroupPolicy", "GroupName", "devs"), 400,

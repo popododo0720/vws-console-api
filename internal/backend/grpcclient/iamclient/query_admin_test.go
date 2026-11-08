@@ -281,7 +281,7 @@ func TestGetUserAndGetGroupThroughTheQuerySurfaceOverGRPC(t *testing.T) {
 			url.Values{"Action": {"GetUser"}},
 			http.StatusOK,
 			[]string{
-				"<UserName>bob</UserName>", "<Path>/eng/</Path>", "<Arn>" + bobARN + "</Arn>",
+				"<UserName>bob</UserName>", "<Path>/eng/</Path>", "<Arn>" + iam.AWSPartition(bobARN) + "</Arn>",
 				"<UserId>AIDABOB0000000000001</UserId>", "<CreateDate>2026-09-01T00:00:00Z</CreateDate>",
 			},
 		},
@@ -289,7 +289,7 @@ func TestGetUserAndGetGroupThroughTheQuerySurfaceOverGRPC(t *testing.T) {
 			"GetUser for a named user",
 			url.Values{"Action": {"GetUser"}, "UserName": {"alice"}},
 			http.StatusOK,
-			[]string{"<UserName>alice</UserName>", "<Path>/ops/</Path>", "<Arn>" + aliceARN + "</Arn>"},
+			[]string{"<UserName>alice</UserName>", "<Path>/ops/</Path>", "<Arn>" + iam.AWSPartition(aliceARN) + "</Arn>"},
 		},
 		{
 			"GetUser for a missing user",
@@ -303,8 +303,9 @@ func TestGetUserAndGetGroupThroughTheQuerySurfaceOverGRPC(t *testing.T) {
 			url.Values{"Action": {"GetGroup"}, "GroupName": {"devs"}},
 			http.StatusOK,
 			[]string{
-				"<GroupName>devs</GroupName>", "<Path>/team/</Path>", "<Arn>" + devsARN + "</Arn>",
-				"<GroupId>AGPADEVS000000000001</GroupId>", "<UserName>alice</UserName>", "<Arn>" + aliceARN + "</Arn>",
+				"<GroupName>devs</GroupName>", "<Path>/team/</Path>", "<Arn>" + iam.AWSPartition(devsARN) + "</Arn>",
+				"<GroupId>AGPADEVS000000000001</GroupId>", "<UserName>alice</UserName>",
+				"<Arn>" + iam.AWSPartition(aliceARN) + "</Arn>",
 			},
 		},
 		{
