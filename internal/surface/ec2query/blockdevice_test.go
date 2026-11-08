@@ -192,3 +192,60 @@ func TestRunInstancesRootVolumeSizeRoundTrips(t *testing.T) {
 		}
 	}
 }
+
+// #423 AC4: a mapping field EC2 takes and VWS cannot honor is refused as
+// UnsupportedOperation, naming the field and why, and creates nothing.
+func TestUnsupportedBlockDeviceFieldsAreRefusedWithAReason(t *testing.T) {
+	h, cred, now := harness(t)
+	send := func(f url.Values) string {
+		t.Helper()
+		f.Set("Version", Version)
+		res := signed(t, h, cred, now, f.Encode())
+		if res.Code != http.StatusOK {
+			t.Fatalf("%s %d %s", f.Get("Action"), res.Code, res.Body)
+		}
+		return res.Body.String()
+	}
+	subnet := newSubnet(t, send)
+	root := func(field, value string) url.Values {
+		return url.Values{"BlockDeviceMapping.1.DeviceName": {"/dev/xvda"}, "BlockDeviceMapping.1." + field: {value}}
+	}
+	for _, c := range []struct {
+		name, want string
+		extra      url.Values
+	}{
+		{"root snapshot", "BlockDeviceMapping.1.Ebs.SnapshotId", root("Ebs.SnapshotId", "snap-0123456789abcdef0")},
+		{"encrypted", "BlockDeviceMapping.1.Ebs.Encrypted", root("Ebs.Encrypted", "true")},
+		{"kms key", "BlockDeviceMapping.1.Ebs.KmsKeyId", root("Ebs.KmsKeyId", "alias/aws/ebs")},
+		{"no device", "BlockDeviceMapping.1.NoDevice", root("NoDevice", "")},
+		{"instance store", "BlockDeviceMapping.1.VirtualName", url.Values{
+			"BlockDeviceMapping.1.DeviceName": {"/dev/sdb"}, "BlockDeviceMapping.1.VirtualName": {"ephemeral0"},
+		}},
+		{"later mapping", "BlockDeviceMapping.2.Ebs.SnapshotId", url.Values{
+			"BlockDeviceMapping.1.DeviceName": {"/dev/xvda"}, "BlockDeviceMapping.1.Ebs.VolumeType": {"gp3"},
+			"BlockDeviceMapping.2.DeviceName": {"/dev/sdf"}, "BlockDeviceMapping.2.Ebs.SnapshotId": {"snap-0123456789abcdef0"},
+		}},
+	} {
+		res := signed(t, h, cred, now, launchForm(subnet, "unsupported", c.extra).Encode())
+		body := res.Body.String()
+		if res.Code != http.StatusBadRequest || !strings.Contains(body, "<Code>UnsupportedOperation</Code>") ||
+			!strings.Contains(body, c.want+" is not supported: ") {
+			t.Fatalf("%s: %d %s", c.name, res.Code, body)
+		}
+	}
+	if got := send(url.Values{"Action": {"DescribeInstances"}}); strings.Contains(got, "<instanceId>") {
+		t.Fatalf("a refused launch created an instance: %s", got)
+	}
+	bad := signed(t, h, cred, now, launchForm(subnet, "bad-bool", root("Ebs.Encrypted", "yes")).Encode())
+	if bad.Code != http.StatusBadRequest || !strings.Contains(bad.Body.String(), "<Code>InvalidParameterValue</Code>") {
+		t.Fatalf("Encrypted=yes: %d %s", bad.Code, bad.Body)
+	}
+	nameless := url.Values{"BlockDeviceMapping.1.Ebs.Encrypted": {"false"}}
+	res := signed(t, h, cred, now, launchForm(subnet, "nameless", nameless).Encode())
+	if res.Code != http.StatusBadRequest ||
+		!strings.Contains(res.Body.String(), "<Code>InvalidBlockDeviceMapping</Code>") {
+		t.Fatalf("Encrypted=false without DeviceName: %d %s", res.Code, res.Body)
+	}
+	// Encrypted=false states what every VWS volume is, so it launches.
+	send(launchForm(subnet, "unencrypted", root("Ebs.Encrypted", "false")))
+}
