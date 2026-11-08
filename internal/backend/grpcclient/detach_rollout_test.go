@@ -2,6 +2,8 @@ package grpcclient
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"maps"
@@ -149,7 +151,7 @@ func c09cba3Replay(
 		match = opUnknown
 	case fp == detachFPToken(requestHex, fingerprint):
 		match = opSaved
-	case fp == legacyFPToken(fingerprint):
+	case fp == c09cba3FPToken(fingerprint):
 		match = opUnknown
 	default:
 		match = opOtherParams
@@ -162,6 +164,14 @@ func c09cba3Replay(
 		return resource.OperationID{}, match, resource.Internal(err)
 	}
 	return id, match, nil
+}
+
+// c09cba3FPToken is the operation token a build before #213 wrote, bound to
+// the fingerprint only. c09cba3 still read it; this build reads it as a token
+// of other parameters (#454).
+func c09cba3FPToken(fingerprint string) string {
+	sum := sha256.Sum256([]byte(fingerprint))
+	return hex.EncodeToString(sum[:8])
 }
 
 // A build before #362 that served a same-token retry between the detach's

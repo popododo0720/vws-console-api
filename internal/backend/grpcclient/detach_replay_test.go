@@ -193,12 +193,12 @@ func TestDetachOpTokenRules(t *testing.T) {
 		},
 		{
 			"a pre-#213 token, same parameters",
-			detachReplay{requestHex: reqA, opLocal: "0000000000000001", fingerprint: legacyFPToken("fp")},
-			"fp", opUnknown,
+			detachReplay{requestHex: reqA, opLocal: "0000000000000001", fingerprint: c09cba3FPToken("fp")},
+			"fp", opOtherParams,
 		},
 		{
 			"a pre-#213 token, other parameters",
-			detachReplay{requestHex: reqA, opLocal: "0000000000000001", fingerprint: legacyFPToken("fp")},
+			detachReplay{requestHex: reqA, opLocal: "0000000000000001", fingerprint: c09cba3FPToken("fp")},
 			"fp-2", opOtherParams,
 		},
 	}
@@ -209,10 +209,8 @@ func TestDetachOpTokenRules(t *testing.T) {
 	}
 	// The token is 16 hex digits (#304). Both value forms fit one 63-byte
 	// label value for the longest operation id operationLocal accepts.
-	for _, tok := range []string{detachFPToken(reqA, "fp"), legacyFPToken("fp")} {
-		if len(tok) != 16 || !isHexString(tok, 16) {
-			t.Errorf("token %q is not 16 hex digits", tok)
-		}
+	if tok := detachFPToken(reqA, "fp"); len(tok) != 16 || !isHexString(tok, 16) {
+		t.Errorf("token %q is not 16 hex digits", tok)
 	}
 	longest := strings.Repeat("f", 40)
 	if !operationHexWidth(len(longest)) || operationHexWidth(len(longest)+1) {
