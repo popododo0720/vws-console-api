@@ -1514,6 +1514,9 @@ func ec2Refinement(e *resource.Error) (errs.AWSEntry, bool) {
 		if resource.IsInvalidTaggedID(e) {
 			return badRequest("InvalidID")
 		}
+		if resource.IsAttachmentLimitExceeded(e) {
+			return badRequest("AttachmentLimitExceeded")
+		}
 		// EC2 names a malformed instance ID separately (#246).
 		if e.Kind == resource.KindInstance {
 			return badRequest("InvalidInstanceID.Malformed")

@@ -108,6 +108,7 @@ const (
 	invalidUnsupported
 	invalidTagLimit
 	invalidTaggedID
+	invalidAttachmentLimit
 )
 
 func (e *Error) Error() string {
@@ -204,6 +205,17 @@ func TagLimitExceeded(field, message string) *Error {
 
 // IsTagLimitExceeded reports whether e came from TagLimitExceeded.
 func IsTagLimitExceeded(e *Error) bool { return e != nil && e.invalid == invalidTagLimit }
+
+// AttachmentLimitExceeded reports a launch that would attach more volumes to
+// one instance than it takes. EC2 answers AttachmentLimitExceeded.
+func AttachmentLimitExceeded(message string) *Error {
+	return &Error{
+		Code: CodeInvalidArgument, Field: "blockDeviceMapping", Message: message, invalid: invalidAttachmentLimit,
+	}
+}
+
+// IsAttachmentLimitExceeded reports whether e came from AttachmentLimitExceeded.
+func IsAttachmentLimitExceeded(e *Error) bool { return e != nil && e.invalid == invalidAttachmentLimit }
 
 // IsMissingParameter reports whether e came from MissingParameter.
 func IsMissingParameter(e *Error) bool { return e != nil && e.invalid == invalidMissing }
