@@ -505,7 +505,7 @@ func TestCookieUploadContentTypeOnS3(t *testing.T) {
 		t.Fatal(err)
 	}
 	grant := backendtest.UserGrant(ctx, t, users, account, "bob")
-	if _, err := users.CreateLoginProfile(ctx, account, "bob", "correct horse 1", grant); err != nil {
+	if _, err := users.CreateLoginProfile(ctx, account, "bob", "correct horse 1", false, grant); err != nil {
 		t.Fatal(err)
 	}
 	if err := users.PutInlinePolicy(ctx, account, iam.EntityUser, "bob", "put",

@@ -362,10 +362,12 @@ type Admin interface {
 	UpdateUser(ctx context.Context, a resource.AccountID, name, newPath, newName string, want AuthorizedPrincipal) error
 
 	CreateLoginProfile(
-		ctx context.Context, a resource.AccountID, user, password string, want AuthorizedPrincipal,
+		ctx context.Context, a resource.AccountID, user, password string, resetRequired bool, want AuthorizedPrincipal,
 	) (LoginProfile, error)
 	GetLoginProfile(ctx context.Context, a resource.AccountID, user string, want AuthorizedPrincipal) (LoginProfile, error)
-	UpdateLoginProfile(ctx context.Context, a resource.AccountID, user, password string, want AuthorizedPrincipal) error
+	UpdateLoginProfile(
+		ctx context.Context, a resource.AccountID, user string, change LoginProfileUpdate, want AuthorizedPrincipal,
+	) error
 	DeleteLoginProfile(ctx context.Context, a resource.AccountID, user string, want AuthorizedPrincipal) error
 
 	// The access key secret is only ever in the CreateAccessKey result.
@@ -499,4 +501,16 @@ type Admin interface {
 type LoginProfile struct {
 	UserName string
 	Created  time.Time
+	// ResetRequired is PasswordResetRequired: the user must set a new
+	// password at the next console sign-in.
+	ResetRequired bool
+}
+
+// LoginProfileUpdate is an UpdateLoginProfile. A zero field keeps what the
+// profile has, so a change of only the reset flag keeps the password.
+type LoginProfileUpdate struct {
+	// Password is the new password; empty keeps the current one.
+	Password string
+	// ResetRequired sets PasswordResetRequired; nil keeps it.
+	ResetRequired *bool
 }

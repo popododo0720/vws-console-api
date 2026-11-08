@@ -169,5 +169,5 @@ type loginProfileXML struct {
 }
 
 func toLoginProfile(p iam.LoginProfile) loginProfileXML {
-	return loginProfileXML{UserName: p.UserName, CreateDate: stamp(p.Created)}
+	return loginProfileXML{UserName: p.UserName, CreateDate: stamp(p.Created), PasswordResetRequired: p.ResetRequired}
 }
