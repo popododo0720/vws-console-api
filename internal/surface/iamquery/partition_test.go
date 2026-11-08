@@ -97,9 +97,13 @@ func TestIAMAndSTSResponsesUseTheAWSPartition(t *testing.T) {
 	})
 	has(t, res, http.StatusOK, `<Arn>arn:aws:sts::123456789012:assumed-role/ops/s1</Arn>`)
 
-	missing := "arn:aws:iam::123456789012:policy/ghost"
-	has(t, call(t, h, root, sigv4.ServiceIAM, url.Values{"Action": {"GetPolicy"}, "PolicyArn": {missing}}),
-		http.StatusNotFound, `<Code>NoSuchEntity</Code>`, "Policy "+missing+" does not exist or is not attachable.")
+	for _, missing := range []string{
+		"arn:aws:iam::123456789012:policy/ghost",
+		"arn:aws:iam::123456789012:policy/arn:vws:folder/ghost",
+	} {
+		has(t, call(t, h, root, sigv4.ServiceIAM, url.Values{"Action": {"GetPolicy"}, "PolicyArn": {missing}}),
+			http.StatusNotFound, `<Code>NoSuchEntity</Code>`, "Policy "+missing+" does not exist or is not attachable.")
+	}
 
 	seen := strings.Join(rec.seen, "\n")
 	for _, want := range []string{
@@ -147,4 +151,37 @@ func TestOnlyTheAWSPartitionIsReadAsVWS(t *testing.T) {
 	has(t, call(t, h, root, sigv4.ServiceIAM, url.Values{
 		"Action": {"GetPolicy"}, "PolicyArn": {"arn:aws-cn:iam::123456789012:policy/p"},
 	}), http.StatusNotFound, `<Code>NoSuchEntity</Code>`)
+}
+
+// A Deny on the vws spelling of an ARN still refuses the aws spelling, since
+// an aws ARN is authorized as vws.
+func TestDenyOnTheVWSARNHoldsForTheAWSSpelling(t *testing.T) {
+	h, f, _, root := harness(t)
+	ctx := t.Context()
+	doc := `{"Statement":[{"Effect":"Allow","Action":"*","Resource":"*"}]}`
+	p, err := f.CreatePolicy(ctx, root.Account, "p", "/", doc, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	serial := seedMfaDevice(t, f, root, "bob-phone")
+	if _, err := f.CreateUser(ctx, root.Account, "bob", "/"); err != nil {
+		t.Fatal(err)
+	}
+	policy := `{"Statement":[{"Effect":"Allow","Action":"*","Resource":"*"},` +
+		`{"Effect":"Deny","Action":["iam:GetPolicy","iam:ListMFADeviceTags"],"Resource":["` + p.ARN + `","` + serial + `"]}]}`
+	if err := f.PutInlinePolicy(ctx, root.Account, iam.EntityUser, "bob", "deny", policy,
+		backendtest.EntityGrant(ctx, t, f, root.Account, iam.EntityUser, "bob")); err != nil {
+		t.Fatal(err)
+	}
+	k, err := f.CreateAccessKey(ctx, root.Account, "bob", backendtest.UserGrant(ctx, t, f, root.Account, "bob"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bob := sigv4.Credential{AccessKey: k.AccessKeyID, Secret: k.Secret}
+	for _, form := range []url.Values{
+		{"Action": {"GetPolicy"}, "PolicyArn": {iam.AWSPartition(p.ARN)}},
+		{"Action": {"ListMFADeviceTags"}, "SerialNumber": {iam.AWSPartition(serial)}},
+	} {
+		has(t, call(t, h, bob, sigv4.ServiceIAM, form), http.StatusForbidden, `<Code>AccessDenied</Code>`)
+	}
 }

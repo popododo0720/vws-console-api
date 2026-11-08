@@ -9,6 +9,7 @@ import (
 	"encoding/xml"
 	"net/http"
 	"net/url"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -240,6 +241,10 @@ type errorXML struct {
 	RequestID string   `xml:"RequestId"`
 }
 
+// messageARNRE finds an ARN that begins a word of an error message, so an
+// "arn:vws:" inside an ARN's resource path is left as it is.
+var messageARNRE = regexp.MustCompile(`(^|[\s'"(])arn:vws:`)
+
 func (c *exchange) fail(err error) {
 	e := resource.AsError(err)
 	status, code := c.wire(e)
@@ -255,7 +260,7 @@ func (c *exchange) fail(err error) {
 	_, werr := c.w.Write([]byte(xml.Header))
 	if werr == nil {
 		// An error names an ARN in the aws partition, as a response does.
-		msg := strings.ReplaceAll(e.Message, "arn:vws:", "arn:aws:")
+		msg := messageARNRE.ReplaceAllString(e.Message, "${1}arn:aws:")
 		werr = xml.NewEncoder(c.w).Encode(errorXML{Type: typ, Code: code, Message: msg, RequestID: requestID(c.r)})
 	}
 	server.RecordFailure(c.w, werr)
