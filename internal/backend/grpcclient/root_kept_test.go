@@ -206,3 +206,51 @@ func TestRootVolumeReadsComputesDeleteOnTermination(t *testing.T) {
 		}
 	}
 }
+
+// TestKeptRootOfATerminatedInstanceIsNotInUse pins that compute's spec of a
+// terminated instance holds no volume on detach, as DescribeVolumes reads
+// it: a kept root is available, so DetachVolume is VolumeNotInUse with or
+// without the instance named, as on the fake, and writes nothing.
+func TestKeptRootOfATerminatedInstanceIsNotInUse(t *testing.T) {
+	account := mustAccount(t)
+	projectID := project(account)
+	const instID = "i-0123456789abcdef0"
+	const rootID = "vol-0fedcba9876543210"
+	for _, named := range []bool{false, true} {
+		t.Run(map[bool]string{false: "volume only", true: "instance named"}[named], func(t *testing.T) {
+			terminated := observedInstance(projectID, instID,
+				commonv1.ReconciliationState_RECONCILIATION_STATE_DELETING,
+				computev1.InstancePower_INSTANCE_POWER_RUNNING)
+			terminated.DeleteTime = timestamppb.Now()
+			terminated.Spec.Volumes = []*computev1.VolumeAttachment{{
+				Volume: volumeName(projectID, rootID), DeviceName: "boot", Boot: true,
+				DeleteOnTermination: proto.Bool(false),
+			}}
+			root := observedVolume(projectID, rootID, commonv1.ReconciliationState_RECONCILIATION_STATE_READY, "")
+			root.Spec.Source = &storagev1.VolumeSpec_Image{Image: imageName(projectID, "ami-0123456789abcdef0")}
+			root.Labels = map[string]string{labelInstance: instID}
+			world := &detachWorld{
+				inst: []*computev1.Instance{terminated}, vol: root, byRequest: map[string]*detachRecord{},
+			}
+			client := dialDetachWorld(t, world)
+			req := resource.DetachVolumeRequest{VolumeID: mustVolume(t, rootID)}
+			if named {
+				id, err := resource.Parse[resource.InstanceID](instID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				req.InstanceID = id
+			}
+			_, err := client.DetachVolume(context.Background(), backend.Mutation{
+				Scope: backend.Scope{Account: account}, Key: "k-kept", Fingerprint: "fp-kept",
+			}, req)
+			if want := resource.VolumeNotInUse(req.VolumeID); resource.CodeOf(err) != resource.CodeOf(want) ||
+				resource.AsError(err).Message != resource.AsError(want).Message {
+				t.Fatalf("detach: %v, want %v", err, want)
+			}
+			if world.updateCount() != 0 {
+				t.Fatalf("updates %d, want none", world.updateCount())
+			}
+		})
+	}
+}

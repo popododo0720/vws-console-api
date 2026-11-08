@@ -644,7 +644,7 @@ func (c computeClient) detachBind(
 			}
 			return nil, resource.Instance{}, backend.VolumeBind{}, false, resource.VolumeNotInUse(vol.ID)
 		}
-		if bind, ok := backend.BindOf(model, vol.ID); ok {
+		if bind, ok := liveBindOf(model, vol.ID); ok {
 			return got, model, bind, true, nil
 		}
 		return got, model, backend.VolumeBind{}, false, nil
@@ -660,7 +660,7 @@ func (c computeClient) detachBind(
 			return nil, resource.Instance{}, backend.VolumeBind{}, false, err
 		}
 		if err == nil {
-			if bind, ok := backend.BindOf(model, vol.ID); ok {
+			if bind, ok := liveBindOf(model, vol.ID); ok {
 				return got, model, bind, true, nil
 			}
 			candidate, candidateModel, haveCandidate = got, model, true
@@ -691,6 +691,16 @@ func (c computeClient) detachInstance(
 	return got, model, nil
 }
 
+// liveBindOf is backend.BindOf on an instance that is not terminated. A
+// terminated instance holds no volume, though compute keeps its spec: a root
+// it kept is available (#423).
+func liveBindOf(model resource.Instance, id resource.VolumeID) (backend.VolumeBind, bool) {
+	if model.State == resource.InstanceTerminated {
+		return backend.VolumeBind{}, false
+	}
+	return backend.BindOf(model, id)
+}
+
 // findVolumeBind pages the caller's instances until one spec names id.
 // A repeated page token is an error. Stopping early would hide a later bind.
 func (c computeClient) findVolumeBind(
@@ -717,7 +727,7 @@ func (c computeClient) findVolumeBind(
 			if err != nil {
 				return nil, resource.Instance{}, backend.VolumeBind{}, false, err
 			}
-			if bind, ok := backend.BindOf(model, id); ok {
+			if bind, ok := liveBindOf(model, id); ok {
 				return item, model, bind, true, nil
 			}
 		}
