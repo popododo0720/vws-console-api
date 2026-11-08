@@ -1507,6 +1507,9 @@ func ec2Refinement(e *resource.Error) (errs.AWSEntry, bool) {
 		if e.Field == "routeTableId" {
 			return badRequest("InvalidRouteTableID.Malformed")
 		}
+		if e.Field == instanceTypeNamesField {
+			return badRequest("InvalidInstanceType")
+		}
 		// EC2 reports a public key it cannot read as InvalidKey.Format.
 		if strings.EqualFold(e.Field, "publicKeyMaterial") {
 			if e.Message == "required" {

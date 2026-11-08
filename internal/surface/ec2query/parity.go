@@ -490,7 +490,12 @@ func (h *handler) describeInstanceTypes(w http.ResponseWriter, r *http.Request, 
 		writeErr(w, r, err)
 		return
 	}
-	want := stringSetOf(indexedStrings(r, "InstanceType"))
+	names := indexedStrings(r, "InstanceType")
+	if err := checkInstanceTypeNames(names); err != nil {
+		writeErr(w, r, err)
+		return
+	}
+	want := stringSetOf(names)
 	var rows []instanceTypeItem
 	for _, typ := range resource.InstanceTypes() {
 		row := instanceTypeOf(typ)
@@ -510,6 +515,43 @@ func (h *handler) describeInstanceTypes(w http.ResponseWriter, r *http.Request, 
 	writeXML(w, describeInstanceTypesXML{
 		InstanceTypes: instanceTypeSetXML{Items: rows}, NextToken: next, RequestID: requestID(r),
 	})
+}
+
+// instanceTypeNamesField marks the error for InstanceType.N names that are
+// not in the catalog, which EC2 answers as InvalidInstanceType.
+const instanceTypeNamesField = "InstanceType.N"
+
+// checkInstanceTypeNames refuses the InstanceType.N names VWS does not
+// offer, all of them in one sentence in request order, the way EC2 does:
+// "The following supplied instance types do not exist: [m1.medium, m3.medium]".
+// https://github.com/4dn-dcic/tibanna/issues/382
+func checkInstanceTypeNames(names []string) error {
+	known := make(map[string]struct{})
+	for _, typ := range resource.InstanceTypes() {
+		known[typ.Name] = struct{}{}
+	}
+	if unknown := unknownNames(names, known); len(unknown) > 0 {
+		return resource.Invalid(instanceTypeNamesField,
+			"The following supplied instance types do not exist: ["+strings.Join(unknown, ", ")+"]")
+	}
+	return nil
+}
+
+// unknownNames is the names not in known, each once, in request order.
+func unknownNames(names []string, known map[string]struct{}) []string {
+	var out []string
+	seen := make(map[string]struct{})
+	for _, name := range names {
+		if _, ok := known[name]; ok {
+			continue
+		}
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		out = append(out, name)
+	}
+	return out
 }
 
 func stringSetOf(values []string) map[string]struct{} {
@@ -839,7 +881,16 @@ func (h *handler) describeAvailabilityZones(w http.ResponseWriter, r *http.Reque
 		writeErr(w, r, err)
 		return
 	}
-	names := stringSetOf(indexedStrings(r, "ZoneName"))
+	zoneNames := indexedStrings(r, "ZoneName")
+	// EC2 answers a ZoneName.N it does not know as InvalidParameterValue,
+	// "Invalid availability zone: [us-west-2-lax-1a]" (floci-io/floci#5519,
+	// from eksctl-io/eksctl#8174).
+	if unknown := unknownNames(zoneNames, map[string]struct{}{resource.ZoneName: {}}); len(unknown) > 0 {
+		writeErr(w, r, resource.Invalid("ZoneName",
+			"Invalid availability zone: ["+strings.Join(unknown, ", ")+"]"))
+		return
+	}
+	names := stringSetOf(zoneNames)
 	ids := stringSetOf(indexedStrings(r, "ZoneId"))
 	all := []availabilityZoneItem{{
 		ZoneName:           resource.ZoneName,
