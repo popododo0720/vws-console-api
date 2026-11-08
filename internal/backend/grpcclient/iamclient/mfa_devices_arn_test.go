@@ -10,6 +10,8 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	iamv1 "github.com/popododo0720/vws-proto/gen/go/vws/iam/v1"
+
+	"github.com/popododo0720/vws-console-api/internal/iam"
 )
 
 // #330 r2: over gRPC, ListMFADevices returns devices only while the user is
@@ -114,7 +116,7 @@ func TestListMFADevicesActsOnTheAuthorizedARNOverGRPC(t *testing.T) {
 				t.Fatalf("authorized on %q, want %q", resources, tc.authorized)
 			}
 			if tc.code == http.StatusOK {
-				expect(t, res, http.StatusOK, "<SerialNumber>"+tc.serial+"</SerialNumber>")
+				expect(t, res, http.StatusOK, "<SerialNumber>"+iam.AWSPartition(tc.serial)+"</SerialNumber>")
 				return
 			}
 			expect(t, res, http.StatusConflict, "<Code>ConcurrentModification</Code>")

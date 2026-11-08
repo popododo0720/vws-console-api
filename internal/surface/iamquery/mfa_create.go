@@ -76,7 +76,7 @@ func createVirtualMFADevice(h *handler, c *exchange) (any, error) {
 		return nil, err
 	}
 	return createVirtualMFADeviceResult{VirtualMFADevice: createdVirtualMFADeviceXML{
-		SerialNumber:     dev.SerialNumber,
+		SerialNumber:     iam.AWSPartition(dev.SerialNumber),
 		Base32StringSeed: base64.StdEncoding.EncodeToString([]byte(dev.Base32StringSeed)),
 		QRCodePNG:        base64.StdEncoding.EncodeToString(png),
 	}}, nil

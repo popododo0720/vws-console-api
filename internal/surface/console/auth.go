@@ -311,7 +311,10 @@ func (h *handler) login(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, &http.Cookie{Name: SessionCookie, Value: s.Token, Path: "/", MaxAge: maxAge, HttpOnly: true, Secure: true, SameSite: http.SameSiteStrictMode})
 	http.SetCookie(w, &http.Cookie{Name: CSRFCookie, Value: csrf, Path: "/", MaxAge: maxAge, Secure: true, SameSite: http.SameSiteStrictMode})
 	w.Header().Set("Cache-Control", "no-store")
-	writeJSON(w, http.StatusOK, sessionBody{Principal: s.Principal.ARN, Account: s.Principal.Account.String(), Root: s.Principal.Root, ExpiresAt: s.Expires, CSRFToken: csrf, LoginEnabled: !h.loginOff})
+	writeJSON(w, http.StatusOK, sessionBody{
+		Principal: iam.AWSPartition(s.Principal.ARN), Account: s.Principal.Account.String(), Root: s.Principal.Root,
+		ExpiresAt: s.Expires, CSRFToken: csrf, LoginEnabled: !h.loginOff,
+	})
 }
 
 // Which sign-in bucket ran dry; the audit metric outcome.
@@ -351,7 +354,9 @@ func (h *handler) session(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	out := sessionBody{Principal: c.Principal, Account: c.Account.String(), Root: c.Root, LoginEnabled: !h.loginOff}
+	out := sessionBody{
+		Principal: iam.AWSPartition(c.Principal), Account: c.Account.String(), Root: c.Root, LoginEnabled: !h.loginOff,
+	}
 	if ck, err := r.Cookie(SessionCookie); err == nil && h.iam != nil && !h.loginOff {
 		if s, err := h.iam.ValidateSession(r.Context(), ck.Value); err == nil {
 			out.ExpiresAt = s.Expires

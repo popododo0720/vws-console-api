@@ -750,7 +750,7 @@ def identity():
     describe = json.dumps({"Version": "2012-10-17", "Statement": [
         {"Effect": "Allow", "Action": ["ec2:Describe*", "sts:AssumeRole"], "Resource": "*"}]})
     step("IAM CreateUser", lambda: check(
-        iam.create_user(UserName="e2e-bob", Path="/e2e/")["User"]["Arn"] == f"arn:vws:iam::{account}:user/e2e/e2e-bob", "user arn"))
+        iam.create_user(UserName="e2e-bob", Path="/e2e/")["User"]["Arn"] == f"arn:aws:iam::{account}:user/e2e/e2e-bob", "user arn"))
     step("IAM CreateUser again is EntityAlreadyExists", lambda: aws_error(
         "EntityAlreadyExists", lambda: iam.create_user(UserName="e2e-bob")))
     step("IAM GetUser", lambda: check(iam.get_user(UserName="e2e-bob")["User"]["Path"] == "/e2e/", "path"))
@@ -773,7 +773,7 @@ def identity():
         "ValidationError", lambda: loose_iam.list_users(MaxItems=0)))
     step("IAM UpdateUser NewPath", lambda: iam.update_user(UserName="e2e-dave", NewPath="/e2e/moved/"))
     step("IAM GetUser after UpdateUser", lambda: check(
-        iam.get_user(UserName="e2e-dave")["User"]["Arn"] == f"arn:vws:iam::{account}:user/e2e/moved/e2e-dave", "arn"))
+        iam.get_user(UserName="e2e-dave")["User"]["Arn"] == f"arn:aws:iam::{account}:user/e2e/moved/e2e-dave", "arn"))
     step("IAM UpdateUser missing is NoSuchEntity", lambda: aws_error(
         "NoSuchEntity", lambda: iam.update_user(UserName="nobody", NewPath="/")))
     step("IAM DeleteUser e2e-dave", lambda: iam.delete_user(UserName="e2e-dave"))
@@ -785,7 +785,7 @@ def identity():
     S["mfa"] = step("IAM CreateVirtualMFADevice", lambda: iam.create_virtual_mfa_device(
         VirtualMFADeviceName="e2e-phone", Path="/e2e/")["VirtualMFADevice"])
     step("IAM CreateVirtualMFADevice answers serial, base32 seed and PNG", lambda: (
-        check(S["mfa"]["SerialNumber"] == f"arn:vws:iam::{account}:mfa/e2e/e2e-phone", "serial"),
+        check(S["mfa"]["SerialNumber"] == f"arn:aws:iam::{account}:mfa/e2e/e2e-phone", "serial"),
         check(len(base64.b32decode(S["mfa"]["Base32StringSeed"] + b"=" * (-len(S["mfa"]["Base32StringSeed"]) % 8))) > 0,
               "seed"),
         check(S["mfa"]["QRCodePNG"].startswith(b"\x89PNG\r\n\x1a\n"), "png")))
@@ -797,7 +797,7 @@ def identity():
         "InvalidInput", lambda: iam.create_virtual_mfa_device(
             VirtualMFADeviceName="e2e-tagged", Tags=[{"Key": "team", "Value": "e2e"}])))
     step("IAM DeleteVirtualMFADevice created", lambda: iam.delete_virtual_mfa_device(
-        SerialNumber=f"arn:vws:iam::{account}:mfa/e2e/e2e-phone"))
+        SerialNumber=S["mfa"]["SerialNumber"]))
     step("IAM EnableMFADevice missing user is NoSuchEntity", lambda: aws_error(
         "NoSuchEntity", lambda: iam.enable_mfa_device(
             UserName="e2e-nobody", SerialNumber=f"arn:vws:iam::{account}:mfa/e2e-no-such-phone",
@@ -1153,7 +1153,7 @@ def cli_identity():
         if not uarn:
             return
         step("aws iam create-user answers the user ARN", lambda: check(
-            uarn == f"arn:vws:iam::{account}:user/cli/cli-carol", uarn))
+            uarn == f"arn:aws:iam::{account}:user/cli/cli-carol", uarn))
         cli_error("iam create-user again", "EntityAlreadyExists", "iam", "create-user", "--user-name", "cli-carol")
         cli_error("iam create-user with a bad name", "ValidationError", "iam", "create-user", "--user-name", "cli carol;")
         cli_error("iam get-user of a missing user", "NoSuchEntity", "iam", "get-user", "--user-name", "cli-nobody")
@@ -1379,7 +1379,7 @@ def console_login():
         all(a in session_cookie for a in ("HttpOnly", "Secure", "SameSite=Strict", "Path=/"))
         and "Domain" not in session_cookie, session_cookie))
     step("login body names the user and hides the token", lambda: check(
-        body["principal"] == f"arn:vws:iam::{account}:user/e2e-carol" and jar["__Host-vws_session"] not in json.dumps(body), body))
+        body["principal"] == f"arn:aws:iam::{account}:user/e2e-carol" and jar["__Host-vws_session"] not in json.dumps(body), body))
     step("GET /api/v1/auth/session", lambda: check(expect(200, console_call(
         "GET", "/api/v1/auth/session", cookies=jar))[1]["principal"].endswith(":user/e2e-carol"), "principal"))
     step("session says loginEnabled true with IAM", lambda: check(console_call(

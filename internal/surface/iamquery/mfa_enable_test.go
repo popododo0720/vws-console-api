@@ -48,7 +48,7 @@ func TestEnableMFADevice(t *testing.T) {
 		t.Errorf("not authorized as %s: %v", want, rec.seen)
 	}
 	has(t, call(t, h, root, sigv4.ServiceIAM, url.Values{"Action": {"ListMFADevices"}, "UserName": {"alice"}}),
-		http.StatusOK, `<SerialNumber>`+serial+`</SerialNumber>`)
+		http.StatusOK, `<SerialNumber>`+iam.AWSPartition(serial)+`</SerialNumber>`)
 }
 
 // Each documented error maps to its AWS code and HTTP status.

@@ -103,6 +103,11 @@ func (h *handler) serve(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	for _, k := range [...]string{"PolicyArn", "RoleArn", "SerialNumber"} {
+		if vs := r.Form[k]; len(vs) == 1 {
+			vs[0] = iam.VWSPartition(vs[0])
+		}
+	}
 	want := IAMVersion
 	if c.service == sigv4.ServiceSTS {
 		want = STSVersion
@@ -249,7 +254,9 @@ func (c *exchange) fail(err error) {
 	c.w.WriteHeader(status)
 	_, werr := c.w.Write([]byte(xml.Header))
 	if werr == nil {
-		werr = xml.NewEncoder(c.w).Encode(errorXML{Type: typ, Code: code, Message: e.Message, RequestID: requestID(c.r)})
+		// An error names an ARN in the aws partition, as a response does.
+		msg := strings.ReplaceAll(e.Message, "arn:vws:", "arn:aws:")
+		werr = xml.NewEncoder(c.w).Encode(errorXML{Type: typ, Code: code, Message: msg, RequestID: requestID(c.r)})
 	}
 	server.RecordFailure(c.w, werr)
 }

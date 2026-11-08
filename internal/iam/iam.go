@@ -76,15 +76,26 @@ func RootARN(account resource.AccountID) string {
 	return "arn:vws:iam::" + account.String() + ":root"
 }
 
-// AWSPartition names an internal arn:vws ARN in the aws partition. STS
-// GetCallerIdentity answers the caller ARN as AWS does, because SDKs, CLI
-// scripts and policy tooling parse the partition (#247).
+// AWSPartition names an internal arn:vws ARN in the aws partition. Every ARN
+// a surface answers is in the aws partition, as in AWS, because SDKs, CLI
+// scripts and policy tooling parse the partition (#430).
 func AWSPartition(arn string) string {
 	rest, ok := strings.CutPrefix(arn, "arn:vws:")
 	if !ok {
 		return arn
 	}
 	return "arn:aws:" + rest
+}
+
+// VWSPartition names an arn:aws ARN in the internal vws partition, the one
+// authorization and the backends match. A client sends back the arn:aws ARN
+// a response gave it.
+func VWSPartition(arn string) string {
+	rest, ok := strings.CutPrefix(arn, "arn:aws:")
+	if !ok {
+		return arn
+	}
+	return "arn:vws:" + rest
 }
 
 // Authenticator adapts a Client to the sigv4 verifier.
