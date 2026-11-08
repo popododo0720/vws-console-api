@@ -617,6 +617,9 @@ func (s *instanceSrv) CreateInstance(ctx context.Context, req *computev1.CreateI
 		// boot volume the client created, so a type the client drops or
 		// changes on the way to vws-storage shows in the contract (#323).
 		RootVolumeType: rootType, RootVolumeSize: rootSize, RootIops: rootIops, RootThroughput: rootMiBps,
+		// It keeps a boot volume whose attachment says so, as vws-compute
+		// does after vws-compute#173.
+		RootVolumeKept: spec.GetVolumes()[0].DeleteOnTermination != nil && !spec.GetVolumes()[0].GetDeleteOnTermination(),
 	})
 	if err != nil {
 		return nil, toStatus(err)

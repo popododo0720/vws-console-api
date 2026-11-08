@@ -442,7 +442,7 @@ func TestEntityPolicyActionsThroughTheQuerySurfaceOverGRPC(t *testing.T) {
 			[]string{"<AttachGroupPolicyResponse"},
 		},
 		{f("Action", "ListAttachedGroupPolicies", "GroupName", "devs", "PathPrefix", "/team/"), 200, []string{
-			"<AttachedPolicies><member><PolicyName>Ops</PolicyName><PolicyArn>" + ops +
+			"<AttachedPolicies><member><PolicyName>Ops</PolicyName><PolicyArn>" + iam.AWSPartition(ops) +
 				"</PolicyArn></member></AttachedPolicies>",
 			"<IsTruncated>false</IsTruncated>",
 		}},
@@ -472,7 +472,7 @@ func TestEntityPolicyActionsThroughTheQuerySurfaceOverGRPC(t *testing.T) {
 		{f("Action", "DetachGroupPolicy", "GroupName", "devs", "PolicyArn", ops), 200, nil},
 		{
 			f("Action", "DetachGroupPolicy", "GroupName", "devs", "PolicyArn", ops), 404,
-			[]string{"<Code>NoSuchEntity</Code>", "Policy " + ops + " was not found."},
+			[]string{"<Code>NoSuchEntity</Code>", "Policy " + iam.AWSPartition(ops) + " was not found."},
 		},
 	} {
 		rec := queryCall(t, h, st.form)
@@ -498,7 +498,7 @@ func TestUserManagedPolicyActionsThroughTheQuerySurfaceOverGRPC(t *testing.T) {
 	readOnly := d.seedPolicy("ReadOnly", "/")
 	ops := d.seedPolicy("Ops", "/team/")
 	member := func(name, arn string) string {
-		return "<member><PolicyName>" + name + "</PolicyName><PolicyArn>" + arn + "</PolicyArn></member>"
+		return "<member><PolicyName>" + name + "</PolicyName><PolicyArn>" + iam.AWSPartition(arn) + "</PolicyArn></member>"
 	}
 	attach := func(arn string) url.Values {
 		return url.Values{"Action": {"AttachUserPolicy"}, "UserName": {"alice"}, "PolicyArn": {arn}}
@@ -527,7 +527,7 @@ func TestUserManagedPolicyActionsThroughTheQuerySurfaceOverGRPC(t *testing.T) {
 	expect(t, queryCall(t, h, list), http.StatusOK,
 		"<AttachedPolicies>"+member("ReadOnly", readOnly)+"</AttachedPolicies>")
 	expect(t, queryCall(t, h, detach), http.StatusNotFound,
-		"<Code>NoSuchEntity</Code>", "Policy "+ops+" was not found.")
+		"<Code>NoSuchEntity</Code>", "Policy "+iam.AWSPartition(ops)+" was not found.")
 }
 
 // #314 bundle 3: the group inline policy actions succeed over gRPC through

@@ -122,7 +122,8 @@ type Volume struct {
 	// from AttachVolume until the backend reports the volume on the instance,
 	// then attached. It is empty while detached.
 	AttachState AttachmentStatus `json:"attachState,omitempty"`
-	// DeleteOnTermination is set on a root volume, which goes with its instance.
+	// DeleteOnTermination is set on an attached volume that is deleted when
+	// its instance terminates. A root volume has it unless its launch kept it.
 	DeleteOnTermination bool `json:"deleteOnTermination,omitempty"`
 	// Iops and Throughput (MiB/s) are the provisioned performance of gp3,
 	// io1 and io2. They are zero for every other type. ReportedIops is what

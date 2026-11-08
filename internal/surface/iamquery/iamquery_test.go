@@ -115,7 +115,8 @@ func TestIAMResponseAndErrorShapes(t *testing.T) {
 	has(t, res, http.StatusOK,
 		`<CreateUserResponse>`,
 		`<CreateUserResult><User><Path>/eng/</Path><UserName>bob</UserName><UserId>AIDA`,
-		`<Arn>arn:vws:iam::123456789012:user/eng/bob</Arn><CreateDate>2026-10-09T10:00:00Z</CreateDate></User></CreateUserResult>`,
+		`<Arn>arn:aws:iam::123456789012:user/eng/bob</Arn>`,
+		`<CreateDate>2026-10-09T10:00:00Z</CreateDate></User></CreateUserResult>`,
 		`<ResponseMetadata><RequestId>`)
 	res = call(t, h, root, sigv4.ServiceIAM, url.Values{"Action": {"GetUser"}, "UserName": {"nobody"}})
 	has(t, res, http.StatusNotFound, `<ErrorResponse><Error><Type>Sender</Type><Code>NoSuchEntity</Code>`)
@@ -136,7 +137,8 @@ func TestPolicyDocumentsAreURLEncoded(t *testing.T) {
 	h, _, _, root := harness(t)
 	doc := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"ec2:Describe*","Resource":"*"}]}`
 	res := call(t, h, root, sigv4.ServiceIAM, url.Values{"Action": {"CreatePolicy"}, "PolicyName": {"d"}, "PolicyDocument": {doc}})
-	has(t, res, http.StatusOK, `<Arn>arn:vws:iam::123456789012:policy/d</Arn>`, `<DefaultVersionId>v1</DefaultVersionId>`, `<AttachmentCount>0</AttachmentCount>`)
+	has(t, res, http.StatusOK, `<Arn>arn:aws:iam::123456789012:policy/d</Arn>`,
+		`<DefaultVersionId>v1</DefaultVersionId>`, `<AttachmentCount>0</AttachmentCount>`)
 	res = call(t, h, root, sigv4.ServiceIAM, url.Values{"Action": {"GetPolicyVersion"}, "PolicyArn": {"arn:vws:iam::123456789012:policy/d"}, "VersionId": {"v1"}})
 	has(t, res, http.StatusOK, `<Document>`+strings.ReplaceAll(url.QueryEscape(doc), "+", "%20")+`</Document>`, `<IsDefaultVersion>true</IsDefaultVersion>`)
 }
@@ -954,7 +956,7 @@ func TestLimitedUserAndSTS(t *testing.T) {
 		http.StatusOK, `<RoleName>ops</RoleName>`, `<AssumeRolePolicyDocument>`, `<MaxSessionDuration>3600</MaxSessionDuration>`)
 	res := call(t, h, bob, sigv4.ServiceSTS, url.Values{"Action": {"AssumeRole"}, "RoleArn": {"arn:vws:iam::123456789012:role/ops"}, "RoleSessionName": {"s1"}, "DurationSeconds": {"900"}})
 	has(t, res, http.StatusOK, `<AssumeRoleResult><Credentials><AccessKeyId>ASIA`, `<SessionToken>`, `<Expiration>2026-10-09T10:15:00Z</Expiration>`,
-		`<AssumedRoleUser><AssumedRoleId>AROA`, `<Arn>arn:vws:sts::123456789012:assumed-role/ops/s1</Arn>`)
+		`<AssumedRoleUser><AssumedRoleId>AROA`, `<Arn>arn:aws:sts::123456789012:assumed-role/ops/s1</Arn>`)
 	has(t, call(t, h, bob, sigv4.ServiceSTS, url.Values{"Action": {"AssumeRole"}, "RoleArn": {"arn:vws:iam::123456789012:role/ops"}, "RoleSessionName": {"s1"}, "DurationSeconds": {"60"}}),
 		http.StatusBadRequest, `<Code>ValidationError</Code>`)
 	unknown := sigv4.Credential{AccessKey: "AKIANOSUCHKEY0000000", Secret: "x"}

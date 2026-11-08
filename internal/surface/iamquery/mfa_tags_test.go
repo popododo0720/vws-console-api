@@ -445,7 +445,7 @@ func TestMFADeviceTagSerialVariantsStayInScope(t *testing.T) {
 	}
 	bob := sigv4.Credential{AccessKey: k.AccessKeyID, Secret: k.Secret}
 	variants := []string{
-		"arn:aws:iam::" + root.Account.String() + ":mfa/scope-phone",
+		"arn:aws-cn:iam::" + root.Account.String() + ":mfa/scope-phone",
 		"arn:vws:iam:us-east-1:" + root.Account.String() + ":mfa/scope-phone",
 		"arn:vws:iam::" + root.Account.String() + ":mfa/admin/scope-phone",
 	}

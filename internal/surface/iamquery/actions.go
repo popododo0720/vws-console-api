@@ -97,18 +97,6 @@ func arnOf(c *exchange, kind, path, name string) string {
 	return "arn:vws:iam::" + c.caller.Account.String() + ":" + kind + path + name
 }
 
-// awsPartition names an internal arn:vws ARN in the aws partition for the
-// wire. STS GetCallerIdentity answers the caller ARN as AWS does, because
-// SDKs, CLI scripts and policy tooling parse the partition (#247). Other IAM
-// and STS responses still carry arn:vws (#430).
-func awsPartition(arn string) string {
-	rest, ok := strings.CutPrefix(arn, "arn:vws:")
-	if !ok {
-		return arn
-	}
-	return "arn:aws:" + rest
-}
-
 // userName is UserName, or the calling user when it is omitted, as in AWS.
 func userName(c *exchange) string {
 	if n := c.form("UserName"); n != "" {
@@ -487,7 +475,7 @@ func iamActions() map[string]spec {
 			if name == "" { // the root user asking about itself
 				return struct {
 					User userXML `xml:"User"`
-				}{userXML{UserID: c.caller.Account.String(), Arn: c.caller.Principal}}, nil
+				}{userXML{UserID: c.caller.Account.String(), Arn: iam.AWSPartition(c.caller.Principal)}}, nil
 			}
 			// The lookup is read again for the response; a user that moved
 			// since it was authorized is not shown.
@@ -1229,7 +1217,8 @@ func iamActions() map[string]spec {
 			page, truncated, next := pageByName(ps, func(p iam.ManagedPolicy) string { return p.Name }, marker, maxItems)
 			out := attachedResult{AttachedPolicies: []attachedXML{}, IsTruncated: truncated, Marker: next}
 			for _, p := range page {
-				out.AttachedPolicies = append(out.AttachedPolicies, attachedXML{PolicyName: p.Name, PolicyArn: p.ARN})
+				out.AttachedPolicies = append(out.AttachedPolicies,
+					attachedXML{PolicyName: p.Name, PolicyArn: iam.AWSPartition(p.ARN)})
 			}
 			return out, nil
 		}}
@@ -1304,7 +1293,7 @@ func stsActions() map[string]spec {
 				Arn     string `xml:"Arn"`
 				UserID  string `xml:"UserId"`
 				Account string `xml:"Account"`
-			}{awsPartition(c.caller.Principal), callerID(h, c), c.caller.Account.String()}, nil
+			}{iam.AWSPartition(c.caller.Principal), callerID(h, c), c.caller.Account.String()}, nil
 		}},
 		"AssumeRole": {
 			params: []string{"RoleArn", "RoleSessionName", "DurationSeconds"}, needsAdmin: true,
@@ -1336,7 +1325,7 @@ func stsActions() map[string]spec {
 						SessionToken:    got.Key.SessionToken,
 						Expiration:      stamp(got.Key.Expires),
 					},
-					got.AssumedRoleID, got.ARN,
+					got.AssumedRoleID, iam.AWSPartition(got.ARN),
 				}, nil
 			},
 		},

@@ -243,6 +243,7 @@ func (h *handler) runInstances(w http.ResponseWriter, r *http.Request, c resourc
 		ImageID: img, InstanceType: r.Form.Get("InstanceType"), SubnetID: sub, Count: count, Tags: tags,
 		KeyName: r.Form.Get("KeyName"), UserData: userData,
 		RootVolumeType: root.typ, RootVolumeSize: root.size, RootIops: root.iops, RootThroughput: root.throughput,
+		RootVolumeKept:    root.kept,
 		NetworkInterfaces: nics,
 	})
 	if err != nil {
@@ -530,11 +531,15 @@ const maxBlockDeviceMappings = 100
 type rootMapping struct {
 	typ                    resource.VolumeType
 	size, iops, throughput int64
+	kept                   bool
 }
 
 // rootDeviceFields are the BlockDeviceMapping.N fields rootVolume reads.
 func rootDeviceFields() []string {
-	return []string{"DeviceName", "Ebs.VolumeType", "Ebs.VolumeSize", "Ebs.Iops", "Ebs.Throughput", "Ebs.Encrypted"}
+	return []string{
+		"DeviceName", "Ebs.VolumeType", "Ebs.VolumeSize", "Ebs.Iops", "Ebs.Throughput", "Ebs.Encrypted",
+		"Ebs.DeleteOnTermination",
+	}
 }
 
 // unsupportedDeviceField is a BlockDeviceMapping.N field EC2 takes that VWS
@@ -579,11 +584,11 @@ func refuseUnsupportedDeviceFields(r *http.Request, prefix string) error {
 
 // rootVolume reads the RunInstances block device mapping. VWS creates only
 // the root volume, so the one mapping it takes names the root device and
-// may set Ebs.VolumeType, Ebs.VolumeSize, Ebs.Iops and Ebs.Throughput;
-// Normalize checks them with the CreateVolume rules and the backend checks
-// the size against the image. A mapping for any other device would add a
-// volume, which VWS does not support yet (#423 AC2), so it is refused
-// rather than ignored. A field of unsupportedDeviceFields is refused first,
+// may set Ebs.VolumeType, Ebs.VolumeSize, Ebs.Iops, Ebs.Throughput and
+// Ebs.DeleteOnTermination; Normalize checks them with the CreateVolume rules
+// and the backend checks the size against the image. A mapping for any
+// other device would add a volume, which VWS does not support yet (#423
+// AC2), so it is refused rather than ignored. A field of unsupportedDeviceFields is refused first,
 // so the answer names it. The other mapping fields are refused by allowRun.
 func rootVolume(r *http.Request) (rootMapping, error) {
 	var root rootMapping
@@ -617,6 +622,14 @@ func rootVolume(r *http.Request) (rootMapping, error) {
 		}
 		if root.throughput, err = mappingInt(r, prefix+"Ebs.Throughput", "throughput"); err != nil {
 			return rootMapping{}, err
+		}
+		if key := prefix + "Ebs.DeleteOnTermination"; r.Form.Has(key) {
+			switch v := r.Form.Get(key); {
+			case strings.EqualFold(v, "false"):
+				root.kept = true
+			case !strings.EqualFold(v, "true"):
+				return rootMapping{}, resource.Invalid(key, "Value ("+v+") for parameter deleteOnTermination is invalid.")
+			}
 		}
 	}
 	return root, nil

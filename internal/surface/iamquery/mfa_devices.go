@@ -21,7 +21,7 @@ type virtualMFADevicesResult struct {
 }
 
 func toVirtualMFADevice(d iam.VirtualMFADevice) virtualMFADeviceXML {
-	out := virtualMFADeviceXML{SerialNumber: d.SerialNumber}
+	out := virtualMFADeviceXML{SerialNumber: iam.AWSPartition(d.SerialNumber)}
 	if d.User != nil {
 		u := toUser(*d.User)
 		out.User = &u
@@ -49,7 +49,7 @@ type mfaDevicesResult struct {
 
 func toListedMFADevice(d iam.MFADevice) listedMFADeviceXML {
 	return listedMFADeviceXML{
-		UserName: d.UserName, SerialNumber: d.SerialNumber, EnableDate: stamp(d.Enabled),
+		UserName: d.UserName, SerialNumber: iam.AWSPartition(d.SerialNumber), EnableDate: stamp(d.Enabled),
 	}
 }
 

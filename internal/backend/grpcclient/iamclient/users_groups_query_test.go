@@ -68,7 +68,7 @@ func TestUserAndGroupActionsThroughTheQuerySurfaceOverGRPC(t *testing.T) {
 		{"CreateUser", []step{
 			{f("Action", "CreateUser", "UserName", "carol", "Path", "/qa/"), 200, []string{
 				"<CreateUserResponse", "<UserName>carol</UserName>", "<Path>/qa/</Path>",
-				"<Arn>arn:vws:iam::123456789012:user/qa/carol</Arn>", "<UserId>AIDA", "<CreateDate>",
+				"<Arn>arn:aws:iam::123456789012:user/qa/carol</Arn>", "<UserId>AIDA", "<CreateDate>",
 			}},
 			{f("Action", "CreateUser", "UserName", "CAROL"), 409, []string{
 				"<Code>EntityAlreadyExists</Code>", "User with name CAROL already exists.",
@@ -104,7 +104,7 @@ func TestUserAndGroupActionsThroughTheQuerySurfaceOverGRPC(t *testing.T) {
 		}},
 		{"groups", []step{
 			{f("Action", "CreateGroup", "GroupName", "ops", "Path", "/x/"), 200, []string{
-				"<GroupName>ops</GroupName>", "<Arn>arn:vws:iam::123456789012:group/x/ops</Arn>", "<GroupId>AGPA",
+				"<GroupName>ops</GroupName>", "<Arn>arn:aws:iam::123456789012:group/x/ops</Arn>", "<GroupId>AGPA",
 			}},
 			{f("Action", "CreateGroup", "GroupName", "ops"), 409, []string{"<Code>EntityAlreadyExists</Code>"}},
 			{f("Action", "ListGroups", "MaxItems", "1"), 200, []string{

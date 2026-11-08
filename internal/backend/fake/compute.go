@@ -95,13 +95,13 @@ func (c compute) RunInstances(ctx context.Context, m backend.Mutation, req resou
 		inst.LaunchTime = launched
 		inst.RootDeviceName = resource.RootDeviceName
 		inst.BlockDevices = []resource.BlockDevice{{
-			Device: resource.RootDeviceName, VolumeID: volID, DeleteOnTermination: true, Status: resource.AttachmentAttached,
-			AttachTime: launched,
+			Device: resource.RootDeviceName, VolumeID: volID, DeleteOnTermination: !req.RootVolumeKept,
+			Status: resource.AttachmentAttached, AttachTime: launched,
 		}}
 		roots = append(roots, resource.Volume{
 			ID: volID, OwnerID: m.Account, SizeGiB: req.RootSize(), Zone: resource.ZoneName, Type: req.RootType(),
 			State: resource.VolumeInUse, InstanceID: id, Device: resource.RootDeviceName,
-			CreateTime: launched, AttachTime: launched, DeleteOnTermination: true,
+			CreateTime: launched, AttachTime: launched, DeleteOnTermination: !req.RootVolumeKept,
 			AttachState: resource.AttachmentAttached, Iops: iops, Throughput: miBps,
 		})
 		items = append(items, inst)

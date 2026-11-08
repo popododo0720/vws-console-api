@@ -64,10 +64,10 @@ func TestCreateVirtualMFADevice(t *testing.T) {
 	res := call(t, h, root, sigv4.ServiceIAM, createMFAForm("alice-phone", "/eng/"))
 	has(t, res, http.StatusOK, `<CreateVirtualMFADeviceResponse>`,
 		`<CreateVirtualMFADeviceResult><VirtualMFADevice>`+
-			`<SerialNumber>arn:vws:iam::123456789012:mfa/eng/alice-phone</SerialNumber><Base32StringSeed>`,
+			`<SerialNumber>arn:aws:iam::123456789012:mfa/eng/alice-phone</SerialNumber><Base32StringSeed>`,
 		`</Base32StringSeed><QRCodePNG>`, `<ResponseMetadata><RequestId>`)
 	serial, seed, qr := createdDevice(t, res.Body.Bytes())
-	if serial != "arn:vws:iam::123456789012:mfa/eng/alice-phone" {
+	if serial != "arn:aws:iam::123456789012:mfa/eng/alice-phone" {
 		t.Errorf("serial %q", serial)
 	}
 	if !bytes.HasPrefix(qr, []byte("\x89PNG\r\n\x1a\n")) {
@@ -81,7 +81,7 @@ func TestCreateVirtualMFADevice(t *testing.T) {
 		t.Errorf("not authorized as %s: %v", want, rec.seen)
 	}
 	has(t, call(t, h, root, sigv4.ServiceIAM, url.Values{"Action": {"ListVirtualMFADevices"}}),
-		http.StatusOK, `<SerialNumber>`+serial+`</SerialNumber>`)
+		http.StatusOK, `<SerialNumber>`+iam.AWSPartition(serial)+`</SerialNumber>`)
 	if _, err := f.CreateUser(t.Context(), root.Account, "alice", "/"); err != nil {
 		t.Fatal(err)
 	}
@@ -94,7 +94,7 @@ func TestCreateVirtualMFADevice(t *testing.T) {
 	// Path defaults to "/", and a name of 226 characters is accepted.
 	long := strings.Repeat("a", iam.MaxVirtualMFADeviceNameLen)
 	has(t, call(t, h, root, sigv4.ServiceIAM, createMFAForm(long, "")),
-		http.StatusOK, `<SerialNumber>arn:vws:iam::123456789012:mfa/`+long+`</SerialNumber>`)
+		http.StatusOK, `<SerialNumber>arn:aws:iam::123456789012:mfa/`+long+`</SerialNumber>`)
 }
 
 // Each documented error maps to its AWS code and HTTP status, and a Tags

@@ -11,7 +11,9 @@ type userXML struct {
 }
 
 func toUser(u iam.User) userXML {
-	return userXML{Path: u.Path, UserName: u.Name, UserID: u.ID, Arn: u.ARN, CreateDate: stamp(u.Created)}
+	return userXML{
+		Path: u.Path, UserName: u.Name, UserID: u.ID, Arn: iam.AWSPartition(u.ARN), CreateDate: stamp(u.Created),
+	}
 }
 
 type groupXML struct {
@@ -23,7 +25,9 @@ type groupXML struct {
 }
 
 func toGroup(g iam.Group) groupXML {
-	return groupXML{Path: g.Path, GroupName: g.Name, GroupID: g.ID, Arn: g.ARN, CreateDate: stamp(g.Created)}
+	return groupXML{
+		Path: g.Path, GroupName: g.Name, GroupID: g.ID, Arn: iam.AWSPartition(g.ARN), CreateDate: stamp(g.Created),
+	}
 }
 
 type roleXML struct {
@@ -39,7 +43,7 @@ type roleXML struct {
 
 func toRole(r iam.Role) roleXML {
 	return roleXML{
-		Path: r.Path, RoleName: r.Name, RoleID: r.ID, Arn: r.ARN, CreateDate: stamp(r.Created),
+		Path: r.Path, RoleName: r.Name, RoleID: r.ID, Arn: iam.AWSPartition(r.ARN), CreateDate: stamp(r.Created),
 		AssumeRolePolicyDocument: policyDoc(r.TrustPolicy),
 		Description:              r.Description,
 		MaxSessionDuration:       r.MaxSessionDuration,
@@ -66,7 +70,7 @@ func toPolicy(p iam.ManagedPolicy) policyXML {
 		version = "v1"
 	}
 	return policyXML{
-		PolicyName: p.Name, PolicyID: p.ID, Arn: p.ARN, Path: p.Path, DefaultVersionID: version,
+		PolicyName: p.Name, PolicyID: p.ID, Arn: iam.AWSPartition(p.ARN), Path: p.Path, DefaultVersionID: version,
 		AttachmentCount: p.AttachmentCount, IsAttachable: true, Description: p.Description,
 		CreateDate: stamp(p.Created), UpdateDate: stamp(p.Updated),
 	}
@@ -129,7 +133,7 @@ type mfaDeviceXML struct {
 }
 
 func toMFADevice(d iam.MFADevice) mfaDeviceXML {
-	out := mfaDeviceXML{UserName: d.UserName, SerialNumber: d.SerialNumber}
+	out := mfaDeviceXML{UserName: d.UserName, SerialNumber: iam.AWSPartition(d.SerialNumber)}
 	if !d.Enabled.IsZero() {
 		out.EnableDate = stamp(d.Enabled)
 	}

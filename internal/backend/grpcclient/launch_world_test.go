@@ -13,6 +13,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
+	"google.golang.org/protobuf/proto"
 
 	commonv1 "github.com/popododo0720/vws-proto/gen/go/vws/common/v1"
 	computev1 "github.com/popododo0720/vws-proto/gen/go/vws/compute/v1"
@@ -26,7 +27,9 @@ import (
 // deletes an instance's boot volume and IP with it, refuses to delete an
 // attached volume, and refuses to delete an instance an address names
 // (instance.proto). A delete answers a pending operation that is done on the
-// first poll.
+// first poll. It is a compute before vws-compute#173 unless keepsRoots is
+// set: it drops VolumeAttachment.delete_on_termination and deletes the boot
+// volume with its instance.
 type launchWorld struct {
 	*regionalImages
 	longrunningpb.UnimplementedOperationsServer
@@ -46,6 +49,16 @@ type launchWorld struct {
 	made      map[string]int
 	deletes   []string
 	lis       *bufconn.Listener
+	// keepsRoots makes it a compute with vws-compute#173: GetInstance
+	// reports the boot attachment with the delete_on_termination it was
+	// created with, and DeleteInstance keeps a boot volume created with false.
+	keepsRoots bool
+	// kept marks an instance whose CreateInstance sent
+	// delete_on_termination=false on its boot attachment.
+	kept map[string]bool
+	// sentDeleteOnTermination is the boot attachment field of every
+	// CreateInstance, replays included.
+	sentDeleteOnTermination []*bool
 }
 
 // fault fails times calls of a method from call number n, counted from 1.
@@ -154,12 +167,17 @@ func (w *launchWorld) CreateInstance(
 		return nil, toStatus(err)
 	}
 	name := instanceName(projectID, req.GetInstanceId())
-	boot := req.GetInstance().GetSpec().GetVolumes()[0].GetVolume()
+	attachment := req.GetInstance().GetSpec().GetVolumes()[0]
+	boot := attachment.GetVolume()
+	w.mu.Lock()
+	w.sentDeleteOnTermination = append(w.sentDeleteOnTermination, attachment.DeleteOnTermination)
+	w.mu.Unlock()
 	return w.create("CreateInstance", req.GetRequestId(), name, func() error {
 		if owner, ok := w.volumes[boot]; !ok || owner != "" {
 			return status.Error(codes.FailedPrecondition, "boot volume "+boot)
 		}
 		w.volumes[boot] = name
+		w.kept[name] = attachment.DeleteOnTermination != nil && !attachment.GetDeleteOnTermination()
 		w.ips["10.0.0."+strconv.Itoa(w.made["CreateInstance"]+1)] = name
 		w.regionalImages.mu.Lock()
 		w.labels = req.GetInstance().GetLabels()
@@ -182,6 +200,13 @@ func (w *launchWorld) GetInstance(ctx context.Context, req *computev1.GetInstanc
 	w.mu.Lock()
 	before, _, _ := w.enter("GetInstance")
 	live := w.live(req.GetName())
+	var boot string
+	for vol, owner := range w.volumes {
+		if owner == req.GetName() {
+			boot = vol
+		}
+	}
+	keep, honored := w.kept[req.GetName()], w.keepsRoots
 	w.mu.Unlock()
 	if before {
 		return nil, errDown()
@@ -189,7 +214,14 @@ func (w *launchWorld) GetInstance(ctx context.Context, req *computev1.GetInstanc
 	if !live {
 		return nil, status.Error(codes.NotFound, req.GetName())
 	}
-	return w.regionalImages.GetInstance(ctx, req)
+	got, err := w.regionalImages.GetInstance(ctx, req)
+	if err != nil || !honored {
+		return got, err
+	}
+	got.Spec.Volumes = []*computev1.VolumeAttachment{{
+		Volume: boot, DeviceName: "boot", Boot: true, DeleteOnTermination: proto.Bool(!keep),
+	}}
+	return got, nil
 }
 
 // remove deletes name with change and answers a pending operation.
@@ -230,7 +262,11 @@ func (w *launchWorld) DeleteInstance(
 			}
 		}
 		for vol, owner := range w.volumes {
-			if owner == name {
+			switch {
+			case owner != name:
+			case w.keepsRoots && w.kept[name]:
+				w.volumes[vol] = ""
+			default:
 				delete(w.volumes, vol)
 			}
 		}
@@ -279,6 +315,7 @@ func startLaunchWorld(t *testing.T) (*launchWorld, computeClient) {
 		volumes:        map[string]string{}, ips: map[string]string{}, addresses: map[string]string{},
 		replays: map[string]*longrunningpb.Operation{}, pending: map[string]bool{},
 		calls: map[string]int{}, faults: map[string]fault{}, made: map[string]int{},
+		kept: map[string]bool{},
 	}
 	lis := bufconn.Listen(MaxMessageBytes())
 	srv := grpc.NewServer()

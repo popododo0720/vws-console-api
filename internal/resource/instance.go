@@ -243,6 +243,11 @@ type RunInstancesRequest struct {
 	// RootVolumeSize is the root mapping's Ebs.VolumeSize in GiB. Zero means
 	// omitted; see RootSize.
 	RootVolumeSize int64 `json:"rootVolumeSize,omitempty"`
+	// RootVolumeKept is the root mapping's Ebs.DeleteOnTermination=false:
+	// the root volume is detached and kept when the instance terminates.
+	// False is the EC2 default, so the fingerprint of a request that omits
+	// it does not change.
+	RootVolumeKept bool `json:"rootVolumeKept,omitempty"`
 	// NetworkInterfaces places each interface on a subnet by device index
 	// (EC2 NetworkInterface.N). Any of them, the primary included, may be
 	// on a direct subnet.

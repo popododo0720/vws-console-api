@@ -6,9 +6,11 @@
 package iamquery
 
 import (
+	"encoding/json"
 	"encoding/xml"
 	"net/http"
 	"net/url"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -100,6 +102,18 @@ func (h *handler) serve(w http.ResponseWriter, r *http.Request) {
 	for k, vs := range r.Form {
 		if len(vs) > 1 {
 			c.fail(resource.Invalid(k, "repeated"))
+			return
+		}
+	}
+	for _, k := range [...]string{"PolicyArn", "RoleArn", "SerialNumber"} {
+		if vs := r.Form[k]; len(vs) == 1 {
+			vs[0] = iam.VWSPartition(vs[0])
+		}
+	}
+	for _, k := range [...]string{"PolicyDocument", "AssumeRolePolicyDocument"} {
+		if arn, ok := awsARNIn(r.Form.Get(k)); ok {
+			c.fail(resource.Invalid("PolicyDocument", `Partition "aws" is not valid for resource "`+arn+
+				`": policies are evaluated in the vws partition (#681).`))
 			return
 		}
 	}
@@ -235,6 +249,42 @@ type errorXML struct {
 	RequestID string   `xml:"RequestId"`
 }
 
+// awsARNIn reports the first arn:aws ARN a policy document names. Until
+// documents match the aws partition (#681), such a statement would match
+// nothing, and a Deny or NotResource written with it would fail open, so the
+// document is refused. A document that is not JSON is left to the backend.
+func awsARNIn(doc string) (string, bool) {
+	var v any
+	if doc == "" || json.Unmarshal([]byte(doc), &v) != nil {
+		return "", false
+	}
+	stack := []any{v}
+	for len(stack) > 0 {
+		n := len(stack) - 1
+		switch x := stack[n].(type) {
+		case string:
+			if strings.HasPrefix(x, "arn:aws:") {
+				return x, true
+			}
+			stack = stack[:n]
+		case []any:
+			stack = append(stack[:n], x...)
+		case map[string]any:
+			stack = stack[:n]
+			for _, e := range x {
+				stack = append(stack, e)
+			}
+		default:
+			stack = stack[:n]
+		}
+	}
+	return "", false
+}
+
+// messageARNRE finds an ARN that begins a word of an error message, so an
+// "arn:vws:" inside an ARN's resource path is left as it is.
+var messageARNRE = regexp.MustCompile(`(^|[\s'"(])arn:vws:`)
+
 func (c *exchange) fail(err error) {
 	e := resource.AsError(err)
 	status, code := c.wire(e)
@@ -249,7 +299,9 @@ func (c *exchange) fail(err error) {
 	c.w.WriteHeader(status)
 	_, werr := c.w.Write([]byte(xml.Header))
 	if werr == nil {
-		werr = xml.NewEncoder(c.w).Encode(errorXML{Type: typ, Code: code, Message: e.Message, RequestID: requestID(c.r)})
+		// An error names an ARN in the aws partition, as a response does.
+		msg := messageARNRE.ReplaceAllString(e.Message, "${1}arn:aws:")
+		werr = xml.NewEncoder(c.w).Encode(errorXML{Type: typ, Code: code, Message: msg, RequestID: requestID(c.r)})
 	}
 	server.RecordFailure(c.w, werr)
 }

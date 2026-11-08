@@ -58,7 +58,8 @@ func TestStaticSessionWithBearerNamesRootAndLoginDisabled(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 		t.Fatal(err)
 	}
-	if got["loginEnabled"] != false || got["principal"] != "arn:vws:iam::123456789012:root" || got["root"] != true || got["account"] != "123456789012" {
+	if got["loginEnabled"] != false || got["principal"] != "arn:aws:iam::123456789012:root" || got["root"] != true ||
+		got["account"] != "123456789012" {
 		t.Errorf("body %v", got)
 	}
 	rec = e.do(t, http.MethodGet, "/api/v1/auth/session", "", map[string]string{"Authorization": "Bearer wrong"})

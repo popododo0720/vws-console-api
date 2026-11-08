@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/popododo0720/vws-console-api/internal/iam"
 	"github.com/popododo0720/vws-console-api/internal/sigv4"
 )
 
@@ -26,8 +27,8 @@ func TestDeleteVirtualMFADevice(t *testing.T) {
 		t.Errorf("not authorized as iam:DeleteVirtualMFADevice on %s: %v", serial, rec.seen)
 	}
 	list := call(t, h, root, sigv4.ServiceIAM, url.Values{"Action": {"ListVirtualMFADevices"}})
-	has(t, list, http.StatusOK, `<SerialNumber>`+keep+`</SerialNumber>`)
-	if strings.Contains(list.Body.String(), serial) {
+	has(t, list, http.StatusOK, `<SerialNumber>`+iam.AWSPartition(keep)+`</SerialNumber>`)
+	if strings.Contains(list.Body.String(), iam.AWSPartition(serial)) {
 		t.Errorf("deleted device still listed: %s", list.Body.String())
 	}
 	// A second delete of the same device is NoSuchEntity, as in AWS.
@@ -50,7 +51,7 @@ func TestDeleteVirtualMFADeviceErrors(t *testing.T) {
 	has(t, call(t, h, root, sigv4.ServiceIAM, url.Values{"Action": {"DeleteVirtualMFADevice"}, "SerialNumber": {enabled}}),
 		http.StatusConflict, `<Code>DeleteConflict</Code>`)
 	has(t, call(t, h, root, sigv4.ServiceIAM, url.Values{"Action": {"ListVirtualMFADevices"}}),
-		http.StatusOK, `<SerialNumber>`+enabled+`</SerialNumber>`)
+		http.StatusOK, `<SerialNumber>`+iam.AWSPartition(enabled)+`</SerialNumber>`)
 
 	for name, serial := range map[string]string{
 		"missing":       "arn:vws:iam::123456789012:mfa/ghost-phone",
@@ -77,5 +78,5 @@ func TestDeleteVirtualMFADeviceNeedsPermission(t *testing.T) {
 	has(t, call(t, h, bob, sigv4.ServiceIAM, url.Values{"Action": {"DeleteVirtualMFADevice"}, "SerialNumber": {serial}}),
 		http.StatusForbidden, `<Code>AccessDenied</Code>`)
 	has(t, call(t, h, root, sigv4.ServiceIAM, url.Values{"Action": {"ListVirtualMFADevices"}}),
-		http.StatusOK, `<SerialNumber>`+serial+`</SerialNumber>`)
+		http.StatusOK, `<SerialNumber>`+iam.AWSPartition(serial)+`</SerialNumber>`)
 }
