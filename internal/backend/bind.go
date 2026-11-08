@@ -11,7 +11,8 @@ type VolumeBind struct {
 }
 
 // BindOf finds id in inst.BlockDevices.
-// A boot entry has DeleteOnTermination set or uses the root device name.
+// A boot entry uses the root device name. DeleteOnTermination does not tell
+// it: a launch's extra volumes default to it too (#423).
 func BindOf(inst resource.Instance, id resource.VolumeID) (VolumeBind, bool) {
 	for _, block := range inst.BlockDevices {
 		if block.VolumeID != id {
@@ -19,7 +20,7 @@ func BindOf(inst resource.Instance, id resource.VolumeID) (VolumeBind, bool) {
 		}
 		return VolumeBind{
 			VolumeID: id, InstanceID: inst.ID, Device: block.Device,
-			Boot: block.DeleteOnTermination || block.Device == resource.RootDeviceName,
+			Boot: block.Device == resource.RootDeviceName,
 		}, true
 	}
 	return VolumeBind{}, false
