@@ -313,6 +313,7 @@ func Run(t *testing.T, newSet Harness) {
 	exerciseRootDevice(ctx, t, set, account, created.Items[0].ID, img)
 	exerciseRootVolumeType(ctx, t, set, account, created.Items[0].ID, img)
 	exerciseRootVolumeSize(ctx, t, set, account, created.Items[0].ID, img)
+	exerciseRootDeleteOnTermination(ctx, t, set, account, created.Items[0].ID, img)
 	exerciseTerminateRelease(ctx, t, set, account, created.Items[0].ID, img)
 	exerciseVolumeTypes(ctx, t, set, account)
 }

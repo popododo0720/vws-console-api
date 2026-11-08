@@ -1616,7 +1616,11 @@ func (c computeClient) DescribeVolumes(ctx context.Context, s backend.Scope, q r
 // hot-plug finishes, so neither one makes a volume attached (#448):
 //
 //   - A volume that storage reports with no instance and that a live
-//     instance spec names is in-use from the accept, as on EC2 (#214).
+//     instance spec names is in-use from the accept, as on EC2 (#214). A
+//     root volume is one too: its vws-instance label names the instance it
+//     was made for, which may be gone while a kept root stays (#423).
+//   - DeleteOnTermination is the spec attachment's, and a root's device is
+//     RootDeviceName whatever storage names it.
 //   - The status is the one compute reports for the volume on that instance:
 //     only ATTACHED is attached.
 //   - A spec volume compute has no entry for is attaching: the node has not
@@ -1645,17 +1649,17 @@ func (c computeClient) markAttachState(ctx context.Context, account resource.Acc
 		v := &items[i]
 		view, ok := views[v.ID]
 		if v.InstanceID.IsZero() {
-			if v.State != resource.VolumeAvailable || !ok || !view.inSpec || view.bind.Boot {
+			if v.State != resource.VolumeAvailable || !ok || !view.inSpec {
 				continue
 			}
 			v.State = resource.VolumeInUse
 			v.InstanceID = view.bind.InstanceID
-			v.Device = view.bind.Device
 		}
 		switch {
 		case ok && view.bind.InstanceID == v.InstanceID:
 			v.AttachState = view.state
-			if v.Device == "" {
+			v.DeleteOnTermination = view.deleteOnTermination
+			if v.Device == "" || view.bind.Boot {
 				v.Device = view.bind.Device
 			}
 		case ok:
@@ -1671,9 +1675,10 @@ func (c computeClient) markAttachState(ctx context.Context, account resource.Acc
 
 // attachView is compute's view of one volume on one live instance.
 type attachView struct {
-	bind   backend.VolumeBind
-	inSpec bool
-	state  resource.AttachmentStatus
+	bind                backend.VolumeBind
+	inSpec              bool
+	deleteOnTermination bool
+	state               resource.AttachmentStatus
 }
 
 // attachViews maps each volume a live instance spec names, or compute still
@@ -1746,7 +1751,9 @@ func addAttachViews(out map[resource.VolumeID]attachView, in *computev1.Instance
 		if !ok {
 			continue
 		}
-		staged[block.VolumeID] = attachView{bind: bind, inSpec: true, state: block.Status}
+		staged[block.VolumeID] = attachView{
+			bind: bind, inSpec: true, deleteOnTermination: block.DeleteOnTermination, state: block.Status,
+		}
 	}
 	for id, o := range observed {
 		if _, ok := staged[id]; ok {
@@ -2528,23 +2535,6 @@ func volumeModel(in *storagev1.Volume) (resource.Volume, error) {
 		Device: in.GetStatus().GetDeviceName(), CreateTime: in.GetCreateTime().AsTime().UTC(),
 		Iops: in.GetSpec().GetIops(), Throughput: in.GetSpec().GetThroughputMibps(),
 	}
-	if rootVolume(in) {
-		// RunInstances made it from the image, and compute deletes it with
-		// the instance. Storage may not report the attachment, so the
-		// instance comes from the label RunInstances wrote.
-		vol.DeleteOnTermination = true
-		if vol.InstanceID.IsZero() {
-			if parsed, err := resource.Parse[resource.InstanceID](in.GetLabels()[labelInstance]); err == nil {
-				vol.InstanceID = parsed
-			}
-		}
-		if !vol.InstanceID.IsZero() {
-			vol.Device = resource.RootDeviceName
-			if vol.State == resource.VolumeAvailable {
-				vol.State = resource.VolumeInUse
-			}
-		}
-	}
 	if !vol.InstanceID.IsZero() {
 		// Storage names the instance before hot-plug finishes, so storage
 		// alone never makes a volume attached. Only the attach state compute
@@ -2755,11 +2745,6 @@ func ruleProto(rule resource.IngressRule, id string) (*networkv1.SecurityGroupRu
 		ToPort:    int32(rule.ToPort),
 		Target:    &networkv1.SecurityGroupRule_Cidr{Cidr: rule.Cidr},
 	}, nil
-}
-
-// rootVolume reports a boot volume, which RunInstances creates from an image.
-func rootVolume(in *storagev1.Volume) bool {
-	return in.GetSpec().GetImage() != ""
 }
 
 func protocolName(p networkv1.Protocol) string {

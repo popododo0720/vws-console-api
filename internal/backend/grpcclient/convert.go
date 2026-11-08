@@ -10,6 +10,7 @@ import (
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
@@ -595,8 +596,14 @@ func instanceModel(in *computev1.Instance) (resource.Instance, error) {
 		if o, ok := attach[volID]; ok {
 			state = attachStateOf(o.GetState())
 		}
+		// Unset is true for the boot volume and false for the others
+		// (instance.proto).
+		deleteOnTermination := v.GetBoot()
+		if v.DeleteOnTermination != nil {
+			deleteOnTermination = v.GetDeleteOnTermination()
+		}
 		blocks = append(blocks, resource.BlockDevice{
-			Device: device, VolumeID: volID, DeleteOnTermination: v.GetBoot(), Status: state,
+			Device: device, VolumeID: volID, DeleteOnTermination: deleteOnTermination, Status: state,
 		})
 		delete(attach, volID)
 	}
@@ -1070,7 +1077,10 @@ func volumeAttachments(projectID string, blocks []resource.BlockDevice) []*compu
 		if boot {
 			device = "boot"
 		}
-		out = append(out, &computev1.VolumeAttachment{Volume: volumeName(projectID, b.VolumeID.String()), DeviceName: device, Boot: boot})
+		out = append(out, &computev1.VolumeAttachment{
+			Volume: volumeName(projectID, b.VolumeID.String()), DeviceName: device, Boot: boot,
+			DeleteOnTermination: proto.Bool(b.DeleteOnTermination),
+		})
 	}
 	return out
 }

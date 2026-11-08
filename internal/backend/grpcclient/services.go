@@ -20,6 +20,7 @@ import (
 	storagev1 "github.com/popododo0720/vws-proto/gen/go/vws/storage/v1"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	"github.com/popododo0720/vws-console-api/internal/backend"
@@ -243,6 +244,14 @@ func (c computeClient) launchInstances(
 ) (resource.Accepted[resource.Instance], error) {
 	items := make([]resource.Instance, 0, req.Count)
 	var op resource.Operation
+	// A kept root sends delete_on_termination=false. The default leaves it unset,
+	// true for a boot volume (instance.proto), so a default launch sends the
+	// CreateInstance body it sent before the field, which a launch begun by
+	// an earlier release replays under its request id.
+	var deleteOnTermination *bool
+	if req.RootVolumeKept {
+		deleteOnTermination = proto.Bool(false)
+	}
 	for i := 0; i < req.Count; i++ {
 		attempt := run.Attempt()
 		volID, instID := bootVolumeID(m.Key, attempt, i), launchInstanceID(m.Key, attempt, i)
@@ -276,9 +285,10 @@ func (c computeClient) launchInstances(
 						Subnet:     subnet,
 					}},
 					Volumes: []*computev1.VolumeAttachment{{
-						Volume:     volumeName(projectID, volID),
-						DeviceName: "boot",
-						Boot:       true,
+						Volume:              volumeName(projectID, volID),
+						DeviceName:          "boot",
+						Boot:                true,
+						DeleteOnTermination: deleteOnTermination,
 					}},
 				},
 			},
@@ -303,6 +313,14 @@ func (c computeClient) launchInstances(
 		if err != nil {
 			return resource.Accepted[resource.Instance]{}, err
 		}
+		if req.RootVolumeKept && !keepsRoot(inst) {
+			// A compute before vws-compute#173 drops the field and deletes the
+			// boot volume with the instance. Failing here undoes the launch, so
+			// a root the caller asked to keep is never lost later.
+			return resource.Accepted[resource.Instance]{}, resource.Unsupported("blockDeviceMapping",
+				"Ebs.DeleteOnTermination=false is not supported: "+
+					"the compute service does not keep a root volume after its instance terminates yet.")
+		}
 		inst.KeyName = req.KeyName
 		items = append(items, inst)
 		if i == 0 {
@@ -315,6 +333,17 @@ func (c computeClient) launchInstances(
 	op.Action = resource.ActionRunInstances
 	op.Targets = instanceRefs(items)
 	return resource.Accepted[resource.Instance]{Operation: op, Items: items}, nil
+}
+
+// keepsRoot reports whether compute keeps inst's root volume when it
+// terminates.
+func keepsRoot(inst resource.Instance) bool {
+	for _, block := range inst.BlockDevices {
+		if block.Device == resource.RootDeviceName {
+			return !block.DeleteOnTermination
+		}
+	}
+	return false
 }
 
 // launchImage is the image the caller launches as id in this region. The
