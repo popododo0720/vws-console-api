@@ -80,7 +80,7 @@ func TestDefaultRootLeavesDeleteOnTerminationUnset(t *testing.T) {
 // so the instance keeps its root.
 func TestKeptRootLaunchIsResumedByTheRetry(t *testing.T) {
 	f := newLaunch(t, "kept-resume")
-	f.boot.keepsRoots = true
+	f.boot.honorsDeleteOnTermination = true
 	p, dying := f.process(t)
 	f.boot.crashAt("CreateInstance", 1, p.kill)
 	if _, err := dying.launchKept(t); err == nil {
@@ -115,7 +115,7 @@ func TestKeptRootLaunchIsResumedByTheRetry(t *testing.T) {
 // plan's volume step deletes it.
 func TestKeptRootIsUndone(t *testing.T) {
 	f := newLaunch(t, "kept-undo")
-	f.boot.keepsRoots = true
+	f.boot.honorsDeleteOnTermination = true
 	f.boot.failAt("GetInstance", 1, false)
 	if _, err := f.launchKept(t); resource.CodeOf(err) != resource.CodeUnavailable {
 		t.Fatalf("err %v, want unavailable", err)

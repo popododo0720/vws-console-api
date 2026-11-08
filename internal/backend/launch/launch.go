@@ -42,7 +42,7 @@ const (
 	StepInstance StepKind = "instance"
 )
 
-// Step is one side effect: the backend resource name of the boot volume or
+// Step is one side effect: the backend resource name of a volume or the
 // instance at Index of the launch.
 type Step struct {
 	Kind     StepKind `json:"kind"`

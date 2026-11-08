@@ -207,3 +207,20 @@ func TestTagLimitExceededCode(t *testing.T) {
 		t.Fatalf("malformed tag = %+v", got)
 	}
 }
+
+// #423 AC2: a launch over the volumes one instance takes is
+// AttachmentLimitExceeded with the reason, not the InvalidBlockDeviceMapping
+// every other refused mapping gets.
+func TestAttachmentLimitExceededCode(t *testing.T) {
+	e := resource.AttachmentLimitExceeded("the reason")
+	rec := httptest.NewRecorder()
+	writeErr(rec, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/", nil), e)
+	body := ec2ErrorXML(t, rec.Body.Bytes())
+	if rec.Code != http.StatusBadRequest || body.Code != "AttachmentLimitExceeded" || body.Message != "the reason" {
+		t.Fatalf("%d %+v", rec.Code, body)
+	}
+	mapping := resource.Invalid("blockDeviceMapping", "bad mapping")
+	if got := ec2Wire(t, mapping); got != (wireErr{400, "InvalidBlockDeviceMapping"}) {
+		t.Fatalf("bad mapping = %+v", got)
+	}
+}

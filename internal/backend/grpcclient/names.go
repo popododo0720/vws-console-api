@@ -30,7 +30,7 @@ const (
 	// labelImport holds the random nonce in the request id of an import, so
 	// a retry can name the same compute request while the key pair lives.
 	labelImport = "vws-import"
-	// labelInstance on a boot volume names the instance it was made for.
+	// labelInstance on a launch volume names the instance it was made for.
 	labelInstance = "vws-instance"
 	// labelNameTag carries the EC2 Name tag. Label keys are lowercase, so the
 	// key "Name" cannot be stored as is.

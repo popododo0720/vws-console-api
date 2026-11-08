@@ -99,9 +99,9 @@ func TestRunInstancesBlockDeviceMappingRefusals(t *testing.T) {
 			"BlockDeviceMapping.1.DeviceName": {"/dev/xvda"}, "BlockDeviceMapping.1.Ebs.VolumeType": {"gp3"},
 			"BlockDeviceMapping.2.DeviceName": {"/dev/xvda"}, "BlockDeviceMapping.2.Ebs.VolumeType": {"gp2"},
 		}, "InvalidBlockDeviceMapping"},
-		{"extra volume is not supported", url.Values{
+		{"extra volume without a size", url.Values{
 			"BlockDeviceMapping.1.DeviceName": {"/dev/sdf"}, "BlockDeviceMapping.1.Ebs.VolumeType": {"gp3"},
-		}, "InvalidParameterValue"},
+		}, "InvalidBlockDeviceMapping"},
 		{"root below the image", root("Ebs.VolumeSize", "7"), "InvalidBlockDeviceMapping"},
 		{"zero size", root("Ebs.VolumeSize", "0"), "InvalidParameterValue"},
 		{"size not a number", root("Ebs.VolumeSize", "big"), "InvalidParameterValue"},
@@ -323,9 +323,21 @@ func TestRunInstancesRootDeleteOnTerminationRefusals(t *testing.T) {
 		{"no device name", "InvalidBlockDeviceMapping", "DeviceName is required", url.Values{
 			"BlockDeviceMapping.1.Ebs.DeleteOnTermination": {"false"},
 		}},
-		{"not the root device", "InvalidParameterValue", "only the root device", url.Values{
-			"BlockDeviceMapping.1.DeviceName": {"/dev/sdf"}, "BlockDeviceMapping.1.Ebs.DeleteOnTermination": {"false"},
-		}},
+		{
+			name: "an extra volume without a size", code: "InvalidBlockDeviceMapping",
+			message: "you must specify either a snapshot ID or a volume size",
+			extra: url.Values{
+				"BlockDeviceMapping.1.DeviceName": {"/dev/sdf"}, "BlockDeviceMapping.1.Ebs.DeleteOnTermination": {"false"},
+			},
+		},
+		{
+			name: "not a boolean on an extra volume", code: "InvalidParameterValue",
+			message: "Value (no) for parameter deleteOnTermination",
+			extra: url.Values{
+				"BlockDeviceMapping.1.DeviceName": {"/dev/sdf"}, "BlockDeviceMapping.1.Ebs.VolumeSize": {"8"},
+				"BlockDeviceMapping.1.Ebs.DeleteOnTermination": {"no"},
+			},
+		},
 		{"root mapped twice", "InvalidBlockDeviceMapping", "mapped more than once", url.Values{
 			"BlockDeviceMapping.1.DeviceName": {"/dev/xvda"}, "BlockDeviceMapping.1.Ebs.DeleteOnTermination": {"false"},
 			"BlockDeviceMapping.2.DeviceName": {"/dev/xvda"}, "BlockDeviceMapping.2.Ebs.DeleteOnTermination": {"true"},

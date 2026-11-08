@@ -227,7 +227,7 @@ func (h *handler) runInstances(w http.ResponseWriter, r *http.Request, c resourc
 		writeErr(w, r, err)
 		return
 	}
-	root, err := rootVolume(r)
+	root, extras, err := blockDeviceMappings(r)
 	if err != nil {
 		writeErr(w, r, err)
 		return
@@ -236,7 +236,7 @@ func (h *handler) runInstances(w http.ResponseWriter, r *http.Request, c resourc
 		ImageID: img, InstanceType: r.Form.Get("InstanceType"), SubnetID: sub, Count: count, Tags: tags,
 		KeyName: r.Form.Get("KeyName"), UserData: userData,
 		RootVolumeType: root.typ, RootVolumeSize: root.size, RootIops: root.iops, RootThroughput: root.throughput,
-		RootVolumeKept: root.kept,
+		RootVolumeKept: root.kept, ExtraVolumes: extras,
 	})
 	if err != nil {
 		writeErr(w, r, err)
@@ -518,16 +518,17 @@ func tagSpecificationsFor(r *http.Request, kind string) (map[string]string, erro
 // maxBlockDeviceMappings caps the BlockDeviceMapping.N index this surface reads.
 const maxBlockDeviceMappings = 100
 
-// rootMapping is what the RunInstances block device mapping sets on the
-// root volume.
-type rootMapping struct {
+// ebsMapping is what a RunInstances block device mapping sets on its
+// volume.
+type ebsMapping struct {
 	typ                    resource.VolumeType
 	size, iops, throughput int64
 	kept                   bool
 }
 
-// rootDeviceFields are the BlockDeviceMapping.N fields rootVolume reads.
-func rootDeviceFields() []string {
+// mappingFields are the BlockDeviceMapping.N fields blockDeviceMappings
+// reads.
+func mappingFields() []string {
 	return []string{
 		"DeviceName", "Ebs.VolumeType", "Ebs.VolumeSize", "Ebs.Iops", "Ebs.Throughput", "Ebs.Encrypted",
 		"Ebs.DeleteOnTermination",
@@ -538,13 +539,14 @@ func rootDeviceFields() []string {
 // refuses as UnsupportedOperation, and why.
 type unsupportedDeviceField struct{ field, reason string }
 
-// unsupportedDeviceFields are the mapping fields rootVolume refuses by name,
+// unsupportedDeviceFields are the mapping fields blockDeviceMappings refuses
+// by name,
 // all but Ebs.Encrypted=false (#423 AC4). Each reason has a tracked issue:
 // SnapshotId #675, Encrypted and KmsKeyId #676, VirtualName #677, NoDevice
 // #678.
 func unsupportedDeviceFields() []unsupportedDeviceField {
 	return []unsupportedDeviceField{
-		{"Ebs.SnapshotId", "the root volume is created from the image, and VWS does not create other volumes at launch"},
+		{"Ebs.SnapshotId", "VWS creates the root volume from the image and every other launch volume blank"},
 		{"Ebs.Encrypted", "VWS volumes are not encrypted at rest"},
 		{"Ebs.KmsKeyId", "VWS volumes are not encrypted at rest"},
 		{"VirtualName", "VWS instance types have no instance store volumes"},
@@ -574,57 +576,70 @@ func refuseUnsupportedDeviceFields(r *http.Request, prefix string) error {
 	return nil
 }
 
-// rootVolume reads the RunInstances block device mapping. VWS creates only
-// the root volume, so the one mapping it takes names the root device and
+// blockDeviceMappings reads the RunInstances block device mappings. Each
 // may set Ebs.VolumeType, Ebs.VolumeSize, Ebs.Iops, Ebs.Throughput and
-// Ebs.DeleteOnTermination; Normalize checks them with the CreateVolume rules
-// and the backend checks the size against the image. A mapping for any
-// other device would add a volume, which VWS does not support yet (#423
-// AC2), so it is refused rather than ignored. A field of unsupportedDeviceFields is refused first,
-// so the answer names it. The other mapping fields are refused by allowRun.
-func rootVolume(r *http.Request) (rootMapping, error) {
-	var root rootMapping
+// Ebs.DeleteOnTermination. The one for the root device sets the root
+// volume, and the backend checks its size against the image. Every other
+// one adds a volume to each instance (#423 AC2), in index order. Normalize
+// checks them all with the CreateVolume rules and the device names. A field
+// of unsupportedDeviceFields is refused first, at any index, so the answer
+// names it. The other mapping fields are refused by allowRun.
+func blockDeviceMappings(r *http.Request) (ebsMapping, []resource.LaunchVolume, error) {
+	var root ebsMapping
+	var extras []resource.LaunchVolume
 	mapped := false
 	for i := 1; i <= maxBlockDeviceMappings; i++ {
 		prefix := "BlockDeviceMapping." + strconv.Itoa(i) + "."
 		if err := refuseUnsupportedDeviceFields(r, prefix); err != nil {
-			return rootMapping{}, err
+			return ebsMapping{}, nil, err
 		}
-		if !slices.ContainsFunc(rootDeviceFields(), func(f string) bool { return r.Form.Has(prefix + f) }) {
+		if !slices.ContainsFunc(mappingFields(), func(f string) bool { return r.Form.Has(prefix + f) }) {
 			continue
 		}
 		device := r.Form.Get(prefix + "DeviceName")
 		switch {
 		case device == "":
-			return rootMapping{}, resource.Invalid("blockDeviceMapping", prefix+"DeviceName is required")
-		case device != resource.RootDeviceName:
-			return rootMapping{}, resource.Invalid(prefix+"DeviceName",
-				"unsupported: only the root device "+resource.RootDeviceName+" can be mapped")
-		case mapped:
-			return rootMapping{}, resource.Invalid("blockDeviceMapping", "the root device is mapped more than once")
+			return ebsMapping{}, nil, resource.Invalid("blockDeviceMapping", prefix+"DeviceName is required")
+		case device == resource.RootDeviceName && mapped:
+			return ebsMapping{}, nil, resource.Invalid("blockDeviceMapping", "the root device is mapped more than once")
 		}
-		mapped = true
-		root.typ = resource.VolumeType(r.Form.Get(prefix + "Ebs.VolumeType"))
-		var err error
-		if root.size, err = mappingInt(r, prefix+"Ebs.VolumeSize", "size"); err != nil {
-			return rootMapping{}, err
+		m, err := readMapping(r, prefix)
+		if err != nil {
+			return ebsMapping{}, nil, err
 		}
-		if root.iops, err = mappingInt(r, prefix+"Ebs.Iops", "iops"); err != nil {
-			return rootMapping{}, err
+		if device == resource.RootDeviceName {
+			mapped, root = true, m
+			continue
 		}
-		if root.throughput, err = mappingInt(r, prefix+"Ebs.Throughput", "throughput"); err != nil {
-			return rootMapping{}, err
-		}
-		if key := prefix + "Ebs.DeleteOnTermination"; r.Form.Has(key) {
-			switch v := r.Form.Get(key); {
-			case strings.EqualFold(v, "false"):
-				root.kept = true
-			case !strings.EqualFold(v, "true"):
-				return rootMapping{}, resource.Invalid(key, "Value ("+v+") for parameter deleteOnTermination is invalid.")
-			}
+		extras = append(extras, resource.LaunchVolume{
+			Device: device, SizeGiB: m.size, Type: m.typ, Iops: m.iops, Throughput: m.throughput, Kept: m.kept,
+		})
+	}
+	return root, extras, nil
+}
+
+// readMapping reads the Ebs fields of the mapping at prefix.
+func readMapping(r *http.Request, prefix string) (ebsMapping, error) {
+	m := ebsMapping{typ: resource.VolumeType(r.Form.Get(prefix + "Ebs.VolumeType"))}
+	var err error
+	if m.size, err = mappingInt(r, prefix+"Ebs.VolumeSize", "size"); err != nil {
+		return ebsMapping{}, err
+	}
+	if m.iops, err = mappingInt(r, prefix+"Ebs.Iops", "iops"); err != nil {
+		return ebsMapping{}, err
+	}
+	if m.throughput, err = mappingInt(r, prefix+"Ebs.Throughput", "throughput"); err != nil {
+		return ebsMapping{}, err
+	}
+	if key := prefix + "Ebs.DeleteOnTermination"; r.Form.Has(key) {
+		switch v := r.Form.Get(key); {
+		case strings.EqualFold(v, "false"):
+			m.kept = true
+		case !strings.EqualFold(v, "true"):
+			return ebsMapping{}, resource.Invalid(key, "Value ("+v+") for parameter deleteOnTermination is invalid.")
 		}
 	}
-	return root, nil
+	return m, nil
 }
 
 // mappingInt reads an optional positive integer mapping field, refused with
@@ -866,15 +881,15 @@ func allowRun(key string) bool {
 	}
 }
 
-// blockDeviceField is a BlockDeviceMapping.N field rootVolume reads or
-// refuses by name.
+// blockDeviceField is a BlockDeviceMapping.N field blockDeviceMappings
+// reads or refuses by name.
 func blockDeviceField(key string) bool {
 	rest, ok := strings.CutPrefix(key, "BlockDeviceMapping.")
 	if !ok {
 		return false
 	}
 	n, field, ok := strings.Cut(rest, ".")
-	return ok && inRange(n, maxBlockDeviceMappings) && (slices.Contains(rootDeviceFields(), field) ||
+	return ok && inRange(n, maxBlockDeviceMappings) && (slices.Contains(mappingFields(), field) ||
 		slices.ContainsFunc(unsupportedDeviceFields(), func(u unsupportedDeviceField) bool { return u.field == field }))
 }
 
@@ -1513,6 +1528,9 @@ func ec2Refinement(e *resource.Error) (errs.AWSEntry, bool) {
 		}
 		if resource.IsInvalidTaggedID(e) {
 			return badRequest("InvalidID")
+		}
+		if resource.IsAttachmentLimitExceeded(e) {
+			return badRequest("AttachmentLimitExceeded")
 		}
 		// EC2 names a malformed instance ID separately (#246).
 		if e.Kind == resource.KindInstance {

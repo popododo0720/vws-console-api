@@ -97,7 +97,9 @@ func (c computeClient) RunInstances(ctx context.Context, m backend.Mutation, req
 	if err != nil {
 		return resource.Accepted[resource.Instance]{}, err
 	}
-	plan := func(attempt int) []launch.Step { return launchPlan(projectID, m.Key, attempt, req.Count) }
+	plan := func(attempt int) []launch.Step {
+		return launchPlan(projectID, m.Key, attempt, req.Count, len(req.ExtraVolumes))
+	}
 	run, err := c.launches.Begin(ctx, m.Key, m.Account, m.Fingerprint, req.Count, plan)
 	if err != nil {
 		return resource.Accepted[resource.Instance]{}, err
@@ -125,18 +127,24 @@ func (c computeClient) RunInstances(ctx context.Context, m backend.Mutation, req
 	return acc, nil
 }
 
-// launchPlan names the boot volume and instance of each index attempt of a
-// launch with key may create. The ids are derived from the key and the
-// attempt, so the plan is the same on every retry of one attempt, and an
-// attempt after an undo never names a deleted resource.
-func launchPlan(projectID, key string, attempt, count int) []launch.Step {
-	plan := make([]launch.Step, 0, 2*count)
+// launchPlan names the boot volume, the extra volumes (extras of them) and
+// the instance of each index attempt of a launch with key may create, in the
+// order it creates them. The ids are derived from the key and the attempt,
+// so the plan is the same on every retry of one attempt, and an attempt
+// after an undo never names a deleted resource.
+func launchPlan(projectID, key string, attempt, count, extras int) []launch.Step {
+	plan := make([]launch.Step, 0, (extras+2)*count)
 	for i := range count {
 		plan = append(plan,
-			launch.Step{Kind: launch.StepVolume, Index: i, Resource: volumeName(projectID, bootVolumeID(key, attempt, i))},
-			launch.Step{
-				Kind: launch.StepInstance, Index: i, Resource: instanceName(projectID, launchInstanceID(key, attempt, i)),
+			launch.Step{Kind: launch.StepVolume, Index: i, Resource: volumeName(projectID, bootVolumeID(key, attempt, i))})
+		for j := range extras {
+			plan = append(plan, launch.Step{
+				Kind: launch.StepVolume, Index: i, Resource: volumeName(projectID, extraVolumeID(key, attempt, i, j)),
 			})
+		}
+		plan = append(plan, launch.Step{
+			Kind: launch.StepInstance, Index: i, Resource: instanceName(projectID, launchInstanceID(key, attempt, i)),
+		})
 	}
 	return plan
 }
@@ -154,6 +162,17 @@ func launchParts(key, kind string, attempt, i int) []string {
 
 func bootVolumeID(key string, attempt, i int) string {
 	return derivedID("vol-", launchParts(key, "vol", attempt, i)...)
+}
+
+// extraParts are the id and request id parts of extra volume j of index i.
+// Its kind is not the boot volume's "vol", so the ids of a launch without
+// extra volumes stay as they were.
+func extraParts(key string, attempt, i, j int) []string {
+	return launchParts(key, "vol-"+strconv.Itoa(j+1), attempt, i)
+}
+
+func extraVolumeID(key string, attempt, i, j int) string {
+	return derivedID("vol-", extraParts(key, attempt, i, j)...)
 }
 
 func launchInstanceID(key string, attempt, i int) string {
@@ -190,8 +209,9 @@ func (c computeClient) undoLaunch(ctx context.Context, run *launch.Launch, key s
 const undoAttempts = 3
 
 // undoStep deletes one planned resource and waits until it is gone. Compute
-// deletes an instance's boot volume with it; the volume delete after it
-// covers a volume whose instance was never created. The request id is
+// deletes an instance's boot volume with it, and an extra volume too once it
+// honors delete_on_termination; the volume deletes after it cover a volume
+// compute kept and one whose instance was never created. The request id is
 // derived from verb, the step and the attempt, so a retry of one undo or GC
 // sends the same delete.
 func (c computeClient) undoStep(ctx context.Context, verb, key string, attempt int, step launch.Step) error {
@@ -236,8 +256,8 @@ func (c computeClient) deleteStep(ctx context.Context, requestID string, step la
 	return err
 }
 
-// launchInstances creates the boot volume and then the instance for each
-// index, and records each completed create in run.
+// launchInstances creates the boot volume, the extra volumes and then the
+// instance for each index, and records each completed create in run.
 func (c computeClient) launchInstances(
 	ctx context.Context, run *launch.Launch, m backend.Mutation, req resource.RunInstancesRequest,
 	projectID, subnet, keyPair string, labels map[string]string,
@@ -269,6 +289,36 @@ func (c computeClient) launchInstances(
 		}); err != nil {
 			return resource.Accepted[resource.Instance]{}, err
 		}
+		attachments := []*computev1.VolumeAttachment{{
+			Volume:              volumeName(projectID, volID),
+			DeviceName:          "boot",
+			Boot:                true,
+			DeleteOnTermination: deleteOnTermination,
+		}}
+		for j, extra := range req.ExtraVolumes {
+			extraID := extraVolumeID(m.Key, attempt, i, j)
+			extraOp, err := c.volumes.CreateVolume(ctx, &storagev1.CreateVolumeRequest{
+				Parent:    volumeParent(projectID),
+				VolumeId:  extraID,
+				RequestId: requestUUID(extraParts(m.Key, attempt, i, j)...),
+				Volume:    extraVolume(m.Fingerprint, extra, instID),
+			})
+			if err := rpcErr(extraOp, err); err != nil {
+				return resource.Accepted[resource.Instance]{}, unsupportedVolumeType(err)
+			}
+			if err := run.Done(ctx, launch.Step{
+				Kind: launch.StepVolume, Index: i, Resource: volumeName(projectID, extraID),
+			}); err != nil {
+				return resource.Accepted[resource.Instance]{}, err
+			}
+			// Always explicit: unset is false for a volume that is not the
+			// boot volume (instance.proto), the opposite of the EC2 default.
+			attachments = append(attachments, &computev1.VolumeAttachment{
+				Volume:              volumeName(projectID, extraID),
+				DeviceName:          extra.Device,
+				DeleteOnTermination: proto.Bool(!extra.Kept),
+			})
+		}
 		created, err := c.instances.CreateInstance(ctx, &computev1.CreateInstanceRequest{
 			Parent:     instanceParent(projectID),
 			InstanceId: instID,
@@ -284,12 +334,7 @@ func (c computeClient) launchInstances(
 						DeviceName: "nic0",
 						Subnet:     subnet,
 					}},
-					Volumes: []*computev1.VolumeAttachment{{
-						Volume:              volumeName(projectID, volID),
-						DeviceName:          "boot",
-						Boot:                true,
-						DeleteOnTermination: deleteOnTermination,
-					}},
+					Volumes: attachments,
 				},
 			},
 		})
@@ -313,13 +358,8 @@ func (c computeClient) launchInstances(
 		if err != nil {
 			return resource.Accepted[resource.Instance]{}, err
 		}
-		if req.RootVolumeKept && !keepsRoot(inst) {
-			// A compute before vws-compute#173 drops the field and deletes the
-			// boot volume with the instance. Failing here undoes the launch, so
-			// a root the caller asked to keep is never lost later.
-			return resource.Accepted[resource.Instance]{}, resource.Unsupported("blockDeviceMapping",
-				"Ebs.DeleteOnTermination=false is not supported: "+
-					"the compute service does not keep a root volume after its instance terminates yet.")
+		if err := checkDeleteOnTermination(inst, req); err != nil {
+			return resource.Accepted[resource.Instance]{}, err
 		}
 		inst.KeyName = req.KeyName
 		items = append(items, inst)
@@ -333,6 +373,37 @@ func (c computeClient) launchInstances(
 	op.Action = resource.ActionRunInstances
 	op.Targets = instanceRefs(items)
 	return resource.Accepted[resource.Instance]{Operation: op, Items: items}, nil
+}
+
+// checkDeleteOnTermination refuses a launched instance whose volumes compute
+// would not delete or keep as req asks when it terminates. A compute before
+// vws-compute#173 drops the field: it deletes the boot volume with the
+// instance and keeps every other one. Failing here undoes the launch, so a
+// volume is never lost, or left behind, later.
+func checkDeleteOnTermination(inst resource.Instance, req resource.RunInstancesRequest) error {
+	if req.RootVolumeKept && !keepsRoot(inst) {
+		return resource.Unsupported("blockDeviceMapping",
+			"Ebs.DeleteOnTermination=false is not supported: "+
+				"the compute service does not keep a root volume after its instance terminates yet.")
+	}
+	for _, extra := range req.ExtraVolumes {
+		i := slices.IndexFunc(inst.BlockDevices, func(b resource.BlockDevice) bool { return b.Device == extra.Device })
+		if i < 0 {
+			return resource.Internal(fmt.Errorf("compute attached no volume at %s", extra.Device))
+		}
+		if inst.BlockDevices[i].DeleteOnTermination == !extra.Kept {
+			continue
+		}
+		if extra.Kept {
+			return resource.Unsupported("blockDeviceMapping",
+				"Ebs.DeleteOnTermination=false is not supported for "+extra.Device+
+					": the compute service deletes it with its instance.")
+		}
+		return resource.Unsupported("blockDeviceMapping",
+			"Ebs.DeleteOnTermination=true is not supported for "+extra.Device+
+				": the compute service does not delete a volume other than the root with its instance yet.")
+	}
+	return nil
 }
 
 // keepsRoot reports whether compute keeps inst's root volume when it
@@ -389,6 +460,18 @@ func bootVolume(projectID, fingerprint string, req resource.RunInstancesRequest,
 			Type:    storageType(req.RootType()),
 			Iops:    iops, ThroughputMibps: miBps,
 			Source: &storagev1.VolumeSpec_Image{Image: imageName(projectID, req.ImageID.String())},
+		},
+	}
+}
+
+// extraVolume is the blank disk RunInstances creates for a non-root mapping:
+// v's size, its type (gp2 when omitted) and v.Performance().
+func extraVolume(fingerprint string, v resource.LaunchVolume, instance string) *storagev1.Volume {
+	iops, miBps := v.Performance()
+	return &storagev1.Volume{
+		Labels: map[string]string{labelFingerprint: clip(fingerprint, 63), labelInstance: instance},
+		Spec: &storagev1.VolumeSpec{
+			SizeGib: v.SizeGiB, Type: storageType(v.VolumeType()), Iops: iops, ThroughputMibps: miBps,
 		},
 	}
 }
