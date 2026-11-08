@@ -101,21 +101,23 @@ func filterRows[T any](rows []T, filters []queryFilter, values func(T, string) [
 	return out
 }
 
-// wildcardMatch applies EC2's * and ? filter wildcards. A pattern without
-// either character is an exact match.
+// wildcardMatch applies EC2's filter wildcards: * is any run of characters
+// and ? is one. A backslash makes the *, ? or \ after it literal, so \*
+// matches only "*"; a backslash before anything else is itself literal.
+// https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/Using_Filtering.html
 func wildcardMatch(pattern, value string) bool {
-	if !strings.ContainsAny(pattern, "*?") {
+	if !strings.ContainsAny(pattern, `*?\`) {
 		return pattern == value
 	}
-	p, v := []rune(pattern), []rune(value)
+	p, v := filterPattern(pattern), []rune(value)
 	pi, vi := 0, 0
 	star, mark := -1, 0
 	for vi < len(v) {
 		switch {
-		case pi < len(p) && (p[pi] == '?' || p[pi] == v[vi]):
+		case pi < len(p) && (p[pi].kind == patternOne || p[pi].kind == patternLiteral && p[pi].r == v[vi]):
 			pi++
 			vi++
-		case pi < len(p) && p[pi] == '*':
+		case pi < len(p) && p[pi].kind == patternAny:
 			star, mark = pi, vi
 			pi++
 		case star >= 0:
@@ -126,10 +128,46 @@ func wildcardMatch(pattern, value string) bool {
 			return false
 		}
 	}
-	for pi < len(p) && p[pi] == '*' {
+	for pi < len(p) && p[pi].kind == patternAny {
 		pi++
 	}
 	return pi == len(p)
+}
+
+type patternKind int
+
+const (
+	patternLiteral patternKind = iota
+	patternOne
+	patternAny
+)
+
+type patternElem struct {
+	kind patternKind
+	r    rune
+}
+
+// filterPattern splits an EC2 filter value into literals and wildcards.
+func filterPattern(pattern string) []patternElem {
+	runes := []rune(pattern)
+	out := make([]patternElem, 0, len(runes))
+	for i := 0; i < len(runes); i++ {
+		switch c := runes[i]; c {
+		case '*':
+			out = append(out, patternElem{kind: patternAny})
+		case '?':
+			out = append(out, patternElem{kind: patternOne})
+		case '\\':
+			if i+1 < len(runes) && strings.ContainsRune(`*?\`, runes[i+1]) {
+				i++
+				c = runes[i]
+			}
+			out = append(out, patternElem{kind: patternLiteral, r: c})
+		default:
+			out = append(out, patternElem{kind: patternLiteral, r: c})
+		}
+	}
+	return out
 }
 
 // invalidNextTokenMessage is AWS's sentence for a token that names no row.
