@@ -110,7 +110,7 @@ func (c compute) changeInstances(ctx context.Context, m backend.Mutation, action
 				inst.State = settled
 			}
 			if inst.State == resource.InstanceTerminated {
-				c.w.dropRootVolumes(inst.ID)
+				c.w.releaseVolumes(inst.ID)
 			}
 		}
 	})
@@ -345,7 +345,7 @@ func (w *World) bindOfVolume(
 	account resource.AccountID, id resource.VolumeID,
 ) (*resource.Instance, backend.VolumeBind, bool) {
 	for _, inst := range w.inst {
-		if inst.OwnerID != account {
+		if inst.OwnerID != account || inst.State == resource.InstanceTerminated {
 			continue
 		}
 		if bind, ok := backend.BindOf(*inst, id); ok {
@@ -846,6 +846,9 @@ func (w *World) settleBlock(instID resource.InstanceID, volID resource.VolumeID)
 
 func (w *World) volumeOnInstance(id resource.VolumeID) bool {
 	for _, inst := range w.inst {
+		if inst.State == resource.InstanceTerminated {
+			continue
+		}
 		for _, block := range slices.Concat(inst.BlockDevices, inst.DetachingDevices) {
 			if block.VolumeID == id {
 				return true
@@ -886,11 +889,20 @@ func (w *World) releaseAddresses(id resource.InstanceID) {
 	}
 }
 
-// dropRootVolumes deletes the volumes that go with a terminated instance.
-func (w *World) dropRootVolumes(id resource.InstanceID) {
+// releaseVolumes deletes the volumes that go with a terminated instance and
+// detaches the others, as EC2 does: a kept root is available.
+func (w *World) releaseVolumes(id resource.InstanceID) {
 	for volID, vol := range w.vol {
-		if vol.InstanceID == id && vol.DeleteOnTermination {
+		switch {
+		case vol.InstanceID != id:
+		case vol.DeleteOnTermination:
 			delete(w.vol, volID)
+		default:
+			vol.State = resource.VolumeAvailable
+			vol.InstanceID = resource.InstanceID{}
+			vol.Device = ""
+			vol.AttachTime = time.Time{}
+			vol.AttachState = ""
 		}
 	}
 }

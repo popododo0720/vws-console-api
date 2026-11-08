@@ -204,6 +204,11 @@ type RunInstancesRequest struct {
 	// RootVolumeSize is the root mapping's Ebs.VolumeSize in GiB. Zero means
 	// omitted; see RootSize.
 	RootVolumeSize int64 `json:"rootVolumeSize,omitempty"`
+	// RootVolumeKept is the root mapping's Ebs.DeleteOnTermination=false:
+	// the root volume is detached and kept when the instance terminates.
+	// False is the EC2 default, so the fingerprint of a request that omits
+	// it does not change.
+	RootVolumeKept bool `json:"rootVolumeKept,omitempty"`
 }
 
 // RootVolumeSizeGiB is the smallest root volume RunInstances creates when

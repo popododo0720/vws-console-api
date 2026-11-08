@@ -249,3 +249,117 @@ func TestUnsupportedBlockDeviceFieldsAreRefusedWithAReason(t *testing.T) {
 	// Encrypted=false states what every VWS volume is, so it launches.
 	send(launchForm(subnet, "unencrypted", root("Ebs.Encrypted", "false")))
 }
+
+// #423 AC3: the root mapping's Ebs.DeleteOnTermination, true or false in any
+// case as SDKs send it, reads back on DescribeInstances and DescribeVolumes.
+// A kept root is available once its instance terminates.
+func TestRunInstancesRootDeleteOnTerminationRoundTrips(t *testing.T) {
+	h, cred, now := harness(t)
+	send := func(f url.Values) string {
+		t.Helper()
+		f.Set("Version", Version)
+		res := signed(t, h, cred, now, f.Encode())
+		if res.Code != http.StatusOK {
+			t.Fatalf("%s %d %s", f.Get("Action"), res.Code, res.Body)
+		}
+		return res.Body.String()
+	}
+	subnet := newSubnet(t, send)
+	for _, c := range []struct{ value, want string }{
+		{"false", "false"}, {"FALSE", "false"}, {"true", "true"}, {"True", "true"},
+	} {
+		run := send(launchForm(subnet, "root-dot-"+c.value, url.Values{
+			"BlockDeviceMapping.1.DeviceName": {"/dev/xvda"}, "BlockDeviceMapping.1.Ebs.DeleteOnTermination": {c.value},
+		}))
+		inst := xmlText(t, run, "instanceId")
+		got := send(url.Values{"Action": {"DescribeInstances"}, "InstanceId.1": {inst}})
+		_, mapping, _ := strings.Cut(got, "<blockDeviceMapping>")
+		if !strings.Contains(mapping, "<deleteOnTermination>"+c.want+"</deleteOnTermination>") {
+			t.Fatalf("DeleteOnTermination=%s: instance %s", c.value, got)
+		}
+		vol := xmlText(t, mapping, "volumeId")
+		vols := send(url.Values{"Action": {"DescribeVolumes"}, "VolumeId.1": {vol}})
+		if !strings.Contains(vols, "<deleteOnTermination>"+c.want+"</deleteOnTermination>") {
+			t.Fatalf("DeleteOnTermination=%s: volume %s", c.value, vols)
+		}
+		send(url.Values{"Action": {"TerminateInstances"}, "InstanceId.1": {inst}})
+		send(url.Values{"Action": {"DescribeInstances"}, "InstanceId.1": {inst}})
+		if c.want == "true" {
+			continue
+		}
+		kept := send(url.Values{"Action": {"DescribeVolumes"}, "VolumeId.1": {vol}})
+		if !strings.Contains(kept, "<status>available</status>") || strings.Contains(kept, "<instanceId>") {
+			t.Fatalf("DeleteOnTermination=%s: kept root after terminate %s", c.value, kept)
+		}
+	}
+}
+
+// #423 AC3: a DeleteOnTermination value EC2 would not read, or one with no
+// root device, is refused before anything is created; the flag is part of
+// the request, so a retry with the same ClientToken and the other value is
+// IdempotentParameterMismatch.
+func TestRunInstancesRootDeleteOnTerminationRefusals(t *testing.T) {
+	h, cred, now := harness(t)
+	send := func(f url.Values) string {
+		t.Helper()
+		f.Set("Version", Version)
+		res := signed(t, h, cred, now, f.Encode())
+		if res.Code != http.StatusOK {
+			t.Fatalf("%s %d %s", f.Get("Action"), res.Code, res.Body)
+		}
+		return res.Body.String()
+	}
+	subnet := newSubnet(t, send)
+	for _, c := range []struct {
+		name, code, message string
+		extra               url.Values
+	}{
+		{"not a boolean", "InvalidParameterValue", "Value (yes) for parameter deleteOnTermination is invalid.", url.Values{
+			"BlockDeviceMapping.1.DeviceName": {"/dev/xvda"}, "BlockDeviceMapping.1.Ebs.DeleteOnTermination": {"yes"},
+		}},
+		{"empty", "InvalidParameterValue", "Value () for parameter deleteOnTermination is invalid.", url.Values{
+			"BlockDeviceMapping.1.DeviceName": {"/dev/xvda"}, "BlockDeviceMapping.1.Ebs.DeleteOnTermination": {""},
+		}},
+		{"no device name", "InvalidBlockDeviceMapping", "DeviceName is required", url.Values{
+			"BlockDeviceMapping.1.Ebs.DeleteOnTermination": {"false"},
+		}},
+		{"not the root device", "InvalidParameterValue", "only the root device", url.Values{
+			"BlockDeviceMapping.1.DeviceName": {"/dev/sdf"}, "BlockDeviceMapping.1.Ebs.DeleteOnTermination": {"false"},
+		}},
+		{"root mapped twice", "InvalidBlockDeviceMapping", "mapped more than once", url.Values{
+			"BlockDeviceMapping.1.DeviceName": {"/dev/xvda"}, "BlockDeviceMapping.1.Ebs.DeleteOnTermination": {"false"},
+			"BlockDeviceMapping.2.DeviceName": {"/dev/xvda"}, "BlockDeviceMapping.2.Ebs.DeleteOnTermination": {"true"},
+		}},
+	} {
+		res := signed(t, h, cred, now, launchForm(subnet, "dot-refuse", c.extra).Encode())
+		body := res.Body.String()
+		if res.Code != http.StatusBadRequest || !strings.Contains(body, "<Code>"+c.code+"</Code>") ||
+			!strings.Contains(body, c.message) {
+			t.Fatalf("%s: %d %s", c.name, res.Code, body)
+		}
+	}
+	if got := send(url.Values{"Action": {"DescribeInstances"}}); strings.Contains(got, "<instanceId>") {
+		t.Fatalf("a refused launch created an instance: %s", got)
+	}
+	f := launchForm(subnet, "fp-dot", url.Values{
+		"BlockDeviceMapping.1.DeviceName": {"/dev/xvda"}, "BlockDeviceMapping.1.Ebs.DeleteOnTermination": {"false"},
+	})
+	first := xmlText(t, send(f), "instanceId")
+	if again := xmlText(t, send(f), "instanceId"); again != first {
+		t.Fatalf("replay launched %s, want %s", again, first)
+	}
+	f.Set("BlockDeviceMapping.1.Ebs.DeleteOnTermination", "true")
+	res := signed(t, h, cred, now, f.Encode())
+	if res.Code != http.StatusBadRequest ||
+		!strings.Contains(res.Body.String(), "<Code>IdempotentParameterMismatch</Code>") {
+		t.Fatalf("the other value under the same token: %d %s", res.Code, res.Body)
+	}
+	// DeleteOnTermination=true is the default, so it is the request that
+	// omits it, under one token.
+	def := launchForm(subnet, "fp-dot-default", url.Values{"BlockDeviceMapping.1.DeviceName": {"/dev/xvda"}})
+	plain := xmlText(t, send(def), "instanceId")
+	def.Set("BlockDeviceMapping.1.Ebs.DeleteOnTermination", "true")
+	if same := xmlText(t, send(def), "instanceId"); same != plain {
+		t.Fatalf("DeleteOnTermination=true under the token of a launch without it: %s, want %s", same, plain)
+	}
+}
