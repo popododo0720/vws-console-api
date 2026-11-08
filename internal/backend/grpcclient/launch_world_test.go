@@ -27,16 +27,18 @@ import (
 // deletes an instance's boot volume and IP with it, refuses to delete an
 // attached volume, and refuses to delete an instance an address names
 // (instance.proto). A delete answers a pending operation that is done on the
-// first poll. It is a compute before vws-compute#173 unless keepsRoots is
-// set: it drops VolumeAttachment.delete_on_termination and deletes the boot
-// volume with its instance.
+// first poll. It is a compute before vws-compute#173 unless
+// honorsDeleteOnTermination is set: it drops
+// VolumeAttachment.delete_on_termination, deletes the boot volume with its
+// instance and keeps every other volume.
 type launchWorld struct {
 	*regionalImages
 	longrunningpb.UnimplementedOperationsServer
 	networkv1.UnimplementedAddressServiceServer
 
 	mu sync.Mutex
-	// volumes maps a live volume to the instance it boots, "" before one.
+	// volumes maps a live volume to the instance it is attached to, "" when
+	// none.
 	volumes map[string]string
 	// ips maps a live instance's private IP to the instance.
 	ips map[string]string
@@ -49,16 +51,18 @@ type launchWorld struct {
 	made      map[string]int
 	deletes   []string
 	lis       *bufconn.Listener
-	// keepsRoots makes it a compute with vws-compute#173: GetInstance
-	// reports the boot attachment with the delete_on_termination it was
-	// created with, and DeleteInstance keeps a boot volume created with false.
-	keepsRoots bool
-	// kept marks an instance whose CreateInstance sent
-	// delete_on_termination=false on its boot attachment.
-	kept map[string]bool
+	// honorsDeleteOnTermination makes it a compute with vws-compute#173:
+	// GetInstance reports each attachment with the delete_on_termination it
+	// was created with, and DeleteInstance deletes or keeps each volume as
+	// it says, unset meaning true for the boot volume only.
+	honorsDeleteOnTermination bool
+	// attached is the volume attachments each instance was created with.
+	attached map[string][]*computev1.VolumeAttachment
 	// sentDeleteOnTermination is the boot attachment field of every
 	// CreateInstance, replays included.
 	sentDeleteOnTermination []*bool
+	// sentVolumes is every CreateVolume request, replays included.
+	sentVolumes []*storagev1.CreateVolumeRequest
 }
 
 // fault fails times calls of a method from call number n, counted from 1.
@@ -104,12 +108,13 @@ func errDown() error { return status.Error(codes.Unavailable, "backend down") }
 func (w *launchWorld) left() (volumes, instances, ips int) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	live := map[string]bool{}
 	for _, owner := range w.volumes {
 		if owner != "" {
-			instances++
+			live[owner] = true
 		}
 	}
-	return len(w.volumes), instances, len(w.ips)
+	return len(w.volumes), len(live), len(w.ips)
 }
 
 // create replays requestID, or makes name with change and remembers the
@@ -150,6 +155,9 @@ func (w *launchWorld) CreateVolume(
 		return nil, toStatus(err)
 	}
 	name := volumeName(projectID, req.GetVolumeId())
+	w.mu.Lock()
+	w.sentVolumes = append(w.sentVolumes, req)
+	w.mu.Unlock()
 	return w.create("CreateVolume", req.GetRequestId(), name, func() error {
 		if _, ok := w.volumes[name]; ok {
 			return status.Error(codes.AlreadyExists, name)
@@ -167,17 +175,20 @@ func (w *launchWorld) CreateInstance(
 		return nil, toStatus(err)
 	}
 	name := instanceName(projectID, req.GetInstanceId())
-	attachment := req.GetInstance().GetSpec().GetVolumes()[0]
-	boot := attachment.GetVolume()
+	attachments := req.GetInstance().GetSpec().GetVolumes()
 	w.mu.Lock()
-	w.sentDeleteOnTermination = append(w.sentDeleteOnTermination, attachment.DeleteOnTermination)
+	w.sentDeleteOnTermination = append(w.sentDeleteOnTermination, attachments[0].DeleteOnTermination)
 	w.mu.Unlock()
 	return w.create("CreateInstance", req.GetRequestId(), name, func() error {
-		if owner, ok := w.volumes[boot]; !ok || owner != "" {
-			return status.Error(codes.FailedPrecondition, "boot volume "+boot)
+		for _, a := range attachments {
+			if owner, ok := w.volumes[a.GetVolume()]; !ok || owner != "" {
+				return status.Error(codes.FailedPrecondition, "volume "+a.GetVolume())
+			}
 		}
-		w.volumes[boot] = name
-		w.kept[name] = attachment.DeleteOnTermination != nil && !attachment.GetDeleteOnTermination()
+		for _, a := range attachments {
+			w.volumes[a.GetVolume()] = name
+		}
+		w.attached[name] = attachments
 		w.ips["10.0.0."+strconv.Itoa(w.made["CreateInstance"]+1)] = name
 		w.regionalImages.mu.Lock()
 		w.labels = req.GetInstance().GetLabels()
@@ -200,13 +211,14 @@ func (w *launchWorld) GetInstance(ctx context.Context, req *computev1.GetInstanc
 	w.mu.Lock()
 	before, _, _ := w.enter("GetInstance")
 	live := w.live(req.GetName())
-	var boot string
-	for vol, owner := range w.volumes {
-		if owner == req.GetName() {
-			boot = vol
+	var volumes []*computev1.VolumeAttachment
+	for _, a := range w.attached[req.GetName()] {
+		a = proto.CloneOf(a)
+		if !w.honorsDeleteOnTermination {
+			a.DeleteOnTermination = nil
 		}
+		volumes = append(volumes, a)
 	}
-	keep, honored := w.kept[req.GetName()], w.keepsRoots
 	w.mu.Unlock()
 	if before {
 		return nil, errDown()
@@ -215,13 +227,21 @@ func (w *launchWorld) GetInstance(ctx context.Context, req *computev1.GetInstanc
 		return nil, status.Error(codes.NotFound, req.GetName())
 	}
 	got, err := w.regionalImages.GetInstance(ctx, req)
-	if err != nil || !honored {
-		return got, err
+	if err != nil {
+		return nil, err
 	}
-	got.Spec.Volumes = []*computev1.VolumeAttachment{{
-		Volume: boot, DeviceName: "boot", Boot: true, DeleteOnTermination: proto.Bool(!keep),
-	}}
+	got.Spec.Volumes = volumes
 	return got, nil
+}
+
+// deletedWith reports whether compute deletes the volume of a with its
+// instance: unset is true for the boot volume only (instance.proto), and a
+// compute before vws-compute#173 never reads the field.
+func (w *launchWorld) deletedWith(a *computev1.VolumeAttachment) bool {
+	if !w.honorsDeleteOnTermination || a.DeleteOnTermination == nil {
+		return a.GetBoot()
+	}
+	return a.GetDeleteOnTermination()
 }
 
 // remove deletes name with change and answers a pending operation.
@@ -261,13 +281,11 @@ func (w *launchWorld) DeleteInstance(
 				return status.Error(codes.FailedPrecondition, "DEPENDENCY_MISSING: "+addr+" names "+name)
 			}
 		}
-		for vol, owner := range w.volumes {
-			switch {
-			case owner != name:
-			case w.keepsRoots && w.kept[name]:
-				w.volumes[vol] = ""
-			default:
-				delete(w.volumes, vol)
+		for _, a := range w.attached[name] {
+			if w.deletedWith(a) {
+				delete(w.volumes, a.GetVolume())
+			} else {
+				w.volumes[a.GetVolume()] = ""
 			}
 		}
 		for ip, owner := range w.ips {
@@ -315,7 +333,7 @@ func startLaunchWorld(t *testing.T) (*launchWorld, computeClient) {
 		volumes:        map[string]string{}, ips: map[string]string{}, addresses: map[string]string{},
 		replays: map[string]*longrunningpb.Operation{}, pending: map[string]bool{},
 		calls: map[string]int{}, faults: map[string]fault{}, made: map[string]int{},
-		kept: map[string]bool{},
+		attached: map[string][]*computev1.VolumeAttachment{},
 	}
 	lis := bufconn.Listen(MaxMessageBytes())
 	srv := grpc.NewServer()

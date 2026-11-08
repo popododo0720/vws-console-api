@@ -51,7 +51,7 @@ func (f launchFixture) record(t *testing.T) launch.Record {
 }
 
 func (f launchFixture) plan(attempt, count int) []launch.Step {
-	return launchPlan(project(f.m.Account), f.m.Key, attempt, count)
+	return launchPlan(project(f.m.Account), f.m.Key, attempt, count, 0)
 }
 
 func (f launchFixture) created() (volumes, instances int) {

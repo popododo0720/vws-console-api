@@ -49,9 +49,24 @@ func (c compute) RunInstances(ctx context.Context, m backend.Mutation, req resou
 		return resource.Accepted[resource.Instance]{}, err
 	}
 	items := make([]resource.Instance, 0, req.Count)
-	roots := make([]resource.Volume, 0, req.Count)
+	vols := make([]resource.Volume, 0, req.Count*(1+len(req.ExtraVolumes)))
 	targets := make([]resource.Ref, 0, req.Count)
 	seen := map[resource.InstanceID]struct{}{}
+	seenVol := map[resource.VolumeID]struct{}{}
+	mintVolume := func() (resource.VolumeID, error) {
+		id, err := resource.Mint[resource.VolumeID](c.w.entropy)
+		if err != nil {
+			return resource.VolumeID{}, err
+		}
+		if _, exists := c.w.vol[id]; exists {
+			return resource.VolumeID{}, resource.Internal(errors.New("identifier collision"))
+		}
+		if _, exists := seenVol[id]; exists {
+			return resource.VolumeID{}, resource.Internal(errors.New("identifier collision"))
+		}
+		seenVol[id] = struct{}{}
+		return id, nil
+	}
 	for i := 0; i < req.Count; i++ {
 		id, err := resource.Mint[resource.InstanceID](c.w.entropy)
 		if err != nil {
@@ -83,12 +98,9 @@ func (c compute) RunInstances(ctx context.Context, m backend.Mutation, req resou
 		if key != nil {
 			inst.KeyName, inst.KeyPairID = key.Name, key.ID
 		}
-		volID, err := resource.Mint[resource.VolumeID](c.w.entropy)
+		volID, err := mintVolume()
 		if err != nil {
 			return resource.Accepted[resource.Instance]{}, err
-		}
-		if _, exists := c.w.vol[volID]; exists {
-			return resource.Accepted[resource.Instance]{}, resource.Internal(errors.New("identifier collision"))
 		}
 		launched := c.w.now().UTC()
 		iops, miBps := req.RootPerformance()
@@ -98,12 +110,29 @@ func (c compute) RunInstances(ctx context.Context, m backend.Mutation, req resou
 			Device: resource.RootDeviceName, VolumeID: volID, DeleteOnTermination: !req.RootVolumeKept,
 			Status: resource.AttachmentAttached, AttachTime: launched,
 		}}
-		roots = append(roots, resource.Volume{
+		vols = append(vols, resource.Volume{
 			ID: volID, OwnerID: m.Account, SizeGiB: req.RootSize(), Zone: resource.ZoneName, Type: req.RootType(),
 			State: resource.VolumeInUse, InstanceID: id, Device: resource.RootDeviceName,
 			CreateTime: launched, AttachTime: launched, DeleteOnTermination: !req.RootVolumeKept,
 			AttachState: resource.AttachmentAttached, Iops: iops, Throughput: miBps,
 		})
+		for _, extra := range req.ExtraVolumes {
+			extraID, err := mintVolume()
+			if err != nil {
+				return resource.Accepted[resource.Instance]{}, err
+			}
+			iops, miBps := extra.Performance()
+			inst.BlockDevices = append(inst.BlockDevices, resource.BlockDevice{
+				Device: extra.Device, VolumeID: extraID, DeleteOnTermination: !extra.Kept,
+				Status: resource.AttachmentAttached, AttachTime: launched,
+			})
+			vols = append(vols, resource.Volume{
+				ID: extraID, OwnerID: m.Account, SizeGiB: extra.SizeGiB, Zone: resource.ZoneName,
+				Type: extra.VolumeType(), State: resource.VolumeInUse, InstanceID: id, Device: extra.Device,
+				CreateTime: launched, AttachTime: launched, DeleteOnTermination: !extra.Kept,
+				AttachState: resource.AttachmentAttached, Iops: iops, Throughput: miBps,
+			})
+		}
 		items = append(items, inst)
 		targets = append(targets, id.Ref())
 	}
@@ -121,7 +150,7 @@ func (c compute) RunInstances(ctx context.Context, m backend.Mutation, req resou
 		stored := item
 		c.w.inst[stored.ID] = &stored
 	}
-	for _, vol := range roots {
+	for _, vol := range vols {
 		stored := vol
 		c.w.vol[stored.ID] = &stored
 	}

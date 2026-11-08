@@ -107,6 +107,8 @@ const (
 	invalidCombination
 	invalidUnsupported
 	invalidTagLimit
+	invalidTaggedID
+	invalidAttachmentLimit
 )
 
 func (e *Error) Error() string {
@@ -204,6 +206,17 @@ func TagLimitExceeded(field, message string) *Error {
 // IsTagLimitExceeded reports whether e came from TagLimitExceeded.
 func IsTagLimitExceeded(e *Error) bool { return e != nil && e.invalid == invalidTagLimit }
 
+// AttachmentLimitExceeded reports a launch that would attach more volumes to
+// one instance than it takes. EC2 answers AttachmentLimitExceeded.
+func AttachmentLimitExceeded(message string) *Error {
+	return &Error{
+		Code: CodeInvalidArgument, Field: "blockDeviceMapping", Message: message, invalid: invalidAttachmentLimit,
+	}
+}
+
+// IsAttachmentLimitExceeded reports whether e came from AttachmentLimitExceeded.
+func IsAttachmentLimitExceeded(e *Error) bool { return e != nil && e.invalid == invalidAttachmentLimit }
+
 // IsMissingParameter reports whether e came from MissingParameter.
 func IsMissingParameter(e *Error) bool { return e != nil && e.invalid == invalidMissing }
 
@@ -212,6 +225,22 @@ func IsInvalidCombination(e *Error) bool { return e != nil && e.invalid == inval
 
 // IsUnsupported reports whether e came from Unsupported.
 func IsUnsupported(e *Error) bool { return e != nil && e.invalid == invalidUnsupported }
+
+// InvalidTaggedID reports a resource ID a tagging call cannot read. EC2
+// answers InvalidID, whatever kind the ID names, in its own sentence (#438).
+// https://docs.aws.amazon.com/AWSEC2/latest/APIReference/errors-overview.html
+func InvalidTaggedID(id string) *Error {
+	return &Error{
+		Code:    CodeInvalidArgument,
+		Field:   "ResourceId",
+		ID:      id,
+		Message: "The ID '" + id + "' is not valid",
+		invalid: invalidTaggedID,
+	}
+}
+
+// IsInvalidTaggedID reports whether e came from InvalidTaggedID.
+func IsInvalidTaggedID(e *Error) bool { return e != nil && e.invalid == invalidTaggedID }
 
 // Malformed reports an identifier that failed validation. EC2 names a
 // malformed instance ID in its own sentence.

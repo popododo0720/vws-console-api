@@ -248,6 +248,11 @@ type RunInstancesRequest struct {
 	// False is the EC2 default, so the fingerprint of a request that omits
 	// it does not change.
 	RootVolumeKept bool `json:"rootVolumeKept,omitempty"`
+	// ExtraVolumes are the mappings for devices other than the root, in the
+	// order sent: each instance gets one new volume per entry. Empty marshals
+	// to nothing, so the fingerprint of a request without one does not
+	// change.
+	ExtraVolumes []LaunchVolume `json:"extraVolumes,omitempty"`
 	// NetworkInterfaces places each interface on a subnet by device index
 	// (EC2 NetworkInterface.N). Any of them, the primary included, may be
 	// on a direct subnet.
@@ -298,6 +303,42 @@ func (r RunInstancesRequest) Interfaces() []NetworkInterfaceSpec {
 	}
 	return []NetworkInterfaceSpec{{SubnetID: r.SubnetID}}
 }
+
+// LaunchVolume is one non-root block device mapping of RunInstances: a blank
+// EBS volume each instance is launched with, attached at Device (#423 AC2).
+type LaunchVolume struct {
+	Device  string `json:"deviceName"`
+	SizeGiB int64  `json:"size"`
+	// Type is the mapping's Ebs.VolumeType. Empty means gp2; see VolumeType.
+	Type       VolumeType `json:"volumeType,omitempty"`
+	Iops       int64      `json:"iops,omitempty"`
+	Throughput int64      `json:"throughput,omitempty"`
+	// Kept is the mapping's Ebs.DeleteOnTermination=false. False is the EC2
+	// default for a volume mapped at launch (User Guide, "Preserve data when
+	// an instance is terminated"): it is deleted with its instance.
+	Kept bool `json:"kept,omitempty"`
+}
+
+// VolumeType is the EBS type of the volume: the mapping's, or gp2, the
+// CreateVolume default.
+func (v LaunchVolume) VolumeType() VolumeType {
+	if v.Type == "" {
+		return VolumeGP2
+	}
+	return v.Type
+}
+
+// Performance is the Iops and Throughput (MiB/s) of the volume: the
+// mapping's, and for an omitted one what EC2 fills in for its type.
+func (v LaunchVolume) Performance() (iops, miBps int64) {
+	return withDefaultPerformance(v.VolumeType(), v.Iops, v.Throughput)
+}
+
+// MaxLaunchVolumes is the EBS volumes RunInstances attaches to one instance,
+// the root included: a Nitro instance shares 28 attachments between its
+// volumes and network interfaces, and a VWS instance has one interface
+// (User Guide, "Amazon EBS volume limits").
+const MaxLaunchVolumes = 27
 
 // RootVolumeSizeGiB is the smallest root volume RunInstances creates when
 // the request names no size, and the size of the catalog image.
@@ -412,6 +453,9 @@ func (r RunInstancesRequest) Normalize() (RunInstancesRequest, error) {
 	if err := r.checkRootShape(); err != nil {
 		return RunInstancesRequest{}, err
 	}
+	if err := r.checkExtraVolumes(); err != nil {
+		return RunInstancesRequest{}, err
+	}
 	return r, nil
 }
 
@@ -448,6 +492,53 @@ func normalizeInterfaces(in []NetworkInterfaceSpec) ([]NetworkInterfaceSpec, err
 	out := slices.Clone(in)
 	slices.SortFunc(out, func(a, b NetworkInterfaceSpec) int { return cmp.Compare(a.DeviceIndex, b.DeviceIndex) })
 	return out, nil
+}
+
+// checkExtraVolumes applies the attachment limit, the EC2 device names and
+// the CreateVolume per-type rules to the non-root mappings. A device is one
+// whether or not it is spelled with /dev/, so xvda is the root device.
+func (r RunInstancesRequest) checkExtraVolumes() error {
+	if len(r.ExtraVolumes)+1 > MaxLaunchVolumes {
+		return AttachmentLimitExceeded(fmt.Sprintf(
+			"You've reached the limit on the number of Amazon EBS volumes that can be attached to a single instance: "+
+				"a VWS instance takes %d, the root volume included.", MaxLaunchVolumes))
+	}
+	devices := map[string]struct{}{deviceKey(RootDeviceName): {}}
+	for _, v := range r.ExtraVolumes {
+		if !ValidDeviceName(v.Device) {
+			return Invalid("blockDeviceMapping", v.Device+" is not a valid EBS device name.")
+		}
+		if _, ok := devices[deviceKey(v.Device)]; ok {
+			return Invalid("blockDeviceMapping", "device "+v.Device+" is mapped more than once")
+		}
+		devices[deviceKey(v.Device)] = struct{}{}
+		for _, f := range []struct {
+			name string
+			v    int64
+		}{{"size", v.SizeGiB}, {"iops", v.Iops}, {"throughput", v.Throughput}} {
+			if f.v < 0 {
+				return Invalid(f.name, fmt.Sprintf("Value (%d) for parameter %s is invalid.", f.v, f.name))
+			}
+		}
+		if v.SizeGiB == 0 {
+			// EbsBlockDevice VolumeSize. VWS takes no snapshot (#675), so
+			// the size is required.
+			return Invalid("blockDeviceMapping", v.Device+": you must specify either a snapshot ID or a volume size")
+		}
+		if v.Type != "" && !v.Type.Valid() {
+			return Invalid("volumeType", "unsupported")
+		}
+		iops, miBps := v.Performance()
+		if err := CheckVolumeShape(v.VolumeType(), v.SizeGiB, iops, miBps); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// deviceKey is a device name without its optional /dev/ prefix.
+func deviceKey(name string) string {
+	return strings.TrimPrefix(name, "/dev/")
 }
 
 // checkRootShape applies the CreateVolume per-type rules (EC2 API

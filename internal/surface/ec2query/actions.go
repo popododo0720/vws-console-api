@@ -710,7 +710,8 @@ func portValue(raw string) (int, error) {
 }
 
 // createTags tags instances, VPCs and subnets, which may be mixed in one call.
-// Other resource kinds fail with InvalidParameterValue. Each kind is its own
+// Other resource kinds fail with InvalidParameterValue, and an ID of a
+// taggable kind that does not parse with InvalidID. Each kind is its own
 // backend mutation; with a ClientToken and more than one kind, each kind gets
 // a token derived from the caller's, so a retry replays every part.
 func (h *handler) createTags(w http.ResponseWriter, r *http.Request, c resource.Caller) {
@@ -729,29 +730,31 @@ func (h *handler) createTags(w http.ResponseWriter, r *http.Request, c resource.
 		case strings.HasPrefix(raw, "i-"):
 			id, err := resource.Parse[resource.InstanceID](raw)
 			if err != nil {
-				writeErr(w, r, err)
+				writeErr(w, r, resource.InvalidTaggedID(raw))
 				return
 			}
 			insts = append(insts, id)
 		case strings.HasPrefix(raw, "vpc-"):
 			id, err := resource.Parse[resource.VpcID](raw)
-			if err == nil && resource.IsDirectVpc(id) {
+			if err != nil {
+				writeErr(w, r, resource.InvalidTaggedID(raw))
+				return
+			}
+			if resource.IsDirectVpc(id) {
 				// The tags fan out per kind, so a refusal must come before
 				// any of them is written.
-				err = resource.DirectReadOnly()
-			}
-			if err != nil {
-				writeErr(w, r, err)
+				writeErr(w, r, resource.DirectReadOnly())
 				return
 			}
 			vpcs = append(vpcs, id)
 		case strings.HasPrefix(raw, "subnet-"):
 			id, err := resource.Parse[resource.SubnetID](raw)
-			if err == nil && resource.IsDirectSubnet(id) {
-				err = resource.DirectReadOnly()
-			}
 			if err != nil {
-				writeErr(w, r, err)
+				writeErr(w, r, resource.InvalidTaggedID(raw))
+				return
+			}
+			if resource.IsDirectSubnet(id) {
+				writeErr(w, r, resource.DirectReadOnly())
 				return
 			}
 			subs = append(subs, id)

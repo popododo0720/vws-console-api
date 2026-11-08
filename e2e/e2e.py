@@ -420,6 +420,32 @@ def key_launch():
               f"root gp3 performance {vol.get('Iops')} {vol.get('Throughput')}")
     step("RunInstances root BlockDeviceMapping VolumeType=gp3 reads back as gp3", root_gp3, "vm")
 
+    def extra_volume():
+        """#423 AC2 and AC3: a kept non-root mapping is a new volume at its device, available after terminate.
+        Kept, so it launches on a compute before vws-compute#173 too."""
+        # The RunInstances bucket takes 5 launches per 2 s, and the steps above spend it.
+        time.sleep(2)
+        inst = ec2.run_instances(
+            ImageId="ami-0123456789abcdef0", InstanceType="t3.micro", MinCount=1, MaxCount=1,
+            SubnetId=S["subnet"], ClientToken="tok-extra-volume",
+            BlockDeviceMappings=[{"DeviceName": "/dev/sdf", "Ebs": {
+                "VolumeSize": 10, "VolumeType": "gp3", "DeleteOnTermination": False}}],
+        )["Instances"][0]
+        iid = inst["InstanceId"]
+        got = ec2.describe_instances(InstanceIds=[iid])["Reservations"][0]["Instances"][0]
+        maps = {m["DeviceName"]: m["Ebs"] for m in got.get("BlockDeviceMappings") or []}
+        check(set(maps) == {"/dev/xvda", "/dev/sdf"} and maps["/dev/sdf"]["DeleteOnTermination"] is False,
+              f"mappings {got.get('BlockDeviceMappings')}")
+        vid = maps["/dev/sdf"]["VolumeId"]
+        wait_attached(vid, iid, "/dev/sdf")
+        vol = ec2.describe_volumes(VolumeIds=[vid])["Volumes"][0]
+        check(vol["Size"] == 10 and vol["VolumeType"] == "gp3" and vol["Attachments"][0]["DeleteOnTermination"] is False,
+              f"extra volume {vol}")
+        ec2.terminate_instances(InstanceIds=[iid])
+        ec2.get_waiter("volume_available").wait(VolumeIds=[vid], WaiterConfig={"Delay": 1, "MaxAttempts": 60})
+        ec2.delete_volume(VolumeId=vid)
+    step("RunInstances non-root BlockDeviceMapping is a kept volume at its device", extra_volume, "vm")
+
     def delete_key(name):
         deadline = time.monotonic() + WAIT_TIMEOUT
         while True:

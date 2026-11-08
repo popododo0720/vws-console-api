@@ -138,6 +138,21 @@ func (c computeClient) collectLaunches(ctx context.Context) (int, error) {
 	})
 }
 
+// launchExtras is how many extra volumes each instance of rec's launch has:
+// the volume steps of index 0 in its plan less the boot volume. Every
+// attempt of a launch runs the request of its fingerprint, so the latest
+// plan tells every attempt's. A record of a launch without extra volumes
+// reads 0.
+func launchExtras(rec launch.Record) int {
+	n := 0
+	for _, step := range rec.Plan {
+		if step.Kind == launch.StepVolume && step.Index == 0 {
+			n++
+		}
+	}
+	return max(n-1, 0)
+}
+
 // collectAttempts deletes the plan of each dead attempt not yet collected,
 // last step first, and records each attempt collected once its plan is
 // gone, so a launch with many attempts makes progress across passes. One
@@ -148,7 +163,7 @@ func (c computeClient) collectAttempts(ctx context.Context, run *launch.Launch) 
 	rec := run.Record()
 	projectID := project(rec.Account)
 	for attempt := rec.Collected + 1; attempt <= rec.Dead(); attempt++ {
-		for _, step := range slices.Backward(launchPlan(projectID, rec.Key, attempt, rec.Count)) {
+		for _, step := range slices.Backward(launchPlan(projectID, rec.Key, attempt, rec.Count, launchExtras(rec))) {
 			if err := c.undoStep(ctx, "gc-", rec.Key, attempt, step); err != nil {
 				return err
 			}

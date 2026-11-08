@@ -159,8 +159,9 @@ func TestNoOpRetryLeavesResourceVersion(t *testing.T) {
 }
 
 // TestLargestLaunchFitsTheObjectLimit pins that a launch of the most
-// instances RunInstances accepts, planned and every step recorded, stays under the
-// vws-deploy#478 object limit, and that a record over it is refused.
+// instances RunInstances accepts, each with the most volumes, planned and
+// every step recorded, stays under a quarter of the vws-deploy#478 object
+// limit, and that a record over it is refused.
 func TestLargestLaunchFitsTheObjectLimit(t *testing.T) {
 	ctx := context.Background()
 	s, cs, ns := open(t)
@@ -170,8 +171,11 @@ func TestLargestLaunchFitsTheObjectLimit(t *testing.T) {
 	}
 	const zone = "projects/a123456789012/zones/vws-1a/"
 	for i := range 10 {
+		for range resource.MaxLaunchVolumes {
+			rec.Plan = append(rec.Plan,
+				launch.Step{Kind: launch.StepVolume, Index: i, Resource: zone + "volumes/vol-0123456789abcdef0"})
+		}
 		rec.Plan = append(rec.Plan,
-			launch.Step{Kind: launch.StepVolume, Index: i, Resource: zone + "volumes/vol-0123456789abcdef0"},
 			launch.Step{Kind: launch.StepInstance, Index: i, Resource: zone + "instances/i-0123456789abcdef0"})
 	}
 	rec.Steps = rec.Plan
@@ -182,7 +186,7 @@ func TestLargestLaunchFitsTheObjectLimit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if size := len(cm.Data["launch.json"]); size > kubestore.MaxRecordBytes/32 {
+	if size := len(cm.Data["launch.json"]); size > kubestore.MaxRecordBytes/4 {
 		t.Fatalf("largest launch is %d bytes", size)
 	}
 	huge := rec

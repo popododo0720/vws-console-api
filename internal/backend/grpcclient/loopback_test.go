@@ -270,7 +270,7 @@ func (w *loopWorld) putBoot(vol *storagev1.Volume) {
 	w.boots[vol.GetName()] = vol
 }
 
-// boot returns the boot volume stored under name, or nil.
+// boot returns the launch volume stored under name, or nil.
 func (w *loopWorld) boot(name string) *storagev1.Volume {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -608,6 +608,21 @@ func (s *instanceSrv) CreateInstance(ctx context.Context, req *computev1.CreateI
 	if err != nil {
 		return nil, toStatus(err)
 	}
+	// The fake creates the extra volumes itself, from the volumes the client
+	// created, and deletes or keeps each as its attachment says, as
+	// vws-compute does after vws-compute#173.
+	var extras []resource.LaunchVolume
+	for _, v := range spec.GetVolumes()[1:] {
+		made := s.w.boot(v.GetVolume())
+		if made == nil {
+			return nil, toStatus(resource.NotFound(resource.KindVolume, v.GetVolume()))
+		}
+		extras = append(extras, resource.LaunchVolume{
+			Device: v.GetDeviceName(), SizeGiB: made.GetSpec().GetSizeGib(), Type: volumeTypeOf(made.GetSpec().GetType()),
+			Iops: made.GetSpec().GetIops(), Throughput: made.GetSpec().GetThroughputMibps(),
+			Kept: !v.GetDeleteOnTermination(),
+		})
+	}
 	acc, err := s.w.set.Compute.RunInstances(ctx, backend.Mutation{
 		Scope: backend.Scope{Account: account}, Key: req.GetRequestId(), Fingerprint: fp,
 	}, resource.RunInstancesRequest{
@@ -620,6 +635,7 @@ func (s *instanceSrv) CreateInstance(ctx context.Context, req *computev1.CreateI
 		// It keeps a boot volume whose attachment says so, as vws-compute
 		// does after vws-compute#173.
 		RootVolumeKept: spec.GetVolumes()[0].DeleteOnTermination != nil && !spec.GetVolumes()[0].GetDeleteOnTermination(),
+		ExtraVolumes:   extras,
 	})
 	if err != nil {
 		return nil, toStatus(err)
@@ -1089,7 +1105,8 @@ func (s *volumeSrv) CreateVolume(ctx context.Context, req *storagev1.CreateVolum
 		return nil, toStatus(err)
 	}
 	spec := req.GetVolume().GetSpec()
-	if spec.GetImage() != "" {
+	// A launch volume is kept here; the fake makes its own on CreateInstance.
+	if spec.GetImage() != "" || req.GetVolume().GetLabels()[labelInstance] != "" {
 		name := volumeName(projectID, req.GetVolumeId())
 		fp, err := protoFingerprint(req)
 		if err != nil {
