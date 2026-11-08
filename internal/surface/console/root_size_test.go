@@ -64,7 +64,13 @@ func TestConsoleRootVolumeSizeFollowsTheImage(t *testing.T) {
 	for _, c := range []struct {
 		key, size string
 		want      float64
-	}{{"larger", `,"rootVolumeSize":30`, 30}, {"omitted", "", 20}} {
+	}{
+		{"larger", `,"rootVolumeSize":30`, 30},
+		{"omitted", "", 20},
+		// #429: 1,000 io1 IOPS need 20 GiB at 50 IOPS per GiB, so the
+		// ratio is checked on the image's size, not on 8 GiB.
+		{"io1-omitted", `,"rootVolumeType":"io1","rootIops":1000`, 20},
+	} {
 		inst := first(launch(c.key, c.size), http.StatusAccepted, "launch"+c.size)
 		devices, ok := inst["blockDeviceMappings"].([]any)
 		if !ok || len(devices) != 1 {
