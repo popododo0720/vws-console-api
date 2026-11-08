@@ -962,7 +962,7 @@ func (h *handler) describeRouteTables(w http.ResponseWriter, r *http.Request, c 
 		"route.destination-ipv6-cidr-block", "route.destination-prefix-list-id",
 		"route.egress-only-internet-gateway-id", "route.gateway-id", "route.instance-id",
 		"route.nat-gateway-id", "route.transit-gateway-id", "route.origin", "route.state",
-		"route.vpc-peering-connection-id", "tag", "tag-key", "vpc-id",
+		"route.vpc-peering-connection-id", "tag-key", "vpc-id",
 	); err != nil {
 		writeErr(w, r, err)
 		return
