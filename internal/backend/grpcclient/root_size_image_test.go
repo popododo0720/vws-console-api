@@ -58,3 +58,34 @@ func TestRootVolumeBelowARegisteredImageIsRefused(t *testing.T) {
 		}
 	}
 }
+
+// #429: an omitted size takes the image's, and the io1 Iops-per-GiB ratio
+// is checked on it: 1,000 IOPS need 20 GiB, so they boot a 20 GiB image.
+func TestRootIopsRatioIsCheckedOnTheImageSize(t *testing.T) {
+	sub, err := resource.Parse[resource.SubnetID]("subnet-01234567")
+	if err != nil {
+		t.Fatal(err)
+	}
+	boot, client := startRegional(t)
+	boot.mu.Lock()
+	boot.images[registeredAMI] = imageRecord{project: project(mustAccount(t)), region: resource.RegionName, sizeGiB: 20}
+	boot.mu.Unlock()
+	req, err := resource.RunInstancesRequest{
+		ImageID: mustImage(t, registeredAMI), InstanceType: "vws.small", SubnetID: sub, Count: 1,
+		RootVolumeType: resource.VolumeIO1, RootIops: 1000,
+	}.Normalize()
+	if err != nil {
+		t.Fatalf("normalize: %v", err)
+	}
+	if _, err := client.RunInstances(context.Background(), backend.Mutation{
+		Scope: backend.Scope{Account: mustAccount(t)}, Key: "io1-ratio", Fingerprint: "fp-io1-ratio",
+	}, req); err != nil {
+		t.Fatalf("1,000 io1 IOPS on a 20 GiB image: %v", err)
+	}
+	boot.mu.Lock()
+	got := boot.size
+	boot.mu.Unlock()
+	if got != 20 {
+		t.Fatalf("storage got %d GiB, want 20", got)
+	}
+}

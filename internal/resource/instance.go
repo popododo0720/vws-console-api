@@ -299,8 +299,8 @@ func (r RunInstancesRequest) Interfaces() []NetworkInterfaceSpec {
 const RootVolumeSizeGiB = 8
 
 // RootSize is the mapping's Ebs.VolumeSize in GiB, or RootVolumeSizeGiB when
-// it is omitted. Normalize checks this size; the backend resolves an omitted
-// one against the image with RootSizeFor.
+// it is omitted. Normalize checks a size the request names; the backend
+// resolves an omitted one against the image with RootSizeFor.
 func (r RunInstancesRequest) RootSize() int64 {
 	if r.RootVolumeSize == 0 {
 		return RootVolumeSizeGiB
@@ -460,7 +460,14 @@ func (r RunInstancesRequest) checkRootShape() error {
 		return Invalid("size", fmt.Sprintf("Value (%d) for parameter size is invalid.", r.RootVolumeSize))
 	}
 	iops, miBps := r.RootPerformance()
-	return CheckVolumeShape(r.RootType(), r.RootSize(), iops, miBps)
+	size := r.RootVolumeSize
+	if size == 0 {
+		// An omitted size is the image's, which only the backend knows, and
+		// RootSizeFor checks the shape again on it. A ratio refused at the
+		// largest size the type takes is refused at every size (#429).
+		size = limitsOf(r.RootType()).maxGiB
+	}
+	return CheckVolumeShape(r.RootType(), size, iops, miBps)
 }
 
 // StopInstancesRequest stops instances that are running.

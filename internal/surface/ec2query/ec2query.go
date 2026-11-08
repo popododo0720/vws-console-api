@@ -534,7 +534,47 @@ type rootMapping struct {
 
 // rootDeviceFields are the BlockDeviceMapping.N fields rootVolume reads.
 func rootDeviceFields() []string {
-	return []string{"DeviceName", "Ebs.VolumeType", "Ebs.VolumeSize", "Ebs.Iops", "Ebs.Throughput"}
+	return []string{"DeviceName", "Ebs.VolumeType", "Ebs.VolumeSize", "Ebs.Iops", "Ebs.Throughput", "Ebs.Encrypted"}
+}
+
+// unsupportedDeviceField is a BlockDeviceMapping.N field EC2 takes that VWS
+// refuses as UnsupportedOperation, and why.
+type unsupportedDeviceField struct{ field, reason string }
+
+// unsupportedDeviceFields are the mapping fields rootVolume refuses by name,
+// all but Ebs.Encrypted=false (#423 AC4). Each reason has a tracked issue:
+// SnapshotId #675, Encrypted and KmsKeyId #676, VirtualName #677, NoDevice
+// #678.
+func unsupportedDeviceFields() []unsupportedDeviceField {
+	return []unsupportedDeviceField{
+		{"Ebs.SnapshotId", "the root volume is created from the image, and VWS does not create other volumes at launch"},
+		{"Ebs.Encrypted", "VWS volumes are not encrypted at rest"},
+		{"Ebs.KmsKeyId", "VWS volumes are not encrypted at rest"},
+		{"VirtualName", "VWS instance types have no instance store volumes"},
+		{"NoDevice", "a VWS image maps only its root device, which a launch cannot remove"},
+	}
+}
+
+// refuseUnsupportedDeviceFields refuses a field of unsupportedDeviceFields in
+// the mapping at prefix. Ebs.Encrypted=false is taken: it states what every
+// VWS volume is, and SDKs send it.
+func refuseUnsupportedDeviceFields(r *http.Request, prefix string) error {
+	for _, u := range unsupportedDeviceFields() {
+		key := prefix + u.field
+		if !r.Form.Has(key) {
+			continue
+		}
+		if u.field == "Ebs.Encrypted" {
+			switch v := r.Form.Get(key); {
+			case strings.EqualFold(v, "false"):
+				continue
+			case !strings.EqualFold(v, "true"):
+				return resource.Invalid(key, "Value ("+v+") for parameter encrypted is invalid.")
+			}
+		}
+		return resource.Unsupported(key, key+" is not supported: "+u.reason+".")
+	}
+	return nil
 }
 
 // rootVolume reads the RunInstances block device mapping. VWS creates only
@@ -542,13 +582,17 @@ func rootDeviceFields() []string {
 // may set Ebs.VolumeType, Ebs.VolumeSize, Ebs.Iops and Ebs.Throughput;
 // Normalize checks them with the CreateVolume rules and the backend checks
 // the size against the image. A mapping for any other device would add a
-// volume, which VWS does not support yet (#323 follow-up), so it is refused
-// rather than ignored. The other mapping fields are refused by allowRun.
+// volume, which VWS does not support yet (#423 AC2), so it is refused
+// rather than ignored. A field of unsupportedDeviceFields is refused first,
+// so the answer names it. The other mapping fields are refused by allowRun.
 func rootVolume(r *http.Request) (rootMapping, error) {
 	var root rootMapping
 	mapped := false
 	for i := 1; i <= maxBlockDeviceMappings; i++ {
 		prefix := "BlockDeviceMapping." + strconv.Itoa(i) + "."
+		if err := refuseUnsupportedDeviceFields(r, prefix); err != nil {
+			return rootMapping{}, err
+		}
 		if !slices.ContainsFunc(rootDeviceFields(), func(f string) bool { return r.Form.Has(prefix + f) }) {
 			continue
 		}
@@ -865,14 +909,16 @@ func networkInterfaceField(key string) bool {
 		slices.Contains(networkInterfaceFields(), field)
 }
 
-// blockDeviceField is a BlockDeviceMapping.N field rootVolume reads.
+// blockDeviceField is a BlockDeviceMapping.N field rootVolume reads or
+// refuses by name.
 func blockDeviceField(key string) bool {
 	rest, ok := strings.CutPrefix(key, "BlockDeviceMapping.")
 	if !ok {
 		return false
 	}
 	n, field, ok := strings.Cut(rest, ".")
-	return ok && inRange(n, maxBlockDeviceMappings) && slices.Contains(rootDeviceFields(), field)
+	return ok && inRange(n, maxBlockDeviceMappings) && (slices.Contains(rootDeviceFields(), field) ||
+		slices.ContainsFunc(unsupportedDeviceFields(), func(u unsupportedDeviceField) bool { return u.field == field }))
 }
 
 func allowStop(key string) bool {
@@ -1328,9 +1374,12 @@ func indexed(key, prefix string, max int) bool {
 	return inRange(rest, max)
 }
 
+// inRange reports an index from 1 to max spelled as the readers spell it,
+// strconv.Itoa(n). Another spelling, such as 01 or +1, names a key no reader
+// takes, so it must not pass the allow-list.
 func inRange(raw string, max int) bool {
 	n, err := strconv.Atoi(raw)
-	return err == nil && n >= 1 && n <= max
+	return err == nil && n >= 1 && n <= max && strconv.Itoa(n) == raw
 }
 
 func requestID(r *http.Request) string { return obs.RequestID(r.Context()) }
