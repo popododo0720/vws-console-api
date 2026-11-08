@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -679,5 +680,31 @@ func TestCreateVolumeFromSnapshot(t *testing.T) {
 	code, body = call("Action", "CreateVolume", "AvailabilityZone", "vws-1a", "SnapshotId", "snap-00000000000000000")
 	if code != http.StatusBadRequest || !strings.Contains(body, "<Code>InvalidSnapshot.NotFound</Code>") {
 		t.Fatalf("missing snapshot: %d %s", code, body)
+	}
+}
+
+// An index the readers do not spell, such as 01 or +1, names a field no
+// reader takes, so it is refused rather than dropped.
+func TestNonCanonicalIndexIsRejected(t *testing.T) {
+	h, cred, now := harness(t)
+	subnet := newSubnet(t, func(f url.Values) string {
+		t.Helper()
+		f.Set("Version", Version)
+		res := signed(t, h, cred, now, f.Encode())
+		if res.Code != http.StatusOK {
+			t.Fatalf("%s %d %s", f.Get("Action"), res.Code, res.Body)
+		}
+		return res.Body.String()
+	})
+	for i, key := range []string{
+		"BlockDeviceMapping.01.Ebs.Encrypted", "BlockDeviceMapping.+1.VirtualName",
+		"BlockDeviceMapping.01.Ebs.VolumeType", "TagSpecification.01.ResourceType",
+	} {
+		f := launchForm(subnet, "alias"+strconv.Itoa(i), url.Values{key: {"true"}})
+		res := signed(t, h, cred, now, f.Encode())
+		if res.Code != http.StatusBadRequest ||
+			!strings.Contains(res.Body.String(), "<Code>InvalidParameterValue</Code><Message>unsupported</Message>") {
+			t.Fatalf("%s: %d %s", key, res.Code, res.Body)
+		}
 	}
 }
