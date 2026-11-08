@@ -967,13 +967,8 @@ func (h *handler) describeRouteTables(w http.ResponseWriter, r *http.Request, c 
 		writeErr(w, r, err)
 		return
 	}
-	if ids := indexedStrings(r, "RouteTableId"); len(ids) > 0 {
-		raw := ids[0]
-		if !validRouteTableID(raw) {
-			writeErr(w, r, resource.Invalid("routeTableId", "malformed"))
-			return
-		}
-		writeErr(w, r, routeTableNotFound(raw))
+	if err := checkRouteTableIDs(indexedStrings(r, "RouteTableId")); err != nil {
+		writeErr(w, r, err)
 		return
 	}
 	page, err := pageForm(r)
@@ -999,6 +994,24 @@ func routeTableNotFound(id string) *resource.Error {
 		Code: resource.CodeNotFound, Field: "routeTableId", ID: id,
 		Message: "The routeTable ID '" + id + "' does not exist.",
 	}
+}
+
+// checkRouteTableIDs refuses the first malformed id of the request, then the
+// first id that names no route table. VWS has no route table model, so every
+// well-formed id is unknown.
+func checkRouteTableIDs(ids []string) error {
+	for _, id := range ids {
+		if !validRouteTableID(id) {
+			return &resource.Error{
+				Code: resource.CodeInvalidArgument, Field: "routeTableId", ID: id,
+				Message: "Invalid id: \"" + id + "\" (expecting \"rtb-...\")",
+			}
+		}
+	}
+	if len(ids) > 0 {
+		return routeTableNotFound(ids[0])
+	}
+	return nil
 }
 
 func validRouteTableID(id string) bool {
