@@ -9,6 +9,7 @@ package iam
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/popododo0720/vws-console-api/internal/resource"
@@ -73,6 +74,17 @@ type Authorizer interface {
 // RootARN is the ARN of an account's root user.
 func RootARN(account resource.AccountID) string {
 	return "arn:vws:iam::" + account.String() + ":root"
+}
+
+// AWSPartition names an internal arn:vws ARN in the aws partition. STS
+// GetCallerIdentity answers the caller ARN as AWS does, because SDKs, CLI
+// scripts and policy tooling parse the partition (#247).
+func AWSPartition(arn string) string {
+	rest, ok := strings.CutPrefix(arn, "arn:vws:")
+	if !ok {
+		return arn
+	}
+	return "arn:aws:" + rest
 }
 
 // Authenticator adapts a Client to the sigv4 verifier.
