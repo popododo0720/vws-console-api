@@ -179,7 +179,7 @@ func boundRows(key *string) []boundRow {
 		}),
 		user("CreateLoginProfile", boundBob, ServesLoginProfiles, true,
 			func(ctx context.Context, a iam.Directory, w iam.AuthorizedPrincipal) error {
-				_, err := a.CreateLoginProfile(ctx, acct, "bob", boundPw, w)
+				_, err := a.CreateLoginProfile(ctx, acct, "bob", boundPw, false, w)
 				return err
 			}),
 		user("GetLoginProfile", boundAlice, ServesLoginProfiles, false,
@@ -189,7 +189,7 @@ func boundRows(key *string) []boundRow {
 			}),
 		user("UpdateLoginProfile", boundAlice, ServesLoginProfiles, false,
 			func(ctx context.Context, a iam.Directory, w iam.AuthorizedPrincipal) error {
-				return a.UpdateLoginProfile(ctx, acct, "alice", boundPw+"x", w)
+				return a.UpdateLoginProfile(ctx, acct, "alice", iam.LoginProfileUpdate{Password: boundPw + "x"}, w)
 			}),
 		user("DeleteLoginProfile", boundAlice, ServesLoginProfiles, true,
 			func(ctx context.Context, a iam.Directory, w iam.AuthorizedPrincipal) error {
@@ -360,7 +360,7 @@ func seedBound(ctx context.Context, t *testing.T, a iam.Directory, policy Policy
 		t.Fatalf("seed CreateAccessKey: %v", err)
 	}
 	if serves&ServesLoginProfiles != 0 {
-		if _, err := a.CreateLoginProfile(ctx, acct, "alice", boundPw, Grant(ctx, t, boundAlice)); err != nil {
+		if _, err := a.CreateLoginProfile(ctx, acct, "alice", boundPw, false, Grant(ctx, t, boundAlice)); err != nil {
 			t.Fatalf("seed CreateLoginProfile: %v", err)
 		}
 	}

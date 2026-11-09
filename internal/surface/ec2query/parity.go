@@ -101,21 +101,23 @@ func filterRows[T any](rows []T, filters []queryFilter, values func(T, string) [
 	return out
 }
 
-// wildcardMatch applies EC2's * and ? filter wildcards. A pattern without
-// either character is an exact match.
+// wildcardMatch applies EC2's filter wildcards: * is any run of characters
+// and ? is one. A backslash makes the *, ? or \ after it literal, so \*
+// matches only "*"; a backslash before anything else is itself literal.
+// https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/Using_Filtering.html
 func wildcardMatch(pattern, value string) bool {
-	if !strings.ContainsAny(pattern, "*?") {
+	if !strings.ContainsAny(pattern, `*?\`) {
 		return pattern == value
 	}
-	p, v := []rune(pattern), []rune(value)
+	p, v := filterPattern(pattern), []rune(value)
 	pi, vi := 0, 0
 	star, mark := -1, 0
 	for vi < len(v) {
 		switch {
-		case pi < len(p) && (p[pi] == '?' || p[pi] == v[vi]):
+		case pi < len(p) && (p[pi].kind == patternOne || p[pi].kind == patternLiteral && p[pi].r == v[vi]):
 			pi++
 			vi++
-		case pi < len(p) && p[pi] == '*':
+		case pi < len(p) && p[pi].kind == patternAny:
 			star, mark = pi, vi
 			pi++
 		case star >= 0:
@@ -126,10 +128,46 @@ func wildcardMatch(pattern, value string) bool {
 			return false
 		}
 	}
-	for pi < len(p) && p[pi] == '*' {
+	for pi < len(p) && p[pi].kind == patternAny {
 		pi++
 	}
 	return pi == len(p)
+}
+
+type patternKind int
+
+const (
+	patternLiteral patternKind = iota
+	patternOne
+	patternAny
+)
+
+type patternElem struct {
+	kind patternKind
+	r    rune
+}
+
+// filterPattern splits an EC2 filter value into literals and wildcards.
+func filterPattern(pattern string) []patternElem {
+	runes := []rune(pattern)
+	out := make([]patternElem, 0, len(runes))
+	for i := 0; i < len(runes); i++ {
+		switch c := runes[i]; c {
+		case '*':
+			out = append(out, patternElem{kind: patternAny})
+		case '?':
+			out = append(out, patternElem{kind: patternOne})
+		case '\\':
+			if i+1 < len(runes) && strings.ContainsRune(`*?\`, runes[i+1]) {
+				i++
+				c = runes[i]
+			}
+			out = append(out, patternElem{kind: patternLiteral, r: c})
+		default:
+			out = append(out, patternElem{kind: patternLiteral, r: c})
+		}
+	}
+	return out
 }
 
 // invalidNextTokenMessage is AWS's sentence for a token that names no row.
@@ -452,7 +490,12 @@ func (h *handler) describeInstanceTypes(w http.ResponseWriter, r *http.Request, 
 		writeErr(w, r, err)
 		return
 	}
-	want := stringSetOf(indexedStrings(r, "InstanceType"))
+	names := indexedStrings(r, "InstanceType")
+	if err := checkInstanceTypeNames(names); err != nil {
+		writeErr(w, r, err)
+		return
+	}
+	want := stringSetOf(names)
 	var rows []instanceTypeItem
 	for _, typ := range resource.InstanceTypes() {
 		row := instanceTypeOf(typ)
@@ -472,6 +515,43 @@ func (h *handler) describeInstanceTypes(w http.ResponseWriter, r *http.Request, 
 	writeXML(w, describeInstanceTypesXML{
 		InstanceTypes: instanceTypeSetXML{Items: rows}, NextToken: next, RequestID: requestID(r),
 	})
+}
+
+// instanceTypeNamesField marks the error for InstanceType.N names that are
+// not in the catalog, which EC2 answers as InvalidInstanceType.
+const instanceTypeNamesField = "InstanceType.N"
+
+// checkInstanceTypeNames refuses the InstanceType.N names VWS does not
+// offer, all of them in one sentence in request order, the way EC2 does:
+// "The following supplied instance types do not exist: [m1.medium, m3.medium]".
+// https://github.com/4dn-dcic/tibanna/issues/382
+func checkInstanceTypeNames(names []string) error {
+	known := make(map[string]struct{})
+	for _, typ := range resource.InstanceTypes() {
+		known[typ.Name] = struct{}{}
+	}
+	if unknown := unknownNames(names, known); len(unknown) > 0 {
+		return resource.Invalid(instanceTypeNamesField,
+			"The following supplied instance types do not exist: ["+strings.Join(unknown, ", ")+"]")
+	}
+	return nil
+}
+
+// unknownNames is the names not in known, each once, in request order.
+func unknownNames(names []string, known map[string]struct{}) []string {
+	var out []string
+	seen := make(map[string]struct{})
+	for _, name := range names {
+		if _, ok := known[name]; ok {
+			continue
+		}
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		out = append(out, name)
+	}
+	return out
 }
 
 func stringSetOf(values []string) map[string]struct{} {
@@ -801,7 +881,16 @@ func (h *handler) describeAvailabilityZones(w http.ResponseWriter, r *http.Reque
 		writeErr(w, r, err)
 		return
 	}
-	names := stringSetOf(indexedStrings(r, "ZoneName"))
+	zoneNames := indexedStrings(r, "ZoneName")
+	// EC2 answers a ZoneName.N it does not know as InvalidParameterValue,
+	// "Invalid availability zone: [us-west-2-lax-1a]" (floci-io/floci#5519,
+	// from eksctl-io/eksctl#8174).
+	if unknown := unknownNames(zoneNames, map[string]struct{}{resource.ZoneName: {}}); len(unknown) > 0 {
+		writeErr(w, r, resource.Invalid("ZoneName",
+			"Invalid availability zone: ["+strings.Join(unknown, ", ")+"]"))
+		return
+	}
+	names := stringSetOf(zoneNames)
 	ids := stringSetOf(indexedStrings(r, "ZoneId"))
 	all := []availabilityZoneItem{{
 		ZoneName:           resource.ZoneName,
@@ -924,18 +1013,13 @@ func (h *handler) describeRouteTables(w http.ResponseWriter, r *http.Request, c 
 		"route.destination-ipv6-cidr-block", "route.destination-prefix-list-id",
 		"route.egress-only-internet-gateway-id", "route.gateway-id", "route.instance-id",
 		"route.nat-gateway-id", "route.transit-gateway-id", "route.origin", "route.state",
-		"route.vpc-peering-connection-id", "tag", "tag-key", "vpc-id",
+		"route.vpc-peering-connection-id", "tag-key", "vpc-id",
 	); err != nil {
 		writeErr(w, r, err)
 		return
 	}
-	if ids := indexedStrings(r, "RouteTableId"); len(ids) > 0 {
-		raw := ids[0]
-		if !validRouteTableID(raw) {
-			writeErr(w, r, resource.Invalid("routeTableId", "malformed"))
-			return
-		}
-		writeErr(w, r, routeTableNotFound(raw))
+	if err := checkRouteTableIDs(indexedStrings(r, "RouteTableId")); err != nil {
+		writeErr(w, r, err)
 		return
 	}
 	page, err := pageForm(r)
@@ -961,6 +1045,24 @@ func routeTableNotFound(id string) *resource.Error {
 		Code: resource.CodeNotFound, Field: "routeTableId", ID: id,
 		Message: "The routeTable ID '" + id + "' does not exist.",
 	}
+}
+
+// checkRouteTableIDs refuses the first malformed id of the request, then the
+// first id that names no route table. VWS has no route table model, so every
+// well-formed id is unknown.
+func checkRouteTableIDs(ids []string) error {
+	for _, id := range ids {
+		if !validRouteTableID(id) {
+			return &resource.Error{
+				Code: resource.CodeInvalidArgument, Field: "routeTableId", ID: id,
+				Message: "Invalid id: \"" + id + "\" (expecting \"rtb-...\")",
+			}
+		}
+	}
+	if len(ids) > 0 {
+		return routeTableNotFound(ids[0])
+	}
+	return nil
 }
 
 func validRouteTableID(id string) bool {

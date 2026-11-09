@@ -120,8 +120,8 @@ against `-root-password-file` locally. A bad password, unknown user or missing
 MFA code is the same `401` as in the other modes, `RESOURCE_EXHAUSTED` from
 vws-iam is `429`, and `UNAVAILABLE` or a transport failure is `503` with
 `Retry-After`. A sign-in vws-iam marks `password_reset_required` is refused
-(`403`) and its session revoked, because the console has no password-change
-flow yet. STS `AssumeRole` sends the caller in the request's `authentication`
+(`403`) and its session revoked, because the console has no
+password-change flow yet (#691); `-iam=fake` refuses it the same way. STS `AssumeRole` sends the caller in the request's `authentication`
 field: the caller's own SigV4 request, or its console session token; nothing
 goes in gRPC metadata. `GetSessionToken` names its caller the same way;
 vws-iam checks its MFA code. The static root key cannot assume a role (as in
@@ -265,8 +265,10 @@ Console sign-in limits for now:
   vws-iam holds sessions.
 - **No MFA yet.** Users have no MFA devices until vws-iam#6, so a login that
   sends `mfaCode` fails.
-- **No forced password change.** `CreateLoginProfile`/`UpdateLoginProfile`
-  reject `PasswordResetRequired=true` until a change-password flow exists.
+- **No forced password change.** `CreateLoginProfile` and
+  `UpdateLoginProfile` store `PasswordResetRequired`, and `UpdateLoginProfile`
+  may change only the flag. A user with the flag cannot sign in to the
+  console until a change-password flow exists (#691).
 - **`-console-token` stays** as the account root until vws-console signs in
   with cookies; it is removed after that switch.
 

@@ -52,10 +52,8 @@ func (c *Client) Login(ctx context.Context, r iam.LoginRequest) (iam.Session, er
 		return iam.Session{}, unavailable("sign-in")
 	}
 	if resp.GetPasswordResetRequired() {
-		// The console has no password-change flow yet, so a session that
-		// must change its password first is not handed out.
 		c.revoke(ctx, resp.GetSessionToken())
-		return iam.Session{}, resource.Denied("Your password must be reset before you can sign in to the console.")
+		return iam.Session{}, iam.PasswordResetRequired()
 	}
 	return iam.Session{Token: resp.GetSessionToken(), Principal: p, Expires: resp.GetExpireTime().AsTime()}, nil
 }

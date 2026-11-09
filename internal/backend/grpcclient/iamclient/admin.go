@@ -471,7 +471,7 @@ func (a STSAdmin) DeletePolicyVersion(
 
 // CreateLoginProfile implements iam.Admin.
 func (STSAdmin) CreateLoginProfile(
-	_ context.Context, _ resource.AccountID, _, _ string, want iam.AuthorizedPrincipal,
+	_ context.Context, _ resource.AccountID, _, _ string, _ bool, want iam.AuthorizedPrincipal,
 ) (iam.LoginProfile, error) {
 	return iam.LoginProfile{}, unboundOrNotServed(want, "CreateLoginProfile")
 }
@@ -485,7 +485,7 @@ func (STSAdmin) GetLoginProfile(
 
 // UpdateLoginProfile implements iam.Admin.
 func (STSAdmin) UpdateLoginProfile(
-	_ context.Context, _ resource.AccountID, _, _ string, want iam.AuthorizedPrincipal,
+	_ context.Context, _ resource.AccountID, _ string, _ iam.LoginProfileUpdate, want iam.AuthorizedPrincipal,
 ) error {
 	return unboundOrNotServed(want, "UpdateLoginProfile")
 }

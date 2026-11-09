@@ -150,6 +150,11 @@ func DetachReplay(t *testing.T, newSet Harness) {
 		}
 		attach(t, "att-moved-2", vol, first, "/dev/sdj")
 		replays(t, "volume only, attached elsewhere", m, req, orig)
+		other := m
+		other.Fingerprint = "fp-dr-moved-other"
+		if _, err := set.Compute.DetachVolume(ctx, other, req); resource.CodeOf(err) != resource.CodeIdempotencyMismatch {
+			t.Fatalf("same token, other parameters, attached elsewhere: %v", err)
+		}
 		page, err := set.Compute.DescribeVolumes(ctx, scope, resource.VolumeQuery{
 			IDs: []resource.VolumeID{vol}, Page: resource.PageRequest{Size: 50},
 		})

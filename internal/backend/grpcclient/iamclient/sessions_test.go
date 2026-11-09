@@ -374,7 +374,7 @@ func seededFake(t *testing.T) *iam.Fake {
 		t.Fatal(err)
 	}
 	if _, err := f.CreateLoginProfile(
-		t.Context(), account(t), "bob", "correct horse 1", backendtest.UserGrant(t.Context(), t, f, account(t), "bob"),
+		t.Context(), account(t), "bob", "correct horse 1", false, backendtest.UserGrant(t.Context(), t, f, account(t), "bob"),
 	); err != nil {
 		t.Fatal(err)
 	}
