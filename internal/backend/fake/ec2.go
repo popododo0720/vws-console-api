@@ -188,6 +188,7 @@ func (c compute) CreateVolume(ctx context.Context, m backend.Mutation, req resou
 	vol := resource.Volume{
 		ID: id, OwnerID: m.Account, SizeGiB: req.SizeGiB, Zone: req.Zone, Type: req.Type, State: resource.VolumeCreating,
 		SnapshotID: req.SnapshotID, CreateTime: c.w.now().UTC(), Iops: req.Iops, Throughput: req.Throughput,
+		Tags: copyTags(req.Tags),
 	}
 	op, err := c.w.newOp(m.Account, resource.ServiceCompute, resource.ActionCreateVolume, []resource.Ref{id.Ref()}, func(time.Time) {
 		if cur := c.w.vol[id]; cur != nil && cur.State == resource.VolumeCreating {
