@@ -177,3 +177,13 @@ func TestAttachLifecycleContract(t *testing.T) {
 		return set, func() { now = now.Add(2 * time.Second) }
 	})
 }
+
+// TestDirectNetworksContract runs the #60 direct network table on the fake.
+func TestDirectNetworksContract(t *testing.T) {
+	direct, err := resource.Parse[resource.SubnetID](backendtest.DirectSubnet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	world := New(Options{Entropy: &Sequence{}, Direct: []DirectNetwork{{ID: direct, Cidr: backendtest.DirectCidr}}})
+	backendtest.DirectNetworks(t, world.Set)
+}

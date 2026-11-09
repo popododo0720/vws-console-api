@@ -740,11 +740,21 @@ func (h *handler) createTags(w http.ResponseWriter, r *http.Request, c resource.
 				writeErr(w, r, resource.InvalidTaggedID(raw))
 				return
 			}
+			if resource.IsDirectVpc(id) {
+				// The tags fan out per kind, so a refusal must come before
+				// any of them is written.
+				writeErr(w, r, resource.DirectReadOnly())
+				return
+			}
 			vpcs = append(vpcs, id)
 		case strings.HasPrefix(raw, "subnet-"):
 			id, err := resource.Parse[resource.SubnetID](raw)
 			if err != nil {
 				writeErr(w, r, resource.InvalidTaggedID(raw))
+				return
+			}
+			if resource.IsDirectSubnet(id) {
+				writeErr(w, r, resource.DirectReadOnly())
 				return
 			}
 			subs = append(subs, id)

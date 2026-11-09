@@ -91,8 +91,11 @@ type CreateSubnetRequest struct {
 func (CreateSubnetRequest) Action() Action { return ActionCreateSubnet }
 
 // Normalize checks that cidr is an IPv4 network and the zone is the one zone.
-// An empty zone is that zone.
+// An empty zone is that zone. The direct VPC takes no new subnet.
 func (r CreateSubnetRequest) Normalize() (CreateSubnetRequest, error) {
+	if IsDirectVpc(r.VpcID) {
+		return CreateSubnetRequest{}, DirectReadOnly()
+	}
 	ip, ipNet, err := net.ParseCIDR(r.Cidr)
 	if err != nil || ip.To4() == nil {
 		return CreateSubnetRequest{}, Invalid("cidrBlock", "must be an ipv4 network")
@@ -134,10 +137,13 @@ type DeleteSubnetRequest struct {
 // Action returns DeleteSubnet.
 func (DeleteSubnetRequest) Action() Action { return ActionDeleteSubnet }
 
-// Normalize checks the id.
+// Normalize checks the id. A direct subnet cannot be deleted.
 func (r DeleteSubnetRequest) Normalize() (DeleteSubnetRequest, error) {
 	if r.ID.IsZero() {
 		return DeleteSubnetRequest{}, Invalid("subnetId", "required")
+	}
+	if IsDirectSubnet(r.ID) {
+		return DeleteSubnetRequest{}, DirectReadOnly()
 	}
 	return r, nil
 }

@@ -210,6 +210,9 @@ func (c computeClient) DescribeSnapshots(ctx context.Context, s backend.Scope, q
 }
 
 func (c networkClient) DeleteSubnet(ctx context.Context, m backend.Mutation, req resource.DeleteSubnetRequest) (resource.Accepted[resource.Subnet], error) {
+	if resource.IsDirectSubnet(req.ID) {
+		return resource.Accepted[resource.Subnet]{}, resource.DirectReadOnly()
+	}
 	// The subnet name includes the VPC. After the row is gone the client cannot form it.
 	projectID := project(m.Account)
 	name, err := computeClient(c).findSubnet(ctx, projectID, req.ID.String())
@@ -760,10 +763,12 @@ func stringListed(values []string, want string) bool {
 	return false
 }
 
-// AssociateAddress sets spec.association to the instance's first network
+// AssociateAddress sets spec.association to the instance's primary network
 // interface. The network service has no AssociateAddress RPC. The instance is
 // read from compute after the address so a missing or terminated one is
 // InvalidInstanceID.NotFound and the device name is the one compute stores.
+// A direct primary interface is refused here: vws-network refuses it too,
+// but as InvalidArgument, which EC2 would answer InvalidParameterValue.
 func (c networkClient) AssociateAddress(ctx context.Context, m backend.Mutation, req resource.AssociateAddressRequest) (resource.Accepted[resource.Address], error) {
 	projectID := project(m.Account)
 	if _, err := c.getAddress(ctx, projectID, req.ID.String()); err != nil {
@@ -781,11 +786,14 @@ func (c networkClient) AssociateAddress(ctx context.Context, m backend.Mutation,
 	if model.State == resource.InstanceTerminated {
 		return resource.Accepted[resource.Address]{}, resource.NotFound(resource.KindInstance, req.InstanceID.String())
 	}
-	nics := inst.GetSpec().GetNetworkInterfaces()
-	if len(nics) == 0 {
+	if resource.IsDirectSubnet(model.SubnetID) {
+		return resource.Accepted[resource.Address]{}, resource.DirectElasticIP()
+	}
+	device, ok := primaryDevice(inst)
+	if !ok {
 		return resource.Accepted[resource.Address]{}, resource.Invalid("instanceId", "instance has no network interface")
 	}
-	assoc := &networkv1.AddressAssociation{Instance: name, DeviceName: nics[0].GetDeviceName()}
+	assoc := &networkv1.AddressAssociation{Instance: name, DeviceName: device}
 	return c.updateAssociation(ctx, m, req.ID, assoc, req.InstanceID, resource.ActionAssociateAddress)
 }
 

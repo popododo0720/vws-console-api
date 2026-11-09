@@ -45,9 +45,9 @@ func (snapshotKind) kind() Kind      { return KindSnapshot }
 func (instanceKind) valid(s string) bool      { return validMinted(KindInstance, s) }
 func (imageKind) valid(s string) bool         { return validMinted(KindImage, s) }
 func (reservationKind) valid(s string) bool   { return validMinted(KindReservation, s) }
-func (subnetKind) valid(s string) bool        { return validMinted(KindSubnet, s) }
+func (subnetKind) valid(s string) bool        { return validMinted(KindSubnet, s) || validDirectSubnet(s) }
 func (bucketKind) valid(s string) bool        { return validBucketName(s) }
-func (vpcKind) valid(s string) bool           { return validMinted(KindVpc, s) }
+func (vpcKind) valid(s string) bool           { return validMinted(KindVpc, s) || s == directVpc }
 func (volumeKind) valid(s string) bool        { return validMinted(KindVolume, s) }
 func (securityGroupKind) valid(s string) bool { return validMinted(KindSecurityGroup, s) }
 func (keyPairKind) valid(s string) bool       { return validMinted(KindKeyPair, s) }
@@ -65,7 +65,8 @@ type (
 	InstanceID = ID[instanceKind]
 	// ImageID identifies a machine image ("ami-" and 8 to 17 hex digits).
 	ImageID = ID[imageKind]
-	// VpcID identifies a VPC ("vpc-" and 8 to 17 hex digits).
+	// VpcID identifies a VPC ("vpc-" and 8 to 17 hex digits), or is the
+	// direct VPC "vpc-direct".
 	VpcID = ID[vpcKind]
 	// VolumeID identifies a block volume ("vol-" and 8 to 17 hex digits).
 	VolumeID = ID[volumeKind]
@@ -79,7 +80,8 @@ type (
 	SnapshotID = ID[snapshotKind]
 	// ReservationID groups the instances one RunInstances call launched.
 	ReservationID = ID[reservationKind]
-	// SubnetID identifies a subnet.
+	// SubnetID identifies a subnet ("subnet-" and 8 to 17 hex digits), or a
+	// direct subnet ("subnet-direct-" and a name).
 	SubnetID = ID[subnetKind]
 	// BucketName is chosen by the caller. It is not minted.
 	BucketName = ID[bucketKind]

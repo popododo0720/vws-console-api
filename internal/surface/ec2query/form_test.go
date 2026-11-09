@@ -498,15 +498,19 @@ func harness(t *testing.T) (http.Handler, sigv4.Credential, time.Time) {
 
 func harnessWithImages(t *testing.T, images []resource.Image) (http.Handler, sigv4.Credential, time.Time) {
 	t.Helper()
+	return harnessWithOptions(t, fake.Options{Images: images})
+}
+
+// harnessWithOptions serves a fake world built from opt at a fixed time.
+func harnessWithOptions(t *testing.T, opt fake.Options) (http.Handler, sigv4.Credential, time.Time) {
+	t.Helper()
 	now := time.Date(2026, 10, 9, 10, 0, 0, 0, time.UTC)
 	account, err := resource.Parse[resource.AccountID]("123456789012")
 	if err != nil {
 		t.Fatal(err)
 	}
-	svc := cloud.New(cloud.Config{Backends: fake.New(fake.Options{
-		Now:    func() time.Time { return now },
-		Images: images,
-	}).Set()})
+	opt.Now = func() time.Time { return now }
+	svc := cloud.New(cloud.Config{Backends: fake.New(opt).Set()})
 	cred := sigv4.Credential{AccessKey: "AKIDEXAMPLE", Secret: "secret", Account: account}
 	h := New(Config{Service: svc, Authorizer: iam.NewStatic(cred.AccessKey, cred.Secret, cred.Account), Verifier: sigv4.NewVerifier(sigv4.Verifier{
 		Service: sigv4.ServiceEC2,

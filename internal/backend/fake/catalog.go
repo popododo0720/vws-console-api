@@ -3,6 +3,7 @@ package fake
 import (
 	"context"
 	"errors"
+	"slices"
 	"time"
 
 	"github.com/popododo0720/vws-console-api/internal/backend"
@@ -154,6 +155,9 @@ func (n network) DeleteSubnet(ctx context.Context, m backend.Mutation, req resou
 	n.w.mu.Lock()
 	defer n.w.mu.Unlock()
 	n.w.settle(n.w.now())
+	if resource.IsDirectSubnet(req.ID) {
+		return resource.Accepted[resource.Subnet]{}, resource.DirectReadOnly()
+	}
 	if acc, ok, err := replay[resource.Accepted[resource.Subnet]](n.w, m.Key, m.Fingerprint); err != nil || ok {
 		return acc, err
 	}
@@ -162,7 +166,10 @@ func (n network) DeleteSubnet(ctx context.Context, m backend.Mutation, req resou
 		return resource.Accepted[resource.Subnet]{}, resource.NotFound(resource.KindSubnet, req.ID.String())
 	}
 	for _, inst := range n.w.inst {
-		if inst.SubnetID == req.ID && inst.State != resource.InstanceTerminated {
+		onSubnet := slices.ContainsFunc(inst.Interfaces(), func(nic resource.NetworkInterface) bool {
+			return nic.SubnetID == req.ID
+		})
+		if onSubnet && inst.State != resource.InstanceTerminated {
 			return resource.Accepted[resource.Subnet]{}, resource.Conflict(resource.KindSubnet, req.ID.String(), "subnet has dependents")
 		}
 	}
@@ -431,6 +438,9 @@ func (n network) AssociateAddress(ctx context.Context, m backend.Mutation, req r
 	inst, ok := n.w.inst[req.InstanceID]
 	if !ok || inst.OwnerID != m.Account || inst.State == resource.InstanceTerminated {
 		return resource.Accepted[resource.Address]{}, resource.NotFound(resource.KindInstance, req.InstanceID.String())
+	}
+	if resource.IsDirectSubnet(inst.SubnetID) {
+		return resource.Accepted[resource.Address]{}, resource.DirectElasticIP()
 	}
 	for _, other := range n.w.addr {
 		if other.ID != addr.ID && other.InstanceID == req.InstanceID {

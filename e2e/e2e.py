@@ -5,8 +5,12 @@ Environment:
   VWS_E2E_EC2      EC2 Query endpoint. Default http://127.0.0.1:8081.
   VWS_E2E_S3       S3 endpoint. Default http://127.0.0.1:8082.
   VWS_E2E_IAM      IAM and STS Query endpoint (one listener). Default http://127.0.0.1:8084.
-  VWS_E2E_CAPS     Comma list of capabilities the backend has: vm, eip.
-                   Default is vm,eip for fake and none for grpc.
+  VWS_E2E_CAPS     Comma list of capabilities the backend has: vm, eip, direct
+                   (a direct network VWS_E2E_DIRECT_SUBNET is configured).
+                   Default is vm,eip,direct for fake and none for grpc.
+  VWS_E2E_DIRECT_SUBNET
+                   The direct subnet the direct steps use. Default
+                   subnet-direct-prod, the one -backend=fake serves.
   VWS_E2E_ACCESS_KEY, VWS_E2E_SECRET_KEY
                    Root credentials for the SigV4 clients. The defaults are
                    the public development values, which a grpc backend refuses,
@@ -42,7 +46,8 @@ import boto3
 from botocore.config import Config
 
 BACKEND = os.environ.get("VWS_E2E_BACKEND", "fake")
-CAPS = set(filter(None, os.environ.get("VWS_E2E_CAPS", "vm,eip" if BACKEND == "fake" else "").split(",")))
+CAPS = set(filter(None, os.environ.get("VWS_E2E_CAPS", "vm,eip,direct" if BACKEND == "fake" else "").split(",")))
+DIRECT_SUBNET = os.environ.get("VWS_E2E_DIRECT_SUBNET", "subnet-direct-prod")
 KW = dict(
     aws_access_key_id=os.environ.get("VWS_E2E_ACCESS_KEY", "AKIDEXAMPLE"),
     aws_secret_access_key=os.environ.get("VWS_E2E_SECRET_KEY", "secret"),
@@ -1472,6 +1477,66 @@ def console_static():
         CONSOLE_URL = saved
 
 
+def direct():
+    """#60: a direct subnet is shared and read-only, an instance may put any
+    interface on it, and an elastic IP is refused on a direct primary one."""
+    def listed():
+        sub = ec2.describe_subnets(SubnetIds=[DIRECT_SUBNET])["Subnets"][0]
+        tags = {t["Key"]: t["Value"] for t in sub.get("Tags", [])}
+        check(sub["VpcId"] == "vpc-direct" and sub["State"] == "available" and tags == {"vws:network-type": "direct"},
+              f"direct subnet {sub}")
+    step("DescribeSubnets shows the direct subnet in vpc-direct", listed, "direct")
+    step("DeleteSubnet on a direct subnet is UnauthorizedOperation", lambda: ec2_error(
+        "UnauthorizedOperation", lambda: ec2.delete_subnet(SubnetId=DIRECT_SUBNET)), "direct")
+    step("CreateTags on a direct subnet is UnauthorizedOperation", lambda: ec2_error(
+        "UnauthorizedOperation", lambda: ec2.create_tags(Resources=[DIRECT_SUBNET], Tags=[{"Key": "k", "Value": "v"}])),
+        "direct")
+    step("CreateSubnet in vpc-direct is UnauthorizedOperation", lambda: ec2_error(
+        "UnauthorizedOperation", lambda: ec2.create_subnet(VpcId="vpc-direct", CidrBlock="192.168.200.0/25")), "direct")
+    vm = "direct" if "vm" in CAPS else "vm"
+
+    def launch(token, nics):
+        # RunInstances is throttled per account (5, refilled at 2/s), and these
+        # launches follow others closely. RequestLimitExceeded is retryable, and
+        # the same ClientToken keeps a retry one launch.
+        for attempt in range(5):
+            try:
+                return ec2.run_instances(
+                    ImageId="ami-0123456789abcdef0", InstanceType="t3.micro", MinCount=1, MaxCount=1,
+                    ClientToken=token, NetworkInterfaces=nics)["Instances"][0]["InstanceId"]
+            except ec2.exceptions.ClientError as exc:
+                if exc.response["Error"]["Code"] != "RequestLimitExceeded" or attempt == 4:
+                    raise
+                time.sleep(1)
+
+    def mixed():
+        nics = [{"DeviceIndex": 1, "SubnetId": DIRECT_SUBNET}, {"DeviceIndex": 0, "SubnetId": S["subnet"]}]
+        iid = launch("e2e-direct-mixed", nics)
+        check(launch("e2e-direct-mixed", nics) == iid, "retry launched another instance")
+        inst = ec2.describe_instances(InstanceIds=[iid])["Reservations"][0]["Instances"][0]
+        got = sorted((n["Attachment"]["DeviceIndex"], n["SubnetId"], n["VpcId"]) for n in inst["NetworkInterfaces"])
+        check(got == [(0, S["subnet"], S["vpc"]), (1, DIRECT_SUBNET, "vpc-direct")] and inst["SubnetId"] == S["subnet"],
+              f"interfaces {inst['NetworkInterfaces']}")
+        return iid
+    S["direct_mixed"] = step("RunInstances NetworkInterfaces on an overlay and a direct subnet", mixed, vm)
+    eip = "direct" if {"vm", "eip"} <= CAPS else ("vm" if "vm" not in CAPS else "eip")
+
+    def refused_eip():
+        iid = launch("e2e-direct-only", [{"DeviceIndex": 0, "SubnetId": DIRECT_SUBNET}])
+        S["direct_only"] = iid
+        alloc = ec2.allocate_address(Domain="vpc")["AllocationId"]
+        try:
+            ec2_error("InvalidParameterCombination", lambda: ec2.associate_address(AllocationId=alloc, InstanceId=iid))
+            check("InstanceId" not in ec2.describe_addresses(AllocationIds=[alloc])["Addresses"][0], "address stuck")
+        finally:
+            ec2.release_address(AllocationId=alloc)
+    step("AssociateAddress to a direct primary interface is InvalidParameterCombination", refused_eip, eip)
+    for key in ("direct_mixed", "direct_only"):
+        if S.get(key):
+            step(f"TerminateInstances ({key})", lambda key=key: ec2.terminate_instances(InstanceIds=[S[key]]), vm)
+            step(f"wait terminated ({key})", lambda key=key: wait_state(S[key], "terminated"), vm)
+
+
 def cleanup():
     if S.get("restored_snap"):
         step("DeleteSnapshot", lambda: ec2.delete_snapshot(SnapshotId=S["restored_snap"]))
@@ -1490,6 +1555,7 @@ if __name__ == "__main__":
     vms()
     key_launch()
     addresses()
+    direct()
     objects()
     identity()
     cli_identity()
