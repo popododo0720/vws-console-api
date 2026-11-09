@@ -53,7 +53,7 @@ func requiredTags(tags map[string]string) error {
 	if len(tags) == 0 {
 		return Invalid("tags", "required")
 	}
-	return validTags(tags)
+	return validRequestTags(tags)
 }
 
 func distinctIDs[T interface {

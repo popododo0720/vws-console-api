@@ -30,3 +30,27 @@ func TestValidTagsFollowEC2(t *testing.T) {
 		}
 	}
 }
+
+// TestRequestTagsRefuseAWSKeys checks that a request may not set an aws: key,
+// in any case, but a resource that already has one can take other tags.
+func TestRequestTagsRefuseAWSKeys(t *testing.T) {
+	id, err := Parse[InstanceID]("i-01234567")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, tags := range map[string]map[string]string{
+		"aws: prefix": {"aws:cloudformation:stack-name": "v"},
+		"AWS: prefix": {"AWS:x": "v"},
+	} {
+		if err := validRequestTags(tags); CodeOf(err) != CodeInvalidArgument {
+			t.Errorf("%s: %v, want InvalidArgument", name, err)
+		}
+		if _, err := (CreateTagsRequest{IDs: []InstanceID{id}, Tags: tags}).Normalize(); err == nil {
+			t.Errorf("%s: CreateTags accepted it", name)
+		}
+	}
+	got, err := MergeTags(map[string]string{"aws:cloudformation:id": "s"}, map[string]string{"Name": "web"})
+	if err != nil || got["aws:cloudformation:id"] != "s" || got["Name"] != "web" {
+		t.Fatalf("CreateTags on a resource with an aws: tag: %v %v", got, err)
+	}
+}

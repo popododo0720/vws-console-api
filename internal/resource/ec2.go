@@ -42,7 +42,7 @@ func (r CreateVpcRequest) Normalize() (CreateVpcRequest, error) {
 		return CreateVpcRequest{}, err
 	}
 	r.Cidr = cidr
-	if err := validTags(r.Tags); err != nil {
+	if err := validRequestTags(r.Tags); err != nil {
 		return CreateVpcRequest{}, err
 	}
 	return r, nil

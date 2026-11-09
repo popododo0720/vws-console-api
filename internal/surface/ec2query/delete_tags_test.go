@@ -162,3 +162,30 @@ func TestFannedOutTagRequestIsCheckedBeforeAnyWrite(t *testing.T) {
 		}
 	}
 }
+
+// TestAWSTagKeysCannotBeSet checks that CreateTags refuses an aws: key, as
+// EC2 does. DeleteTags cannot name one either, so a key CreateTags let
+// through could never be removed.
+func TestAWSTagKeysCannotBeSet(t *testing.T) {
+	h, cred, now := harness(t)
+	send := func(f url.Values) (int, string) {
+		t.Helper()
+		f.Set("Version", Version)
+		res := signed(t, h, cred, now, f.Encode())
+		return res.Code, res.Body.String()
+	}
+	_, created := send(url.Values{"Action": {"CreateVpc"}, "CidrBlock": {"10.0.0.0/16"}})
+	vpc := xmlText(t, created, "vpcId")
+	for _, key := range []string{"aws:stack", "AWS:stack"} {
+		code, body := send(url.Values{
+			"Action": {"CreateTags"}, "ResourceId.1": {vpc}, "Tag.1.Key": {key}, "Tag.1.Value": {"x"},
+		})
+		if code != http.StatusBadRequest || !strings.Contains(body, "<Code>InvalidParameterValue</Code>") {
+			t.Fatalf("CreateTags %s: %d %s", key, code, body)
+		}
+	}
+	_, got := send(url.Values{"Action": {"DescribeVpcs"}, "VpcId.1": {vpc}})
+	if strings.Contains(strings.ToLower(got), "<key>aws:stack</key>") {
+		t.Fatalf("a refused CreateTags set an aws: tag: %s", got)
+	}
+}
