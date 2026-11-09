@@ -758,7 +758,7 @@ func NextInstanceState(action Action, from InstanceState) (transitional, settled
 		ActionDeleteSecurityGroup, ActionDeleteSubnet, ActionAllocateAddress, ActionReleaseAddress,
 		ActionCreateSnapshot, ActionDeleteSnapshot, ActionAssociateAddress, ActionDisassociateAddress,
 		ActionModifyVolume, ActionCreateTags, ActionDetachVolume, ActionRevokeSecurityGroupIngress,
-		actionNone:
+		ActionDeleteTags, actionNone:
 		return 0, 0, Invalid("action", "not an instance transition")
 	default:
 		return 0, 0, Invalid("action", "not an instance transition")

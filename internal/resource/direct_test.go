@@ -79,6 +79,16 @@ func TestDirectNetworksAreReadOnly(t *testing.T) {
 			errOf(TagVpcsRequest{IDs: []VpcID{vpc}, Tags: tags}.Normalize()),
 		},
 		{
+			"UntagSubnets",
+			errOf(UntagSubnetsRequest{IDs: []SubnetID{overlay, direct}}.Normalize()),
+			errOf(UntagSubnetsRequest{IDs: []SubnetID{overlay}}.Normalize()),
+		},
+		{
+			"UntagVpcs",
+			errOf(UntagVpcsRequest{IDs: []VpcID{vpc, DirectVpcID()}}.Normalize()),
+			errOf(UntagVpcsRequest{IDs: []VpcID{vpc}}.Normalize()),
+		},
+		{
 			"DeleteVpc",
 			errOf(DeleteVpcRequest{ID: DirectVpcID()}.Normalize()),
 			errOf(DeleteVpcRequest{ID: vpc}.Normalize()),

@@ -101,6 +101,9 @@ type Compute interface {
 	TerminateInstances(ctx context.Context, m Mutation, req resource.TerminateInstancesRequest) (resource.Accepted[resource.InstanceStateChange], error)
 	DescribeInstances(ctx context.Context, s Scope, q resource.InstanceQuery) (resource.Page[resource.Instance], error)
 	CreateTags(ctx context.Context, m Mutation, req resource.CreateTagsRequest) (resource.Accepted[resource.Instance], error)
+	DeleteTags(
+		ctx context.Context, m Mutation, req resource.DeleteTagsRequest,
+	) (resource.Accepted[resource.Instance], error)
 	CreateVolume(ctx context.Context, m Mutation, req resource.CreateVolumeRequest) (resource.Accepted[resource.Volume], error)
 	AttachVolume(ctx context.Context, m Mutation, req resource.AttachVolumeRequest) (resource.Accepted[resource.Volume], error)
 	DetachVolume(
@@ -143,6 +146,10 @@ type Network interface {
 	DescribeVpcs(ctx context.Context, s Scope, q resource.VpcQuery) (resource.Page[resource.Vpc], error)
 	TagVpcs(ctx context.Context, m Mutation, req resource.TagVpcsRequest) (resource.Accepted[resource.Vpc], error)
 	TagSubnets(ctx context.Context, m Mutation, req resource.TagSubnetsRequest) (resource.Accepted[resource.Subnet], error)
+	UntagVpcs(ctx context.Context, m Mutation, req resource.UntagVpcsRequest) (resource.Accepted[resource.Vpc], error)
+	UntagSubnets(
+		ctx context.Context, m Mutation, req resource.UntagSubnetsRequest,
+	) (resource.Accepted[resource.Subnet], error)
 	CreateSecurityGroup(ctx context.Context, m Mutation, req resource.CreateSecurityGroupRequest) (resource.Accepted[resource.SecurityGroup], error)
 	DeleteSecurityGroup(ctx context.Context, m Mutation, req resource.DeleteSecurityGroupRequest) (resource.Accepted[resource.SecurityGroup], error)
 	DescribeSecurityGroups(ctx context.Context, s Scope, q resource.SecurityGroupQuery) (resource.Page[resource.SecurityGroup], error)

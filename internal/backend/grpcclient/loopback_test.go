@@ -731,7 +731,7 @@ func (s *instanceSrv) changePower(ctx context.Context, req *computev1.UpdateInst
 		resource.ActionDeleteKeyPair, resource.ActionDeleteSecurityGroup, resource.ActionDeleteSubnet,
 		resource.ActionAllocateAddress, resource.ActionReleaseAddress, resource.ActionCreateSnapshot, resource.ActionDeleteSnapshot,
 		resource.ActionAssociateAddress, resource.ActionDisassociateAddress,
-		resource.ActionModifyVolume, resource.ActionCreateTags, resource.ActionDetachVolume:
+		resource.ActionModifyVolume, resource.ActionCreateTags, resource.ActionDetachVolume, resource.ActionDeleteTags:
 		return nil, toStatus(resource.Invalid("power", "unsupported"))
 	default:
 		return nil, toStatus(resource.Invalid("power", "unsupported"))
@@ -746,7 +746,7 @@ func (s *instanceSrv) changePower(ctx context.Context, req *computev1.UpdateInst
 	return runningOp(projectID, acc.Operation, instanceName(projectID, id.String()), commonv1.OperationVerb_OPERATION_VERB_UPDATE, s.w.now)
 }
 
-// retag serves a labels-only update as CreateTags with the decoded tags.
+// retag serves a labels-only update by replacing the tags with the decoded ones.
 func (s *instanceSrv) retag(ctx context.Context, req *computev1.UpdateInstanceRequest) (*longrunningpb.Operation, error) {
 	projectID, err := projectOfName(req.GetInstance().GetName())
 	if err != nil {
@@ -764,18 +764,25 @@ func (s *instanceSrv) retag(ctx context.Context, req *computev1.UpdateInstanceRe
 	if err != nil {
 		return nil, toStatus(err)
 	}
+	// Compute replaces the labels; the fake merges tags, so clear them first.
 	tags, err := userTags(req.GetInstance().GetLabels())
 	if err != nil {
 		return nil, toStatus(err)
 	}
-	if len(tags) == 0 {
-		return nil, toStatus(resource.Invalid("labels", "no tags"))
-	}
-	acc, err := s.w.set.Compute.CreateTags(ctx, backend.Mutation{
-		Scope: backend.Scope{Account: account}, Key: req.GetRequestId(), Fingerprint: fp,
-	}, resource.CreateTagsRequest{IDs: []resource.InstanceID{id}, Tags: tags})
+	scope := backend.Scope{Account: account}
+	acc, err := s.w.set.Compute.DeleteTags(ctx, backend.Mutation{
+		Scope: scope, Key: req.GetRequestId() + "-clear", Fingerprint: fp,
+	}, resource.DeleteTagsRequest{IDs: []resource.InstanceID{id}})
 	if err != nil {
 		return nil, toStatus(err)
+	}
+	if len(tags) > 0 {
+		acc, err = s.w.set.Compute.CreateTags(ctx, backend.Mutation{
+			Scope: scope, Key: req.GetRequestId(), Fingerprint: fp,
+		}, resource.CreateTagsRequest{IDs: []resource.InstanceID{id}, Tags: tags})
+		if err != nil {
+			return nil, toStatus(err)
+		}
 	}
 	if actionName := req.GetInstance().GetLabels()[labelAction]; actionName != "" {
 		s.w.rememberAction(id.String(), actionName)
