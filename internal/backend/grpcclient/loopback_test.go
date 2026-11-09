@@ -1139,11 +1139,15 @@ func (s *volumeSrv) CreateVolume(ctx context.Context, req *storagev1.CreateVolum
 			return nil, toStatus(err)
 		}
 	}
+	tags, err := userTags(req.GetVolume().GetLabels())
+	if err != nil {
+		return nil, toStatus(err)
+	}
 	acc, err := s.w.set.Compute.CreateVolume(ctx, backend.Mutation{
 		Scope: backend.Scope{Account: account}, Key: req.GetRequestId(), Fingerprint: fp,
 	}, resource.CreateVolumeRequest{
 		SizeGiB: spec.GetSizeGib(), Zone: resource.ZoneName, Type: volumeTypeOf(spec.GetType()), SnapshotID: snap,
-		Iops: spec.GetIops(), Throughput: spec.GetThroughputMibps(),
+		Iops: spec.GetIops(), Throughput: spec.GetThroughputMibps(), Tags: tags,
 	})
 	if err != nil {
 		return nil, toStatus(err)

@@ -140,9 +140,14 @@ func (h *handler) createVolume(w http.ResponseWriter, r *http.Request, c resourc
 		writeErr(w, r, err)
 		return
 	}
+	tags, err := tagSpecificationsFor(r, "volume")
+	if err != nil {
+		writeErr(w, r, err)
+		return
+	}
 	acc, err := h.svc.CreateVolume(r.Context(), c, token, resource.CreateVolumeRequest{
 		SizeGiB: size, Zone: r.Form.Get("AvailabilityZone"), Type: resource.VolumeType(r.Form.Get("VolumeType")),
-		SnapshotID: snap, Iops: iops, Throughput: throughput,
+		SnapshotID: snap, Iops: iops, Throughput: throughput, Tags: tags,
 	})
 	if err != nil {
 		writeErr(w, r, err)
@@ -175,7 +180,7 @@ func (h *handler) describeVolumes(w http.ResponseWriter, r *http.Request, c reso
 		writeErr(w, r, err)
 		return
 	}
-	if err := checkFilterNames(filters, "attachment.instance-id"); err != nil {
+	if err := checkTagFilterNames(filters, "attachment.instance-id"); err != nil {
 		writeErr(w, r, err)
 		return
 	}
@@ -724,6 +729,7 @@ func (h *handler) createTags(w http.ResponseWriter, r *http.Request, c resource.
 		insts []resource.InstanceID
 		vpcs  []resource.VpcID
 		subs  []resource.SubnetID
+		vols  []resource.VolumeID
 	)
 	for _, raw := range indexedStrings(r, "ResourceId") {
 		switch {
@@ -758,12 +764,19 @@ func (h *handler) createTags(w http.ResponseWriter, r *http.Request, c resource.
 				return
 			}
 			subs = append(subs, id)
+		case strings.HasPrefix(raw, "vol-"):
+			id, err := resource.Parse[resource.VolumeID](raw)
+			if err != nil {
+				writeErr(w, r, err)
+				return
+			}
+			vols = append(vols, id)
 		default:
-			writeErr(w, r, resource.Invalid("ResourceId", "only instances, VPCs and subnets can be tagged"))
+			writeErr(w, r, resource.Invalid("ResourceId", "only instances, VPCs, subnets and volumes can be tagged"))
 			return
 		}
 	}
-	if len(insts)+len(vpcs)+len(subs) == 0 {
+	if len(insts)+len(vpcs)+len(subs)+len(vols) == 0 {
 		writeErr(w, r, resource.Invalid("ResourceId", "required"))
 		return
 	}
@@ -781,7 +794,7 @@ func (h *handler) createTags(w http.ResponseWriter, r *http.Request, c resource.
 		tags[k] = v
 	}
 	kinds := 0
-	for _, n := range []int{len(insts), len(vpcs), len(subs)} {
+	for _, n := range []int{len(insts), len(vpcs), len(subs), len(vols)} {
 		if n > 0 {
 			kinds++
 		}
@@ -816,6 +829,16 @@ func (h *handler) createTags(w http.ResponseWriter, r *http.Request, c resource.
 		t, err := part("subnet")
 		if err == nil {
 			_, err = h.svc.TagSubnets(r.Context(), c, t, resource.TagSubnetsRequest{IDs: subs, Tags: tags})
+		}
+		if err != nil {
+			writeErr(w, r, err)
+			return
+		}
+	}
+	if len(vols) > 0 {
+		t, err := part("volume")
+		if err == nil {
+			_, err = h.svc.TagVolumes(r.Context(), c, t, resource.TagVolumesRequest{IDs: vols, Tags: tags})
 		}
 		if err != nil {
 			writeErr(w, r, err)

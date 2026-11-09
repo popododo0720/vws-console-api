@@ -129,6 +129,7 @@ func (h *handler) routes(mux *http.ServeMux) {
 	handle("GET /api/v1/vpcs/{id}", h.getVpc)
 	handle("POST /api/v1/vpcs/{id}/tags", h.tagVpc)
 	handle("POST /api/v1/subnets/{id}/tags", h.tagSubnet)
+	handle("POST /api/v1/volumes/{id}/tags", h.tagVolume)
 	handle("GET /api/v1/volumes", h.listVolumes)
 	handle("GET /api/v1/volumes/{id}", h.getVolume)
 	handle("GET /api/v1/images", h.listImages)

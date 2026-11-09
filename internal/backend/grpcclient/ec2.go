@@ -284,6 +284,10 @@ func (c computeClient) CreateVolume(ctx context.Context, m backend.Mutation, req
 		return resource.Accepted[resource.Volume]{}, resource.Invalid("volumeType", "unsupported")
 	}
 	projectID := project(m.Account)
+	labels, err := withInternalLabels(req.Tags, map[string]string{labelFingerprint: clip(m.Fingerprint, 63)})
+	if err != nil {
+		return resource.Accepted[resource.Volume]{}, err
+	}
 	spec := &storagev1.VolumeSpec{SizeGib: req.SizeGiB, Type: typ, Iops: req.Iops, ThroughputMibps: req.Throughput}
 	if !req.SnapshotID.IsZero() {
 		// A size of 0 is the snapshot size, which only the snapshot knows.
@@ -307,7 +311,7 @@ func (c computeClient) CreateVolume(ctx context.Context, m backend.Mutation, req
 		VolumeId:  derivedID("vol-", m.Key, "blank"),
 		RequestId: requestUUID(m.Key, "blank-vol"),
 		Volume: &storagev1.Volume{
-			Labels: map[string]string{labelFingerprint: clip(m.Fingerprint, 63)},
+			Labels: labels,
 			Spec:   spec,
 		},
 	})
@@ -2394,14 +2398,23 @@ func (c computeClient) getVolume(ctx context.Context, projectID, id string) (res
 	return volumeModel(out)
 }
 
-// getUntypedVolume reads a volume for an action that needs no volume type,
-// such as DeleteVolume and DetachVolume. A stored type this build cannot name
-// is logged and the rest of the volume is returned, so the volume can still be
-// detached and cleaned up (#335 review, #337).
+// getUntypedVolume reads a volume for an action that needs no volume type
+// and no tags, such as DeleteVolume and DetachVolume. A stored type this build
+// cannot name, or tag labels that do not decode, are logged and the rest of
+// the volume is returned, so the volume can still be detached and cleaned up
+// (#335 review, #337).
 func (c computeClient) getUntypedVolume(
 	ctx context.Context, projectID, id string, action resource.Action,
 ) (resource.Volume, error) {
 	vol, err := c.getVolume(ctx, projectID, id)
+	var badTags *badTagLabelsError
+	if errors.As(err, &badTags) {
+		c.logger().WarnContext(ctx, "acting on a volume whose tag labels do not decode",
+			slog.String("action", action.String()),
+			slog.String("id", id),
+			slog.Any("err", err))
+		return vol, nil
+	}
 	var unknownType *unknownVolumeTypeError
 	if errors.As(err, &unknownType) {
 		c.logger().WarnContext(ctx, "acting on a volume with an unknown volume type",
@@ -2471,7 +2484,7 @@ func acceptedVolume(op *longrunningpb.Operation, req resource.CreateVolumeReques
 	vol := resource.Volume{
 		ID: id, OwnerID: named, SizeGiB: req.SizeGiB, Zone: req.Zone, Type: req.Type, State: state,
 		SnapshotID: req.SnapshotID, CreateTime: parsed.CreateTime,
-		Iops: req.Iops, Throughput: req.Throughput,
+		Iops: req.Iops, Throughput: req.Throughput, Tags: maps.Clone(req.Tags),
 	}
 	parsed.Action = resource.ActionCreateVolume
 	parsed.Targets = []resource.Ref{id.Ref()}
@@ -2536,17 +2549,25 @@ func volumeModel(in *storagev1.Volume) (resource.Volume, error) {
 		}
 		snap = parsed
 	}
+	// Tags that do not decode are returned as an error beside the rest of
+	// the volume, like an unknown type below, so actions that read no tags
+	// (DeleteVolume, DetachVolume) can still act on it.
+	tags, tagErr := userTags(in.GetLabels())
 	vol := resource.Volume{
 		ID: id, OwnerID: owner, SizeGiB: in.GetSpec().GetSizeGib(), Zone: parts[3], SnapshotID: snap,
 		Type: volumeTypeOf(in.GetSpec().GetType()), State: state, InstanceID: inst,
 		Device: in.GetStatus().GetDeviceName(), CreateTime: in.GetCreateTime().AsTime().UTC(),
 		Iops: in.GetSpec().GetIops(), Throughput: in.GetSpec().GetThroughputMibps(),
+		Tags: tags,
 	}
 	if !vol.InstanceID.IsZero() {
 		// Storage names the instance before hot-plug finishes, so storage
 		// alone never makes a volume attached. Only the attach state compute
 		// reports does (markAttachState, #448).
 		vol.AttachState = resource.AttachmentAttaching
+	}
+	if tagErr != nil {
+		return vol, tagErr
 	}
 	if vol.Type == "" {
 		// The volume is returned whole, with no type, beside the error, so
@@ -2614,8 +2635,10 @@ func volumeProto(v resource.Volume, projectID string) *storagev1.Volume {
 	if v.DeleteOnTermination {
 		spec.Source = &storagev1.VolumeSpec_Image{Image: imageName(projectID, "ami-0123456789abcdef0")}
 	}
+	labels, _ := withInternalLabels(v.Tags, nil) //nolint:errcheck // accepted tags fit
 	return &storagev1.Volume{
 		CreateTime: created,
+		Labels:     labels,
 		Name:       volumeName(projectID, v.ID.String()),
 		Spec:       spec,
 		Status:     status,

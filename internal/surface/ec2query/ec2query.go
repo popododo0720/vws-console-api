@@ -970,7 +970,7 @@ func allowCreateVolume(key string) bool {
 	case "Action", "Version", "ClientToken", "Size", "AvailabilityZone", "VolumeType", "SnapshotId", "Iops", "Throughput":
 		return true
 	default:
-		return false
+		return tagSpecField(key)
 	}
 }
 

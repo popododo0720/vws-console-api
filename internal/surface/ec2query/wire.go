@@ -233,6 +233,7 @@ type createVolumeXML struct {
 	Created    string   `xml:"createTime,omitempty"`
 	Iops       int64    `xml:"iops,omitempty"`
 	Throughput int64    `xml:"throughput,omitempty"`
+	Tags       *tagSet  `xml:"tagSet,omitempty"`
 }
 
 type describeVolumesXML struct {
@@ -257,6 +258,7 @@ type volumeItem struct {
 	Attachments struct {
 		Items []attachmentItem `xml:"item"`
 	} `xml:"attachmentSet,omitempty"`
+	Tags *tagSet `xml:"tagSet,omitempty"`
 }
 
 type attachmentItem struct {
@@ -747,7 +749,7 @@ func volumeCreatedXML(requestID string, v resource.Volume) createVolumeXML {
 	return createVolumeXML{
 		RequestID: requestID, VolumeID: v.ID.String(), Size: v.SizeGiB,
 		Zone: v.Zone, Status: string(v.State), Type: string(v.Type), Created: awsTime(v.CreateTime),
-		Snapshot: snapshotOf(v), Iops: v.ReportedIops(), Throughput: v.Throughput,
+		Snapshot: snapshotOf(v), Iops: v.ReportedIops(), Throughput: v.Throughput, Tags: tagSetOf(v.Tags),
 	}
 }
 
@@ -762,7 +764,7 @@ func volumeXML(v resource.Volume) volumeItem {
 	item := volumeItem{
 		VolumeID: v.ID.String(), Size: v.SizeGiB, Zone: v.Zone, Status: string(v.State), Type: string(v.Type),
 		Snapshot: snapshotOf(v), Created: awsTime(v.CreateTime),
-		Iops: v.ReportedIops(), Throughput: v.Throughput,
+		Iops: v.ReportedIops(), Throughput: v.Throughput, Tags: tagSetOf(v.Tags),
 	}
 	if !v.InstanceID.IsZero() {
 		// The backend reports attached only once the disk is on the machine;

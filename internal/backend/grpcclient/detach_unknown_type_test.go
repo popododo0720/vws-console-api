@@ -67,3 +67,49 @@ func TestDetachVolumeWithUnknownTypeDetaches(t *testing.T) {
 		})
 	}
 }
+
+// DetachVolume reads no tags, so a volume whose vws-tags- chunk labels do
+// not decode still detaches over gRPC instead of answering Internal.
+func TestDetachVolumeWithUndecodableTagsDetaches(t *testing.T) {
+	account := mustAccount(t)
+	projectID := project(account)
+	const (
+		instID = "i-0123456789abcdef0"
+		rootID = "vol-0123456789abcdef0"
+		dataID = "vol-0fedcba9876543210"
+	)
+	holder := observedInstance(projectID, instID,
+		commonv1.ReconciliationState_RECONCILIATION_STATE_READY,
+		computev1.InstancePower_INSTANCE_POWER_RUNNING)
+	holder.Spec.Volumes = []*computev1.VolumeAttachment{
+		{Volume: volumeName(projectID, rootID), DeviceName: "boot", Boot: true},
+		{Volume: volumeName(projectID, dataID), DeviceName: "/dev/sdf"},
+	}
+	vol := observedVolume(projectID, dataID, commonv1.ReconciliationState_RECONCILIATION_STATE_READY, instID)
+	vol.Status.DeviceName = "/dev/sdf"
+	if vol.Labels == nil {
+		vol.Labels = map[string]string{}
+	}
+	vol.Labels[tagChunkKey(1)] = `{"a":"b"}` // chunk 01 with no chunk 00
+	if _, err := volumeModel(vol); resource.CodeOf(err) != resource.CodeInternal {
+		t.Fatalf("volumeModel of undecodable tags: %v, want Internal", err)
+	}
+	world := &detachWorld{
+		inst:      []*computev1.Instance{holder},
+		vol:       vol,
+		byRequest: map[string]*detachRecord{},
+	}
+	client := dialDetachWorld(t, world)
+	data, err := resource.Parse[resource.VolumeID](dataID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mut := backend.Mutation{Scope: backend.Scope{Account: account}, Key: "k-detach-tags", Fingerprint: "fp-detach-tags"}
+	detached, err := client.DetachVolume(context.Background(), mut, resource.DetachVolumeRequest{VolumeID: data})
+	if err != nil {
+		t.Fatalf("DetachVolume: %v", err)
+	}
+	if item := detached.Items[0]; item.Status != resource.AttachmentDetaching || item.Device != "/dev/sdf" {
+		t.Fatalf("detach %+v", item)
+	}
+}

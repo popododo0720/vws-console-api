@@ -118,8 +118,13 @@ func exerciseVolumeTypes(ctx context.Context, t *testing.T, set backend.Set, acc
 		t.Fatalf("create gp2 to retype: %v", err)
 	}
 	id := created.Items[0].ID
-	shape := func(v resource.Volume) resource.Volume {
-		return resource.Volume{Type: v.Type, SizeGiB: v.SizeGiB, Iops: v.Iops, Throughput: v.Throughput}
+	// volumeShape is comparable; resource.Volume is not, since it has tags.
+	type volumeShape struct {
+		Type                      resource.VolumeType
+		SizeGiB, Iops, Throughput int64
+	}
+	shape := func(v resource.Volume) volumeShape {
+		return volumeShape{Type: v.Type, SizeGiB: v.SizeGiB, Iops: v.Iops, Throughput: v.Throughput}
 	}
 	for _, step := range []struct {
 		req  resource.ModifyVolumeRequest
@@ -147,10 +152,10 @@ func exerciseVolumeTypes(ctx context.Context, t *testing.T, set backend.Set, acc
 		if err != nil {
 			t.Fatalf("modify %+v: %v", step.req, err)
 		}
-		if got := shape(acc.Items[0]); got != step.want {
+		if got := shape(acc.Items[0]); got != shape(step.want) {
 			t.Fatalf("modify %+v returned %+v, want %+v", step.req, got, step.want)
 		}
-		if got := describe(id); len(got) != 1 || shape(got[0]) != step.want {
+		if got := describe(id); len(got) != 1 || shape(got[0]) != shape(step.want) {
 			t.Fatalf("after modify %+v: %+v, want %+v", step.req, got, step.want)
 		}
 	}
