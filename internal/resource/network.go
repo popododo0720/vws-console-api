@@ -107,7 +107,7 @@ func (r CreateSubnetRequest) Normalize() (CreateSubnetRequest, error) {
 	if r.Zone != ZoneName {
 		return CreateSubnetRequest{}, Invalid("availabilityZone", "unsupported")
 	}
-	if err := validTags(r.Tags); err != nil {
+	if err := validRequestTags(r.Tags); err != nil {
 		return CreateSubnetRequest{}, err
 	}
 	return r, nil
