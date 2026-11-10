@@ -136,6 +136,52 @@ func TestModifyVolumeSendsOneMaskWithTheNamedFields(t *testing.T) {
 	}
 }
 
+// #491: over gRPC a ModifyVolume without Size keeps the stored 100 GiB and
+// leaves spec.size_gib out of the mask; an equal or larger Size is sent as
+// the target; a smaller one is InvalidArgument and never reaches storage.
+func TestModifyVolumeSizeAbsentEqualLargerSmaller(t *testing.T) {
+	account, err := resource.Parse[resource.AccountID]("123456789012")
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := resource.Parse[resource.VolumeID]("vol-0123456789abcdef0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := backend.Mutation{Scope: backend.Scope{Account: account}, Key: "k-size", Fingerprint: "fp-size"}
+	for _, tc := range []struct {
+		name string
+		req  resource.ModifyVolumeRequest
+		mask []string
+		size int64
+	}{
+		{"absent", resource.ModifyVolumeRequest{ID: id, Iops: 5000}, []string{"spec.iops"}, 100},
+		{"equal", resource.ModifyVolumeRequest{ID: id, SizeGiB: 100}, []string{"spec.size_gib"}, 100},
+		{"larger", resource.ModifyVolumeRequest{ID: id, SizeGiB: 101}, []string{"spec.size_gib"}, 101},
+	} {
+		set, got := modifyStorage(t, status.Error(codes.Unavailable, "recorded"))
+		_, _ = set.Compute.ModifyVolume(t.Context(), m, tc.req)
+		calls := got()
+		if len(calls) != 1 {
+			t.Fatalf("size %s: %d UpdateVolume calls, want 1", tc.name, len(calls))
+		}
+		if paths := calls[0].GetUpdateMask().GetPaths(); !slices.Equal(paths, tc.mask) {
+			t.Errorf("size %s: mask %v, want %v", tc.name, paths, tc.mask)
+		}
+		if size := calls[0].GetVolume().GetSpec().GetSizeGib(); size != tc.size {
+			t.Errorf("size %s: spec size %d GiB, want %d", tc.name, size, tc.size)
+		}
+	}
+	set, got := modifyStorage(t, status.Error(codes.Unavailable, "recorded"))
+	_, err = set.Compute.ModifyVolume(t.Context(), m, resource.ModifyVolumeRequest{ID: id, SizeGiB: 99})
+	if resource.CodeOf(err) != resource.CodeInvalidArgument {
+		t.Errorf("size smaller: %v, want InvalidArgument", err)
+	}
+	if n := len(got()); n != 0 {
+		t.Errorf("size smaller: %d UpdateVolume calls, want 0", n)
+	}
+}
+
 // #324 AC1: vws-storage refusing a target type it has no storage for is
 // UnknownVolumeType on ModifyVolume as on CreateVolume (#335 r2).
 func TestModifyVolumeToAnUnservedTypeIsUnknownVolumeType(t *testing.T) {
