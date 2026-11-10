@@ -65,13 +65,20 @@ func (d *directory) CreatePolicy(_ context.Context, req *iamv1.CreatePolicyReque
 	if d.policies[req.GetPolicyId()] != nil {
 		return nil, awsErr(codes.AlreadyExists, "ALREADY_EXISTS", "EntityAlreadyExists")
 	}
-	p := &dirPolicy{id: req.GetPolicyId(), path: dirPath(spec.GetPath()), description: spec.GetDescription(), created: time.Now().UTC()}
+	p := &dirPolicy{
+		id:          req.GetPolicyId(),
+		path:        dirPath(spec.GetPath()),
+		description: spec.GetDescription(),
+		created:     time.Now().UTC(),
+	}
 	d.policies[p.id] = p
 	d.seq++
 	return d.done("CreatePolicy", req.GetRequestId(), req, d.policyProto("123456789012", p))
 }
 
-func (d *directory) ListPolicies(_ context.Context, req *iamv1.ListPoliciesRequest) (*iamv1.ListPoliciesResponse, error) {
+func (d *directory) ListPolicies(
+	_ context.Context, req *iamv1.ListPoliciesRequest,
+) (*iamv1.ListPoliciesResponse, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if err := d.enter("ListPolicies", req); err != nil {

@@ -31,7 +31,8 @@ func TestCreatePolicyChecksBeforeSending(t *testing.T) {
 	c, d := dirHarness(t)
 	a := STSAdmin{Client: c}
 	for _, in := range [][3]string{{"bad name!", "/", mpDoc}, {"Ok", "no-slash", mpDoc}, {"Ok", "/", "{"}} {
-		if _, err := a.CreatePolicy(context.Background(), accountID(t), in[0], in[1], in[2], ""); resource.CodeOf(err) != resource.CodeInvalidArgument {
+		_, err := a.CreatePolicy(context.Background(), accountID(t), in[0], in[1], in[2], "")
+		if resource.CodeOf(err) != resource.CodeInvalidArgument {
 			t.Fatalf("CreatePolicy %q: %v, want InvalidArgument", in, err)
 		}
 	}

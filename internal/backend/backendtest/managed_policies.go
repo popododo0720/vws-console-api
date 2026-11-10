@@ -64,7 +64,8 @@ func IAMManagedPolicies(t *testing.T, newAdmin func(t *testing.T) iam.Directory)
 		_, err = a.CreatePolicy(ctx, acct, "bad name!", "/", doc, "")
 		wantErr(t, "CreatePolicy bad name", err, resource.CodeInvalidArgument, "")
 		_, err = a.GetPolicy(ctx, acct, missing)
-		wantErr(t, "GetPolicy missing", err, resource.CodeNotFound, resource.AsError(iam.PolicyNotAttachable(missing)).Message)
+		wantErr(t, "GetPolicy missing", err, resource.CodeNotFound,
+			resource.AsError(iam.PolicyNotAttachable(missing)).Message)
 		wrongPath := arnPrefix + "policy/Ops"
 		_, err = a.GetPolicy(ctx, acct, wrongPath)
 		wantErr(t, "GetPolicy wrong path", err, resource.CodeNotFound, "")
