@@ -2,10 +2,10 @@
 
 The web-only backend of VWS, a private cloud with an AWS-shaped control
 plane. One stateless process serves the console JSON API, an EC2 Query entry
-point and an S3 REST entry point. Compute, storage and network state lives in
-internal services reached over gRPC; this process keeps no copy. The one
-record it writes is a RunInstances launch record, a ConfigMap in the
-Kubernetes API (#392). Protocol
+point and an S3 REST entry point. Proxmox VE and AWS hold the state; this
+process keeps no copy (`docs/hybrid.md`). The Kubernetes path (`grpc`
+backend, launch records as ConfigMaps, #392) is retired and stays only until
+the `regions` and `proxmox` backends replace it. Protocol
 compatibility is behavioral: no logos, image assets or text that claims this
 project is someone else's cloud.
 
@@ -147,6 +147,9 @@ change both files together.
   user approvals; all status lives on GitHub.
 - Verify T0 only (unit tests, fakes, envtest); the verification bot runs T1
   and T2.
+- Proxmox safety (`docs/proxmox-safety.md`): PVE tokens never go in bot
+  secrets; CI tests use pvefake only; live checks run only on the nested
+  test VM `pve-test-1`.
 - pstack, for a new package, shared type, surface or backend method:
   **architect** (caller's usage, then types), **interrogate** (more than one
   reviewer), **correct** (a copied mistake becomes a failing check).
