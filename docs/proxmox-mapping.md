@@ -65,10 +65,10 @@ enc(s)  := for each byte of the UTF-8 string
 | Rule | Function |
 | --- | --- |
 | Encode one user tag as above. | `EncodeTag` |
-| Decode a `vws.t.` tag: `+` takes the next letter, `_` the next two hex digits, `.` is only the separator. | `DecodeTag` |
-| Split a VM's `tags` and `description` into user tags and system tags; a key is read once. | `SplitTags` |
-| A tag whose encoding is longer than 128 characters goes to the `vws:tags` JSON block of the VM `description` instead, and a key lives in one place only. | `PlaceTags` |
-| Keys starting with `aws:`, `vws:` or `vws.` are `InvalidParameterValue`. | `CheckTagKey` |
+| Decode a `vws.t.` tag: `+` takes the next letter, `_` the next two hex digits, `.` is only the separator; only the spelling `EncodeTag` writes decodes. | `DecodeTag` |
+| Split a VM's `tags` and `description` into user tags and system tags; a key is read once. | `ReadTags` |
+| A tag whose encoding is longer than 128 characters goes to the `vws:tags` JSON block of the VM `description` instead, and a key lives in one place only. | `Split`, `WithDescriptionTags` |
+| Keys starting with `aws:`, `vws:` or `vws.` are `InvalidParameterValue`. | `EncodeTag` |
 
 Examples: `Name=web-01` is `vws.t.+name.web-01`. `cost:center=R&D` followed
 by a space and U+D300 is `vws.t.cost_3acenter.+r_26+d_20_ed_8c_80`. An empty
