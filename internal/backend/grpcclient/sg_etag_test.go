@@ -82,9 +82,9 @@ func TestMissingRuleIsPermissionNotFound(t *testing.T) {
 		Scope: scope, Key: "k-revoke", Fingerprint: "fp-revoke",
 	}, resource.RevokeSecurityGroupIngressRequest{
 		ID: group,
-		Rule: resource.IngressRule{
+		Rules: []resource.IngressRule{{
 			Protocol: "tcp", FromPort: 22, ToPort: 22, Cidr: "10.0.0.0/16",
-		},
+		}},
 	})
 	if !resource.IsPermissionNotFound(err) {
 		t.Fatalf("missing rule = %v, want a missing permission", err)
@@ -113,12 +113,12 @@ func TestSameRequestRetriesTheFirstOperation(t *testing.T) {
 	}
 	revoke := backend.Mutation{Scope: scope, Key: "k-revoke", Fingerprint: "fp-revoke"}
 	revoked, err := set.Network.RevokeSecurityGroupIngress(ctx, revoke,
-		resource.RevokeSecurityGroupIngressRequest{ID: group, Rule: rule})
+		resource.RevokeSecurityGroupIngressRequest{ID: group, Rules: []resource.IngressRule{rule}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	replayed, err := set.Network.RevokeSecurityGroupIngress(ctx, revoke,
-		resource.RevokeSecurityGroupIngressRequest{ID: group, Rule: rule})
+		resource.RevokeSecurityGroupIngressRequest{ID: group, Rules: []resource.IngressRule{rule}})
 	if err != nil || replayed.Operation.ID != revoked.Operation.ID || len(replayed.Items[0].Rules) != 0 {
 		t.Fatalf("revoke retry: %v %+v", err, replayed)
 	}
@@ -149,7 +149,7 @@ func TestConcurrentRevokesKeepNoRule(t *testing.T) {
 			defer wg.Done()
 			_, errs[i] = set.Network.RevokeSecurityGroupIngress(ctx, backend.Mutation{
 				Scope: scope, Key: fmt.Sprintf("k-close-%d", i), Fingerprint: fmt.Sprintf("fp-close-%d", i),
-			}, resource.RevokeSecurityGroupIngressRequest{ID: group, Rule: rules[i]})
+			}, resource.RevokeSecurityGroupIngressRequest{ID: group, Rules: []resource.IngressRule{rules[i]}})
 		}(i)
 	}
 	wg.Wait()

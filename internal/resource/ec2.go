@@ -737,10 +737,10 @@ func (r AuthorizeSecurityGroupIngressRequest) Normalize() (AuthorizeSecurityGrou
 	return AuthorizeSecurityGroupIngressRequest{ID: r.ID, Rules: rules}, nil
 }
 
-// RevokeSecurityGroupIngressRequest removes one inbound rule.
+// RevokeSecurityGroupIngressRequest removes inbound rules, all or none.
 type RevokeSecurityGroupIngressRequest struct {
-	ID   SecurityGroupID `json:"groupId"`
-	Rule IngressRule     `json:"ipPermissions"`
+	ID    SecurityGroupID `json:"groupId"`
+	Rules []IngressRule   `json:"rules"`
 }
 
 // Action returns RevokeSecurityGroupIngress.
@@ -748,24 +748,33 @@ func (RevokeSecurityGroupIngressRequest) Action() Action {
 	return ActionRevokeSecurityGroupIngress
 }
 
-// Normalize checks the group and the rule.
+// Normalize checks the group and canonicalizes each rule with the same checks
+// as authorize. A group never holds more than MaxIngressRules, so a longer
+// list is refused as authorize refuses it. A rule named twice is removed once.
 func (r RevokeSecurityGroupIngressRequest) Normalize() (RevokeSecurityGroupIngressRequest, error) {
-	id, rule, err := normalizeIngressRule(r.ID, r.Rule)
-	if err != nil {
-		return RevokeSecurityGroupIngressRequest{}, err
+	if r.ID.IsZero() {
+		return RevokeSecurityGroupIngressRequest{}, Invalid("groupId", "required")
 	}
-	return RevokeSecurityGroupIngressRequest{ID: id, Rule: rule}, nil
-}
-
-func normalizeIngressRule(id SecurityGroupID, rule IngressRule) (SecurityGroupID, IngressRule, error) {
-	if id.IsZero() {
-		return SecurityGroupID{}, IngressRule{}, Invalid("groupId", "required")
+	if len(r.Rules) == 0 {
+		return RevokeSecurityGroupIngressRequest{}, MissingParameter(
+			"ipPermissions",
+			"The request must contain the parameter ipPermissions.",
+		)
 	}
-	rule, err := normalizeRule(rule)
-	if err != nil {
-		return SecurityGroupID{}, IngressRule{}, err
+	if len(r.Rules) > MaxIngressRules {
+		return RevokeSecurityGroupIngressRequest{}, RulesPerSecurityGroupLimitExceeded(r.ID.String())
 	}
-	return id, rule, nil
+	rules := make([]IngressRule, 0, len(r.Rules))
+	for _, rule := range r.Rules {
+		canon, err := normalizeRule(rule)
+		if err != nil {
+			return RevokeSecurityGroupIngressRequest{}, err
+		}
+		if !slices.Contains(rules, canon) {
+			rules = append(rules, canon)
+		}
+	}
+	return RevokeSecurityGroupIngressRequest{ID: r.ID, Rules: rules}, nil
 }
 
 func normalizeRule(rule IngressRule) (IngressRule, error) {

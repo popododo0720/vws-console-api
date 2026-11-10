@@ -449,13 +449,18 @@ func (h *handler) revokeIngress(w http.ResponseWriter, r *http.Request, c resour
 		writeErr(w, r, err)
 		return
 	}
-	rule, err := ingressRule(r)
+	perms, err := ipPermissions(r)
+	if err != nil {
+		writeErr(w, r, err)
+		return
+	}
+	rules, err := resource.IngressRules(perms)
 	if err != nil {
 		writeErr(w, r, err)
 		return
 	}
 	if _, err := h.svc.RevokeSecurityGroupIngress(r.Context(), c, token, resource.RevokeSecurityGroupIngressRequest{
-		ID: id, Rule: rule,
+		ID: id, Rules: rules,
 	}); err != nil {
 		writeErr(w, r, err)
 		return
@@ -669,31 +674,6 @@ func inOrder(byIndex map[int]map[string]string) []map[string]string {
 		out = append(out, byIndex[m])
 	}
 	return out
-}
-
-func ingressRule(r *http.Request) (resource.IngressRule, error) {
-	protocol := r.Form.Get("IpPermissions.1.IpProtocol")
-	fromRaw := r.Form.Get("IpPermissions.1.FromPort")
-	toRaw := r.Form.Get("IpPermissions.1.ToPort")
-	cidr := r.Form.Get("IpPermissions.1.IpRanges.1.CidrIp")
-	if cidr == "" {
-		cidr = r.Form.Get("IpPermissions.1.CidrIp")
-	}
-	if protocol == "" {
-		protocol = r.Form.Get("IpProtocol")
-		fromRaw = r.Form.Get("FromPort")
-		toRaw = r.Form.Get("ToPort")
-		cidr = r.Form.Get("CidrIp")
-	}
-	from, err := portValue(fromRaw)
-	if err != nil {
-		return resource.IngressRule{}, err
-	}
-	to, err := portValue(toRaw)
-	if err != nil {
-		return resource.IngressRule{}, err
-	}
-	return resource.IngressRule{Protocol: protocol, FromPort: from, ToPort: to, Cidr: cidr}, nil
 }
 
 // sentPort reads a port of an IpPermissions entry. Nil means it was not sent,

@@ -2327,7 +2327,7 @@ func (c networkClient) RevokeSecurityGroupIngress(
 		resource.Conflict(resource.KindSecurityGroup, req.ID.String(), "security group changed")
 }
 
-// revokeIngressOnce reads the group, removes the rule and writes the whole
+// revokeIngressOnce reads the group, removes the rules and writes the whole
 // rule list with the etag from that read. A stale etag is etagMismatchError so
 // the caller rereads and tries again.
 func (c networkClient) revokeIngressOnce(
@@ -2337,14 +2337,8 @@ func (c networkClient) revokeIngressOnce(
 	if err != nil {
 		return resource.Accepted[resource.SecurityGroup]{}, err
 	}
-	index := -1
-	for i, have := range current.Rules {
-		if have == req.Rule {
-			index = i
-			break
-		}
-	}
-	if index < 0 {
+	rules, ok := backend.WithoutRules(current.Rules, req.Rules)
+	if !ok {
 		etag, replay, err := sameIngressRequest(current, m, resource.ActionRevokeSecurityGroupIngress, "revoke")
 		if err != nil {
 			return resource.Accepted[resource.SecurityGroup]{}, err
@@ -2355,9 +2349,6 @@ func (c networkClient) revokeIngressOnce(
 		}
 		return resource.Accepted[resource.SecurityGroup]{}, resource.PermissionNotFound(current.ID.String())
 	}
-	rules := make([]resource.IngressRule, 0, len(current.Rules)-1)
-	rules = append(rules, current.Rules[:index]...)
-	rules = append(rules, current.Rules[index+1:]...)
 	return c.writeGroupRules(ctx, m, projectID, current, rules, current.Etag, "revoke",
 		resource.ActionRevokeSecurityGroupIngress)
 }
