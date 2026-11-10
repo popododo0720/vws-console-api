@@ -126,7 +126,8 @@ func get(t *testing.T, srv *httptest.Server, path string, out any) int {
 }
 
 // TestTokenACLsAreEnforced: a token with VM.Audit only through /pool/vws-a reads that pool's VM, gets 403
-// for other VMs and /cluster/status, lists only its VM, and /access/permissions answers its grants.
+// for other VMs and /cluster/status, lists its VM without the pool and the nodes without stats, and
+// /access/permissions answers its grants, the pool member at 0.
 func TestTokenACLsAreEnforced(t *testing.T) {
 	_, srv := start(t, scenario(t))
 	c := client(t, srv, poolA, poolAKey)
@@ -143,11 +144,12 @@ func TestTokenACLsAreEnforced(t *testing.T) {
 		t.Errorf("cluster status without Sys.Audit = %v, want 403", err)
 	}
 	res, err := c.ClusterResources(ctx, "")
-	if err != nil || len(res) != 1 || res[0].VMID != 100 {
-		t.Errorf("resources = %+v, %v; want only qemu/100", res, err)
+	if err != nil || len(res) != 3 || res[0].VMID != 100 || res[0].Pool != "" ||
+		res[1].ID != "node/pve1" || res[1].MaxCPU != 0 {
+		t.Errorf("resources = %+v, %v; want qemu/100 without pool, then both nodes without stats", res, err)
 	}
 	perms, err := c.AccessPermissions(ctx, "")
-	want := pveclient.Permissions{"/pool/vws-a": {"VM.Audit": 1}}
+	want := pveclient.Permissions{"/pool/vws-a": {"VM.Audit": 1}, "/vms/100": {"VM.Audit": 0}}
 	if err != nil || !reflect.DeepEqual(perms, want) {
 		t.Errorf("permissions = %v, %v; want %v", perms, err, want)
 	}
@@ -158,7 +160,7 @@ func TestTokenACLsAreEnforced(t *testing.T) {
 
 // TestDeeperACLReplacesInherited follows PVE: an entry on a deeper path
 // replaces the inherited roles, NoAccess removes them, and one that does not
-// propagate holds only on its own path.
+// propagate holds only on its own path and on the members of its pool.
 func TestDeeperACLReplacesInherited(t *testing.T) {
 	s := scenario(t)
 	no := false
@@ -168,6 +170,7 @@ func TestDeeperACLReplacesInherited(t *testing.T) {
 		{Path: "/vms/101", Role: "NoAccess"},
 		{Path: "/nodes/pve1", Role: "VMReader"},
 	}})
+	s.Tokens[1].ACL[0].Propagate = &no
 	s.Tokens[1].ACL = append(s.Tokens[1].ACL, pvefake.ACE{Path: "/vms", Role: "VMReader", Propagate: &no})
 	_, srv := start(t, s)
 	ctx := t.Context()
@@ -179,7 +182,13 @@ func TestDeeperACLReplacesInherited(t *testing.T) {
 	if want := (pveclient.Permissions{"/nodes/pve1": {"VM.Audit": 1}}); err != nil || !reflect.DeepEqual(perms, want) {
 		t.Errorf("VMReader on /nodes/pve1 under PVEAuditor on / = %v, %v; want %v", perms, err, want)
 	}
+	if perms, err := mixed.AccessPermissions(ctx, ""); err != nil || perms["/vms/101"] != nil || perms["/"] == nil {
+		t.Errorf("permissions = %v, %v; want / and no NoAccess path", perms, err)
+	}
 	pool := client(t, srv, poolA, poolAKey)
+	if _, err := pool.VMConfig(ctx, pveclient.VM{Node: "pve1", VMID: 100}); err != nil {
+		t.Errorf("a /pool/vws-a entry without propagate did not reach its member: %v", err)
+	}
 	if _, err := pool.VMConfig(ctx, pveclient.VM{Node: "pve2", VMID: 101}); status(err) != http.StatusForbidden {
 		t.Errorf("a /vms entry without propagate reached /vms/101: %v", err)
 	}
@@ -210,21 +219,34 @@ func TestClusterShapes(t *testing.T) {
 	if err != nil || len(st) != 1 || st[0].Type != "node" || st[0].Online != 1 {
 		t.Errorf("standalone status = %+v, %v; want one node row and no cluster row", st, err)
 	}
+	var raw struct {
+		Data []map[string]any `json:"data"`
+	}
+	if get(t, alone, "/cluster/status", &raw); raw.Data[0]["nodeid"] != 0.0 {
+		t.Errorf("standalone nodeid = %v, want 0", raw.Data[0]["nodeid"])
+	}
 }
 
 // TestRestartedFakeAnswersTheSame: a Fake built again from the same scenario
-// answers the same digest, so a backend restarted over it reads the same VM.
+// answers the same digest, so a backend restarted over it reads the same VM,
+// and editing the scenario after New does not change a running Fake.
 func TestRestartedFakeAnswersTheSame(t *testing.T) {
-	read := func() string {
-		_, srv := start(t, scenario(t))
+	read := func(srv *httptest.Server) string {
 		cfg, err := client(t, srv, auditor, auditorKey).VMConfig(t.Context(), pveclient.VM{Node: "pve1", VMID: 100})
 		if err != nil {
 			t.Fatal(err)
 		}
 		return cfg.Digest
 	}
-	if first, again := read(), read(); first != again {
-		t.Errorf("digest %s became %s across a restart", first, again)
+	s := scenario(t)
+	_, srv := start(t, s)
+	first := read(srv)
+	s.VMs[0].Config["cores"], s.Tokens[0].Secret = "64", "edited-after-new"
+	if again := read(srv); again != first {
+		t.Errorf("an edit to the scenario after New changed digest %s to %s", first, again)
+	}
+	if _, restarted := start(t, scenario(t)); read(restarted) != first {
+		t.Errorf("digest %s changed across a restart", first)
 	}
 }
 
@@ -262,6 +284,8 @@ func TestNewRefusesABadScenario(t *testing.T) {
 		"unclean acl path":  func(s *pvefake.Scenario) { s.Tokens[0].ACL[0].Path = "/vms/../" },
 		"bad token id":      func(s *pvefake.Scenario) { s.Tokens[0].ID = "vws" },
 		"nodes, no cluster": func(s *pvefake.Scenario) { s.Cluster = "" },
+		"repeated token":    func(s *pvefake.Scenario) { s.Tokens[1].ID = s.Tokens[0].ID },
+		"repeated role":     func(s *pvefake.Scenario) { s.Roles[1].ID = s.Roles[0].ID },
 	}
 	for name, edit := range cases {
 		s := scenario(t)

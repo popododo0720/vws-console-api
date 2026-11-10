@@ -28,10 +28,12 @@ type failure struct {
 }
 
 // New checks s and returns a Fake with every node online and with quorum.
+// The Fake keeps its own copy: editing s afterwards does not change it.
 func New(s Scenario) (*Fake, error) {
 	if err := s.check(); err != nil {
 		return nil, fmt.Errorf("pvefake: %w", err)
 	}
+	s = s.clone()
 	f := &Fake{s: s, roles: map[string][]string{}, quorate: true, online: map[string]bool{}, mux: http.NewServeMux()}
 	for _, r := range s.Roles {
 		f.roles[r.ID] = r.Privs
@@ -120,18 +122,17 @@ func (f *Fake) need(t *Token, p string, privs ...string) *failure {
 func (f *Fake) can(t *Token, p string, privs ...string) bool { return f.need(t, p, privs...) == nil }
 
 // privs maps each privilege t holds on p to 1 when it propagates, as PVE's
-// AccessControl::roles and RPCEnvironment::permissions do. A VM in a pool
-// adds the propagating roles on /pool/<pool> it does not hold already, and
-// NoAccess anywhere in the result removes every privilege.
+// RPCEnvironment::compile_acl_path does. A VM in a pool adds the roles held on
+// /pool/<pool> itself, propagating or not, at 0, and NoAccess anywhere in the
+// result removes every privilege.
 func (f *Fake) privs(t *Token, p string) map[string]int {
 	roles := f.walk(t, p)
 	if id, ok := strings.CutPrefix(p, "/vms/"); ok {
-		if vmid, err := strconv.Atoi(id); err == nil {
+		if vmid, err := strconv.Atoi(id); err == nil && id == strconv.Itoa(vmid) {
 			if vm := f.vm(vmid); vm != nil && vm.Pool != "" {
-				// One level below the pool, so only its propagating entries count.
-				for r, v := range f.walk(t, "/pool/"+vm.Pool+"/"+id) {
+				for r := range f.walk(t, "/pool/"+vm.Pool) {
 					if _, held := roles[r]; !held {
-						roles[r] = v
+						roles[r] = 0
 					}
 				}
 			}

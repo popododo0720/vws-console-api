@@ -8,8 +8,10 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path"
+	"slices"
 	"strings"
 
 	"go.yaml.in/yaml/v3"
@@ -125,13 +127,18 @@ func (s Scenario) check() error {
 	}
 	roles := map[string]bool{}
 	for _, r := range s.Roles {
+		if roles[r.ID] {
+			return fmt.Errorf("role %q is repeated", r.ID)
+		}
 		roles[r.ID] = true
 	}
+	tokens := map[string]bool{}
 	for _, t := range s.Tokens {
 		user, name, ok := strings.Cut(t.ID, "!")
-		if !ok || !strings.Contains(user, "@") || name == "" || t.Secret == "" {
-			return fmt.Errorf("token %q is not user@realm!name with a secret", t.ID)
+		if !ok || !strings.Contains(user, "@") || name == "" || t.Secret == "" || tokens[t.ID] {
+			return fmt.Errorf("token %q is repeated or not user@realm!name with a secret", t.ID)
 		}
+		tokens[t.ID] = true
 		for _, a := range t.ACL {
 			if a.Path != path.Clean(a.Path) || !path.IsAbs(a.Path) || !roles[a.Role] {
 				return fmt.Errorf("token %q: acl path %q is not clean and absolute, or role %q is unknown", t.ID, a.Path, a.Role)
@@ -139,4 +146,26 @@ func (s Scenario) check() error {
 		}
 	}
 	return nil
+}
+
+// clone copies every slice, map and pointer, so the Fake shares no memory
+// with the caller.
+func (s Scenario) clone() Scenario {
+	s.Nodes, s.VMs = slices.Clone(s.Nodes), slices.Clone(s.VMs)
+	s.Roles, s.Tokens = slices.Clone(s.Roles), slices.Clone(s.Tokens)
+	for i := range s.VMs {
+		s.VMs[i].Config = maps.Clone(s.VMs[i].Config)
+	}
+	for i := range s.Roles {
+		s.Roles[i].Privs = slices.Clone(s.Roles[i].Privs)
+	}
+	for i := range s.Tokens {
+		acl := slices.Clone(s.Tokens[i].ACL)
+		for j, a := range acl {
+			p := a.propagates()
+			acl[j].Propagate = &p
+		}
+		s.Tokens[i].ACL = acl
+	}
+	return s
 }

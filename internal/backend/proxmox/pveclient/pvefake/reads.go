@@ -44,7 +44,7 @@ func (f *Fake) clusterStatus(t *Token, _ *http.Request) (any, *failure) {
 	}
 	for i, n := range f.s.Nodes {
 		rows = append(rows, map[string]any{
-			"type": "node", "id": "node/" + n.Name, "name": n.Name, "nodeid": i + 1, "level": "",
+			"type": "node", "id": "node/" + n.Name, "name": n.Name, "nodeid": (i + 1) * b2i(f.s.Cluster != ""), "level": "",
 			"online": b2i(f.online[n.Name]), "local": b2i(i == 0), "ip": fmt.Sprintf("192.0.2.%d", i+1),
 		})
 	}
@@ -71,36 +71,44 @@ func (f *Fake) clusterResources(t *Token, r *http.Request) (any, *failure) {
 			if !f.online[vm.Node] {
 				row["status"] = "unknown"
 			}
-			setIf(row, "pool", vm.Pool)
+			if vm.Pool != "" && f.can(t, "/pool/"+vm.Pool, "Pool.Audit") {
+				row["pool"] = vm.Pool
+			}
 			setIf(row, "tags", vm.Tags)
 			rows = append(rows, row)
 		}
 	}
 	for _, n := range f.s.Nodes {
-		if (kind == "" || kind == "node") && f.can(t, "/nodes/"+n.Name, "Sys.Audit") {
-			rows = append(rows, map[string]any{
-				"id": "node/" + n.Name, "type": "node", "node": n.Name, "status": nodeStatus(f.online[n.Name]),
-				"maxcpu": n.MaxCPU, "maxmem": n.MaxMem, "level": "",
-			})
+		if kind == "" || kind == "node" {
+			rows = append(rows, f.nodeRow(t, n))
 		}
 	}
 	return rows, nil
 }
 
-func nodeStatus(online bool) string {
+// nodeRow is a node as /nodes and /cluster/resources list it, for every
+// caller. Without Sys.Audit on the node the stats are left out, and an
+// offline node has no live ones (API2Tools::extract_node_stats).
+func (f *Fake) nodeRow(t *Token, n Node) map[string]any {
+	online := f.online[n.Name]
+	row := map[string]any{"id": "node/" + n.Name, "type": "node", "node": n.Name, "status": "offline", "level": ""}
 	if online {
-		return "online"
+		row["status"] = "online"
 	}
-	return "offline"
+	if !f.can(t, "/nodes/"+n.Name, "Sys.Audit") {
+		return row
+	}
+	row["maxcpu"], row["maxmem"] = n.MaxCPU, n.MaxMem
+	if online {
+		row["mem"], row["cpu"], row["uptime"] = 0, 0, 0
+	}
+	return row
 }
 
-func (f *Fake) nodes(*Token, *http.Request) (any, *failure) {
+func (f *Fake) nodes(t *Token, _ *http.Request) (any, *failure) {
 	rows := []map[string]any{}
 	for _, n := range f.s.Nodes {
-		rows = append(rows, map[string]any{
-			"node": n.Name, "id": "node/" + n.Name, "type": "node", "status": nodeStatus(f.online[n.Name]),
-			"maxcpu": n.MaxCPU, "maxmem": n.MaxMem, "mem": 0, "cpu": 0, "uptime": 0, "level": "",
-		})
+		rows = append(rows, f.nodeRow(t, n))
 	}
 	return rows, nil
 }
@@ -128,16 +136,30 @@ func (f *Fake) config(t *Token, r *http.Request) (any, *failure) {
 	return cfg, nil
 }
 
-// permissions answers for the path asked, or for every path the token's ACL
-// names.
+// permissions answers for the path asked or, as get_effective_permissions
+// does, for the fixed top paths, every ACL path of any token and every pool
+// member, leaving out the paths t holds nothing on.
 func (f *Fake) permissions(t *Token, r *http.Request) (any, *failure) {
 	out := map[string]map[string]int{}
 	if p := r.URL.Query().Get("path"); p != "" {
 		out[p] = f.privs(t, p)
 		return out, nil
 	}
-	for _, a := range t.ACL {
-		out[a.Path] = f.privs(t, a.Path)
+	paths := []string{"/", "/access", "/access/groups", "/nodes", "/pool", "/sdn", "/storage", "/vms"}
+	for _, tok := range f.s.Tokens {
+		for _, a := range tok.ACL {
+			paths = append(paths, a.Path)
+		}
+	}
+	for _, vm := range f.s.VMs {
+		if vm.Pool != "" {
+			paths = append(paths, "/vms/"+strconv.Itoa(vm.VMID))
+		}
+	}
+	for _, p := range paths {
+		if held := f.privs(t, p); len(held) > 0 {
+			out[p] = held
+		}
 	}
 	return out, nil
 }
