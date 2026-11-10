@@ -33,6 +33,6 @@ func (k ConsoleKind) String() string {
 // handed to the caller. The session must be opened before Expires.
 type ConsoleSession struct {
 	Kind    ConsoleKind
-	URL     string
+	URL     string `json:"-"`
 	Expires time.Time
 }
