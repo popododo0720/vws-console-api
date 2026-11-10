@@ -5,7 +5,6 @@ package console
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -590,19 +589,6 @@ func objectRef(r *http.Request) (resource.PutObjectRequest, error) {
 		return resource.PutObjectRequest{}, err
 	}
 	return resource.PutObjectRequest{Bucket: bucket, Key: key, Size: -1}, nil
-}
-
-func decode(w http.ResponseWriter, r *http.Request, dst any) error {
-	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(dst); err != nil {
-		var maxErr *http.MaxBytesError
-		if errors.As(err, &maxErr) {
-			return resource.TooLarge("body exceeds the limit")
-		}
-		return resource.Invalid("body", "malformed json")
-	}
-	return nil
 }
 
 func writeAccepted[T any](w http.ResponseWriter, acc resource.Accepted[T]) {
