@@ -199,6 +199,7 @@ func (c compute) CreateVolume(ctx context.Context, m backend.Mutation, req resou
 		return resource.Accepted[resource.Volume]{}, err
 	}
 	stored := vol
+	stored.Tags = copyTags(vol.Tags)
 	c.w.vol[id] = &stored
 	acc := resource.Accepted[resource.Volume]{Operation: op, Items: []resource.Volume{vol}}
 	c.w.finish(m.Key, m.Fingerprint, acc)
