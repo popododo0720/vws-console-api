@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -203,6 +204,41 @@ func TestAccessKeyWritesFailClosedWhenTheUserMovesDuringTheCall(t *testing.T) {
 				t.Errorf("%s changed the key of a moved user: %+v", tc.method, kept)
 			}
 		})
+	}
+}
+
+// #624: a user moved after the client bound it and before vws-iam creates
+// the key gets no key. CreateAccessKey sends the bound read's etag as
+// user_etag, vws-iam refuses a user at another version with ABORTED, and the
+// client answers ConcurrentModification without a secret. The same stale
+// principal sent again is refused at the bind and sends no create.
+func TestCreateAccessKeyFailsClosedWhenTheUserMovesDuringTheCall(t *testing.T) {
+	ctx := t.Context()
+	a, d := seeded(ctx, t)
+	grant := backendtest.UserGrant(ctx, t, a, account314, "bob")
+	bob := fold("projects/123456789012/users/bob")
+	d.mu.Lock()
+	etag := strconv.Itoa(d.users[bob].version)
+	d.keyRace, d.keyRacePath = 1, "/denied/"
+	d.mu.Unlock()
+	for attempt := range 2 {
+		k, err := a.CreateAccessKey(ctx, account314, "bob", grant)
+		if !iam.IsChanged(err) || resource.AsError(err).Message != iam.UserChanged {
+			t.Errorf("attempt %d on a user moved during the call: %v, want ConcurrentModification", attempt, err)
+		}
+		if k.Secret != "" || k.AccessKeyID != "" {
+			t.Errorf("attempt %d returned key %q with a secret: %t", attempt, k.AccessKeyID, k.Secret != "")
+		}
+	}
+	sent := d.sent("CreateAccessKey")
+	if len(sent) != 1 || sent[0].(*iamv1.CreateAccessKeyRequest).GetUserEtag() != etag {
+		t.Errorf("CreateAccessKey requests %v, want one with user_etag %q", sent, etag)
+	}
+	d.mu.Lock()
+	n := d.keysOf(bob)
+	d.mu.Unlock()
+	if n != 0 {
+		t.Errorf("the moved user has %d keys, want 0", n)
 	}
 }
 

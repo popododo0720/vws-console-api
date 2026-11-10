@@ -29,7 +29,10 @@ const secretLen = 40
 // The secret is in the result only: it never reaches a span, a log record
 // or an error, and nothing keeps it. vws-iam does not replay the call, so it
 // is sent once: a retry after a lost response would create a second key.
-// want must be the user's ARN when the user is read before the call.
+// want must be the user's ARN when the user is read before the call, and that
+// read's etag is sent as user_etag: vws-iam creates the key only while the
+// user is still at it, so a user moved in between gets no key and the call
+// answers ConcurrentModification (#624).
 func (a STSAdmin) CreateAccessKey(
 	ctx context.Context, account resource.AccountID, user string, want iam.AuthorizedPrincipal,
 ) (out iam.NewAccessKey, err error) {
@@ -42,12 +45,12 @@ func (a STSAdmin) CreateAccessKey(
 	if !entityName(user) {
 		return iam.NewAccessKey{}, entityNotFound("user", user)
 	}
-	u, err := a.keyUser(ctx, account, user, want)
+	u, etag, err := a.boundUser(ctx, account, user, want)
 	if err != nil {
 		return iam.NewAccessKey{}, err
 	}
 	resp, err := call(ctx, a.accessKeys.CreateAccessKey, &iamv1.CreateAccessKeyRequest{
-		Parent: userResource(account, user), RequestId: newRequestID(),
+		Parent: userResource(account, user), RequestId: newRequestID(), UserEtag: etag,
 	})
 	if err != nil {
 		return iam.NewAccessKey{}, keyError(err, "user", user)
