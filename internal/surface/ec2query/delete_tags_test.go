@@ -123,3 +123,42 @@ func TestDeleteTags(t *testing.T) {
 		t.Fatalf("vpc tags after failed deletes: %s", got)
 	}
 }
+
+// TestFannedOutTagRequestIsCheckedBeforeAnyWrite sends CreateTags and
+// DeleteTags whose later kind fails validation (a repeated subnet id). The
+// request is refused, and the earlier kind keeps its tags.
+func TestFannedOutTagRequestIsCheckedBeforeAnyWrite(t *testing.T) {
+	h, cred, now := harness(t)
+	send := func(f url.Values) (int, string) {
+		t.Helper()
+		f.Set("Version", Version)
+		res := signed(t, h, cred, now, f.Encode())
+		return res.Code, res.Body.String()
+	}
+	ok := func(f url.Values) string {
+		t.Helper()
+		code, body := send(f)
+		if code != http.StatusOK {
+			t.Fatalf("%s %d %s", f.Get("Action"), code, body)
+		}
+		return body
+	}
+	vpc := xmlText(t, ok(url.Values{"Action": {"CreateVpc"}, "CidrBlock": {"10.0.0.0/16"}}), "vpcId")
+	sub := xmlText(t, ok(url.Values{"Action": {"CreateSubnet"}, "VpcId": {vpc}, "CidrBlock": {"10.0.1.0/24"}}), "subnetId")
+	ok(url.Values{"Action": {"CreateTags"}, "ResourceId.1": {vpc}, "Tag.1.Key": {"env"}, "Tag.1.Value": {"dev"}})
+	for _, f := range []url.Values{
+		{
+			"Action": {"CreateTags"}, "ResourceId.1": {vpc}, "ResourceId.2": {sub}, "ResourceId.3": {sub},
+			"Tag.1.Key": {"env"}, "Tag.1.Value": {"prod"},
+		},
+		{"Action": {"DeleteTags"}, "ResourceId.1": {vpc}, "ResourceId.2": {sub}, "ResourceId.3": {sub}, "Tag.1.Key": {"env"}},
+	} {
+		if code, body := send(f); code != http.StatusBadRequest {
+			t.Fatalf("%s with a repeated subnet id: %d %s", f.Get("Action"), code, body)
+		}
+		got := ok(url.Values{"Action": {"DescribeVpcs"}, "VpcId.1": {vpc}})
+		if !strings.Contains(got, "<key>env</key><value>dev</value>") {
+			t.Fatalf("a refused %s changed the vpc tags: %s", f.Get("Action"), got)
+		}
+	}
+}

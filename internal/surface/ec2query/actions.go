@@ -770,6 +770,26 @@ func parseTagTargets(r *http.Request) (tagTargets, error) {
 	return t, nil
 }
 
+// checkPart normalizes one kind's part of a request that fans out per kind.
+// Every part is checked before the first is sent, so a request that fails
+// validation in a later kind writes nothing.
+func checkPart[I any, R resource.Request[R]](ids []I, req R) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	_, err := req.Normalize()
+	return err
+}
+
+func firstErr(errs ...error) error {
+	for _, err := range errs {
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // partToken is the client token for one kind of a request that fans out:
 // the caller's own with one kind, else one derived from it per kind.
 func partToken(token resource.ClientToken, kinds int, kind string) (resource.ClientToken, error) {
@@ -808,10 +828,17 @@ func (h *handler) createTags(w http.ResponseWriter, r *http.Request, c resource.
 		tags[k] = v
 	}
 	kinds := t.kinds()
+	instReq := resource.CreateTagsRequest{IDs: t.insts, Tags: tags}
+	vpcReq := resource.TagVpcsRequest{IDs: t.vpcs, Tags: tags}
+	subReq := resource.TagSubnetsRequest{IDs: t.subs, Tags: tags}
+	if err := firstErr(checkPart(t.insts, instReq), checkPart(t.vpcs, vpcReq), checkPart(t.subs, subReq)); err != nil {
+		writeErr(w, r, err)
+		return
+	}
 	if len(t.insts) > 0 {
 		pt, err := partToken(token, kinds, "instance")
 		if err == nil {
-			_, err = h.svc.CreateTags(r.Context(), c, pt, resource.CreateTagsRequest{IDs: t.insts, Tags: tags})
+			_, err = h.svc.CreateTags(r.Context(), c, pt, instReq)
 		}
 		if err != nil {
 			writeErr(w, r, err)
@@ -821,7 +848,7 @@ func (h *handler) createTags(w http.ResponseWriter, r *http.Request, c resource.
 	if len(t.vpcs) > 0 {
 		pt, err := partToken(token, kinds, "vpc")
 		if err == nil {
-			_, err = h.svc.TagVpcs(r.Context(), c, pt, resource.TagVpcsRequest{IDs: t.vpcs, Tags: tags})
+			_, err = h.svc.TagVpcs(r.Context(), c, pt, vpcReq)
 		}
 		if err != nil {
 			writeErr(w, r, err)
@@ -831,7 +858,7 @@ func (h *handler) createTags(w http.ResponseWriter, r *http.Request, c resource.
 	if len(t.subs) > 0 {
 		pt, err := partToken(token, kinds, "subnet")
 		if err == nil {
-			_, err = h.svc.TagSubnets(r.Context(), c, pt, resource.TagSubnetsRequest{IDs: t.subs, Tags: tags})
+			_, err = h.svc.TagSubnets(r.Context(), c, pt, subReq)
 		}
 		if err != nil {
 			writeErr(w, r, err)
@@ -882,24 +909,28 @@ func (h *handler) deleteTags(w http.ResponseWriter, r *http.Request, c resource.
 		writeErr(w, r, err)
 		return
 	}
+	instReq := resource.DeleteTagsRequest{IDs: t.insts, Tags: sel}
+	vpcReq := resource.UntagVpcsRequest{IDs: t.vpcs, Tags: sel}
+	subReq := resource.UntagSubnetsRequest{IDs: t.subs, Tags: sel}
+	if err := firstErr(checkPart(t.insts, instReq), checkPart(t.vpcs, vpcReq), checkPart(t.subs, subReq)); err != nil {
+		writeErr(w, r, err)
+		return
+	}
 	var token resource.ClientToken
 	if len(t.insts) > 0 {
-		req := resource.DeleteTagsRequest{IDs: t.insts, Tags: sel}
-		if _, err := h.svc.DeleteTags(r.Context(), c, token, req); err != nil {
+		if _, err := h.svc.DeleteTags(r.Context(), c, token, instReq); err != nil {
 			writeErr(w, r, err)
 			return
 		}
 	}
 	if len(t.vpcs) > 0 {
-		req := resource.UntagVpcsRequest{IDs: t.vpcs, Tags: sel}
-		if _, err := h.svc.UntagVpcs(r.Context(), c, token, req); err != nil {
+		if _, err := h.svc.UntagVpcs(r.Context(), c, token, vpcReq); err != nil {
 			writeErr(w, r, err)
 			return
 		}
 	}
 	if len(t.subs) > 0 {
-		req := resource.UntagSubnetsRequest{IDs: t.subs, Tags: sel}
-		if _, err := h.svc.UntagSubnets(r.Context(), c, token, req); err != nil {
+		if _, err := h.svc.UntagSubnets(r.Context(), c, token, subReq); err != nil {
 			writeErr(w, r, err)
 			return
 		}
