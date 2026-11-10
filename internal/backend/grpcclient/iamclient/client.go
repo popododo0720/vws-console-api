@@ -224,6 +224,8 @@ func principalProto(p iam.Principal) *iamv1.Principal {
 		}
 	case strings.Contains(p.ARN, ":assumed-role/"):
 		out.Type = iamv1.PrincipalType_PRINCIPAL_TYPE_ASSUMED_ROLE
+	case strings.Contains(p.ARN, ":federated-user/"):
+		out.Type = iamv1.PrincipalType_PRINCIPAL_TYPE_FEDERATED_USER
 	default:
 		out.Type = iamv1.PrincipalType_PRINCIPAL_TYPE_USER
 	}

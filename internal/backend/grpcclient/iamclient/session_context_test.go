@@ -90,6 +90,35 @@ func TestSessionContextReachesAuthorizeByteForByte(t *testing.T) {
 	}
 }
 
+// vws-iam denies a federated user sent as another type or without its
+// session_context. Both survive Authenticate to Authorize, on every retry.
+func TestFederatedUserReachesAuthorizeAsFederatedUser(t *testing.T) {
+	c, s := harness(t)
+	arn := "arn:vws:sts::123456789012:federated-user/bob"
+	s.authnResult = &iamv1.AuthenticateResponse{
+		Account: "123456789012", Arn: arn,
+		Principal: &iamv1.Principal{
+			Type: iamv1.PrincipalType_PRINCIPAL_TYPE_FEDERATED_USER, Arn: arn, Project: "123456789012",
+			UniqueId: "123456789012:bob", SessionContext: authnSealed,
+		},
+	}
+	p, err := c.Authenticate(t.Context(), signed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if _, err := c.Authorize(t.Context(), describeAs(p)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i, req := range s.authz {
+		got := req.GetPrincipal()
+		if got.GetType() != iamv1.PrincipalType_PRINCIPAL_TYPE_FEDERATED_USER || got.GetSessionContext() != authnSealed {
+			t.Errorf("Authorize %d: type %v, session_context %q", i, got.GetType(), got.GetSessionContext())
+		}
+	}
+}
+
 // A user principal has no session_context, and Authorize gets none: an empty
 // field is what vws-iam expects from a user or root.
 func TestUserPrincipalSendsNoSessionContext(t *testing.T) {
