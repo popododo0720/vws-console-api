@@ -494,19 +494,28 @@ func mergeTags(r *http.Request) (map[string]string, error) {
 	return base, nil
 }
 
+// tagSpecifications reads TagSpecification.N.Tag.M up to resource.MaxTags
+// per specification, the bound CreateTags reads. A specification with any
+// tag but no ResourceType is MissingParameter, as EC2 requires one.
 func tagSpecifications(r *http.Request) (map[string]string, error) {
 	out := map[string]string{}
 	for i := 1; i <= 5; i++ {
-		for j := 1; j <= 20; j++ {
-			prefix := "TagSpecification." + strconv.Itoa(i) + ".Tag." + strconv.Itoa(j) + "."
+		base := "TagSpecification." + strconv.Itoa(i) + "."
+		hasTag := false
+		for j := 1; j <= resource.MaxTags; j++ {
+			prefix := base + "Tag." + strconv.Itoa(j) + "."
 			k, v := r.Form.Get(prefix+"Key"), r.Form.Get(prefix+"Value")
 			if k == "" && v == "" {
 				continue
 			}
+			hasTag = true
 			if k == "" {
 				return nil, resource.Invalid(prefix+"Key", "required")
 			}
 			out[k] = v
+		}
+		if hasTag && r.Form.Get(base+"ResourceType") == "" {
+			return nil, resource.MissingParameter(base+"ResourceType", "Each tag specification requires a resource type.")
 		}
 	}
 	if len(out) == 0 {
@@ -1282,7 +1291,7 @@ func tagSpecField(key string) bool {
 		return false
 	}
 	m, leaf, ok := strings.Cut(tagRest, ".")
-	if !ok || !inRange(m, 20) {
+	if !ok || !inRange(m, resource.MaxTags) {
 		return false
 	}
 	return leaf == "Key" || leaf == "Value"
