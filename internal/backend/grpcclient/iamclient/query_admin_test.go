@@ -77,18 +77,22 @@ func queryHarness(t *testing.T) (http.Handler, *server) {
 			Status: &iamv1.GroupStatus{Arn: devsARN, UniqueId: "AGPADEVS000000000001"}, CreateTime: created,
 		},
 	}
+	s.client = c
+	return queryHandler(c), s
+}
+
+// queryHandler is the Query surface with c as admin, authenticator and authorizer.
+func queryHandler(c *Client) http.Handler {
 	verifier := func(svc sigv4.Service) *sigv4.Verifier {
 		return sigv4.NewVerifier(sigv4.Verifier{
 			Service: svc, Regions: backend.DefaultRegions(),
 			Now: func() time.Time { return queryNow }, Auth: iam.Authenticator(c),
 		})
 	}
-	h := iamquery.New(iamquery.Config{
+	return iamquery.New(iamquery.Config{
 		Admin: STSAdmin{Client: c}, Authorizer: c,
 		IAM: verifier(sigv4.ServiceIAM), STS: verifier(sigv4.ServiceSTS),
 	})
-	s.client = c
-	return h, s
 }
 
 // queryCall signs an IAM form as bob and serves it.

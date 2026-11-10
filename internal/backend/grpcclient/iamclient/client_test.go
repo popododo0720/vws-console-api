@@ -151,9 +151,11 @@ type server struct {
 	// client is the Client harness dialed, for tests that start from the server.
 	client *Client
 	// Role calls.
-	getRole       []*iamv1.GetRoleRequest
-	getRoleRes    *iamv1.Role
-	getRoleErr    error
+	getRole    []*iamv1.GetRoleRequest
+	getRoleRes *iamv1.Role
+	getRoleErr error
+	// getRoleHang makes GetRole answer only when its context ends.
+	getRoleHang   bool
 	updateRole    []*iamv1.UpdateRoleRequest
 	updateRoleRes *longrunningpb.Operation
 	updateRoleErr error
@@ -206,6 +208,11 @@ func (s *server) GetRole(ctx context.Context, req *iamv1.GetRoleRequest) (*iamv1
 		return nil, err
 	}
 	s.mu.Lock()
+	if s.getRoleHang {
+		s.mu.Unlock()
+		<-ctx.Done()
+		return nil, status.FromContextError(ctx.Err()).Err()
+	}
 	defer s.mu.Unlock()
 	s.getRole = append(s.getRole, req)
 	if s.getRoleErr != nil {
