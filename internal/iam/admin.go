@@ -469,10 +469,14 @@ type Admin interface {
 	// Query API calls SerialNumber.
 	GetMFADevice(ctx context.Context, a resource.AccountID, serial string) (MFADevice, error)
 	// CreateVirtualMFADevice creates an unassigned virtual device named name
-	// on path (already validated; "" is "/") and returns its serial number
-	// and TOTP seed, once. A name the account already holds, on any path, is
-	// EntityAlreadyExists. The seed and the otpauth URI are never logged.
-	CreateVirtualMFADevice(ctx context.Context, a resource.AccountID, name, path string) (NewVirtualMFADevice, error)
+	// on path (already validated; "" is "/") with tags (CheckMFADeviceTags;
+	// nil is none) and returns its serial number and TOTP seed, once. A name
+	// the account already holds, on any path, is EntityAlreadyExists, and a
+	// refused create stores no tag. The seed and the otpauth URI are never
+	// logged.
+	CreateVirtualMFADevice(
+		ctx context.Context, a resource.AccountID, name, path string, tags []Tag,
+	) (NewVirtualMFADevice, error)
 	// DeleteVirtualMFADevice deletes a virtual device that is not enabled for
 	// a user. An enabled device is a DeleteConflict.
 	DeleteVirtualMFADevice(ctx context.Context, a resource.AccountID, serial string) error

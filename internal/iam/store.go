@@ -1526,7 +1526,7 @@ func (f *Fake) EnableMFADevice(
 // EntityAlreadyExists too. The device gets a random 20-byte TOTP seed, so
 // EnableMFADevice accepts codes made from the returned seed.
 func (f *Fake) CreateVirtualMFADevice(
-	_ context.Context, a resource.AccountID, name, path string,
+	_ context.Context, a resource.AccountID, name, path string, tags []Tag,
 ) (NewVirtualMFADevice, error) {
 	if err := CheckVirtualMFADeviceName(name); err != nil {
 		return NewVirtualMFADevice{}, err
@@ -1534,6 +1534,13 @@ func (f *Fake) CreateVirtualMFADevice(
 	path, err := normPath(path)
 	if err != nil {
 		return NewVirtualMFADevice{}, err
+	}
+	if err := CheckMFADeviceTags(tags); err != nil {
+		return NewVirtualMFADevice{}, err
+	}
+	tagMap := make(map[string]string, len(tags))
+	for _, tag := range tags {
+		tagMap[tag.Key] = tag.Value
 	}
 	seed := make([]byte, 20)
 	if _, err := rand.Read(seed); err != nil {
@@ -1548,7 +1555,7 @@ func (f *Fake) CreateVirtualMFADevice(
 		}
 	}
 	serial := VirtualMFADeviceSerial(a, path, name)
-	st.mfa[serial] = &mfaDeviceRec{tags: map[string]string{}, seed: seed}
+	st.mfa[serial] = &mfaDeviceRec{tags: tagMap, seed: seed}
 	enc := base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(seed)
 	uri := url.URL{
 		Scheme: "otpauth", Host: "totp", Path: "/VWS:" + name,
@@ -1605,7 +1612,7 @@ func (f *Fake) TagMFADevice(_ context.Context, a resource.AccountID, serial stri
 		merged[tag.Key] = tag.Value
 	}
 	if len(merged) > MaxTags {
-		return quota("Cannot exceed quota for TagsPerMfaDevice: 50")
+		return MFADeviceTagsExceeded()
 	}
 	d.tags = merged
 	return nil

@@ -2,6 +2,7 @@ package iam
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -17,7 +18,7 @@ func TestFakeCreateVirtualMFADevice(t *testing.T) {
 	ctx := t.Context()
 	f := NewFake()
 	a := account(t)
-	dev, err := f.CreateVirtualMFADevice(ctx, a, "alice-phone", "/eng/")
+	dev, err := f.CreateVirtualMFADevice(ctx, a, "alice-phone", "/eng/", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -27,7 +28,7 @@ func TestFakeCreateVirtualMFADevice(t *testing.T) {
 	if err := CheckEnrollment(dev.Base32StringSeed, dev.OtpauthURI); err != nil {
 		t.Errorf("fake enrollment: %v", err)
 	}
-	other, err := f.CreateVirtualMFADevice(ctx, a, "bob-phone", "")
+	other, err := f.CreateVirtualMFADevice(ctx, a, "bob-phone", "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,7 +39,7 @@ func TestFakeCreateVirtualMFADevice(t *testing.T) {
 		t.Errorf("default path serial %q", other.SerialNumber)
 	}
 	for _, path := range []string{"/eng/", "/"} {
-		_, err := f.CreateVirtualMFADevice(ctx, a, "alice-phone", path)
+		_, err := f.CreateVirtualMFADevice(ctx, a, "alice-phone", path, nil)
 		if resource.CodeOf(err) != resource.CodeAlreadyExists || err.Error() != MFADeviceExists().Error() {
 			t.Errorf("duplicate at %s: %v", path, err)
 		}
@@ -46,10 +47,55 @@ func TestFakeCreateVirtualMFADevice(t *testing.T) {
 	for _, tc := range []struct{ name, path string }{
 		{"", "/"}, {"a b", "/"}, {strings.Repeat("a", MaxVirtualMFADeviceNameLen+1), "/"}, {"x", "eng"},
 	} {
-		_, err := f.CreateVirtualMFADevice(ctx, a, tc.name, tc.path)
+		_, err := f.CreateVirtualMFADevice(ctx, a, tc.name, tc.path, nil)
 		if resource.CodeOf(err) != resource.CodeInvalidArgument {
 			t.Errorf("%q %q: %v, want InvalidArgument", tc.name, tc.path, err)
 		}
+	}
+}
+
+// The fake stores the create's tags on the device. More than MaxTags tags is
+// LimitExceeded, a bad tag or an aws: key is InvalidInput, and a refused
+// create leaves no device behind.
+func TestFakeCreateVirtualMFADeviceTags(t *testing.T) {
+	ctx := t.Context()
+	f := NewFake()
+	a := account(t)
+	dev, err := f.CreateVirtualMFADevice(ctx, a, "tagged", "/", []Tag{{"team", "eng"}, {"Env", ""}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	page, err := f.ListMFADeviceTags(ctx, a, dev.SerialNumber, "", 0)
+	if err != nil || len(page.Tags) != 2 {
+		t.Fatalf("tags %v, %v", page.Tags, err)
+	}
+	tooMany := make([]Tag, MaxTags+1)
+	for i := range tooMany {
+		tooMany[i] = Tag{Key: fmt.Sprint("k", i)}
+	}
+	for name, tc := range map[string]struct {
+		tags []Tag
+		code resource.Code
+		msg  string
+	}{
+		"51 tags":    {tooMany, resource.CodeResourceExhausted, mfaDeviceTagQuotaMsg},
+		"bad key":    {[]Tag{{"bad#key", "v"}}, resource.CodeInvalidArgument, "tags.member.key"},
+		"aws: key":   {[]Tag{{"aws:owner", "v"}}, resource.CodeInvalidArgument, "reserved prefix"},
+		"aws: value": {[]Tag{{"team", "aws:x"}}, resource.CodeInvalidArgument, "reserved prefix"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := f.CreateVirtualMFADevice(ctx, a, "refused", "/", tc.tags)
+			if resource.CodeOf(err) != tc.code || !strings.Contains(err.Error(), tc.msg) {
+				t.Fatalf("got %v, want %v %q", err, tc.code, tc.msg)
+			}
+			var e *resource.Error
+			if tc.code == resource.CodeInvalidArgument && (!errors.As(err, &e) || e.Field != "Tags") {
+				t.Errorf("field of %v is not Tags, so it is not InvalidInput", err)
+			}
+			if _, err := f.ListMFADeviceTags(ctx, a, VirtualMFADeviceSerial(a, "/", "refused"), "", 0); err == nil {
+				t.Error("a refused create left a device")
+			}
+		})
 	}
 }
 

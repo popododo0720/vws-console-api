@@ -20,12 +20,13 @@ import (
 
 // CreateVirtualMFADevice implements iam.Admin over
 // MfaDeviceService.CreateVirtualMfaDevice, which answers synchronously with
-// the device, its base32 seed and its otpauth URI.
+// the device, its base32 seed and its otpauth URI. The tags go in the same
+// request, so vws-iam writes them with the device or not at all.
 //
-// The call is sent once and never retried: CreateVirtualMfaDeviceRequest has
-// no request_id (vws-proto#129), so a retry after a lost response that did
-// commit would be refused as EntityAlreadyExists and the seed, which vws-iam
-// returns only here, would be lost either way. A transport failure is ServiceUnavailable;
+// The call is sent once and never retried: it carries no request_id, so a
+// retry after a lost response that did commit would be refused as
+// EntityAlreadyExists and the seed, which vws-iam returns only here, would be
+// lost either way. A transport failure is ServiceUnavailable;
 // the caller may find the device with ListVirtualMFADevices and delete it.
 //
 // The seed and the URI are checked (non-empty, base32, URI carries the seed)
@@ -33,7 +34,7 @@ import (
 // The span and the log name the device by its account-free path only
 // ("mfa/eng/alice-phone").
 func (a STSAdmin) CreateVirtualMFADevice(
-	ctx context.Context, account resource.AccountID, name, path string,
+	ctx context.Context, account resource.AccountID, name, path string, tags []iam.Tag,
 ) (out iam.NewVirtualMFADevice, err error) {
 	start := time.Now()
 	device := "mfa" + path + name
@@ -50,11 +51,18 @@ func (a STSAdmin) CreateVirtualMFADevice(
 	if err != nil {
 		return iam.NewVirtualMFADevice{}, err
 	}
+	if err := iam.CheckMFADeviceTags(tags); err != nil {
+		return iam.NewVirtualMFADevice{}, err
+	}
 	device = "mfa" + path + name
-	resp, err := call(ctx, a.mfaDevices.CreateVirtualMfaDevice, &iamv1.CreateVirtualMfaDeviceRequest{
+	req := &iamv1.CreateVirtualMfaDeviceRequest{
 		Parent: projectName(account), MfaDeviceId: name,
 		MfaDevice: &iamv1.MfaDevice{Spec: &iamv1.MfaDeviceSpec{Path: path}},
-	})
+	}
+	for _, tag := range tags {
+		req.Tags = append(req.Tags, &iamv1.Tag{Key: tag.Key, Value: tag.Value})
+	}
+	resp, err := call(ctx, a.mfaDevices.CreateVirtualMfaDevice, req)
 	if err != nil {
 		return iam.NewVirtualMFADevice{}, mfaCreateError(err)
 	}

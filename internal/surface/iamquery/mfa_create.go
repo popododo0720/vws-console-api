@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"strings"
 
 	"rsc.io/qr"
 
@@ -67,7 +68,11 @@ func createVirtualMFADevice(h *handler, c *exchange) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	dev, err := h.cfg.Admin.CreateVirtualMFADevice(c.r.Context(), c.caller.Account, name, path)
+	tags, err := createVirtualMFADeviceTags(c)
+	if err != nil {
+		return nil, err
+	}
+	dev, err := h.cfg.Admin.CreateVirtualMFADevice(c.r.Context(), c.caller.Account, name, path, tags)
 	if err != nil {
 		return nil, err
 	}
@@ -80,6 +85,31 @@ func createVirtualMFADevice(h *handler, c *exchange) (any, error) {
 		Base32StringSeed: base64.StdEncoding.EncodeToString([]byte(dev.Base32StringSeed)),
 		QRCodePNG:        base64.StdEncoding.EncodeToString(png),
 	}}, nil
+}
+
+// createVirtualMFADeviceTags reads the optional Tags.member.N of
+// CreateVirtualMFADevice. More than MaxTags tags is LimitExceeded and any bad
+// member is InvalidInput, the errors AWS documents for this action.
+func createVirtualMFADeviceTags(c *exchange) ([]iam.Tag, error) {
+	sent := false
+	indexes := map[string]bool{}
+	for key := range c.r.Form {
+		if !strings.HasPrefix(key, "Tags.member.") {
+			continue
+		}
+		sent = true
+		if m := tagMemberRE.FindStringSubmatch(key); m != nil {
+			indexes[m[1]] = true
+		}
+	}
+	if !sent {
+		return nil, nil
+	}
+	if len(indexes) > iam.MaxTags {
+		return nil, iam.MFADeviceTagsExceeded()
+	}
+	tags, err := parseTagMembers(c)
+	return tags, iam.MFADeviceTagInput(err)
 }
 
 // errQRCode is the fault of a URI the QR encoder refused. The URI (it embeds
