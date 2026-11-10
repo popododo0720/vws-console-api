@@ -410,7 +410,8 @@ func exerciseEC2(ctx context.Context, t *testing.T, set backend.Set, account res
 	}
 	seenIDs := map[string]bool{}
 	for _, r := range append(slices.Clone(sshIDs), moreIDs...) {
-		if !resource.IsRuleID(r.ID) || seenIDs[r.ID] || r.GroupID != group.Items[0].ID || r.OwnerID != scope.Account || r.IsEgress {
+		badGroup := r.GroupID != group.Items[0].ID || r.OwnerID != scope.Account
+		if !resource.IsRuleID(r.ID) || seenIDs[r.ID] || badGroup || r.IsEgress {
 			t.Fatalf("rule id %+v", r)
 		}
 		seenIDs[r.ID] = true
