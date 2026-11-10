@@ -769,7 +769,7 @@ func parseTagTargets(r *http.Request) (tagTargets, error) {
 		case strings.HasPrefix(raw, "vol-"):
 			id, err := resource.Parse[resource.VolumeID](raw)
 			if err != nil {
-				return tagTargets{}, err
+				return tagTargets{}, resource.InvalidTaggedID(raw)
 			}
 			t.vols = append(t.vols, id)
 		default:
