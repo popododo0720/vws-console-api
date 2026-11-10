@@ -120,7 +120,7 @@ func (c IDs) Volume(serial, storage, volname string) (resource.VolumeID, IDSourc
 			return id, SourceSerial, nil
 		}
 	}
-	id, err := resource.Parse[resource.VolumeID]("vol-" + c.digest("vws-pve-volume-v1", storage, volname))
+	id, err := resource.Parse[resource.VolumeID]("vol-" + c.digest("vws-pve-volume-name-v1", storage, volname))
 	return id, SourceVolname, wrap("volume", err)
 }
 
@@ -138,13 +138,13 @@ func (c IDs) BridgeSubnet(iface, cidr string) (resource.SubnetID, error) {
 
 // SDNVPC returns the vpc- id of an SDN VNet.
 func (c IDs) SDNVPC(zone, vnet string) (resource.VpcID, error) {
-	id, err := resource.Parse[resource.VpcID]("vpc-" + c.digest("vws-pve-vpc-v1", zone, vnet))
+	id, err := resource.Parse[resource.VpcID]("vpc-" + c.digest("vws-pve-sdn-vpc-v1", zone, vnet))
 	return id, wrap("vpc", err)
 }
 
 // SDNSubnet returns the subnet- id of a subnet of an SDN VNet.
 func (c IDs) SDNSubnet(vnet, cidr string) (resource.SubnetID, error) {
-	id, err := resource.Parse[resource.SubnetID]("subnet-" + c.digest("vws-pve-subnet-v1", vnet, cidr))
+	id, err := resource.Parse[resource.SubnetID]("subnet-" + c.digest("vws-pve-sdn-subnet-v1", vnet, cidr))
 	return id, wrap("subnet", err)
 }
 

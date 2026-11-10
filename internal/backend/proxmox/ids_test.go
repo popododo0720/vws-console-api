@@ -38,16 +38,56 @@ func TestFormulasArePinned(t *testing.T) {
 		{"volume serial", c.VolumeSerial("key1", 0), "64789ba320027f896"},
 		{"root volume serial", c.RootVolumeSerial(testUUID), "1242e29aa9300a558"},
 		{"volume by serial", vol("64789ba320027f896"), "vol-64789ba320027f896"},
-		{"volume by name", vol(""), "vol-a246dac826e6d32dc"},
+		{"volume by name", vol(""), "vol-605b08b939ebcfc8e"},
 		{"bridge vpc", str(c.BridgeVPC("vmbr0")), "vpc-04858cd8262694c9d"},
 		{"bridge subnet", str(c.BridgeSubnet("vmbr0", "10.0.0.0/24")), "subnet-29f9256c6bad386c4"},
-		{"sdn vpc", str(c.SDNVPC("zone1", "vnet1")), "vpc-617f9316b4facaa20"},
-		{"sdn subnet", str(c.SDNSubnet("vnet1", "10.1.0.0/24")), "subnet-16447773614414a4d"},
+		{"sdn vpc", str(c.SDNVPC("zone1", "vnet1")), "vpc-ea91b128a0c0a85ee"},
+		{"sdn subnet", str(c.SDNSubnet("vnet1", "10.1.0.0/24")), "subnet-551fa8fab90a9dec9"},
 		{"security group", str(c.SecurityGroup("web")), "sg-6fbd3e734140cbd24"},
 	} {
 		if tc.got != tc.want {
 			t.Errorf("%s: got %q, want %q", tc.name, tc.got, tc.want)
 		}
+	}
+}
+
+// Two id forms of one kind must never hash the same input: a zone named
+// "bridge" once gave its VNet the id of the bridge of the same name.
+func TestFormsNeverShareHashInput(t *testing.T) {
+	c := NewIDs("pve-seoul")
+	uuid := testUUID
+	bridgeVPC, err := c.BridgeVPC("vmbr0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sdnVPC, err := c.SDNVPC("bridge", "vmbr0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bridgeVPC == sdnVPC {
+		t.Errorf("SDNVPC(bridge, vmbr0) = BridgeVPC(vmbr0) = %v", sdnVPC)
+	}
+	bridgeSubnet, err := c.BridgeSubnet("vmbr0", "10.0.0.0/24")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sdnSubnet, err := c.SDNSubnet("bridge\x00vmbr0", "10.0.0.0/24")
+	if err == nil && bridgeSubnet == sdnSubnet {
+		t.Errorf("SDNSubnet(bridge NUL vmbr0) = BridgeSubnet(vmbr0) = %v", sdnSubnet)
+	}
+	named, _, err := c.Volume("", uuid, "root")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if root := c.RootVolumeSerial(uuid); named.String() == "vol-"+root {
+		t.Errorf("Volume(storage %s, volname root) = the root volume %v", uuid, named)
+	}
+	named, _, err = c.Volume("", "key1", "0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created := c.VolumeSerial("key1", 0); named.String() == "vol-"+created {
+		t.Errorf("Volume(storage key1, volname 0) = the created volume %v", named)
 	}
 }
 
