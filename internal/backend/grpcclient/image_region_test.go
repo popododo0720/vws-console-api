@@ -27,6 +27,8 @@ import (
 const (
 	catalogAMI      = "ami-0123456789abcdef0"
 	registeredAMI   = "ami-0a1b2c3d4e5f67890"
+	copiedAMI       = "ami-0c0d0e0f1a2b3c4d5"
+	copiedImage     = "img-0c0d0e0f1a2b3c4d5"
 	otherRegionAMI  = "ami-fedcba9876543210"
 	absentAMI       = "ami-0000000000000001"
 	otherProjectAMI = "ami-abcdefabcdefabcd"
@@ -177,14 +179,23 @@ func TestRunInstancesRequiresImageInCallerRegion(t *testing.T) {
 
 	t.Run("registered in region", func(t *testing.T) {
 		boot, client := startRegional(t)
-		assertImageLaunches(t, boot, client, sub, registeredAMI, "registered")
-		if boot.imageReads != 1 || boot.imageName != imageName(caller, registeredAMI) {
+		assertImageLaunches(t, boot, client, sub, registeredAMI, registeredAMI, "registered")
+		// The copy name img-<digits> is read first and misses; the seed is
+		// the second read.
+		if boot.imageReads != 2 || boot.imageName != imageName(caller, registeredAMI) {
+			t.Fatalf("reads %d name %q", boot.imageReads, boot.imageName)
+		}
+	})
+	t.Run("copied in region", func(t *testing.T) {
+		boot, client := startRegional(t)
+		assertImageLaunches(t, boot, client, sub, copiedAMI, copiedImage, "copied")
+		if boot.imageReads != 1 || boot.imageName != imageName(caller, copiedImage) {
 			t.Fatalf("reads %d name %q", boot.imageReads, boot.imageName)
 		}
 	})
 	t.Run("catalog", func(t *testing.T) {
 		boot, client := startRegional(t)
-		assertImageLaunches(t, boot, client, sub, catalogAMI, "catalog")
+		assertImageLaunches(t, boot, client, sub, catalogAMI, catalogAMI, "catalog")
 		if boot.imageReads != 0 {
 			t.Fatalf("catalog read the image store %d times", boot.imageReads)
 		}
@@ -194,7 +205,7 @@ func TestRunInstancesRequiresImageInCallerRegion(t *testing.T) {
 		boot.mu.Lock()
 		boot.imageDown = true
 		boot.mu.Unlock()
-		assertImageLaunches(t, boot, client, sub, catalogAMI, "catalog-down")
+		assertImageLaunches(t, boot, client, sub, catalogAMI, catalogAMI, "catalog-down")
 		if boot.imageReads != 0 {
 			t.Fatalf("catalog read the image store %d times", boot.imageReads)
 		}
@@ -236,15 +247,17 @@ func launchImage(
 	})
 }
 
+// assertImageLaunches launches the EC2 image id and checks that one volume,
+// copied from the compute image local, and one instance are created.
 func assertImageLaunches(
-	t *testing.T, boot *regionalImages, client computeClient, sub resource.SubnetID, id, key string,
+	t *testing.T, boot *regionalImages, client computeClient, sub resource.SubnetID, id, local, key string,
 ) {
 	t.Helper()
 	acc, err := launchImage(t, client, sub, id, key)
 	if err != nil || len(acc.Items) != 1 || acc.Items[0].ImageID.String() != id {
 		t.Fatalf("%v %+v", err, acc.Items)
 	}
-	want := imageName(project(mustAccount(t)), id)
+	want := imageName(project(mustAccount(t)), local)
 	boot.mu.Lock()
 	defer boot.mu.Unlock()
 	if boot.volumes != 1 || boot.instances != 1 || boot.image != want {
@@ -292,6 +305,7 @@ func startRegional(t *testing.T) (*regionalImages, computeClient) {
 	caller := project(mustAccount(t))
 	boot := &regionalImages{images: map[string]imageRecord{
 		registeredAMI:   {project: caller, region: resource.RegionName},
+		copiedImage:     {project: caller, region: resource.RegionName},
 		otherRegionAMI:  {project: caller, region: otherRegionName},
 		otherProjectAMI: {project: otherProjectID, region: resource.RegionName},
 	}}

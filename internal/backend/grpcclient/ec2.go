@@ -1851,6 +1851,9 @@ func (c computeClient) listImages(
 	ctx context.Context, projectID string, account resource.AccountID,
 ) ([]resource.Image, error) {
 	var items []resource.Image
+	// at is the index in items of each EC2 id. A copy "img-H" and a seed
+	// "ami-H" read as one id; the copy wins, as getImage reads it first.
+	at := map[resource.ImageID]int{}
 	token := ""
 	seen := map[string]struct{}{}
 	for page := 0; page < 50; page++ {
@@ -1868,12 +1871,20 @@ func (c computeClient) listImages(
 				}
 				return nil, err
 			}
+			local := lastSegment(in.GetName())
 			if img.OwnerID != account {
-				img, err = c.confirmImageOwner(ctx, img, account)
+				img, err = c.confirmImageOwner(ctx, img, local, account)
 				if err != nil {
 					return nil, err
 				}
 			}
+			if i, dup := at[img.ID]; dup {
+				if strings.HasPrefix(local, computeCopyPrefix) {
+					items[i] = img
+				}
+				continue
+			}
+			at[img.ID] = len(items)
 			items = append(items, img)
 		}
 		next := out.GetNextPageToken()
@@ -1895,10 +1906,10 @@ func (c computeClient) listImages(
 // the image stays the caller's own. Any other failed read is reported: a
 // guessed owner would let an owner filter hide the caller's image.
 func (c computeClient) confirmImageOwner(
-	ctx context.Context, img resource.Image, caller resource.AccountID,
+	ctx context.Context, img resource.Image, local string, caller resource.AccountID,
 ) (resource.Image, error) {
 	_, err := c.images.GetImage(ctx, &computev1.GetImageRequest{
-		Name: imageName(project(img.OwnerID), img.ID.String()),
+		Name: imageName(project(img.OwnerID), local),
 	})
 	if err == nil {
 		return img, nil
