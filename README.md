@@ -1,10 +1,10 @@
 # vws-console-api
 
 Web backend for VWS. One process serves the Next.js console, an EC2 Query
-entry point, and a path-style object entry point. It does not store resources.
-Compute, storage, and network live behind gRPC. A restart of this process
-drops nothing, because the idempotency record and the operation live in the
-service that owns the resource.
+entry point, and a path-style object entry point. It does not store resources:
+Proxmox VE and AWS are the source of truth (`docs/hybrid.md`). A restart of
+this process drops nothing, because the idempotency record and the operation
+live with the resource.
 
 Long-running work returns an operation. The console polls it. Query clients
 poll the resource state, which is the same lifecycle. Bucket and object calls
@@ -24,7 +24,17 @@ go run ./cmd/vws-console-api -backend=fake \
   -account=123456789012
 ```
 
-`-backend=grpc` dials `-compute-addr`, `-storage-addr`, and `-network-addr`.
+| `-backend` | Use |
+| --- | --- |
+| `fake` | In-memory, for tests and local runs. |
+| `regions` | The global layer: sends each request to its `pve-*` region layer or to AWS (#755). |
+| `proxmox` | The region layer: one Proxmox cluster (#755). |
+
+`docs/proxmox-mapping.md` has the id, tag, pool and zone rules and
+`docs/proxmox-safety.md` the token and test safety rules. `-backend=grpc`,
+which dials `-compute-addr`, `-storage-addr`, and `-network-addr`, is the
+retired Kubernetes path. It stays until `regions` and `proxmox` land and is
+not the production path.
 
 ### Credentials
 
