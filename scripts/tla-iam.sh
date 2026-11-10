@@ -74,7 +74,7 @@ echo "model (real design): ${got}; $(grep -E '^[0-9]+ states generated' "${out}/
 if [[ ${1:-all} == all ]]; then
   # Each guard switched off must break the property it guards. A known
   # finding (docs/formal/iamauth.md) fails on the real design (NONE) until
-  # its fix lands (#624, #625, #626); then its line fails here, and the property moves into
+  # its fix lands (#625, #626); then its line fails here, and the property moves into
   # iamauth.cfg.
   while read -r name flip prop; do
     got=$(tlc "$name" "$(variant "$name" "$flip" "$prop")")
@@ -89,7 +89,7 @@ seed-page-etag FixPageEtag PagesBound
 seed-write-etag FixWriteEtag WritesBound
 seed-expect-arn FixExpectARN WritesBound
 seed-undo-etag FixUndoEtag UndoCatchesMoves
-finding-create-access-key NONE CreateAccessKeyBound
+seed-create-etag FixWriteEtag CreateAccessKeyBound
 finding-update-role NONE UpdateRoleBound
 finding-enable-restart NONE EnableNeverStaysUnverified
 CHECKS

@@ -42,7 +42,7 @@ CONSTANTS
     FixFailClosed, \* a failed lookup authorizes nothing (#358)
     FixBind,       \* every entity read compares its ARN with the principal (#331, #342)
     FixPageEtag,   \* a read of several calls compares the etag of its first and last user reads (#407)
-    FixWriteEtag,  \* a write carries the etag of the read that bound it
+    FixWriteEtag,  \* a write or a key create carries the etag of the read that bound it
     FixExpectARN,  \* an access key write carries expected_user_arn (#340)
     FixUndoEtag    \* EnableMFADevice's reread compares the etag, not the ARN only
 
@@ -58,7 +58,7 @@ Shape == [a \in Actions |->
       [] a = "UpdateUser"      -> "cas"    \* users_groups.go UpdateUser: write under the bound read's etag
       [] a = "UpdateAccessKey" -> "expect" \* access_keys.go: keyUser, write with ExpectedUserArn
       [] a = "EnableMFADevice" -> "undo"   \* admin.go: boundUser, enable, unchangedUser, undo
-      [] a = "CreateAccessKey" -> "none"   \* access_keys.go: keyUser, then a create with no precondition
+      [] a = "CreateAccessKey" -> "create" \* access_keys.go: boundUser, then a create under its etag (user_etag, #624)
       [] a = "UpdateRole"      -> "none"]  \* admin.go: roleAt, then UpdateRole with no etag
 
 VARIABLES
@@ -186,7 +186,7 @@ Verify(r) ==
 Write(r) ==
     /\ pc[r] = "write"
     /\ LET s == Shape[act[r]]
-           ok == CASE s = "cas"    -> ~FixWriteEtag \/ etag = etag0[r]
+           ok == CASE s \in {"cas", "create"} -> ~FixWriteEtag \/ etag = etag0[r]
                    [] s = "expect" -> ~FixExpectARN \/ arn = want[r]
                    [] OTHER        -> TRUE
        IN IF ~ok
@@ -262,12 +262,14 @@ UndoCatchesMoves ==
     \A r \in Reqs: ShapeIs(r, "undo") /\ result[r] \in {"ok", "changed"}
                    => ~(applied[r] /\ tainted[r])
 
+(* A CreateAccessKey never creates a key on the user at another ARN. *)
+CreateAccessKeyBound == \A r \in Reqs: act[r] = "CreateAccessKey" => ~tainted[r]
+
 (* Findings in the current code (iamauth.md): *)
 
 (* An enable made at another ARN does not stay after a restart. *)
 EnableNeverStaysUnverified ==
     \A r \in Reqs: ShapeIs(r, "undo") /\ pc[r] = "done" => ~(applied[r] /\ tainted[r])
 
-CreateAccessKeyBound == \A r \in Reqs: act[r] = "CreateAccessKey" => ~tainted[r]
 UpdateRoleBound == \A r \in Reqs: act[r] = "UpdateRole" => ~tainted[r]
 =============================================================================
