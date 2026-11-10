@@ -1,0 +1,70 @@
+{
+  "region": "pve-seoul-1",
+  "kind": "proxmox",
+  "cluster": {
+    "name": "seoul-1",
+    "pveRelease": "8.4",
+    "quorate": true,
+    "leader": "pve2"
+  },
+  "zones": [
+    {
+      "zoneName": "pve-seoul-1a",
+      "zoneId": "pve-seoul-1a",
+      "state": "available",
+      "nodes": [
+        "pve1",
+        "pve2"
+      ]
+    }
+  ],
+  "actions": {
+    "ec2:AllocateAddress": {
+      "state": "unsupported",
+      "reasonCode": "NoElasticIP",
+      "reason": "pve-seoul-1 does not support Elastic IP addresses"
+    },
+    "ec2:CreateVolume": {
+      "state": "partial",
+      "reasonCode": "NoSnapshotSource",
+      "reason": "pve-seoul-1 does not create a volume from a snapshot"
+    },
+    "ec2:DescribeAddresses": {
+      "state": "empty"
+    },
+    "ec2:RunInstances": {
+      "state": "supported"
+    },
+    "vws:OpenConsole": {
+      "state": "supported",
+      "kinds": [
+        "vnc",
+        "serial"
+      ]
+    }
+  },
+  "instanceTypes": [
+    {
+      "instanceType": "vws.small",
+      "vcpus": 1,
+      "memoryMiB": 1024
+    },
+    {
+      "instanceType": "vws.medium",
+      "vcpus": 2,
+      "memoryMiB": 4096
+    }
+  ],
+  "limits": {
+    "maxInstancesPerRun": 10,
+    "maxTagsPerResource": 50,
+    "maxUserDataBytes": 32768,
+    "maxVolumesPerInstance": 26
+  },
+  "features": {
+    "userData": true,
+    "linkedClones": false,
+    "snapshotScope": "vm",
+    "privateIpMode": "static"
+  }
+}
