@@ -130,6 +130,19 @@ func (d *deadlines) RoundTrip(r *http.Request) (*http.Response, error) {
 	return d.next.RoundTrip(r)
 }
 
+// fakeClock moves its time forward by d on After and fires at once, so a
+// task wait never waits in real time. One client, one goroutine.
+type fakeClock struct{ now time.Time }
+
+func (f *fakeClock) Now() time.Time { return f.now }
+
+func (f *fakeClock) After(d time.Duration) <-chan time.Time {
+	f.now = f.now.Add(d)
+	ch := make(chan time.Time, 1)
+	ch <- f.now
+	return ch
+}
+
 func newClient(t *testing.T, h http.HandlerFunc, log *slog.Logger) (*Client, *deadlines) {
 	t.Helper()
 	srv := httptest.NewServer(h)
@@ -142,6 +155,7 @@ func newClient(t *testing.T, h http.HandlerFunc, log *slog.Logger) (*Client, *de
 	if err != nil {
 		t.Fatal(err)
 	}
+	c.clock = &fakeClock{now: time.Date(2026, 11, 10, 0, 0, 0, 0, time.UTC)}
 	return c, rt
 }
 
@@ -292,13 +306,28 @@ func TestWaitTask(t *testing.T) {
 			t.Fatalf("err = %v, want a TaskError storage full", err)
 		}
 	})
-	t.Run("a task that never stops ends at the limit", func(t *testing.T) {
+	t.Run("a task that never stops ends at the limit on the clock", func(t *testing.T) {
+		var polls atomic.Int32
 		c, _ := newClient(t, func(w http.ResponseWriter, _ *http.Request) {
+			polls.Add(1)
 			fmt.Fprint(w, `{"data":{"status":"running"}}`)
 		}, nil)
-		err := c.WaitTask(t.Context(), task, 20*time.Millisecond)
+		c.poll = time.Second
+		start := c.clock.Now()
+		began := time.Now()
+		err := c.WaitTask(t.Context(), task, StartWait)
 		if !errors.Is(err, context.DeadlineExceeded) {
 			t.Fatalf("err = %v, want DeadlineExceeded", err)
+		}
+		if waited := c.clock.Now().Sub(start); waited != StartWait {
+			t.Errorf("clock moved %v when the wait ended, want exactly the limit %v", waited, StartWait)
+		}
+		// 2m of 0.8s to 1.2s waits, plus the read at the start and at the limit.
+		if got := polls.Load(); got < 101 || got > 152 {
+			t.Errorf("%d polls, want 101 to 152", got)
+		}
+		if took := time.Since(began); took > 2*time.Second {
+			t.Errorf("a %v wait took %v of real time, want under 2s", StartWait, took)
 		}
 	})
 }

@@ -33,6 +33,19 @@ type TaskStatus struct {
 	StartTime  int64  `json:"starttime"`
 }
 
+// clock is the time source of WaitTask. Tests replace it so that a wait to
+// the limit costs no real time.
+type clock interface {
+	Now() time.Time
+	After(d time.Duration) <-chan time.Time
+}
+
+type realClock struct{}
+
+func (realClock) Now() time.Time { return time.Now() }
+
+func (realClock) After(d time.Duration) <-chan time.Time { return time.After(d) }
+
 // TaskError is a task that stopped with an exitstatus other than OK.
 type TaskError struct {
 	UPID       string
@@ -55,8 +68,11 @@ func (c *Client) WaitTask(ctx context.Context, t Task, limit time.Duration) erro
 	if err != nil {
 		return err
 	}
+	// The context deadline bounds a status read still in flight at the limit;
+	// between reads the clock decides when the limit has passed.
 	ctx, cancel := context.WithTimeout(ctx, limit)
 	defer cancel()
+	deadline := c.clock.Now().Add(limit)
 	path := "/nodes" + n + "/tasks" + u + "/status"
 	for {
 		st, err := get[TaskStatus](ctx, c, path, nil)
@@ -69,12 +85,14 @@ func (c *Client) WaitTask(ctx context.Context, t Task, limit time.Duration) erro
 			}
 			return &TaskError{UPID: t.UPID, ExitStatus: st.ExitStatus}
 		}
-		wait := time.NewTimer(jitter(c.poll))
+		wait := min(jitter(c.poll), deadline.Sub(c.clock.Now()))
+		if wait <= 0 {
+			return fmt.Errorf("wait for task %s: %w", t.UPID, context.DeadlineExceeded)
+		}
 		select {
 		case <-ctx.Done():
-			wait.Stop()
 			return fmt.Errorf("wait for task %s: %w", t.UPID, ctx.Err())
-		case <-wait.C:
+		case <-c.clock.After(wait):
 		}
 	}
 }
