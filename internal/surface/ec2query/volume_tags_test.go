@@ -145,3 +145,34 @@ func TestDeleteTagsRefusesVolumesForNow(t *testing.T) {
 		t.Fatalf("a refused DeleteTags changed the vpc tags: %s", got)
 	}
 }
+
+// TestDescribeTagsFilters checks that DescribeTags refuses tag-key, which
+// EC2 documents only on the resource describes, and that a resource-type
+// filter, wildcards included, decides whether volume tags are listed.
+func TestDescribeTagsFilters(t *testing.T) {
+	h, cred, now := harness(t)
+	send := func(f url.Values) (int, string) {
+		t.Helper()
+		f.Set("Version", Version)
+		res := signed(t, h, cred, now, f.Encode())
+		return res.Code, res.Body.String()
+	}
+	send(url.Values{
+		"Action": {"CreateVolume"}, "Size": {"1"}, "AvailabilityZone": {"vws-1a"},
+		"TagSpecification.1.ResourceType": {"volume"},
+		"TagSpecification.1.Tag.1.Key":    {"Name"}, "TagSpecification.1.Tag.1.Value": {"data"},
+	})
+	if code, got := send(url.Values{
+		"Action": {"DescribeTags"}, "Filter.1.Name": {"tag-key"}, "Filter.1.Value.1": {"Name"},
+	}); code != http.StatusBadRequest {
+		t.Fatalf("DescribeTags tag-key: %d %s", code, got)
+	}
+	for value, want := range map[string]bool{"vol*": true, "volume": true, "vpc": false} {
+		code, got := send(url.Values{
+			"Action": {"DescribeTags"}, "Filter.1.Name": {"resource-type"}, "Filter.1.Value.1": {value},
+		})
+		if code != http.StatusOK || strings.Contains(got, "<resourceType>volume</resourceType>") != want {
+			t.Fatalf("DescribeTags resource-type=%s: %d %s", value, code, got)
+		}
+	}
+}

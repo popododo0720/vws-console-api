@@ -656,6 +656,14 @@ func (h *handler) describeTags(w http.ResponseWriter, r *http.Request, c resourc
 		writeErr(w, r, err)
 		return
 	}
+	// EC2 DescribeTags takes tag:<key> but not tag-key, which only the
+	// resource describes take.
+	for _, f := range filters {
+		if f.name == "tag-key" {
+			writeErr(w, r, resource.Invalid("Filter", "unsupported"))
+			return
+		}
+	}
 	if err := checkTagFilterNames(filters, "key", "resource-id", "resource-type", "value"); err != nil {
 		writeErr(w, r, err)
 		return
