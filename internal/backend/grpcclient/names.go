@@ -105,6 +105,37 @@ func imageName(projectID, id string) string {
 	return "projects/" + projectID + "/regions/" + resource.RegionName + "/images/" + id
 }
 
+// computeCopyPrefix starts the id compute mints for an image it copies from
+// a volume or snapshot: "img-" and 17 lowercase hex digits. A seeded image
+// keeps the id it was registered under. vws-compute internal/compute/ids.go.
+const computeCopyPrefix = "img-"
+
+// imageIDOf is the EC2 id of the compute image id local. A copy "img-H"
+// with the 17 digits compute mints reads as "ami-H", the one form
+// computeImageIDs maps back to it; any other id is an EC2 id as it stands,
+// so an "img-" id of another length is not one.
+func imageIDOf(local string) (resource.ImageID, error) {
+	if digits, ok := strings.CutPrefix(local, computeCopyPrefix); ok && len(digits) == 17 {
+		local = "ami-" + digits
+	}
+	id, err := resource.Parse[resource.ImageID](local)
+	if err != nil {
+		return resource.ImageID{}, fmt.Errorf("image id %q: %w", local, err)
+	}
+	return id, nil
+}
+
+// computeImageIDs are the compute ids an EC2 image id can name, in lookup
+// order: the copy "img-H" when H has the 17 digits compute mints, then the
+// id itself, as a seed is stored.
+func computeImageIDs(id resource.ImageID) []string {
+	digits := strings.TrimPrefix(id.String(), "ami-")
+	if len(digits) != 17 {
+		return []string{id.String()}
+	}
+	return []string{computeCopyPrefix + digits, id.String()}
+}
+
 func regionParent(projectID string) string {
 	return "projects/" + projectID + "/regions/" + resource.RegionName
 }

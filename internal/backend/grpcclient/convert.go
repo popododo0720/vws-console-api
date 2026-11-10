@@ -448,7 +448,7 @@ func imageModel(in *computev1.Image, caller resource.AccountID) (resource.Image,
 	if len(parts) != 6 || parts[0] != "projects" || parts[2] != "regions" || parts[4] != "images" {
 		return resource.Image{}, resource.Internal(&badRecordNameError{errors.New("bad image name")})
 	}
-	id, err := resource.Parse[resource.ImageID](parts[5])
+	id, err := imageIDOf(parts[5])
 	if err != nil {
 		return resource.Image{}, resource.Internal(&badRecordNameError{err})
 	}
@@ -1063,7 +1063,8 @@ func missingImage(reason string, code codes.Code) bool {
 
 // refusedImageID reads the public AMI id from an "image <name> not found" sentence.
 // The name may be a resource path, and the sentence may follow a volume prefix.
-// A name that is not an AMI id does not match.
+// A compute copy "img-H" is "ami-H", as imageIDOf reads it. A name that is
+// neither does not match.
 func refusedImageID(msg string) (string, bool) {
 	_, rest, ok := strings.Cut(msg, "image ")
 	if !ok {
@@ -1073,7 +1074,7 @@ func refusedImageID(msg string) (string, bool) {
 	if !ok || name == "" || strings.ContainsAny(name, " \t") {
 		return "", false
 	}
-	id, err := resource.Parse[resource.ImageID](lastSegment(name))
+	id, err := imageIDOf(lastSegment(name))
 	if err != nil {
 		return "", false
 	}
