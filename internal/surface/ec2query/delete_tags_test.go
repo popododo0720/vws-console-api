@@ -163,6 +163,58 @@ func TestFannedOutTagRequestIsCheckedBeforeAnyWrite(t *testing.T) {
 	}
 }
 
+// TestDeleteTagsNamingAnAWSKeyIsRefused sends DeleteTags naming an aws: key
+// in any case beside a user key. EC2 answers InvalidParameterValue with the
+// message below, captured from AWS in
+// https://github.com/ansible-collections/amazon.aws/issues/276, and removes no
+// tag. A key that only looks like the prefix is a user key.
+func TestDeleteTagsNamingAnAWSKeyIsRefused(t *testing.T) {
+	h, cred, now := harness(t)
+	send := func(f url.Values) (int, []byte) {
+		t.Helper()
+		f.Set("Version", Version)
+		res := signed(t, h, cred, now, f.Encode())
+		return res.Code, res.Body.Bytes()
+	}
+	ok := func(f url.Values) string {
+		t.Helper()
+		code, body := send(f)
+		if code != http.StatusOK {
+			t.Fatalf("%s %d %s", f.Get("Action"), code, body)
+		}
+		return string(body)
+	}
+	vpc := xmlText(t, ok(url.Values{"Action": {"CreateVpc"}, "CidrBlock": {"10.0.0.0/16"}}), "vpcId")
+	ok(url.Values{
+		"Action": {"CreateTags"}, "ResourceId.1": {vpc},
+		"Tag.1.Key": {"Name"}, "Tag.1.Value": {"web"},
+		"Tag.2.Key": {"awsx:a"}, "Tag.2.Value": {"1"},
+		"Tag.3.Key": {"aws"}, "Tag.3.Value": {"2"},
+	})
+	const tags = "<tagSet><item><key>Name</key><value>web</value></item>" +
+		"<item><key>aws</key><value>2</value></item><item><key>awsx:a</key><value>1</value></item></tagSet>"
+	for _, key := range []string{"aws:cloudformation:stack-name", "AWS:stack", "Aws:stack", "aws:"} {
+		for range 2 {
+			code, body := send(url.Values{
+				"Action": {"DeleteTags"}, "ResourceId.1": {vpc}, "Tag.1.Key": {"Name"}, "Tag.2.Key": {key},
+			})
+			want := "Value ( " + key + " ) for parameter key is invalid. " +
+				"Tag keys starting with 'aws:' are reserved for internal use"
+			if got := ec2ErrorXML(t, body); code != http.StatusBadRequest ||
+				got.Code != "InvalidParameterValue" || got.Message != want {
+				t.Fatalf("DeleteTags %q: %d %+v, want 400 InvalidParameterValue %q", key, code, got, want)
+			}
+		}
+		if got := ok(url.Values{"Action": {"DescribeVpcs"}, "VpcId.1": {vpc}}); !strings.Contains(got, tags) {
+			t.Fatalf("a refused DeleteTags naming %q changed the tags: %s", key, got)
+		}
+	}
+	ok(url.Values{"Action": {"DeleteTags"}, "ResourceId.1": {vpc}, "Tag.1.Key": {"awsx:a"}, "Tag.2.Key": {"aws"}})
+	if got := ok(url.Values{"Action": {"DescribeVpcs"}, "VpcId.1": {vpc}}); strings.Contains(got, "<key>aws") {
+		t.Fatalf("user keys that look like the prefix were kept: %s", got)
+	}
+}
+
 // TestAWSTagKeysCannotBeSet checks that CreateTags refuses an aws: key, as
 // EC2 does. DeleteTags cannot name one either, so a key CreateTags let
 // through could never be removed.
