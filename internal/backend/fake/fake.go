@@ -128,7 +128,7 @@ func New(opt Options) *World {
 
 // Set returns the three clients.
 func (w *World) Set() backend.Set {
-	return backend.Set{Compute: compute{w}, Storage: storage{w}, Network: network{w}}
+	return backend.Set{Compute: compute{w}, Storage: storage{w}, Network: network{w}, Console: console{w}}
 }
 
 func (w *World) settle(now time.Time) {
