@@ -141,8 +141,7 @@ change both files together.
 ## Working here
 
 - Write short declarative sentences, make a minimal diff, and prove with
-  real artifacts. Use Grok dev bots only, never Cursor cloud
-  agents.
+  real artifacts. Never use Cursor cloud agents.
 - One issue is one branch from `main` and one PR. Commits are atomic and do
   not mix a refactor with a behavior change. Never force-push; never merge
   your own PR.
