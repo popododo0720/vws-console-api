@@ -103,9 +103,7 @@ func modifyForm(id string, params map[string]string) string {
 // #324 AC1: ModifyVolume takes VolumeType, Iops and Throughput with Size in
 // one call and answers the target and original values in volumeModification
 // (EC2 API Reference, ModifyVolume and VolumeModification). Values the target
-// type cannot hold are refused with EC2's codes and change nothing. A retry
-// with the same ClientToken answers the first modification's target; its
-// original values are re-read, which #617 tracks.
+// type cannot hold are refused with EC2's codes and change nothing.
 func TestModifyVolumeTakesTypeIopsAndThroughput(t *testing.T) {
 	h, cred, now := harness(t)
 	res := signed(t, h, cred, now, createVolumeForm(map[string]string{"VolumeType": "gp2", "Size": "10"}))
@@ -136,11 +134,10 @@ func TestModifyVolumeTakesTypeIopsAndThroughput(t *testing.T) {
 	}
 
 	retype := map[string]string{
-		"VolumeType":  "gp3",
-		"Size":        "100",
-		"Iops":        "6000",
-		"Throughput":  "500",
-		"ClientToken": "retype-324",
+		"VolumeType": "gp3",
+		"Size":       "100",
+		"Iops":       "6000",
+		"Throughput": "500",
 	}
 	first := signed(t, h, cred, now, modifyForm(id, retype))
 	body := first.Body.String()
@@ -157,10 +154,6 @@ func TestModifyVolumeTakesTypeIopsAndThroughput(t *testing.T) {
 	if strings.Contains(body, "<originalThroughput>") {
 		t.Errorf("gp2 has no throughput to report: %s", body)
 	}
-	again := signed(t, h, cred, now, modifyForm(id, retype))
-	if again.Code != http.StatusOK || !strings.Contains(again.Body.String(), "<targetIops>6000</targetIops>") {
-		t.Errorf("retry with the same ClientToken: %d %s", again.Code, again.Body)
-	}
 
 	described := signed(t, h, cred, now, url.Values{
 		"Action": {"DescribeVolumes"}, "Version": {Version}, "VolumeId.1": {id},
@@ -171,5 +164,29 @@ func TestModifyVolumeTakesTypeIopsAndThroughput(t *testing.T) {
 		if !strings.Contains(described.Body.String(), want) {
 			t.Errorf("describe after modify: want %s, got %s", want, described.Body)
 		}
+	}
+}
+
+// #617: EC2 ModifyVolume takes no ClientToken (EC2 API Reference, ModifyVolume
+// request parameters), so a token is refused like on DeleteTags, whether it is
+// new or a retry of the same value, and the volume stays as it was.
+func TestModifyVolumeRefusesClientToken(t *testing.T) {
+	h, cred, now := harness(t)
+	res := signed(t, h, cred, now, createVolumeForm(map[string]string{"VolumeType": "gp2", "Size": "10"}))
+	if res.Code != http.StatusOK {
+		t.Fatalf("create: %d %s", res.Code, res.Body)
+	}
+	id := between(res.Body.String(), "<volumeId>", "</volumeId>")
+	for i := range 2 {
+		res = signed(t, h, cred, now, modifyForm(id, map[string]string{"Size": "20", "ClientToken": "t-617"}))
+		if res.Code != http.StatusBadRequest || !strings.Contains(res.Body.String(), "<Code>InvalidParameterValue</Code>") {
+			t.Fatalf("attempt %d: want 400 InvalidParameterValue, got %d %s", i, res.Code, res.Body)
+		}
+	}
+	res = signed(t, h, cred, now, url.Values{
+		"Action": {"DescribeVolumes"}, "Version": {Version}, "VolumeId.1": {id},
+	}.Encode())
+	if !strings.Contains(res.Body.String(), "<size>10</size>") {
+		t.Fatalf("refused modify changed the volume: %s", res.Body)
 	}
 }
