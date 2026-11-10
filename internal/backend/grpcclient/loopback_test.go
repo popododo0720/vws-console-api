@@ -61,15 +61,18 @@ func dialLoopback(t *testing.T, world *fake.World, now time.Time) backendtest.Ha
 }
 
 // dialLoopbackClock is dialLoopback with clock as the client's clock, the
-// one that stamps and prunes detach records. Nil is the wall clock.
-func dialLoopbackClock(t *testing.T, world *fake.World, now time.Time, clock func() time.Time) backendtest.Harness {
+// one that stamps and prunes detach records. Nil is the wall clock. The
+// compute server runs each of compute's interceptors after the label check.
+func dialLoopbackClock(
+	t *testing.T, world *fake.World, now time.Time, clock func() time.Time, compute ...grpc.UnaryServerInterceptor,
+) backendtest.Harness {
 	t.Helper()
 	computeLis := bufconn.Listen(MaxMessageBytes())
 	storageLis := bufconn.Listen(MaxMessageBytes())
 	computeSrv := grpc.NewServer(
 		grpc.MaxRecvMsgSize(MaxMessageBytes()),
 		grpc.MaxSendMsgSize(MaxMessageBytes()),
-		grpc.UnaryInterceptor(enforceLabelGrammar),
+		grpc.ChainUnaryInterceptor(append([]grpc.UnaryServerInterceptor{enforceLabelGrammar}, compute...)...),
 	)
 	storageSrv := grpc.NewServer(
 		grpc.MaxRecvMsgSize(MaxMessageBytes()),
@@ -1050,13 +1053,15 @@ func (s *instanceSrv) observeVolumes(
 		}
 		msg.Status.Volumes = append(msg.Status.Volumes, &computev1.ObservedVolumeAttachment{
 			Volume: volumeName(projectID, block.VolumeID.String()), DeviceName: block.Device, State: state,
+			AttachTime: protoTime(block.AttachTime),
 		})
 	}
 	// The node keeps a detaching entry until the fake settles the detach.
 	for _, block := range inst.DetachingDevices {
 		msg.Status.Volumes = append(msg.Status.Volumes, &computev1.ObservedVolumeAttachment{
 			Volume: volumeName(projectID, block.VolumeID.String()), DeviceName: block.Device,
-			State: computev1.VolumeAttachState_VOLUME_ATTACH_STATE_DETACHING,
+			State:      computev1.VolumeAttachState_VOLUME_ATTACH_STATE_DETACHING,
+			AttachTime: protoTime(block.AttachTime),
 		})
 	}
 	return msg

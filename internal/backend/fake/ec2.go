@@ -311,7 +311,7 @@ func (c compute) DetachVolume(
 	attachedAt := vol.AttachTime
 	vol.AttachState = resource.AttachmentDetaching
 	inst.DetachingDevices = append(append([]resource.BlockDevice(nil), prevDetaching...), resource.BlockDevice{
-		Device: bind.Device, VolumeID: vol.ID, Status: resource.AttachmentDetaching,
+		Device: bind.Device, VolumeID: vol.ID, Status: resource.AttachmentDetaching, AttachTime: attachedAt,
 	})
 	instID, volID := inst.ID, vol.ID
 	op, err := c.w.newOp(

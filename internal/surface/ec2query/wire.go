@@ -836,10 +836,10 @@ func imageXML(img resource.Image) imageItem {
 
 // awsTime renders t as EC2 does (ISO 8601, UTC, milliseconds); zero is omitted.
 // attachTimeOr is the attachment's attachTime: the time the backend recorded
-// when the attachment initiated, or standIn when it records none. The gRPC
-// backend records none: vws-proto has no attach timestamp (vws-proto#83),
-// so a data volume shows its creation time and a block device its instance's
-// launch time, the earliest the attachment can have initiated.
+// when the attachment initiated, or standIn when it records none. A compute
+// from before vws-compute#166 sends no attach_time, so a data volume shows
+// its creation time and a block device its instance's launch time, the
+// earliest the attachment can have initiated.
 func attachTimeOr(recorded, standIn time.Time) time.Time {
 	if !recorded.IsZero() {
 		return recorded

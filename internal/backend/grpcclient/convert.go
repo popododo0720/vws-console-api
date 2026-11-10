@@ -588,8 +588,12 @@ func instanceModel(in *computev1.Instance) (resource.Instance, error) {
 		// A spec volume compute has no entry for is attaching: the node has
 		// not started the attach yet (instance.proto, #448).
 		state := resource.AttachmentAttaching
+		attachTime := timeOf(v.GetAttachTime())
 		if o, ok := attach[volID]; ok {
 			state = attachStateOf(o.GetState())
+			if attachTime.IsZero() {
+				attachTime = timeOf(o.GetAttachTime())
+			}
 		}
 		// Unset is true for the boot volume and false for the others
 		// (instance.proto).
@@ -599,6 +603,7 @@ func instanceModel(in *computev1.Instance) (resource.Instance, error) {
 		}
 		blocks = append(blocks, resource.BlockDevice{
 			Device: device, VolumeID: volID, DeleteOnTermination: deleteOnTermination, Status: state,
+			AttachTime: attachTime,
 		})
 		delete(attach, volID)
 	}
@@ -612,6 +617,7 @@ func instanceModel(in *computev1.Instance) (resource.Instance, error) {
 		}
 		detaching = append(detaching, resource.BlockDevice{
 			Device: o.GetDeviceName(), VolumeID: volID, Status: resource.AttachmentDetaching,
+			AttachTime: timeOf(o.GetAttachTime()),
 		})
 	}
 	tags, err := userTags(in.GetLabels())
@@ -1147,6 +1153,24 @@ func launchTime(in *computev1.Instance) time.Time {
 	return in.GetCreateTime().AsTime().UTC()
 }
 
+// timeOf is ts in UTC, or zero when it is unset. An unset attach_time is an
+// older vws-compute (before vws-compute#166), and the surfaces show their
+// stand-in for it.
+func timeOf(ts *timestamppb.Timestamp) time.Time {
+	if ts == nil {
+		return time.Time{}
+	}
+	return ts.AsTime().UTC()
+}
+
+// protoTime is t as compute sends attach_time: unset when zero.
+func protoTime(t time.Time) *timestamppb.Timestamp {
+	if t.IsZero() {
+		return nil
+	}
+	return timestamppb.New(t)
+}
+
 func volumeAttachments(projectID string, blocks []resource.BlockDevice) []*computev1.VolumeAttachment {
 	out := make([]*computev1.VolumeAttachment, 0, len(blocks))
 	for _, b := range blocks {
@@ -1157,7 +1181,7 @@ func volumeAttachments(projectID string, blocks []resource.BlockDevice) []*compu
 		}
 		out = append(out, &computev1.VolumeAttachment{
 			Volume: volumeName(projectID, b.VolumeID.String()), DeviceName: device, Boot: boot,
-			DeleteOnTermination: proto.Bool(b.DeleteOnTermination),
+			DeleteOnTermination: proto.Bool(b.DeleteOnTermination), AttachTime: protoTime(b.AttachTime),
 		})
 	}
 	return out

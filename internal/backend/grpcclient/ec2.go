@@ -449,9 +449,32 @@ func (c computeClient) attachOnce(
 	vol.InstanceID = req.InstanceID
 	vol.Device = req.Device
 	vol.AttachState = resource.AttachmentAttaching
+	vol.AttachTime = blockAttachTime(model, req.VolumeID)
+	if !present {
+		vol.AttachTime = c.acceptedAttachTime(ctx, instName, req.VolumeID)
+	}
 	op.Action = resource.ActionAttachVolume
 	op.Targets = []resource.Ref{vol.ID.Ref()}
 	return resource.Accepted[resource.Volume]{Operation: op, Items: []resource.Volume{vol}}, nil
+}
+
+// acceptedAttachTime reads the attach_time compute wrote on the spec entry
+// of vol when it accepted the attach. The attach stands whatever this read
+// gives, so a failed read leaves it zero and the surfaces show their
+// stand-in, as for an older compute.
+func (c computeClient) acceptedAttachTime(ctx context.Context, name string, vol resource.VolumeID) time.Time {
+	got, err := c.instances.GetInstance(ctx, &computev1.GetInstanceRequest{Name: name})
+	if err != nil {
+		c.logger().WarnContext(ctx, "attach time unread after an accepted attach",
+			slog.String("instance", lastSegment(name)), slog.String("code", status.Code(err).String()))
+		return time.Time{}
+	}
+	for _, v := range got.GetSpec().GetVolumes() {
+		if lastSegment(v.GetVolume()) == vol.String() {
+			return timeOf(v.GetAttachTime())
+		}
+	}
+	return time.Time{}
 }
 
 // etagMismatchError is a stale resource etag. The caller rereads and tries again.
@@ -1083,15 +1106,29 @@ func (c computeClient) acceptDetachReplay(
 	}, nil
 }
 
-// detachAttachTime is the attachment's start.
-// The fake records Volume.AttachTime at the attach call. The instance and
-// volume protos have no attach timestamp, so this path uses the instance
-// launch time, which does not move when the detach itself updates the row.
+// detachAttachTime is the attachment's start: compute's attach_time for the
+// volume on inst. An older compute reports none (vws-compute#166), and then
+// it is the instance launch time, which does not move when the detach itself
+// updates the row.
 func detachAttachTime(vol resource.Volume, inst resource.Instance) time.Time {
 	if !vol.AttachTime.IsZero() {
 		return vol.AttachTime
 	}
+	if at := blockAttachTime(inst, vol.ID); !at.IsZero() {
+		return at
+	}
 	return inst.LaunchTime
+}
+
+// blockAttachTime is compute's attach_time for vol on inst, attached or
+// detaching, or zero when compute reports none.
+func blockAttachTime(inst resource.Instance, vol resource.VolumeID) time.Time {
+	for _, b := range slices.Concat(inst.BlockDevices, inst.DetachingDevices) {
+		if b.VolumeID == vol {
+			return b.AttachTime
+		}
+	}
+	return time.Time{}
 }
 
 // instanceUpdateLabels replaces an instance label map without dropping the
@@ -1679,6 +1716,7 @@ func (c computeClient) markAttachState(ctx context.Context, account resource.Acc
 		switch {
 		case ok && view.bind.InstanceID == v.InstanceID:
 			v.AttachState = view.state
+			v.AttachTime = view.attachTime
 			v.DeleteOnTermination = view.deleteOnTermination
 			if v.Device == "" || view.bind.Boot {
 				v.Device = view.bind.Device
@@ -1700,6 +1738,7 @@ type attachView struct {
 	inSpec              bool
 	deleteOnTermination bool
 	state               resource.AttachmentStatus
+	attachTime          time.Time
 }
 
 // attachViews maps each volume a live instance spec names, or compute still
@@ -1774,6 +1813,7 @@ func addAttachViews(out map[resource.VolumeID]attachView, in *computev1.Instance
 		}
 		staged[block.VolumeID] = attachView{
 			bind: bind, inSpec: true, deleteOnTermination: block.DeleteOnTermination, state: block.Status,
+			attachTime: block.AttachTime,
 		}
 	}
 	for id, o := range observed {
@@ -1781,8 +1821,9 @@ func addAttachViews(out map[resource.VolumeID]attachView, in *computev1.Instance
 			continue
 		}
 		staged[id] = attachView{
-			bind:  backend.VolumeBind{VolumeID: id, InstanceID: model.ID, Device: o.GetDeviceName()},
-			state: attachStateOf(o.GetState()),
+			bind:       backend.VolumeBind{VolumeID: id, InstanceID: model.ID, Device: o.GetDeviceName()},
+			state:      attachStateOf(o.GetState()),
+			attachTime: timeOf(o.GetAttachTime()),
 		}
 	}
 	for id, view := range staged {

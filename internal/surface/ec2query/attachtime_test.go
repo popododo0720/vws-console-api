@@ -112,7 +112,7 @@ func TestAttachTimeIsWhenTheAttachmentInitiated(t *testing.T) {
 }
 
 // TestAttachTimeStandsInWhenTheBackendRecordsNone pins what a backend that
-// records no attach time shows (gRPC until vws-proto#83): the volume's
+// records no attach time shows (a compute from before vws-compute#166): the volume's
 // creation time, the instance's launch time, and the accept time on
 // AttachVolume, the earliest the attachment can have initiated.
 func TestAttachTimeStandsInWhenTheBackendRecordsNone(t *testing.T) {

@@ -3,7 +3,6 @@ package backendtest
 import (
 	"context"
 	"testing"
-	"time"
 
 	"github.com/popododo0720/vws-console-api/internal/backend"
 	"github.com/popododo0720/vws-console-api/internal/resource"
@@ -227,16 +226,15 @@ func describeVolumes(
 
 // attachTimes pins attachTime (#298), "when the attachment initiated": a
 // backend records it at the accept on the volume and on its block device
-// alike, and the root's at launch, or records none (gRPC until vws-proto#83).
-// With none, AttachVolume answers with the operation's create time.
+// alike, and the root's at launch (over gRPC, compute's attach_time, #518).
 func attachTimes(
 	ctx context.Context, t *testing.T, set backend.Set, scope backend.Scope,
 	acc resource.Accepted[resource.Volume], inst resource.InstanceID, vol resource.VolumeID,
 ) {
 	t.Helper()
 	recorded := acc.Items[0].AttachTime
-	if recorded.IsZero() && acc.Operation.CreateTime.IsZero() {
-		t.Fatal("attach accept has neither an attach time nor an operation create time")
+	if recorded.IsZero() {
+		t.Fatal("attach accept has no attach time")
 	}
 	for _, listed := range []bool{false, true} {
 		if v := describeVolumes(ctx, t, set, scope, listed, vol)[vol]; !v.AttachTime.Equal(recorded) {
@@ -253,9 +251,6 @@ func attachTimes(
 		want := page.Items[0].LaunchTime
 		if block.VolumeID == vol {
 			want = recorded
-		}
-		if recorded.IsZero() {
-			want = time.Time{}
 		}
 		if !block.AttachTime.Equal(want) {
 			t.Fatalf("instance block %s attach time %v, want %v", block.Device, block.AttachTime, want)
