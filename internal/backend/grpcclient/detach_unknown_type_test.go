@@ -116,15 +116,22 @@ func TestDetachVolumeWithUndecodableTagsDetaches(t *testing.T) {
 }
 
 // A volume whose tag labels do not decode still takes calls that read no
-// tags (ModifyVolume and DeleteVolume reach storage), while a read of its
-// tags by id stays Internal, as for an instance (#568).
+// tags (AttachVolume succeeds; ModifyVolume, CreateSnapshot and DeleteVolume
+// reach storage), while a read of its tags by id stays Internal, as for an
+// instance (#568).
 func TestUndecodableVolumeTagsBlockOnlyTagReads(t *testing.T) {
 	account := mustAccount(t)
 	projectID := project(account)
 	const badID = "vol-0fedcba9876543210"
 	bad := observedVolume(projectID, badID, commonv1.ReconciliationState_RECONCILIATION_STATE_READY, "")
 	bad.Labels = map[string]string{tagChunkKey(1): `{"a":"b"}`} // chunk 01 with no chunk 00
-	client := dialDetachWorld(t, &detachWorld{vol: bad, byRequest: map[string]*detachRecord{}})
+	const instID = "i-0123456789abcdef0"
+	holder := observedInstance(projectID, instID,
+		commonv1.ReconciliationState_RECONCILIATION_STATE_READY,
+		computev1.InstancePower_INSTANCE_POWER_RUNNING)
+	client := dialDetachWorld(t, &detachWorld{
+		inst: []*computev1.Instance{holder}, vol: bad, byRequest: map[string]*detachRecord{},
+	})
 	id, err := resource.Parse[resource.VolumeID](badID)
 	if err != nil {
 		t.Fatal(err)
@@ -134,6 +141,16 @@ func TestUndecodableVolumeTagsBlockOnlyTagReads(t *testing.T) {
 		resource.VolumeQuery{IDs: []resource.VolumeID{id}, Page: resource.PageRequest{Size: 5}})
 	if resource.CodeOf(err) != resource.CodeInternal {
 		t.Fatalf("DescribeVolumes by id: %v, want Internal", err)
+	}
+	inst, err := resource.Parse[resource.InstanceID](instID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = client.AttachVolume(context.Background(),
+		backend.Mutation{Scope: scope, Key: "k-attach", Fingerprint: "fp-attach"},
+		resource.AttachVolumeRequest{VolumeID: id, InstanceID: inst, Device: "/dev/sdf"})
+	if err != nil {
+		t.Fatalf("AttachVolume on a volume whose tags do not decode: %v", err)
 	}
 	_, err = client.ModifyVolume(context.Background(),
 		backend.Mutation{Scope: scope, Key: "k-mod", Fingerprint: "fp-mod"},
@@ -148,5 +165,11 @@ func TestUndecodableVolumeTagsBlockOnlyTagReads(t *testing.T) {
 		resource.DeleteVolumeRequest{ID: id})
 	if err == nil || !strings.Contains(err.Error(), "DeleteVolume") {
 		t.Fatalf("DeleteVolume did not reach storage's DeleteVolume: %v", err)
+	}
+	_, err = client.CreateSnapshot(context.Background(),
+		backend.Mutation{Scope: scope, Key: "k-snap", Fingerprint: "fp-snap"},
+		resource.CreateSnapshotRequest{VolumeID: id})
+	if err == nil || !strings.Contains(err.Error(), "SnapshotService") {
+		t.Fatalf("CreateSnapshot did not reach storage's SnapshotService: %v", err)
 	}
 }

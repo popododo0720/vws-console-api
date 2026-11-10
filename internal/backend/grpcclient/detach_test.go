@@ -358,6 +358,9 @@ func dialDetachWorld(t *testing.T, world *detachWorld) computeClient {
 	return computeClient{&api{
 		instances: computev1.NewInstanceServiceClient(conn),
 		volumes:   storagev1.NewVolumeServiceClient(conn),
+		// No snapshot server is registered: a call that reaches it is
+		// Unimplemented.
+		snapshots: storagev1.NewSnapshotServiceClient(conn),
 	}}
 }
 
