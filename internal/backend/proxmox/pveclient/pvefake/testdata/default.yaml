@@ -1,0 +1,64 @@
+# pvefake scenario. Response shapes and permission checks follow the PVE
+# api-viewer of pve-docs 9.2.13 (PVE 9.2), apidoc.js sha256
+# 68a8ac7b4994525a1df5530e2d96f4fc76b6401f07861ac8a51635a0b9ce7c53, read
+# 2026-11-10. Booleans go out as 0/1, as pveproxy writes them. Not yet
+# recorded from a live node: the nested PVE check runs after phase 1.
+version:
+  version: "9.2.13"
+  release: "9.2"
+  repoid: "fake"
+cluster: seoul-1
+nodes:
+  - name: pve1
+    maxcpu: 16
+    maxmem: 68719476736
+  - name: pve2
+    maxcpu: 16
+    maxmem: 68719476736
+vms:
+  - vmid: 100
+    node: pve1
+    name: web-1
+    status: running
+    pool: vws-a
+    tags: vws.k.env-dev
+    maxcpu: 2
+    maxmem: 2147483648
+    config:
+      smbios1: uuid=5f0c3e9a-8b5d-4b8e-9a51-0c2d6c1f7a10
+      cores: "2"
+      memory: "2048"
+      net0: virtio=BC:24:11:00:00:01,bridge=vmbr0,firewall=1
+      scsi0: ceph:vm-100-disk-0,serial=vol0000000000000001,size=8G
+  - vmid: 101
+    node: pve2
+    name: db-1
+    status: stopped
+    pool: vws-b
+    maxcpu: 4
+    maxmem: 4294967296
+    config:
+      smbios1: uuid=0b6f1d2e-3c4a-4f5b-8e6d-7a8b9c0d1e2f
+      cores: "4"
+  - vmid: 9000
+    node: pve1
+    name: ubuntu-24.04
+    status: stopped
+    pool: vws-images
+    template: true
+    config:
+      smbios1: uuid=9d8c7b6a-5e4f-4a3b-8c2d-1e0f9a8b7c6d
+roles:
+  - id: PVEAuditor
+    privs: [Datastore.Audit, Mapping.Audit, Pool.Audit, SDN.Audit, Sys.Audit, VM.Audit, VM.GuestAgent.Audit]
+  - id: VMReader
+    privs: [VM.Audit]
+tokens:
+  - id: vws@pve!auditor
+    secret: 00000000-0000-4000-8000-000000000001
+    acl:
+      - {path: /, role: PVEAuditor}
+  - id: vws@pve!pool-a
+    secret: 00000000-0000-4000-8000-000000000002
+    acl:
+      - {path: /pool/vws-a, role: VMReader}
