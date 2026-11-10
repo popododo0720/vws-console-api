@@ -109,6 +109,7 @@ const (
 	invalidTagLimit
 	invalidTaggedID
 	invalidAttachmentLimit
+	invalidVpcRange
 )
 
 func (e *Error) Error() string {
@@ -216,6 +217,19 @@ func AttachmentLimitExceeded(message string) *Error {
 
 // IsAttachmentLimitExceeded reports whether e came from AttachmentLimitExceeded.
 func IsAttachmentLimitExceeded(e *Error) bool { return e != nil && e.invalid == invalidAttachmentLimit }
+
+// InvalidVpcRange reports a VPC CIDR block EC2 refuses, one with a prefix
+// outside /16 to /28. EC2 answers InvalidVpcRange.
+// https://docs.aws.amazon.com/AWSEC2/latest/APIReference/errors-overview.html
+func InvalidVpcRange(cidr string) *Error {
+	return &Error{
+		Code: CodeInvalidArgument, Kind: KindVpc, Field: "cidrBlock",
+		Message: "The CIDR '" + cidr + "' is invalid.", invalid: invalidVpcRange,
+	}
+}
+
+// IsInvalidVpcRange reports whether e came from InvalidVpcRange.
+func IsInvalidVpcRange(e *Error) bool { return e != nil && e.invalid == invalidVpcRange }
 
 // IsMissingParameter reports whether e came from MissingParameter.
 func IsMissingParameter(e *Error) bool { return e != nil && e.invalid == invalidMissing }

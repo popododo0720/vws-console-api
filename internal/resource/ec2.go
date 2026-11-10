@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/netip"
 	"slices"
 	"strings"
 	"time"
@@ -41,12 +42,25 @@ func (r CreateVpcRequest) Normalize() (CreateVpcRequest, error) {
 	if err != nil {
 		return CreateVpcRequest{}, err
 	}
+	prefix, err := netip.ParsePrefix(cidr)
+	if err != nil {
+		return CreateVpcRequest{}, Invalid("cidrBlock", "must be an ipv4 network")
+	}
+	if bits := prefix.Bits(); bits < minVpcPrefix || bits > maxVpcPrefix {
+		return CreateVpcRequest{}, InvalidVpcRange(cidr)
+	}
 	r.Cidr = cidr
 	if err := validRequestTags(r.Tags); err != nil {
 		return CreateVpcRequest{}, err
 	}
 	return r, nil
 }
+
+// EC2 takes a VPC IPv4 block from /16 (largest) to /28 (smallest).
+const (
+	minVpcPrefix = 16
+	maxVpcPrefix = 28
+)
 
 // DeleteVpcRequest deletes one VPC.
 type DeleteVpcRequest struct {

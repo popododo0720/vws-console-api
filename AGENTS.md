@@ -78,6 +78,7 @@ change both files together.
 | S3 bucket creates answer as S3 outside us-east-1. | `backendtest.BucketCreate` |
 | AuthorizeSecurityGroupIngress takes the `IpPermissions` list, all rules or none; a source VWS cannot store is `UnsupportedOperation`, never dropped. | `TestAuthorizeIngressTakesSeveralPermissions`, `TestUnsupportedIngressSourceIsRefused`, `TestAuthorizeIngressIsAllOrNothing` |
 | An ICMP permission is type in FromPort and code in ToPort, -1 or 0 to 255, stored as sent; one without both is `MissingParameter`. A group holds at most 60 inbound rules; past that is `RulesPerSecurityGroupLimitExceeded` and nothing is written. | `TestICMPTypeAndCodeAreChecked`, `TestICMPTypeAndCodeRoundTrip`, `TestRulesPerSecurityGroupLimitExceeded`, `exerciseEC2` |
+| CreateVpc takes a CIDR block with a prefix from /16 to /28; any other is 400 `InvalidVpcRange` and creates nothing. | `TestCreateVpcRefusesPrefixOutsideSixteenToTwentyEight` |
 | EC2 catalog actions are served on both surfaces. | `TestCatalogActionsAreImplemented` |
 | EC2 describe calls take boto3's parameter names. | `TestDescribeStandardParameters` |
 | EC2 instance, image, volume and address behavior. | `exerciseEC2`, `backendtest.AttachLifecycle` |
