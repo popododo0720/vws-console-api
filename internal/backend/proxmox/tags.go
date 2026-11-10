@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/popododo0720/vws-console-api/internal/resource"
 )
@@ -102,11 +103,17 @@ func decodeComponent(s string) (string, bool) {
 	return b.String(), true
 }
 
-// EncodeTag returns the Proxmox tag for an AWS tag. A key starting with
-// "aws:", "vws:" or "vws." is InvalidParameterValue.
+// EncodeTag returns the Proxmox tag for an AWS tag. An empty key, a key
+// starting with "aws:", "vws:" or "vws.", and text that is not UTF-8 are
+// InvalidParameterValue.
 func EncodeTag(key, value string) (string, error) {
-	if reservedKey(key) {
+	switch {
+	case key == "":
+		return "", resource.Invalid("tags", "a tag key must not be empty")
+	case reservedKey(key):
 		return "", resource.Invalid("tags", "tag keys starting with 'aws:', 'vws:' or 'vws.' are reserved")
+	case !utf8.ValidString(key) || !utf8.ValidString(value):
+		return "", resource.Invalid("tags", "tag keys and values must be UTF-8")
 	}
 	var b strings.Builder
 	b.WriteString(userTagPrefix)
@@ -117,7 +124,9 @@ func EncodeTag(key, value string) (string, error) {
 }
 
 // DecodeTag returns the AWS tag a Proxmox tag encodes. ok is false for any
-// other tag, system tags included.
+// other tag, system tags included, and for every spelling EncodeTag would not
+// write (such as "_61" for "a", or a reserved key): only then is each key one
+// tag.
 func DecodeTag(tag string) (key, value string, ok bool) {
 	rest, found := strings.CutPrefix(tag, userTagPrefix)
 	if !found {
@@ -129,7 +138,13 @@ func DecodeTag(tag string) (key, value string, ok bool) {
 	}
 	key, okKey := decodeComponent(k)
 	value, okValue := decodeComponent(v)
-	return key, value, okKey && okValue
+	if !okKey || !okValue {
+		return "", "", false
+	}
+	if canonical, err := EncodeTag(key, value); err != nil || canonical != tag {
+		return "", "", false
+	}
+	return key, value, true
 }
 
 // Split divides AWS tags into the Proxmox tags to set, sorted, and the tags

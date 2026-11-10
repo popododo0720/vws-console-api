@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/popododo0720/vws-console-api/internal/resource"
 )
@@ -37,14 +38,19 @@ func FuzzTagRoundTrip(f *testing.F) {
 	f.Add("cost:center", "R&D \uD300")
 	f.Add("", "")
 	f.Add("a+b_c.d", "\xff\x00Z")
+	f.Add("a+b_c.d", "\x00Z")
 	re := pveTagPattern()
 	f.Fuzz(func(t *testing.T, key, value string) {
 		tag, err := EncodeTag(key, value)
+		valid := key != "" && !reservedKey(key) && utf8.ValidString(key) && utf8.ValidString(value)
 		if err != nil {
-			if !reservedKey(key) {
+			if valid {
 				t.Fatalf("EncodeTag(%q, %q) failed: %v", key, value, err)
 			}
 			return
+		}
+		if !valid {
+			t.Fatalf("EncodeTag(%q, %q) = %q; want an error", key, value, tag)
 		}
 		if !re.MatchString(tag) {
 			t.Fatalf("EncodeTag(%q, %q) = %q does not match the Proxmox tag pattern", key, value, tag)
@@ -56,13 +62,42 @@ func FuzzTagRoundTrip(f *testing.F) {
 	})
 }
 
-func TestReservedKeysAreInvalidParameterValue(t *testing.T) {
-	for _, key := range []string{"aws:x", "AWS:x", "vws:x", "vws.x", "VWS.t.y"} {
-		_, err := EncodeTag(key, "v")
-		if e := resource.AsError(err); e == nil || e.Code != resource.CodeInvalidArgument {
-			t.Fatalf("EncodeTag(%q) = %v; want InvalidArgument", key, err)
+// Whatever DecodeTag accepts is exactly what EncodeTag writes, so two Proxmox
+// tags never decode to one key (rev-1 and rev-2 finding 1).
+func FuzzDecodeIsCanonical(f *testing.F) {
+	for _, tag := range []string{
+		"vws.t.+a.b", "vws.t._41.b", "vws.t._61.b", "vws.t.a._ff", "vws.t..x", "vws.t.aws_3ax.y",
+	} {
+		f.Add(tag)
+	}
+	f.Fuzz(func(t *testing.T, tag string) {
+		k, v, ok := DecodeTag(tag)
+		if !ok {
+			return
 		}
-		if _, _, err := Split(map[string]string{key: "v"}); err == nil {
+		if got, err := EncodeTag(k, v); err != nil || got != tag {
+			t.Fatalf("DecodeTag(%q) = %q, %q but EncodeTag gives %q, %v", tag, k, v, got, err)
+		}
+	})
+}
+
+func TestReservedKeysAreInvalidParameterValue(t *testing.T) {
+	for _, c := range []struct{ key, value string }{
+		{"aws:x", "v"},
+		{"AWS:x", "v"},
+		{"vws:x", "v"},
+		{"vws.x", "v"},
+		{"VWS.t.y", "v"},
+		{"", "v"},
+		{"\xff", "v"},
+		{"k", "\xff"},
+	} {
+		key := c.key
+		_, err := EncodeTag(key, c.value)
+		if e := resource.AsError(err); e == nil || e.Code != resource.CodeInvalidArgument {
+			t.Fatalf("EncodeTag(%q, %q) = %v; want InvalidArgument", key, c.value, err)
+		}
+		if _, _, err := Split(map[string]string{key: c.value}); err == nil {
 			t.Fatalf("Split accepted %q", key)
 		}
 	}
@@ -72,6 +107,10 @@ func TestDecodeRefusesWhatEncodeNeverWrites(t *testing.T) {
 	for _, tag := range []string{
 		"web", "vws.t.", "vws.t.a", "vws.t.A.b", "vws.t.+.b", "vws.t._4.b", "vws.t._4F.b", "vws.t.a.b.c", "vws.t.a..b",
 		"vws.t.a b.c",
+		// Escapes EncodeTag never writes: a byte with a plain form, an empty key,
+		// invalid UTF-8 and reserved keys.
+		"vws.t._61.b", "vws.t._41.b", "vws.t._2d.b", "vws.t._30.b", "vws.t.a._61", "vws.t..x", "vws.t.a._ff",
+		"vws.t.aws_3ax.y", "vws.t.vws_2ex.y", "vws.t.+v+w+s_2ek.x",
 	} {
 		if k, v, ok := DecodeTag(tag); ok {
 			t.Fatalf("DecodeTag(%q) = %q, %q", tag, k, v)
