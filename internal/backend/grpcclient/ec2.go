@@ -2626,7 +2626,7 @@ func volumeStateOf(in *storagev1.Volume) resource.VolumeState {
 	}
 }
 
-func volumeProto(v resource.Volume, projectID string) *storagev1.Volume {
+func volumeProto(v resource.Volume, projectID string) (*storagev1.Volume, error) {
 	obs := commonv1.ReconciliationState_RECONCILIATION_STATE_PENDING
 	switch v.State {
 	case resource.VolumeAvailable, resource.VolumeInUse:
@@ -2660,14 +2660,17 @@ func volumeProto(v resource.Volume, projectID string) *storagev1.Volume {
 	if v.DeleteOnTermination {
 		spec.Source = &storagev1.VolumeSpec_Image{Image: imageName(projectID, "ami-0123456789abcdef0")}
 	}
-	labels, _ := withInternalLabels(v.Tags, nil) //nolint:errcheck // accepted tags fit
+	labels, err := withInternalLabels(v.Tags, nil)
+	if err != nil {
+		return nil, err
+	}
 	return &storagev1.Volume{
 		CreateTime: created,
 		Labels:     labels,
 		Name:       volumeName(projectID, v.ID.String()),
 		Spec:       spec,
 		Status:     status,
-	}
+	}, nil
 }
 
 func vpcModel(in *networkv1.Vpc) (resource.Vpc, error) {

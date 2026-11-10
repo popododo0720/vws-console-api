@@ -31,7 +31,11 @@ func (s *volumeSrv) GetVolume(ctx context.Context, req *storagev1.GetVolumeReque
 	if len(page.Items) == 0 {
 		return nil, toStatus(resource.NotFound(resource.KindVolume, id.String()))
 	}
-	return volumeProto(page.Items[0], projectID), nil
+	vol, err := volumeProto(page.Items[0], projectID)
+	if err != nil {
+		return nil, toStatus(err)
+	}
+	return vol, nil
 }
 
 func (s *volumeSrv) ListVolumes(ctx context.Context, req *storagev1.ListVolumesRequest) (*storagev1.ListVolumesResponse, error) {
@@ -55,7 +59,11 @@ func (s *volumeSrv) ListVolumes(ctx context.Context, req *storagev1.ListVolumesR
 	}
 	items := make([]*storagev1.Volume, 0, len(page.Items))
 	for _, vol := range page.Items {
-		items = append(items, volumeProto(vol, projectID))
+		item, err := volumeProto(vol, projectID)
+		if err != nil {
+			return nil, toStatus(err)
+		}
+		items = append(items, item)
 	}
 	items = append(items, s.w.bootsFor(projectID)...)
 	return &storagev1.ListVolumesResponse{Volumes: items, NextPageToken: page.NextToken}, nil
