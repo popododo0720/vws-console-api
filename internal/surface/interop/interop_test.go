@@ -785,11 +785,12 @@ func TestConsoleAndQueryRebootTheSameInstance(t *testing.T) {
 		form.Set("Version", ec2query.Version)
 		return serveSigned(t, query, cred, sigv4.ServiceEC2, now, http.MethodPost, "http://127.0.0.1:8081/", form.Encode())
 	}
-	reboot := func(id, key string) *httptest.ResponseRecorder {
-		return call(t, ui, http.MethodPost, "/api/v1/instances/"+id+"/reboot", "", map[string]string{
+	rebootOn := func(h http.Handler, id, key string) *httptest.ResponseRecorder {
+		return call(t, h, http.MethodPost, "/api/v1/instances/"+id+"/reboot", "", map[string]string{
 			"Authorization": "Bearer tok-console", "Content-Type": "application/json", "Idempotency-Key": key,
 		})
 	}
+	reboot := func(id, key string) *httptest.ResponseRecorder { return rebootOn(ui, id, key) }
 	vpc := ec2(url.Values{"Action": {"CreateVpc"}, "CidrBlock": {"10.5.0.0/16"}})
 	subnet := ec2(url.Values{
 		"Action": {"CreateSubnet"}, "VpcId": {xmlField(vpc.Body.String(), "vpcId")}, "CidrBlock": {"10.5.1.0/24"},
@@ -825,7 +826,13 @@ func TestConsoleAndQueryRebootTheSameInstance(t *testing.T) {
 		acc.Items[0].Current != "running" || !strings.HasPrefix(acc.Operation.ID, "op-compute-") {
 		t.Fatalf("console reboot %s", rebooted.Body)
 	}
-	if again := reboot(id, "reboot-web-1"); again.Code != http.StatusAccepted ||
+	// A restarted process is a new kernel over the same backend; the retry
+	// it serves must find the reboot the first one accepted.
+	restarted := console.New(console.Config{
+		Service: cloud.New(cloud.Config{Backends: world.Set()}), IAM: static,
+		Auth: console.BearerTokens{"tok-console": caller},
+	})
+	if again := rebootOn(restarted, id, "reboot-web-1"); again.Code != http.StatusAccepted ||
 		!strings.Contains(again.Body.String(), acc.Operation.ID) {
 		t.Fatalf("console retry %d %s", again.Code, again.Body)
 	}
