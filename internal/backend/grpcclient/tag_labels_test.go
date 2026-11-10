@@ -102,7 +102,7 @@ func TestUndecodableTagChunksFail(t *testing.T) {
 		if got, err := userTags(broken); resource.CodeOf(err) != resource.CodeInternal {
 			t.Fatalf("missing tag chunk %d read as %q, %v; want Internal, not tags without the packed ones", missing, got, err)
 		}
-		_, _, err := mergedLabels(broken, map[string]string{"env": "prod"})
+		_, _, err := editedLabels(broken, mergeEdit(map[string]string{"env": "prod"}))
 		if resource.CodeOf(err) != resource.CodeInternal {
 			t.Fatalf("CreateTags over missing chunk %d: %v; want Internal, not a rewrite that drops them", missing, err)
 		}
@@ -339,7 +339,7 @@ func TestCreateTagsOverTheBudgetIsTagLimitExceeded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	labels, tags, err := mergedLabels(stored, map[string]string{"Extra Key": strings.Repeat("x", 120)})
+	labels, tags, err := editedLabels(stored, mergeEdit(map[string]string{"Extra Key": strings.Repeat("x", 120)}))
 	var e *resource.Error
 	if !errors.As(err, &e) || !resource.IsTagLimitExceeded(e) || labels != nil || tags != nil {
 		t.Fatalf("CreateTags past the budget: %v, %d labels; want TagLimitExceeded", err, len(labels))

@@ -19,6 +19,7 @@ func TestDirectNetworkWritesAreUnauthorizedOperation(t *testing.T) {
 		return res.Body.String()
 	}
 	inst := xmlText(t, send(launchForm(newSubnet(t, send), "direct-tags", nil)), "instanceId")
+	send(url.Values{"Action": {"CreateTags"}, "ResourceId.1": {inst}, "Tag.1.Key": {"keep"}, "Tag.1.Value": {"yes"}})
 	for _, f := range []url.Values{
 		{"Action": {"CreateSubnet"}, "VpcId": {"vpc-direct"}, "CidrBlock": {"192.168.200.0/25"}},
 		{"Action": {"DeleteSubnet"}, "SubnetId": {"subnet-direct-prod"}},
@@ -27,6 +28,8 @@ func TestDirectNetworkWritesAreUnauthorizedOperation(t *testing.T) {
 			"Tag.1.Key": {"owner"}, "Tag.1.Value": {"me"},
 		},
 		{"Action": {"CreateTags"}, "ResourceId.1": {"vpc-direct"}, "Tag.1.Key": {"owner"}, "Tag.1.Value": {"me"}},
+		{"Action": {"DeleteTags"}, "ResourceId.1": {inst}, "ResourceId.2": {"subnet-direct-prod"}},
+		{"Action": {"DeleteTags"}, "ResourceId.1": {"vpc-direct"}, "Tag.1.Key": {"owner"}},
 		{"Action": {"DeleteVpc"}, "VpcId": {"vpc-direct"}},
 		{"Action": {"CreateSecurityGroup"}, "VpcId": {"vpc-direct"}, "GroupName": {"web"}, "GroupDescription": {"web"}},
 	} {
@@ -39,5 +42,8 @@ func TestDirectNetworkWritesAreUnauthorizedOperation(t *testing.T) {
 	got := send(url.Values{"Action": {"DescribeInstances"}, "InstanceId.1": {inst}})
 	if strings.Contains(got, "<key>owner</key>") {
 		t.Fatalf("a refused CreateTags tagged the instance: %s", got)
+	}
+	if !strings.Contains(got, "<key>keep</key>") {
+		t.Fatalf("a refused DeleteTags untagged the instance: %s", got)
 	}
 }

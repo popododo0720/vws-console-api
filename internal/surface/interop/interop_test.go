@@ -548,3 +548,87 @@ func TestCookieUploadContentTypeOnS3(t *testing.T) {
 		}
 	}
 }
+
+// TestConsoleAndQueryDeleteTheSameTags deletes a VPC tag through each surface
+// and reads the result through the other.
+func TestConsoleAndQueryDeleteTheSameTags(t *testing.T) {
+	now := time.Date(2026, 11, 9, 10, 0, 0, 0, time.UTC)
+	account := mustParse[resource.AccountID](t, "123456789012")
+	caller := resource.Caller{
+		Account: account, Subject: "console", Principal: iam.RootARN(account), Root: true,
+	}
+	world := fake.New(fake.Options{Now: func() time.Time { return now }})
+	svc := cloud.New(cloud.Config{Backends: world.Set()})
+	ui := console.New(console.Config{
+		Service: svc, IAM: iam.NewStatic("AKIDEXAMPLE", "secret", account),
+		Auth: console.BearerTokens{"tok-console": caller},
+	})
+	cred := sigv4.Credential{AccessKey: "AKIDEXAMPLE", Secret: "secret", Account: account}
+	query := ec2query.New(ec2query.Config{
+		Service: svc, Authorizer: iam.NewStatic(cred.AccessKey, cred.Secret, cred.Account),
+		Verifier: verifier(cred, sigv4.ServiceEC2, now),
+	})
+	signed := func(form url.Values) *httptest.ResponseRecorder {
+		t.Helper()
+		return serveSigned(t, query, cred, sigv4.ServiceEC2, now, http.MethodPost, "http://127.0.0.1:8081/", form.Encode())
+	}
+	write := func(key string) map[string]string {
+		return map[string]string{
+			"Authorization": "Bearer tok-console", "Content-Type": "application/json", "Idempotency-Key": key,
+		}
+	}
+	auth := map[string]string{"Authorization": "Bearer tok-console"}
+
+	created := call(t, ui, http.MethodPost, "/api/v1/vpcs",
+		`{"cidrBlock":"10.9.0.0/16","tags":{"Name":"web","env":"dev","team":"sre"}}`, write("vpc-tags-1"))
+	var acc struct {
+		Items []struct {
+			ID string `json:"vpcId"`
+		} `json:"items"`
+	}
+	if created.Code != http.StatusAccepted || json.Unmarshal(created.Body.Bytes(), &acc) != nil || len(acc.Items) != 1 {
+		t.Fatalf("create %d %s", created.Code, created.Body)
+	}
+	vpc := acc.Items[0].ID
+	consoleTags := func() map[string]string {
+		t.Helper()
+		rec := call(t, ui, http.MethodGet, "/api/v1/vpcs/"+vpc, "", auth)
+		var got struct {
+			Tags map[string]string `json:"tags"`
+		}
+		if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &got) != nil {
+			t.Fatalf("console get %d %s", rec.Code, rec.Body)
+		}
+		return got.Tags
+	}
+	queryVpc := func() string {
+		t.Helper()
+		form := url.Values{"Action": {"DescribeVpcs"}, "Version": {ec2query.Version}, "VpcId.1": {vpc}}
+		rec := signed(form)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("DescribeVpcs %d %s", rec.Code, rec.Body)
+		}
+		return rec.Body.String()
+	}
+
+	form := url.Values{
+		"Action": {"DeleteTags"}, "Version": {ec2query.Version}, "ResourceId.1": {vpc}, "Tag.1.Key": {"Name"},
+	}
+	if rec := signed(form); rec.Code != http.StatusOK {
+		t.Fatalf("DeleteTags %d %s", rec.Code, rec.Body)
+	}
+	if got := consoleTags(); len(got) != 2 || got["env"] != "dev" || got["team"] != "sre" {
+		t.Fatalf("console tags after an EC2 DeleteTags: %v", got)
+	}
+
+	deleted := call(t, ui, http.MethodPost, "/api/v1/vpcs/"+vpc+"/tags/delete",
+		`{"tags":[{"key":"env","value":"dev"}]}`, write("vpc-untag-1"))
+	if deleted.Code != http.StatusAccepted {
+		t.Fatalf("console delete %d %s", deleted.Code, deleted.Body)
+	}
+	body := queryVpc()
+	if strings.Contains(body, "<key>Name</key>") || strings.Contains(body, "<key>env</key>") ||
+		!strings.Contains(body, "<key>team</key>") || !strings.Contains(body, "<value>sre</value>") {
+		t.Fatalf("DescribeVpcs after a console delete: %s", body)
+	}
+}

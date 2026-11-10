@@ -18,9 +18,9 @@ const (
 
 // DirectNetworks is the direct network table (#60). Every account sees the
 // direct subnet as its own, in vpc-direct and tagged direct, in a listing
-// and by id, from any client set. CreateSubnet in vpc-direct, DeleteSubnet
-// and CreateTags on a direct subnet are PermissionDenied and change nothing,
-// not even another subnet in the same tag batch.
+// and by id, from any client set. CreateSubnet in vpc-direct, DeleteSubnet,
+// CreateTags and DeleteTags on a direct subnet are PermissionDenied and
+// change nothing, not even another subnet in the same tag batch.
 //
 // Its accounts are its own, so it may share a world with Run.
 func DirectNetworks(t *testing.T, newSet Harness) {
@@ -61,6 +61,11 @@ func DirectNetworks(t *testing.T, newSet Harness) {
 		IDs: []resource.SubnetID{ownID, direct}, Tags: map[string]string{"owner": "me"},
 	}); resource.CodeOf(err) != resource.CodePermissionDenied {
 		t.Fatalf("CreateTags on a direct subnet: %v, want PermissionDenied", err)
+	}
+	if _, err := set.Network.UntagSubnets(ctx, mut("untag"), resource.UntagSubnetsRequest{
+		IDs: []resource.SubnetID{ownID, direct},
+	}); resource.CodeOf(err) != resource.CodePermissionDenied {
+		t.Fatalf("DeleteTags on a direct subnet: %v, want PermissionDenied", err)
 	}
 	got, err := set.Network.DescribeSubnets(ctx, scope, resource.SubnetQuery{
 		IDs: []resource.SubnetID{ownID}, Page: resource.PageRequest{Size: 50},

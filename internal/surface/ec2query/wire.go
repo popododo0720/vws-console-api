@@ -317,6 +317,12 @@ type createTagsXML struct {
 	Return    bool     `xml:"return"`
 }
 
+type deleteTagsXML struct {
+	XMLName   struct{} `xml:"DeleteTagsResponse"`
+	RequestID string   `xml:"requestId"`
+	Return    bool     `xml:"return"`
+}
+
 type deleteVolumeXML struct {
 	XMLName   struct{} `xml:"DeleteVolumeResponse"`
 	RequestID string   `xml:"requestId"`

@@ -5,6 +5,7 @@ import (
 	"maps"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -74,5 +75,63 @@ func TestVpcAndSubnetTags(t *testing.T) {
 	}
 	if rec := do(http.MethodPost, "/api/v1/vpcs/vpc-00000000000000000/tags", `{"tags":{"a":"b"}}`, "vt-missing"); rec.Code != http.StatusNotFound {
 		t.Fatalf("missing vpc: %d %s", rec.Code, rec.Body)
+	}
+	deletes := map[string]string{
+		"/api/v1/vpcs/" + vpc + "/tags/delete":    "vu",
+		"/api/v1/subnets/" + sub + "/tags/delete": "su",
+	}
+	for path, key := range deletes {
+		rec := do(http.MethodPost, path, `{"tags":[{"key":"Name"},{"key":"env","value":"prod"}]}`, key)
+		if rec.Code != http.StatusAccepted {
+			t.Fatalf("%s: %d %s", path, rec.Code, rec.Body)
+		}
+	}
+	if got := tagsAt("/api/v1/vpcs/" + vpc); !maps.Equal(got, map[string]string{"Cost Center": "1", "env": "dev"}) {
+		t.Fatalf("vpc tags after deleting Name %v", got)
+	}
+	if got := tagsAt("/api/v1/subnets/" + sub); !maps.Equal(got, map[string]string{"env": "dev"}) {
+		t.Fatalf("subnet tags after deleting Name %v", got)
+	}
+	// A null where omission means something is refused, as is an unknown
+	// field, and the tags stay.
+	for i, body := range []string{
+		`null`, `{"tags":null}`, `{"tags":[null]}`, `{"tags":[{"key":null}]}`,
+		`{"tags":[{"key":"env","value":null}]}`, `{"tags":[{"key":"env","extra":1}]}`, `{"all":true}`,
+	} {
+		rec := do(http.MethodPost, "/api/v1/vpcs/"+vpc+"/tags/delete", body, "vu-bad-"+strconv.Itoa(i))
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("delete with %s: %d %s", body, rec.Code, rec.Body)
+		}
+	}
+	if got := tagsAt("/api/v1/vpcs/" + vpc); !maps.Equal(got, map[string]string{"Cost Center": "1", "env": "dev"}) {
+		t.Fatalf("vpc tags after refused deletes %v", got)
+	}
+	all := do(http.MethodPost, "/api/v1/vpcs/"+vpc+"/tags/delete", `{"tags":[]}`, "vu-all")
+	if all.Code != http.StatusAccepted {
+		t.Fatalf("delete all with an empty list: %d %s", all.Code, all.Body)
+	}
+	if got := tagsAt("/api/v1/vpcs/" + vpc); len(got) != 0 {
+		t.Fatalf("vpc tags after deleting all %v", got)
+	}
+	if rec := do(http.MethodPost, "/api/v1/subnets/"+sub+"/tags/delete", `{}`, "su-all"); rec.Code != http.StatusAccepted {
+		t.Fatalf("delete all: %d %s", rec.Code, rec.Body)
+	}
+	if got := tagsAt("/api/v1/subnets/" + sub); len(got) != 0 {
+		t.Fatalf("subnet tags after deleting all %v", got)
+	}
+	missing := do(http.MethodPost, "/api/v1/vpcs/vpc-00000000000000000/tags/delete", `{}`, "vu-missing")
+	if rec := missing; rec.Code != http.StatusNotFound {
+		t.Fatalf("missing vpc: %d %s", rec.Code, rec.Body)
+	}
+	runBody := `{"imageId":"ami-0123456789abcdef0","instanceType":"vws.small","subnetId":"` + sub +
+		`","count":1,"tags":{"Name":"web","env":"dev"}}`
+	run := do(http.MethodPost, "/api/v1/instances", runBody, "run-untag")
+	inst := created(run, "instanceId")
+	rec := do(http.MethodPost, "/api/v1/instances/"+inst+"/tags/delete", `{"tags":[{"key":"Name"}]}`, "iu")
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("instance delete: %d %s", rec.Code, rec.Body)
+	}
+	if got := tagsAt("/api/v1/instances/" + inst); !maps.Equal(got, map[string]string{"env": "dev"}) {
+		t.Fatalf("instance tags after deleting Name %v", got)
 	}
 }

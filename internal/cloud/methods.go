@@ -123,6 +123,39 @@ func (s *Service) CreateTags(ctx context.Context, c resource.Caller, token resou
 	return mutate(ctx, s, c, token, req, s.backends.Compute.CreateTags)
 }
 
+// DeleteTags accepts a tag delete for instances and returns the operation.
+func (s *Service) DeleteTags(
+	ctx context.Context, c resource.Caller, token resource.ClientToken, req resource.DeleteTagsRequest,
+) (resource.Accepted[resource.Instance], error) {
+	token, err := fillToken(token)
+	if err != nil {
+		return resource.Accepted[resource.Instance]{}, err
+	}
+	return mutate(ctx, s, c, token, req, s.backends.Compute.DeleteTags)
+}
+
+// UntagVpcs accepts a tag delete for VPCs and returns the operation.
+func (s *Service) UntagVpcs(
+	ctx context.Context, c resource.Caller, token resource.ClientToken, req resource.UntagVpcsRequest,
+) (resource.Accepted[resource.Vpc], error) {
+	token, err := fillToken(token)
+	if err != nil {
+		return resource.Accepted[resource.Vpc]{}, err
+	}
+	return mutate(ctx, s, c, token, req, s.backends.Network.UntagVpcs)
+}
+
+// UntagSubnets accepts a tag delete for subnets and returns the operation.
+func (s *Service) UntagSubnets(
+	ctx context.Context, c resource.Caller, token resource.ClientToken, req resource.UntagSubnetsRequest,
+) (resource.Accepted[resource.Subnet], error) {
+	token, err := fillToken(token)
+	if err != nil {
+		return resource.Accepted[resource.Subnet]{}, err
+	}
+	return mutate(ctx, s, c, token, req, s.backends.Network.UntagSubnets)
+}
+
 // TagVpcs accepts tags for VPCs and returns the operation.
 func (s *Service) TagVpcs(ctx context.Context, c resource.Caller, token resource.ClientToken, req resource.TagVpcsRequest) (resource.Accepted[resource.Vpc], error) {
 	token, err := fillToken(token)

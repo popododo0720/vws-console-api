@@ -51,7 +51,13 @@ func (s *networkStateWorld) ListSubnets(
 	return &networkv1.ListSubnetsResponse{Subnets: out}, nil
 }
 
-func dialNetworkStateWorld(t *testing.T, world *networkStateWorld) networkClient {
+// networkServers is what a test network world serves.
+type networkServers interface {
+	networkv1.VpcServiceServer
+	networkv1.SubnetServiceServer
+}
+
+func dialNetworkStateWorld(t *testing.T, world networkServers) networkClient {
 	t.Helper()
 	lis := bufconn.Listen(MaxMessageBytes())
 	srv := grpc.NewServer()
