@@ -55,7 +55,6 @@ func TestAuthorizeIngressTakesIPPermissions(t *testing.T) {
 		"ipv6Ranges":       `"ipv6Ranges":[{"cidrIpv6":"::/0"}]`,
 		"userIdGroupPairs": `"userIdGroupPairs":[{"groupId":"` + sg + `"}]`,
 		"prefixListIds":    `"prefixListIds":[{"prefixListId":"pl-12345678"}]`,
-		"description":      `"ipRanges":[{"cidrIp":"10.2.0.0/16","description":"https"}]`,
 	}
 	for field, source := range refused {
 		ssh := `{"ipProtocol":"tcp","fromPort":22,"toPort":22,"ipRanges":[{"cidrIp":"10.0.0.0/16"}]}`
@@ -103,6 +102,24 @@ func TestAuthorizeIngressTakesIPPermissions(t *testing.T) {
 	if len(replay.Rules) != 3 || replay.Rules[0] != acc.Rules[0] || replay.Rules[2] != acc.Rules[2] {
 		t.Fatalf("retry rules %+v, want %+v", replay.Rules, acc.Rules)
 	}
+	// #594: a range description is stored and described, and the EC2 limits
+	// apply.
+	described := `{"ipPermissions":[{"ipProtocol":"tcp","fromPort":8443,"toPort":8443,` +
+		`"ipRanges":[{"cidrIp":"10.3.0.0/16","description":"admin UI"}]}]}`
+	if rec := do(http.MethodPost, path, described, "auth-desc-1"); rec.Code != http.StatusAccepted ||
+		!strings.Contains(rec.Body.String(), `"cidrIp":"10.3.0.0/16","description":"admin UI"`) {
+		t.Fatalf("description %d %s", rec.Code, rec.Body)
+	}
+	if rec := do(http.MethodGet, "/api/v1/security-groups", "", ""); !strings.Contains(rec.Body.String(),
+		`"cidrIp":"10.3.0.0/16","description":"admin UI"`) {
+		t.Fatalf("described %d %s", rec.Code, rec.Body)
+	}
+	badDesc := `{"ipPermissions":[{"ipProtocol":"tcp","fromPort":8444,"toPort":8444,` +
+		`"ipRanges":[{"cidrIp":"10.3.0.0/16","description":"<b>"}]}]}`
+	if rec := do(http.MethodPost, path, badDesc, "auth-desc-bad"); rec.Code != http.StatusBadRequest ||
+		!strings.Contains(rec.Body.String(), `"field":"description"`) {
+		t.Fatalf("bad description %d %s", rec.Code, rec.Body)
+	}
 	single := `{"ipPermissions":{"ipProtocol":"tcp","fromPort":80,"toPort":80,"cidrIp":"10.0.0.0/16"}}`
 	if old := do(http.MethodPost, path, single, "auth-old-1"); old.Code != http.StatusBadRequest {
 		t.Fatalf("single object %d %s", old.Code, old.Body)
@@ -129,8 +146,12 @@ func TestAuthorizeIngressTakesIPPermissions(t *testing.T) {
 	if rec.Code != http.StatusAccepted || json.Unmarshal(rec.Body.Bytes(), &acc) != nil || len(acc.Items) != 1 {
 		t.Fatalf("revoke %d %s", rec.Code, rec.Body)
 	}
-	if got := acc.Items[0].Rules; len(got) != 1 || got[0] != want[2] {
-		t.Fatalf("after revoke %+v, want only %+v: a refused revoke removed a rule or this one missed one", got, want[2])
+	adminUI := resource.IngressRule{
+		Protocol: "tcp", FromPort: 8443, ToPort: 8443, Cidr: "10.3.0.0/16", Description: "admin UI",
+	}
+	if got := acc.Items[0].Rules; len(got) != 2 || got[0] != want[2] || got[1] != adminUI {
+		t.Fatalf("after revoke %+v, want only %+v and %+v: a refused revoke removed a rule or this one missed one",
+			got, want[2], adminUI)
 	}
 	if old := do(http.MethodPost, revoke, single, "revoke-old-1"); old.Code != http.StatusBadRequest {
 		t.Fatalf("revoke single object %d %s", old.Code, old.Body)

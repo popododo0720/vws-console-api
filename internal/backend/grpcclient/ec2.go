@@ -2291,7 +2291,7 @@ func (c networkClient) authorizeIngressOnce(
 			resource.ActionAuthorizeSecurityGroupIngress)
 	}
 	for _, rule := range req.Rules {
-		if slices.Contains(current.Rules, rule) {
+		if resource.ContainsRule(current.Rules, rule) {
 			return resource.Accepted[resource.SecurityGroup]{}, resource.DuplicatePermission(current.ID.String())
 		}
 	}
@@ -2798,6 +2798,8 @@ func groupModel(in *networkv1.SecurityGroup) (resource.SecurityGroup, error) {
 			FromPort: int(rule.GetFromPort()),
 			ToPort:   int(rule.GetToPort()),
 			Cidr:     rule.GetCidr(),
+
+			Description: rule.GetDescription(),
 		})
 	}
 	return resource.SecurityGroup{
@@ -2833,6 +2835,8 @@ func ruleProto(rule resource.IngressRule, id string) (*networkv1.SecurityGroupRu
 		FromPort:  int32(rule.FromPort),
 		ToPort:    int32(rule.ToPort),
 		Target:    &networkv1.SecurityGroupRule_Cidr{Cidr: rule.Cidr},
+
+		Description: rule.Description,
 	}, nil
 }
 
