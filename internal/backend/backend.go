@@ -119,6 +119,9 @@ type Compute interface {
 	CreateSnapshot(ctx context.Context, m Mutation, req resource.CreateSnapshotRequest) (resource.Accepted[resource.Snapshot], error)
 	DeleteSnapshot(ctx context.Context, m Mutation, req resource.DeleteSnapshotRequest) (resource.Accepted[resource.Snapshot], error)
 	DescribeSnapshots(ctx context.Context, s Scope, q resource.SnapshotQuery) (resource.Page[resource.Snapshot], error)
+	RegisterImage(
+		ctx context.Context, m Mutation, req resource.RegisterImageRequest,
+	) (resource.Accepted[resource.Image], error)
 }
 
 // Storage is the internal storage service. Bucket and object calls finish

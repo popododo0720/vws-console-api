@@ -148,6 +148,52 @@ func (c compute) DescribeSnapshots(ctx context.Context, s backend.Scope, q resou
 	return pageOwned(c.w.snap, s.Account, q.IDs, q.Page, resource.KindSnapshot)
 }
 
+func (c compute) RegisterImage(
+	ctx context.Context, m backend.Mutation, req resource.RegisterImageRequest,
+) (resource.Accepted[resource.Image], error) {
+	if err := ctx.Err(); err != nil {
+		return resource.Accepted[resource.Image]{}, err
+	}
+	c.w.mu.Lock()
+	defer c.w.mu.Unlock()
+	c.w.settle(c.w.now())
+	if acc, ok, err := replay[resource.Accepted[resource.Image]](c.w, m.Key, m.Fingerprint); err != nil || ok {
+		return acc, err
+	}
+	snap, ok := c.w.snap[req.SnapshotID]
+	if !ok || snap.OwnerID != m.Account {
+		return resource.Accepted[resource.Image]{}, resource.NotFound(resource.KindSnapshot, req.SnapshotID.String())
+	}
+	if snap.State != resource.SnapshotCompleted {
+		return resource.Accepted[resource.Image]{}, resource.SnapshotNotCompleted(snap.ID)
+	}
+	id, err := resource.Mint[resource.ImageID](c.w.entropy)
+	if err != nil {
+		return resource.Accepted[resource.Image]{}, err
+	}
+	if _, exists := c.w.img[id]; exists {
+		return resource.Accepted[resource.Image]{}, resource.Internal(errors.New("identifier collision"))
+	}
+	img := resource.Image{
+		ID: id, OwnerID: m.Account, Name: req.Name, Description: req.Description,
+		State: resource.ImagePending, SizeGiB: snap.VolumeSize,
+	}
+	targets := []resource.Ref{id.Ref()}
+	op, err := c.w.newOp(m.Account, resource.ServiceCompute, resource.ActionRegisterImage, targets, func(time.Time) {
+		if cur := c.w.img[id]; cur != nil && cur.State == resource.ImagePending {
+			cur.State = resource.ImageAvailable
+		}
+	})
+	if err != nil {
+		return resource.Accepted[resource.Image]{}, err
+	}
+	stored := img
+	c.w.img[id] = &stored
+	acc := resource.Accepted[resource.Image]{Operation: op, Items: []resource.Image{img}}
+	c.w.finish(m.Key, m.Fingerprint, acc)
+	return acc, nil
+}
+
 func (n network) DeleteSubnet(ctx context.Context, m backend.Mutation, req resource.DeleteSubnetRequest) (resource.Accepted[resource.Subnet], error) {
 	if err := ctx.Err(); err != nil {
 		return resource.Accepted[resource.Subnet]{}, err

@@ -210,6 +210,24 @@ func (h *handler) createSnapshot(w http.ResponseWriter, r *http.Request) {
 	writeAccepted(w, acc)
 }
 
+func (h *handler) registerImage(w http.ResponseWriter, r *http.Request) {
+	c, token, ok := h.begin(w, r)
+	if !ok {
+		return
+	}
+	var req resource.RegisterImageRequest
+	if err := decode(w, r, &req); err != nil {
+		writeErr(w, r, err)
+		return
+	}
+	acc, err := h.svc.RegisterImage(r.Context(), c, token, req)
+	if err != nil {
+		writeErr(w, r, err)
+		return
+	}
+	writeAccepted(w, acc)
+}
+
 func (h *handler) deleteSnapshot(w http.ResponseWriter, r *http.Request) {
 	c, token, ok := h.begin(w, r)
 	if !ok {

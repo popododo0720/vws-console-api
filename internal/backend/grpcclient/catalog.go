@@ -209,6 +209,62 @@ func (c computeClient) DescribeSnapshots(ctx context.Context, s backend.Scope, q
 	return pageByID(items, q.Page, func(item resource.Snapshot) string { return item.ID.String() })
 }
 
+// RegisterImage copies one of the caller's completed snapshots into a compute
+// image. Compute mints the image id whatever image_id says, so the id comes
+// from the operation metadata, and a retry finds its image by request_id,
+// which compute replays for backend.ClientTokenWindow.
+func (c computeClient) RegisterImage(
+	ctx context.Context, m backend.Mutation, req resource.RegisterImageRequest,
+) (resource.Accepted[resource.Image], error) {
+	projectID := project(m.Account)
+	snap, err := c.getSnapshot(ctx, projectID, req.SnapshotID.String())
+	if err != nil {
+		return resource.Accepted[resource.Image]{}, err
+	}
+	if snap.State != resource.SnapshotCompleted {
+		return resource.Accepted[resource.Image]{}, resource.SnapshotNotCompleted(snap.ID)
+	}
+	created, err := c.images.CreateImage(ctx, &computev1.CreateImageRequest{
+		Parent:    regionParent(projectID),
+		ImageId:   derivedID(computeCopyPrefix, m.Key, "image"),
+		RequestId: requestUUID(m.Key, "image"),
+		Image: &computev1.Image{
+			Labels: map[string]string{labelFingerprint: clip(m.Fingerprint, 63)},
+			Spec: &computev1.ImageSpec{
+				Source:      &computev1.ImageSpec_Snapshot{Snapshot: snapshotName(projectID, req.SnapshotID.String())},
+				Description: req.Description,
+				Family:      req.Name,
+			},
+		},
+	})
+	if err := rpcErr(created, err); err != nil {
+		return resource.Accepted[resource.Image]{}, err
+	}
+	op, err := operationFrom(created, resource.ServiceCompute)
+	if err != nil {
+		return resource.Accepted[resource.Image]{}, err
+	}
+	metaName, err := metadataResource(created)
+	if err != nil {
+		return resource.Accepted[resource.Image]{}, err
+	}
+	id, err := imageIDOf(lastSegment(metaName))
+	if err != nil {
+		return resource.Accepted[resource.Image]{}, resource.Internal(err)
+	}
+	owner, err := accountIn(metaName)
+	if err != nil {
+		return resource.Accepted[resource.Image]{}, err
+	}
+	img := resource.Image{
+		ID: id, OwnerID: owner, Name: req.Name, Description: req.Description,
+		State: resource.ImagePending, SizeGiB: snap.VolumeSize,
+	}
+	op.Action = resource.ActionRegisterImage
+	op.Targets = []resource.Ref{id.Ref()}
+	return resource.Accepted[resource.Image]{Operation: op, Items: []resource.Image{img}}, nil
+}
+
 func (c networkClient) DeleteSubnet(ctx context.Context, m backend.Mutation, req resource.DeleteSubnetRequest) (resource.Accepted[resource.Subnet], error) {
 	if resource.IsDirectSubnet(req.ID) {
 		return resource.Accepted[resource.Subnet]{}, resource.DirectReadOnly()

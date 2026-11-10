@@ -211,6 +211,12 @@ func (foreignCompute) DescribeSnapshots(context.Context, backend.Scope, resource
 	return resource.Page[resource.Snapshot]{}, errors.New("unused")
 }
 
+func (foreignCompute) RegisterImage(
+	context.Context, backend.Mutation, resource.RegisterImageRequest,
+) (resource.Accepted[resource.Image], error) {
+	return resource.Accepted[resource.Image]{}, errors.New("unused")
+}
+
 func (f foreignCompute) GetOperation(context.Context, backend.Scope, resource.OperationID) (resource.Operation, error) {
 	if f.op.ID.IsZero() {
 		return resource.Operation{}, errors.New("unused")

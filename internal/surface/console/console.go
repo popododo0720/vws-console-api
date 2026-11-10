@@ -220,6 +220,8 @@ func (h *handler) mutation(action resource.Action) (string, string, http.Handler
 		return http.MethodPost, "/api/v1/instances/{id}/tags/delete", h.deleteTags
 	case resource.ActionDisassociateAddress:
 		return http.MethodPost, "/api/v1/addresses/{id}/disassociate", h.disassociateAddress
+	case resource.ActionRegisterImage:
+		return http.MethodPost, "/api/v1/images", h.registerImage
 	default:
 		return http.MethodGet, "/api/v1/unsupported", func(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, r, resource.Unimplemented(action.String()))

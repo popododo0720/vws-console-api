@@ -632,3 +632,72 @@ func TestConsoleAndQueryDeleteTheSameTags(t *testing.T) {
 		t.Fatalf("DescribeVpcs after a console delete: %s", body)
 	}
 }
+
+func TestConsoleAndQueryRegisterTheSameImage(t *testing.T) {
+	now := time.Date(2026, 10, 9, 10, 0, 0, 0, time.UTC)
+	account := mustParse[resource.AccountID](t, "123456789012")
+	caller := resource.Caller{Account: account, Subject: "console", Principal: iam.RootARN(account), Root: true}
+	world := fake.New(fake.Options{Now: func() time.Time { return now }})
+	svc := cloud.New(cloud.Config{Backends: world.Set()})
+	ui := console.New(console.Config{
+		Service: svc, IAM: iam.NewStatic("AKIDEXAMPLE", "secret", account),
+		Auth: console.BearerTokens{"tok-console": caller},
+	})
+	cred := sigv4.Credential{AccessKey: "AKIDEXAMPLE", Secret: "secret", Account: account}
+	query := ec2query.New(ec2query.Config{
+		Service: svc, Authorizer: iam.NewStatic(cred.AccessKey, cred.Secret, cred.Account),
+		Verifier: verifier(cred, sigv4.ServiceEC2, now),
+	})
+	ec2 := func(form url.Values) *httptest.ResponseRecorder {
+		form.Set("Version", ec2query.Version)
+		return serveSigned(t, query, cred, sigv4.ServiceEC2, now, http.MethodPost, "http://127.0.0.1:8081/", form.Encode())
+	}
+	vol := ec2(url.Values{"Action": {"CreateVolume"}, "Size": {"8"}, "AvailabilityZone": {resource.ZoneName}})
+	if vol.Code != http.StatusOK {
+		t.Fatalf("volume %d %s", vol.Code, vol.Body)
+	}
+	snap := ec2(url.Values{"Action": {"CreateSnapshot"}, "VolumeId": {xmlField(vol.Body.String(), "volumeId")}})
+	if snap.Code != http.StatusOK {
+		t.Fatalf("snapshot %d %s", snap.Code, snap.Body)
+	}
+	snapshotID := xmlField(snap.Body.String(), "snapshotId")
+
+	body := `{"name":"web base","snapshotId":"` + snapshotID + `"}`
+	created := call(t, ui, http.MethodPost, "/api/v1/images", body, map[string]string{
+		"Authorization":   "Bearer tok-console",
+		"Content-Type":    "application/json",
+		"Idempotency-Key": "image-web-1",
+	})
+	if created.Code != http.StatusAccepted {
+		t.Fatalf("console register %d %s", created.Code, created.Body)
+	}
+	var acc struct {
+		Items []struct {
+			ID    string `json:"imageId"`
+			State string `json:"state"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(created.Body.Bytes(), &acc); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(acc.Items[0].ID, "ami-") || acc.Items[0].State != resource.ImagePending {
+		t.Fatalf("%s", created.Body)
+	}
+	again := ec2(url.Values{
+		"Action": {"RegisterImage"}, "ClientToken": {"image-web-1"}, "Name": {"web base"},
+		"BlockDeviceMapping.1.DeviceName": {"/dev/xvda"}, "BlockDeviceMapping.1.Ebs.SnapshotId": {snapshotID},
+	})
+	if again.Code != http.StatusOK || xmlField(again.Body.String(), "imageId") != acc.Items[0].ID {
+		t.Fatalf("query retry %d %s", again.Code, again.Body)
+	}
+	described := ec2(url.Values{"Action": {"DescribeImages"}, "ImageId.1": {acc.Items[0].ID}})
+	if described.Code != http.StatusOK || xmlField(described.Body.String(), "name") != "web base" {
+		t.Fatalf("describe %d %s", described.Code, described.Body)
+	}
+}
+
+func xmlField(body, tag string) string {
+	_, rest, _ := strings.Cut(body, "<"+tag+">")
+	out, _, _ := strings.Cut(rest, "</"+tag+">")
+	return out
+}

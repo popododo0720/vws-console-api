@@ -257,6 +257,23 @@ def network():
         check(got.get("SnapshotId") == snap and got["Size"] == 10, f"restored {got}")
         S["restored_snap"] = snap
     step("CreateVolume SnapshotId (restore)", restore)
+    def register_image():
+        mapping = [{"DeviceName": "/dev/xvda", "Ebs": {"SnapshotId": S["restored_snap"], "DeleteOnTermination": True}}]
+        args = dict(Name="e2e base", Description="e2e", Architecture="x86_64", VirtualizationType="hvm",
+                    EnaSupport=True, RootDeviceName="/dev/xvda", BlockDeviceMappings=mapping)
+        image = ec2.register_image(**args)["ImageId"]
+        check(image.startswith("ami-"), f"image id {image}")
+        ec2.get_waiter("image_available").wait(ImageIds=[image], WaiterConfig={"Delay": 1, "MaxAttempts": 30})
+        got = ec2.describe_images(ImageIds=[image])["Images"][0]
+        check(got["Name"] == "e2e base" and got.get("Description") == "e2e", f"image {got}")
+    step("RegisterImage from a snapshot", register_image)
+    def register_refusals():
+        mapping = [{"DeviceName": "/dev/xvda", "Ebs": {"SnapshotId": S["restored_snap"]}}]
+        ec2_error("UnsupportedOperation", lambda: ec2.register_image(
+            Name="e2e arm", Architecture="arm64", BlockDeviceMappings=mapping))
+        ec2_error("MissingParameter", lambda: ec2.register_image(
+            Name="e2e none", BlockDeviceMappings=[{"DeviceName": "/dev/xvda"}]))
+    step("RegisterImage refuses what VWS cannot register", register_refusals)
     for name, fn in [
         ("DescribeVpcs", ec2.describe_vpcs), ("DescribeSubnets", ec2.describe_subnets),
         ("DescribeSecurityGroups", ec2.describe_security_groups), ("DescribeKeyPairs", ec2.describe_key_pairs),
@@ -293,6 +310,8 @@ def not_found():
         ("DeleteVolume", "InvalidVolume.NotFound", lambda: ec2.delete_volume(VolumeId=vol)),
         ("CreateSnapshot", "InvalidVolume.NotFound", lambda: ec2.create_snapshot(VolumeId=vol)),
         ("DeleteSnapshot", "InvalidSnapshot.NotFound", lambda: ec2.delete_snapshot(SnapshotId=snap)),
+        ("RegisterImage", "InvalidSnapshot.NotFound", lambda: ec2.register_image(
+            Name="e2e missing", BlockDeviceMappings=[{"DeviceName": "/dev/xvda", "Ebs": {"SnapshotId": snap}}])),
         ("DeleteVpc", "InvalidVpcID.NotFound", lambda: ec2.delete_vpc(VpcId=vpc)),
         ("DeleteSubnet", "InvalidSubnetID.NotFound", lambda: ec2.delete_subnet(SubnetId="subnet-00000000000000000")),
         ("StopInstances", "InvalidInstanceID.NotFound", lambda: ec2.stop_instances(InstanceIds=["i-00000000000000000"])),

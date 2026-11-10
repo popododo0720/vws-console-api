@@ -768,11 +768,12 @@ func canonicalProtocol(raw string) (string, error) {
 // Image is a machine image. Public marks one every project in its region can
 // read, as an AWS public AMI. OwnerID is the account that owns it.
 type Image struct {
-	ID      ImageID   `json:"imageId"`
-	OwnerID AccountID `json:"ownerId"`
-	Name    string    `json:"name"`
-	State   string    `json:"state"`
-	Public  bool      `json:"public"`
+	ID          ImageID   `json:"imageId"`
+	OwnerID     AccountID `json:"ownerId"`
+	Name        string    `json:"name"`
+	State       string    `json:"state"`
+	Public      bool      `json:"public"`
+	Description string    `json:"description,omitempty"`
 	// SizeGiB is the smallest root volume the image boots from, and the
 	// root size of a launch that names none. Zero means unknown.
 	SizeGiB int64 `json:"size,omitempty"`
