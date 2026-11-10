@@ -120,6 +120,8 @@ linters:
       case:
         rules:
           json: camel
+          # global.yaml keys follow the design's snake_case spelling (design 7.4).
+          yaml: snake
     nolintlint:
       require-explanation: true
       require-specific: true
