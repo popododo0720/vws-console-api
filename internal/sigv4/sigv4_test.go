@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/popododo0720/vws-console-api/internal/backend"
 	"github.com/popododo0720/vws-console-api/internal/resource"
 )
 
@@ -142,7 +143,7 @@ func cred(t *testing.T) Credential {
 func verifier(c Credential, service Service, now time.Time) *Verifier {
 	return NewVerifier(Verifier{
 		Service: service,
-		Region:  resource.RegionName,
+		Regions: backend.DefaultRegions(),
 		Now:     func() time.Time { return now },
 		Auth: Lookup(func(_ context.Context, key string) (Credential, bool) {
 			return c, key == c.AccessKey

@@ -14,6 +14,7 @@ import (
 
 	iamv1 "github.com/popododo0720/vws-proto/gen/go/vws/iam/v1"
 
+	"github.com/popododo0720/vws-console-api/internal/backend"
 	"github.com/popododo0720/vws-console-api/internal/iam"
 	"github.com/popododo0720/vws-console-api/internal/resource"
 	"github.com/popododo0720/vws-console-api/internal/sigv4"
@@ -78,7 +79,7 @@ func queryHarness(t *testing.T) (http.Handler, *server) {
 	}
 	verifier := func(svc sigv4.Service) *sigv4.Verifier {
 		return sigv4.NewVerifier(sigv4.Verifier{
-			Service: svc, Region: resource.RegionName,
+			Service: svc, Regions: backend.DefaultRegions(),
 			Now: func() time.Time { return queryNow }, Auth: iam.Authenticator(c),
 		})
 	}

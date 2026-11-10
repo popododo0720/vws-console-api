@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/popododo0720/vws-console-api/internal/backend"
 	"github.com/popododo0720/vws-console-api/internal/resource"
 )
 
@@ -26,7 +27,7 @@ func TestVerifyNamesEachFailure(t *testing.T) {
 	}
 	keys := map[string]Credential{c.AccessKey: c, temp.AccessKey: temp, old.AccessKey: old}
 	v := NewVerifier(Verifier{
-		Service: ServiceS3, Region: resource.RegionName, Now: func() time.Time { return now },
+		Service: ServiceS3, Regions: backend.DefaultRegions(), Now: func() time.Time { return now },
 		Auth: authFunc(func(_ context.Context, req AuthRequest) (Identity, error) {
 			k, ok := keys[req.AccessKeyID]
 			switch {
@@ -265,7 +266,7 @@ func TestSignatureMismatchDetail(t *testing.T) {
 	c := cred(t)
 	var seen AuthRequest
 	v := NewVerifier(Verifier{
-		Service: ServiceS3, Region: resource.RegionName, Now: func() time.Time { return now },
+		Service: ServiceS3, Regions: backend.DefaultRegions(), Now: func() time.Time { return now },
 		Auth: authFunc(func(_ context.Context, req AuthRequest) (Identity, error) {
 			seen = req
 			return Identity{}, SignatureMismatch()

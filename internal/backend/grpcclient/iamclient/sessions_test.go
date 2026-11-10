@@ -17,6 +17,7 @@ import (
 
 	iamv1 "github.com/popododo0720/vws-proto/gen/go/vws/iam/v1"
 
+	"github.com/popododo0720/vws-console-api/internal/backend"
 	"github.com/popododo0720/vws-console-api/internal/backend/backendtest"
 	"github.com/popododo0720/vws-console-api/internal/iam"
 	"github.com/popododo0720/vws-console-api/internal/resource"
@@ -603,7 +604,12 @@ func TestSecretsNeverLeaveConsoleAPI(t *testing.T) {
 	const secret = "wJalrXUtnFEMI-K7MDENG-bPxRfiCYEXAMPLEKEY"
 	c, s := harness(t)
 	now := time.Now().UTC()
-	v := sigv4.NewVerifier(sigv4.Verifier{Service: sigv4.ServiceEC2, Region: resource.RegionName, Now: func() time.Time { return now }, Auth: iam.Authenticator(c)})
+	v := sigv4.NewVerifier(sigv4.Verifier{
+		Service: sigv4.ServiceEC2,
+		Regions: backend.DefaultRegions(),
+		Now:     func() time.Time { return now },
+		Auth:    iam.Authenticator(c),
+	})
 	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "http://127.0.0.1:8081/", strings.NewReader("Action=DescribeVpcs&Version=2016-11-15"))
 	req.Host = "127.0.0.1:8081"
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")

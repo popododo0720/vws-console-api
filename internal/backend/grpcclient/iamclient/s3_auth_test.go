@@ -12,6 +12,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/popododo0720/vws-console-api/internal/backend"
 	"github.com/popododo0720/vws-console-api/internal/backend/fake"
 	"github.com/popododo0720/vws-console-api/internal/cloud"
 	"github.com/popododo0720/vws-console-api/internal/iam"
@@ -82,7 +83,7 @@ func TestS3AnswersVwsIAMRefusalsWithS3Codes(t *testing.T) {
 			s.authnErr = tc.answer
 			svc := cloud.New(cloud.Config{Backends: fake.New(fake.Options{Now: func() time.Time { return now }}).Set()})
 			h := s3rest.New(s3rest.Config{Service: svc, Authorizer: c, Verifier: sigv4.NewVerifier(sigv4.Verifier{
-				Service: sigv4.ServiceS3, Region: resource.RegionName, Now: func() time.Time { return now },
+				Service: sigv4.ServiceS3, Regions: backend.DefaultRegions(), Now: func() time.Time { return now },
 				Auth: iam.Authenticator(c),
 			})})
 			req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "http://127.0.0.1:8082/", nil)
