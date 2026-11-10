@@ -17,9 +17,11 @@ import (
 
 // unmappedBoot is vws-storage refusing the RunInstances boot volume the way
 // its admission refuses a type no StorageClass is mapped to: gRPC
-// InvalidArgument with ErrorInfo INVALID_SPEC (vws-storage#123, #124).
+// InvalidArgument with ErrorInfo UNSUPPORTED_VOLUME_TYPE (vws-storage#148).
+// Any other refusal carries INVALID_SPEC.
 type unmappedBoot struct {
 	refusedImage
+	reason string
 }
 
 func (s *unmappedBoot) CreateVolume(
@@ -27,7 +29,7 @@ func (s *unmappedBoot) CreateVolume(
 ) (*longrunningpb.Operation, error) {
 	s.image = req.GetVolume().GetSpec().GetImage()
 	st, err := status.New(codes.InvalidArgument, s.msg).
-		WithDetails(&errdetails.ErrorInfo{Reason: "INVALID_SPEC", Domain: "vws.dev"})
+		WithDetails(&errdetails.ErrorInfo{Reason: s.reason, Domain: "vws.dev"})
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}
@@ -40,8 +42,10 @@ func (s *unmappedBoot) CreateVolume(
 // boot volume keeps its own code.
 func TestRunInstancesUnmappedBootTypeIsUnknownVolumeType(t *testing.T) {
 	sub := must(resource.Parse[resource.SubnetID]("subnet-01234567"))
-	run := func(msg string) error {
-		client := dialRefused(t, &unmappedBoot{refusedImage{msg: msg}})
+	const unmappedMsg = "invalid argument: volume type gp2 is unsupported: " +
+		"invalid: no StorageClass is mapped to volume type gp2"
+	run := func(msg, reason string) error {
+		client := dialRefused(t, &unmappedBoot{refusedImage: refusedImage{msg: msg}, reason: reason})
 		_, err := client.RunInstances(context.Background(), backend.Mutation{
 			Scope: backend.Scope{Account: mustAccount(t)}, Key: "run-unmapped", Fingerprint: "fp",
 		}, resource.RunInstancesRequest{
@@ -49,13 +53,17 @@ func TestRunInstancesUnmappedBootTypeIsUnknownVolumeType(t *testing.T) {
 		})
 		return err
 	}
-	unmapped := run("invalid argument: volume type gp2 is unsupported: " +
-		"invalid: no StorageClass is mapped to volume type gp2")
+	unmapped := run(unmappedMsg, "UNSUPPORTED_VOLUME_TYPE")
 	if e := resource.AsError(unmapped); e == nil || e.Code != resource.CodeInvalidArgument || e.Field != "volumeType" {
 		t.Fatalf("unmapped boot type: got %#v, want the volumeType error (UnknownVolumeType)", e)
 	}
-	other := run("invalid argument: volume type gp2 needs a size from 1 to 16384 GiB")
-	if e := resource.AsError(other); e == nil || e.Code != resource.CodeInvalidArgument || e.Field == "volumeType" {
-		t.Fatalf("size refusal: got %#v, want InvalidArgument without the volumeType field", e)
+	for name, msg := range map[string]string{
+		"size refusal":            "invalid argument: volume type gp2 needs a size from 1 to 16384 GiB",
+		"INVALID_SPEC, same text": unmappedMsg,
+	} {
+		e := resource.AsError(run(msg, "INVALID_SPEC"))
+		if e == nil || e.Code != resource.CodeInvalidArgument || e.Field == "volumeType" {
+			t.Fatalf("%s: got %#v, want InvalidArgument without the volumeType field", name, e)
+		}
 	}
 }

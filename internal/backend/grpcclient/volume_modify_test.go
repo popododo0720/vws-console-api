@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	longrunningpb "cloud.google.com/go/longrunning/autogen/longrunningpb"
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -136,8 +137,21 @@ func TestModifyVolumeSendsOneMaskWithTheNamedFields(t *testing.T) {
 	}
 }
 
-// #324 AC1: vws-storage refusing a target type it has no storage for is
-// UnknownVolumeType on ModifyVolume as on CreateVolume (#335 r2).
+// refusal is a vws-storage InvalidArgument carrying the vws.dev ErrorInfo
+// reason, the way its admission answers.
+func refusal(t *testing.T, reason, msg string) error {
+	t.Helper()
+	st, err := status.New(codes.InvalidArgument, msg).
+		WithDetails(&errdetails.ErrorInfo{Reason: reason, Domain: "vws.dev"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return st.Err()
+}
+
+// #324 AC1, #623: vws-storage refusing a target type it has no storage for
+// (reason UNSUPPORTED_VOLUME_TYPE, vws-storage#148) is UnknownVolumeType on
+// ModifyVolume as on CreateVolume. INVALID_SPEC with the same words is not.
 func TestModifyVolumeToAnUnservedTypeIsUnknownVolumeType(t *testing.T) {
 	account, err := resource.Parse[resource.AccountID]("123456789012")
 	if err != nil {
@@ -147,21 +161,25 @@ func TestModifyVolumeToAnUnservedTypeIsUnknownVolumeType(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	set, _ := modifyStorage(
-		t,
-		status.Error(
-			codes.InvalidArgument,
-			"invalid argument: volume type sc1 is unsupported: invalid: no StorageClass is mapped to volume type sc1",
-		),
-	)
-	m := backend.Mutation{Scope: backend.Scope{Account: account}, Key: "k-modify", Fingerprint: "fp-modify"}
-	_, err = set.Compute.ModifyVolume(
-		t.Context(),
-		m,
-		resource.ModifyVolumeRequest{ID: id, Type: resource.VolumeSC1, SizeGiB: 125},
-	)
-	var e *resource.Error
-	if !errors.As(err, &e) || e.Code != resource.CodeInvalidArgument || e.Field != "volumeType" {
-		t.Fatalf("modify to an unserved type: %v, want InvalidArgument volumeType", err)
+	const msg = "invalid argument: volume type sc1 is unsupported: invalid: no StorageClass is mapped to volume type sc1"
+	for _, tc := range []struct {
+		reason     string
+		volumeType bool
+	}{
+		{"UNSUPPORTED_VOLUME_TYPE", true},
+		{"INVALID_SPEC", false},
+	} {
+		set, _ := modifyStorage(t, refusal(t, tc.reason, msg))
+		m := backend.Mutation{Scope: backend.Scope{Account: account}, Key: "k-modify", Fingerprint: "fp-modify"}
+		_, err = set.Compute.ModifyVolume(
+			t.Context(),
+			m,
+			resource.ModifyVolumeRequest{ID: id, Type: resource.VolumeSC1, SizeGiB: 125},
+		)
+		var e *resource.Error
+		if !errors.As(err, &e) || e.Code != resource.CodeInvalidArgument || (e.Field == "volumeType") != tc.volumeType {
+			t.Fatalf("%s: modify to an unserved type: %#v, want InvalidArgument with volumeType=%v",
+				tc.reason, err, tc.volumeType)
+		}
 	}
 }

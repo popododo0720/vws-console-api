@@ -325,32 +325,43 @@ func (c computeClient) CreateVolume(ctx context.Context, m backend.Mutation, req
 			Spec:   spec,
 		},
 	})
-	if err := rpcErr(created, err); err != nil {
-		return resource.Accepted[resource.Volume]{}, unsupportedVolumeType(err)
+	if err := unsupportedVolumeType(created, err); err != nil {
+		return resource.Accepted[resource.Volume]{}, err
 	}
 	return acceptedVolume(created, req, resource.VolumeCreating)
 }
 
-// unsupportedVolumeType turns vws-storage's refusal of a type it does not
-// serve (InvalidArgument / INVALID_SPEC "volume type X is unsupported", for
-// example a type no StorageClass is mapped to) into the same volumeType error
-// as a type console-api cannot map, which EC2 calls UnknownVolumeType. Any
-// other refusal, such as IOPS, throughput or size out of range, is unchanged
-// and stays InvalidParameterValue.
-func unsupportedVolumeType(err error) error {
-	var re *resource.Error
-	if !errors.As(err, &re) || re.Code != resource.CodeInvalidArgument || re.Field != "" {
-		return err
+// unsupportedVolumeType is rpcErr for a call that creates or changes a
+// volume. vws-storage refuses a type it does not serve (for example one no
+// StorageClass is mapped to) with InvalidArgument and the ErrorInfo reason
+// UNSUPPORTED_VOLUME_TYPE (vws-storage#148). That refusal becomes the same
+// volumeType error as a type console-api cannot map, which EC2 calls
+// UnknownVolumeType. Any other refusal, such as INVALID_SPEC for IOPS,
+// throughput or size out of range, is unchanged and stays
+// InvalidParameterValue. The message text is never read.
+func unsupportedVolumeType(op *longrunningpb.Operation, err error) error {
+	raw := err
+	if raw == nil && op.GetDone() && op.GetError() != nil {
+		raw = status.ErrorProto(op.GetError())
 	}
-	_, rest, ok := strings.Cut(re.Message, "volume type ")
+	if raw != nil && errorReason(raw) == "UNSUPPORTED_VOLUME_TYPE" {
+		return resource.Invalid("volumeType", "unsupported")
+	}
+	return rpcErr(op, err)
+}
+
+// errorReason is the vws.dev ErrorInfo reason a gRPC error carries, or "".
+func errorReason(err error) string {
+	st, ok := status.FromError(err)
 	if !ok {
-		return err
+		return ""
 	}
-	name, tail, ok := strings.Cut(rest, " ")
-	if !ok || name == "" || !strings.HasPrefix(tail, "is unsupported") {
-		return err
+	for _, detail := range st.Details() {
+		if info, isInfo := detail.(*errdetails.ErrorInfo); isInfo && info.GetDomain() == "vws.dev" {
+			return info.GetReason()
+		}
 	}
-	return resource.Invalid("volumeType", "unsupported")
+	return ""
 }
 
 // getTypedVolume reads a volume for a call that needs its type: AttachVolume,
@@ -1574,8 +1585,8 @@ func (c computeClient) ModifyVolume(ctx context.Context, m backend.Mutation, req
 		UpdateMask: &fieldmaskpb.FieldMask{Paths: mask},
 		RequestId:  requestUUID(m.Key, "modify-vol"),
 	})
-	if err := rpcErr(updated, err); err != nil {
-		return resource.Accepted[resource.Volume]{}, unsupportedVolumeType(err)
+	if err := unsupportedVolumeType(updated, err); err != nil {
+		return resource.Accepted[resource.Volume]{}, err
 	}
 	op, err := operationFrom(updated, resource.ServiceCompute)
 	if err != nil {

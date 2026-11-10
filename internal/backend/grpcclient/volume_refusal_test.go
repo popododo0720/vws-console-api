@@ -27,17 +27,19 @@ import (
 )
 
 // refusingVolumes is vws-storage refusing every CreateVolume the way its
-// admission does: gRPC InvalidArgument with ErrorInfo INVALID_SPEC.
+// admission does: gRPC InvalidArgument with an ErrorInfo reason,
+// UNSUPPORTED_VOLUME_TYPE for a type it does not serve (vws-storage#148) and
+// INVALID_SPEC for anything else.
 type refusingVolumes struct {
 	storagev1.UnimplementedVolumeServiceServer
-	msg string
+	msg, reason string
 }
 
 func (s refusingVolumes) CreateVolume(
 	context.Context, *storagev1.CreateVolumeRequest,
 ) (*longrunningpb.Operation, error) {
 	st, err := status.New(codes.InvalidArgument, s.msg).
-		WithDetails(&errdetails.ErrorInfo{Reason: "INVALID_SPEC", Domain: "vws.dev"})
+		WithDetails(&errdetails.ErrorInfo{Reason: s.reason, Domain: "vws.dev"})
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, s.msg)
 	}
@@ -52,19 +54,23 @@ func (s refusingVolumes) CreateVolume(
 func TestStorageVolumeRefusalOverGRPCHasTheEC2Code(t *testing.T) {
 	const unmapped = "invalid argument: volume type %s is unsupported: " +
 		"invalid: no StorageClass is mapped to volume type %s"
+	const spec, unsupported = "INVALID_SPEC", "UNSUPPORTED_VOLUME_TYPE"
 	for _, tc := range []struct {
-		typ, msg, code string
+		typ, msg, reason, code string
 	}{
-		{"gp3", strings.ReplaceAll(unmapped, "%s", "gp3"), "UnknownVolumeType"},
-		{"standard", strings.ReplaceAll(unmapped, "%s", "standard"), "UnknownVolumeType"},
-		{"gp3", "invalid argument: volume type gp3 needs iops from 3000 to 80000", "InvalidParameterValue"},
-		{"gp3", "invalid argument: volume type gp3 needs throughput from 125 to 2000 MiB/s", "InvalidParameterValue"},
+		{"gp3", strings.ReplaceAll(unmapped, "%s", "gp3"), unsupported, "UnknownVolumeType"},
+		{"standard", strings.ReplaceAll(unmapped, "%s", "standard"), unsupported, "UnknownVolumeType"},
+		// The reason decides, not the text: INVALID_SPEC with the same words
+		// is an ordinary bad value.
+		{"gp3", strings.ReplaceAll(unmapped, "%s", "gp3"), spec, "InvalidParameterValue"},
+		{"gp3", "invalid argument: volume type gp3 needs iops from 3000 to 80000", spec, "InvalidParameterValue"},
+		{"gp3", "invalid argument: volume type gp3 needs throughput from 125 to 2000 MiB/s", spec, "InvalidParameterValue"},
 		{"gp3", "invalid argument: volume type gp3 allows at most 0.25 MiB/s of throughput per iops; " +
-			"3000 iops allow 750 MiB/s", "InvalidParameterValue"},
-		{"gp2", "invalid argument: volume type gp2 takes no iops", "InvalidParameterValue"},
-		{"standard", "invalid argument: volume type standard needs a size from 1 to 1024 GiB", "InvalidParameterValue"},
+			"3000 iops allow 750 MiB/s", spec, "InvalidParameterValue"},
+		{"gp2", "invalid argument: volume type gp2 takes no iops", spec, "InvalidParameterValue"},
+		{"standard", "invalid argument: volume type standard needs a size from 1 to 1024 GiB", spec, "InvalidParameterValue"},
 	} {
-		h, cred, now := ec2OverGRPC(t, refusingVolumes{msg: tc.msg})
+		h, cred, now := ec2OverGRPC(t, refusingVolumes{msg: tc.msg, reason: tc.reason})
 		form := url.Values{}
 		form.Set("Action", "CreateVolume")
 		form.Set("Version", ec2query.Version)

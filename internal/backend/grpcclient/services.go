@@ -281,8 +281,8 @@ func (c computeClient) launchInstances(
 			RequestId: requestUUID(launchParts(m.Key, "vol", attempt, i)...),
 			Volume:    bootVolume(imageSource, m.Fingerprint, req, instID),
 		})
-		if err := rpcErr(volOp, err); err != nil {
-			return resource.Accepted[resource.Instance]{}, unsupportedVolumeType(err)
+		if err := unsupportedVolumeType(volOp, err); err != nil {
+			return resource.Accepted[resource.Instance]{}, err
 		}
 		if err := run.Done(ctx, launch.Step{
 			Kind: launch.StepVolume, Index: i, Resource: volumeName(projectID, volID),
@@ -303,8 +303,8 @@ func (c computeClient) launchInstances(
 				RequestId: requestUUID(extraParts(m.Key, attempt, i, j)...),
 				Volume:    extraVolume(m.Fingerprint, extra, instID),
 			})
-			if err := rpcErr(extraOp, err); err != nil {
-				return resource.Accepted[resource.Instance]{}, unsupportedVolumeType(err)
+			if err := unsupportedVolumeType(extraOp, err); err != nil {
+				return resource.Accepted[resource.Instance]{}, err
 			}
 			if err := run.Done(ctx, launch.Step{
 				Kind: launch.StepVolume, Index: i, Resource: volumeName(projectID, extraID),
