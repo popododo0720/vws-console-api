@@ -48,25 +48,26 @@ func TestMalformedInstanceIDIsInvalidInstanceIDMalformed(t *testing.T) {
 
 // #438: a tagging call answers a resource ID it cannot read with InvalidID, not
 // the kind's own malformed code, as the EC2 error reference lists it.
-// DeleteTags is not served yet (#90); it takes the same answer when it is.
-func TestCreateTagsMalformedResourceIDIsInvalidID(t *testing.T) {
-	for _, id := range []string{"i-xyz", "vpc-xyz", "subnet-xyz"} {
-		t.Run(id, func(t *testing.T) {
-			h, cred, now := harness(t)
-			form := url.Values{}
-			form.Set("Action", "CreateTags")
-			form.Set("Version", Version)
-			form.Set("ResourceId.1", id)
-			form.Set("Tag.1.Key", "team")
-			form.Set("Tag.1.Value", "storage")
-			res := signed(t, h, cred, now, form.Encode())
-			if res.Code != http.StatusBadRequest {
-				t.Fatalf("status %d body %s", res.Code, res.Body)
-			}
-			got := ec2ErrorXML(t, res.Body.Bytes())
-			if want := "The ID '" + id + "' is not valid"; got.Code != "InvalidID" || got.Message != want {
-				t.Fatalf("code %q message %q; want InvalidID %q", got.Code, got.Message, want)
-			}
-		})
+func TestTaggingMalformedResourceIDIsInvalidID(t *testing.T) {
+	for _, action := range []string{"CreateTags", "DeleteTags"} {
+		for _, id := range []string{"i-xyz", "vpc-xyz", "subnet-xyz"} {
+			t.Run(action+"/"+id, func(t *testing.T) {
+				h, cred, now := harness(t)
+				form := url.Values{}
+				form.Set("Action", action)
+				form.Set("Version", Version)
+				form.Set("ResourceId.1", id)
+				form.Set("Tag.1.Key", "team")
+				form.Set("Tag.1.Value", "storage")
+				res := signed(t, h, cred, now, form.Encode())
+				if res.Code != http.StatusBadRequest {
+					t.Fatalf("status %d body %s", res.Code, res.Body)
+				}
+				got := ec2ErrorXML(t, res.Body.Bytes())
+				if want := "The ID '" + id + "' is not valid"; got.Code != "InvalidID" || got.Message != want {
+					t.Fatalf("code %q message %q; want InvalidID %q", got.Code, got.Message, want)
+				}
+			})
+		}
 	}
 }
