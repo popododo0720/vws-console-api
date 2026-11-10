@@ -157,8 +157,45 @@ func TestLongTagMovesToTheDescriptionAndMergesOnce(t *testing.T) {
 }
 
 func TestBadDescriptionBlockIsAnError(t *testing.T) {
-	if _, err := ReadTags(nil, "vws:tags {nope"); err == nil {
-		t.Fatal("ReadTags accepted a broken block")
+	for _, desc := range []string{"vws:tags {nope", "vws:tags {\"a\":1}", "vws:tags {}\nvws:tags {\"a\":\"b\"}"} {
+		if _, err := ReadTags(nil, desc); err == nil {
+			t.Fatalf("ReadTags accepted the description %q", desc)
+		}
+	}
+}
+
+// Only a "vws:tags {" line is the block: other text an operator writes, a JSON
+// null included, is description text and never fails or panics the read.
+func TestOnlyAJSONObjectLineIsTheBlock(t *testing.T) {
+	for _, desc := range []string{
+		"vws:tags null", "vws:tags []", `vws:tags "x"`, "vws:tags are listed below\nmore", "vws:tags", "vws:tags {}",
+	} {
+		got, err := ReadTags([]string{"vws.t.a.b"}, desc)
+		if err != nil || !reflect.DeepEqual(got.User, map[string]string{"a": "b"}) {
+			t.Fatalf("ReadTags(%q) = %v, %v", desc, got.User, err)
+		}
+	}
+	got, err := ReadTags(nil, "note\r\nvws:tags {\"k\":\"v\"}\r\n")
+	if err != nil || !reflect.DeepEqual(got.User, map[string]string{"k": "v"}) {
+		t.Fatalf("a CRLF block: ReadTags = %v, %v", got.User, err)
+	}
+}
+
+func TestReservedKeysAreNeverReadAsUserTags(t *testing.T) {
+	got, err := ReadTags([]string{"vws.t.aws_3ax.y"}, `vws:tags {"aws:x":"1","vws.k.x":"2","VWS:y":"3","":"4","ok":"5"}`)
+	if err != nil || !reflect.DeepEqual(got.User, map[string]string{"ok": "5"}) {
+		t.Fatalf("ReadTags = %v, %v; want only ok=5", got.User, err)
+	}
+}
+
+// Two canonical tags with one key (a hand edit) give the same answer in any
+// stored order.
+func TestDuplicateKeyDoesNotDependOnOrder(t *testing.T) {
+	for _, pve := range [][]string{{"vws.t.a.2", "vws.t.a.1"}, {"vws.t.a.1", "vws.t.a.2"}} {
+		got, err := ReadTags(pve, "")
+		if err != nil || !reflect.DeepEqual(got.User, map[string]string{"a": "1"}) {
+			t.Fatalf("ReadTags(%q) = %v, %v; want a=1", pve, got.User, err)
+		}
 	}
 }
 
@@ -166,13 +203,29 @@ func TestSystemTagsAreNeverUserTags(t *testing.T) {
 	system := []string{
 		"vws.k.abc", "vws.f.abc", "vws.n.0", "vws.r.0123456789abcdef0", "vws.ami.0123456789abcdef0", "vws.kp.key",
 		"vws.dot.00000001", "vws.d.k.f.1", "vws.vt.12345678.+a.b", "vws.holder", "vws.live.run1",
+		"VWS.holder", "vws.later.1",
 	}
-	user, _ := EncodeTag("Name", "web")
+	user, err := EncodeTag("Name", "web")
+	if err != nil {
+		t.Fatal(err)
+	}
 	got, err := ReadTags(append(slices.Clone(system), user, "prod"), "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(got.System, system) || !reflect.DeepEqual(got.User, map[string]string{"Name": "web"}) {
+	if !reflect.DeepEqual(got.System, system) || !reflect.DeepEqual(got.User, map[string]string{"Name": "web"}) ||
+		!reflect.DeepEqual(got.Other, []string{"prod"}) {
 		t.Fatalf("ReadTags = %+v", got)
+	}
+}
+
+// A tag that is neither a user tag nor a system tag is kept as stored, so a
+// writer never deletes an operator's tag or one it cannot decode.
+func TestTagsThatDoNotDecodeAreKept(t *testing.T) {
+	other := []string{"prod", "vws.t.x", "VWS.T.+NAME.X", "vws.t._61.b"}
+	got, err := ReadTags(append(slices.Clone(other), "vws.k.1"), "")
+	if err != nil || len(got.User) != 0 || !reflect.DeepEqual(got.Other, other) ||
+		!reflect.DeepEqual(got.System, []string{"vws.k.1"}) {
+		t.Fatalf("ReadTags = %+v, %v", got, err)
 	}
 }

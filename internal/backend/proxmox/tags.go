@@ -22,29 +22,18 @@ const (
 
 // Tags are the tags of one Proxmox object. User holds the AWS tags from both
 // the Proxmox tags and the description block, each key once. System holds the
-// tags VWS keeps for itself, as stored.
+// tags VWS keeps for itself (every other "vws." tag, any case), as stored.
+// Other holds the rest as stored: operator tags and "vws.t." tags that do not
+// decode. A writer keeps System and Other.
 type Tags struct {
 	User   map[string]string
 	System []string
+	Other  []string
 }
 
 func reservedKey(key string) bool {
 	k := strings.ToLower(key)
 	return strings.HasPrefix(k, "aws:") || strings.HasPrefix(k, "vws:") || strings.HasPrefix(k, "vws.")
-}
-
-func isSystemTag(tag string) bool {
-	if tag == "vws.holder" {
-		return true
-	}
-	for _, p := range []string{
-		"vws.k.", "vws.f.", "vws.n.", "vws.r.", "vws.ami.", "vws.kp.", "vws.dot.", "vws.d.", "vws.vt.", "vws.live.",
-	} {
-		if strings.HasPrefix(tag, p) {
-			return true
-		}
-	}
-	return false
 }
 
 func encodeComponent(b *strings.Builder, s string) {
@@ -173,35 +162,63 @@ func Split(tags map[string]string) (pve []string, overflow map[string]string, er
 }
 
 // ReadTags merges the Proxmox tags and the description block. A key in both
-// takes the Proxmox tag's value.
+// takes the Proxmox tag's value; a key in two Proxmox tags takes the smaller
+// tag. It fails only when the block does not parse; a caller listing many
+// objects skips that one rather than failing the listing.
 func ReadTags(pveTags []string, description string) (Tags, error) {
 	user, err := descriptionTags(description)
 	if err != nil {
 		return Tags{}, err
 	}
 	var out Tags
+	inline := map[string]string{}
 	for _, t := range pveTags {
+		lower := strings.ToLower(t)
 		if k, v, ok := DecodeTag(t); ok {
-			user[k] = v
-		} else if isSystemTag(t) {
+			if prev, dup := inline[k]; !dup || t < prev {
+				inline[k] = t
+				user[k] = v
+			}
+		} else if strings.HasPrefix(lower, "vws.") && !strings.HasPrefix(lower, userTagPrefix) {
 			out.System = append(out.System, t)
+		} else {
+			out.Other = append(out.Other, t)
 		}
 	}
 	out.User = user
 	return out, nil
 }
 
+// descriptionBlock returns the JSON of a "vws:tags {...}" line. Any other
+// line, "vws:tags null" included, is the operator's text.
+func descriptionBlock(line string) (string, bool) {
+	block, found := strings.CutPrefix(strings.TrimSuffix(line, "\r"), descriptionPrefix)
+	return block, found && strings.HasPrefix(block, "{")
+}
+
+// descriptionTags reads the block. Keys EncodeTag refuses (empty, reserved)
+// are not user tags and are left out.
 func descriptionTags(description string) (map[string]string, error) {
 	tags := map[string]string{}
+	found := false
 	for line := range strings.SplitSeq(description, "\n") {
-		block, found := strings.CutPrefix(line, descriptionPrefix)
-		if !found {
+		block, ok := descriptionBlock(line)
+		if !ok {
 			continue
 		}
-		if err := json.Unmarshal([]byte(block), &tags); err != nil {
+		if found {
+			return nil, fmt.Errorf("proxmox: the description has more than one %q block", descriptionPrefix)
+		}
+		found = true
+		var stored map[string]string
+		if err := json.Unmarshal([]byte(block), &stored); err != nil {
 			return nil, fmt.Errorf("proxmox: read the vws:tags description block: %w", err)
 		}
-		break
+		for k, v := range stored {
+			if _, err := EncodeTag(k, v); err == nil {
+				tags[k] = v
+			}
+		}
 	}
 	return tags, nil
 }
