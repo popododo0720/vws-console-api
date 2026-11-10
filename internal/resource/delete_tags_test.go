@@ -2,6 +2,7 @@ package resource
 
 import (
 	"maps"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -47,6 +48,13 @@ func TestDeleteTagsRequestNormalize(t *testing.T) {
 		t.Fatal(err)
 	}
 	long := strings.Repeat("v", 257)
+	selectors := func(n int) []TagSelector {
+		out := make([]TagSelector, n)
+		for i := range out {
+			out[i] = TagSelector{Key: "k" + strconv.Itoa(i)}
+		}
+		return out
+	}
 	for name, tc := range map[string]struct {
 		req  UntagVpcsRequest
 		want string
@@ -60,6 +68,12 @@ func TestDeleteTagsRequestNormalize(t *testing.T) {
 		"long value":  {UntagVpcsRequest{IDs: []VpcID{id}, Tags: []TagSelector{{Key: "k", Value: &long}}}, "malformed value"},
 		"aws: prefix": {UntagVpcsRequest{IDs: []VpcID{id}, Tags: []TagSelector{{Key: "aws:x"}}}, "reserved"},
 		"ok, all":     {UntagVpcsRequest{IDs: []VpcID{id}}, ""},
+		"51 selectors": {
+			UntagVpcsRequest{IDs: []VpcID{id}, Tags: selectors(MaxTags + 1)}, "too many",
+		},
+		"50 selectors": {
+			UntagVpcsRequest{IDs: []VpcID{id}, Tags: selectors(MaxTags)}, "",
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := tc.req.Normalize()

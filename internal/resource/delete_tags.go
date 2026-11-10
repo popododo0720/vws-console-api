@@ -14,8 +14,10 @@ type TagSelector struct {
 	Value *string `json:"value,omitempty"`
 }
 
-// maxTagSelectors bounds Tag.N on DeleteTags. EC2 allows up to 1000.
-const maxTagSelectors = 1000
+// maxTagSelectors bounds the selectors of one DeleteTags. It is MaxTags, the
+// Tag.N bound EC2 Query reads for CreateTags and DeleteTags, so the console
+// and EC2 Query take the same requests.
+const maxTagSelectors = MaxTags
 
 // awsTagPrefix marks tags EC2 reserves for itself. DeleteTags never removes
 // them and a caller may not name them.
