@@ -17,9 +17,10 @@ func (s *Service) fillPublicIPs(ctx context.Context, c resource.Caller, items []
 		return nil
 	}
 	byInstance := map[resource.InstanceID]resource.Address{}
+	addresses := served(s, resource.ReadDescribeAddresses, s.backends.Network.DescribeAddresses)
 	token := ""
 	for range maxAddressPages {
-		page, err := readPage(ctx, c, resource.AddressQuery{Page: resource.PageRequest{Size: 100, Token: token}}, s.backends.Network.DescribeAddresses)
+		page, err := readPage(ctx, c, resource.AddressQuery{Page: resource.PageRequest{Size: 100, Token: token}}, addresses)
 		if resource.CodeOf(err) == resource.CodeUnimplemented {
 			return nil
 		}

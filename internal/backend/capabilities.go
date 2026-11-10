@@ -8,7 +8,8 @@ import (
 
 // Capabilities answers what each region supports. The kernel reads it on
 // every gated call, so a region whose document changes is served by the
-// new document without a restart.
+// new document without a restart. An implementation returns a document that
+// passes resource.RegionCapabilities.Validate.
 type Capabilities interface {
 	RegionCapabilities(ctx context.Context, region string) (resource.RegionCapabilities, error)
 }

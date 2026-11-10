@@ -98,8 +98,9 @@ func (k *RegionKind) UnmarshalText(b []byte) error {
 	return Invalid("kind", "unknown")
 }
 
-// ReadAction names an EC2 read a capability document can declare, the
-// read actions of design.md 3.2.4.
+// ReadAction names an EC2 read the kernel gates by the capability document.
+// The other reads of design.md 3.2.4 are not gated yet; a document may still
+// name them, as a key this process does not know.
 type ReadAction int
 
 // The reads a capability document declares.
@@ -110,41 +111,25 @@ const (
 	ReadDescribeVolumes
 	ReadDescribeSnapshots
 	ReadDescribeKeyPairs
-	ReadDescribeInstanceTypes
-	ReadDescribeTags
 	ReadDescribeVpcs
 	ReadDescribeSubnets
 	ReadDescribeSecurityGroups
 	ReadDescribeAddresses
-	ReadDescribeRouteTables
-	ReadDescribeAvailabilityZones
-	ReadDescribeRegions
-	ReadDescribeInstanceStatus
-	ReadDescribeVolumesModifications
-	ReadDescribeInstanceAttribute
 )
 
 // String returns the EC2 action name. An unknown read returns "".
 func (r ReadAction) String() string {
 	names := [...]string{
-		readActionNone:                   "",
-		ReadDescribeInstances:            "DescribeInstances",
-		ReadDescribeImages:               "DescribeImages",
-		ReadDescribeVolumes:              "DescribeVolumes",
-		ReadDescribeSnapshots:            "DescribeSnapshots",
-		ReadDescribeKeyPairs:             "DescribeKeyPairs",
-		ReadDescribeInstanceTypes:        "DescribeInstanceTypes",
-		ReadDescribeTags:                 "DescribeTags",
-		ReadDescribeVpcs:                 "DescribeVpcs",
-		ReadDescribeSubnets:              "DescribeSubnets",
-		ReadDescribeSecurityGroups:       "DescribeSecurityGroups",
-		ReadDescribeAddresses:            "DescribeAddresses",
-		ReadDescribeRouteTables:          "DescribeRouteTables",
-		ReadDescribeAvailabilityZones:    "DescribeAvailabilityZones",
-		ReadDescribeRegions:              "DescribeRegions",
-		ReadDescribeInstanceStatus:       "DescribeInstanceStatus",
-		ReadDescribeVolumesModifications: "DescribeVolumesModifications",
-		ReadDescribeInstanceAttribute:    "DescribeInstanceAttribute",
+		readActionNone:             "",
+		ReadDescribeInstances:      "DescribeInstances",
+		ReadDescribeImages:         "DescribeImages",
+		ReadDescribeVolumes:        "DescribeVolumes",
+		ReadDescribeSnapshots:      "DescribeSnapshots",
+		ReadDescribeKeyPairs:       "DescribeKeyPairs",
+		ReadDescribeVpcs:           "DescribeVpcs",
+		ReadDescribeSubnets:        "DescribeSubnets",
+		ReadDescribeSecurityGroups: "DescribeSecurityGroups",
+		ReadDescribeAddresses:      "DescribeAddresses",
 	}
 	if r < 0 || int(r) >= len(names) {
 		return ""
