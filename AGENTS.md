@@ -21,7 +21,7 @@ project is someone else's cloud.
 | `internal/backend/grpcclient` | The contract over gRPC. The only package that sees protobuf. |
 | `internal/backend/launch` | The RunInstances launch record and the tracker that writes it on transitions. |
 | `internal/backend/launch/kubestore` | Launch records as ConfigMaps. The only package that sees Kubernetes types. |
-| `internal/backend/proxmox` | The Proxmox VE backend; `ids.go` computes EC2 ids from Proxmox data. |
+| `internal/backend/proxmox` | The Proxmox VE backend; `ids.go` computes EC2 ids from Proxmox data; `tags.go` is the reversible AWS tag to Proxmox tag codec and the `vws:tags` description block. |
 | `internal/sigv4` | Signature verification, plus `Sign` for tests. |
 | `internal/globalconfig` | `/etc/vws/global.yaml`: bootstrap settings only; regions and AWS accounts come from the admin API. |
 | `internal/surface/*` | `console` (JSON), `ec2query`, `s3rest` codecs; `interop` drives several surfaces against one world. |
