@@ -176,3 +176,23 @@ func TestDescribeTagsFilters(t *testing.T) {
 		}
 	}
 }
+
+func TestTypeWanted(t *testing.T) {
+	for _, tc := range []struct {
+		filters []queryFilter
+		want    bool
+	}{
+		{nil, true},
+		{[]queryFilter{{name: "key", values: []string{"Name"}}}, true},
+		{[]queryFilter{{name: "resource-type", values: []string{"vpc", "volume"}}}, true},
+		{[]queryFilter{{name: "resource-type", values: []string{"vol*"}}}, true},
+		{[]queryFilter{{name: "resource-type", values: []string{"vpc"}}}, false},
+		{[]queryFilter{
+			{name: "resource-type", values: []string{"volume"}}, {name: "resource-type", values: []string{"vpc"}},
+		}, false},
+	} {
+		if got := typeWanted(tc.filters, "volume"); got != tc.want {
+			t.Errorf("typeWanted(%+v) = %t, want %t", tc.filters, got, tc.want)
+		}
+	}
+}

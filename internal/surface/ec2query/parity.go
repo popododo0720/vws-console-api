@@ -698,15 +698,19 @@ func (h *handler) describeTags(w http.ResponseWriter, r *http.Request, c resourc
 	for _, subnet := range subnets {
 		rows = appendTagDescriptions(rows, "subnet", subnet.ID.String(), subnet.Tags)
 	}
-	volumes, err := collectPages(r.Context(), c, func(page resource.PageRequest) resource.VolumeQuery {
-		return resource.VolumeQuery{Page: page}
-	}, h.svc.DescribeVolumes)
-	if err != nil {
-		writeErr(w, r, err)
-		return
-	}
-	for _, vol := range volumes {
-		rows = appendTagDescriptions(rows, "volume", vol.ID.String(), vol.Tags)
+	// Listing volumes also reads compute for attach state, so a request
+	// whose resource-type filter leaves volumes out does not list them.
+	if typeWanted(filters, "volume") {
+		volumes, err := collectPages(r.Context(), c, func(page resource.PageRequest) resource.VolumeQuery {
+			return resource.VolumeQuery{Page: page}
+		}, h.svc.DescribeVolumes)
+		if err != nil {
+			writeErr(w, r, err)
+			return
+		}
+		for _, vol := range volumes {
+			rows = appendTagDescriptions(rows, "volume", vol.ID.String(), vol.Tags)
+		}
 	}
 	sort.Slice(rows, func(i, j int) bool { return rows[i].identity() < rows[j].identity() })
 	filtered := rows[:0]
@@ -723,6 +727,19 @@ func (h *handler) describeTags(w http.ResponseWriter, r *http.Request, c resourc
 	writeXML(w, describeTagsXML{
 		Tags: tagDescriptionSetXML{Items: filtered}, NextToken: next, RequestID: requestID(r),
 	})
+}
+
+// typeWanted reports whether every resource-type filter can match kind.
+func typeWanted(filters []queryFilter, kind string) bool {
+	for _, f := range filters {
+		if f.name != "resource-type" {
+			continue
+		}
+		if !slices.ContainsFunc(f.values, func(v string) bool { return wildcardMatch(v, kind) }) {
+			return false
+		}
+	}
+	return true
 }
 
 func appendTagDescriptions(
