@@ -81,10 +81,14 @@ func walkObject(dec *json.Decoder, t reflect.Type) error {
 			return nil
 		}
 		lower := strings.ToLower(key)
-		if prev, dup := seen[lower]; dup {
+		seenKey := lower
+		if isMap {
+			seenKey = key
+		}
+		if prev, dup := seen[seenKey]; dup {
 			return resource.Invalid(key, "repeats the key \""+prev+"\" in the same object")
 		}
-		seen[lower] = key
+		seen[seenKey] = key
 		var child reflect.Type
 		switch {
 		case isMap:

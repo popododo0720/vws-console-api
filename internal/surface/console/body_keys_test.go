@@ -90,4 +90,15 @@ func TestRepeatedOrCaseVariantKeyIsRefused(t *testing.T) {
 	if ok.Code != http.StatusAccepted {
 		t.Fatalf("valid body: status %d body %s", ok.Code, ok.Body)
 	}
+
+	// Tag keys are case-sensitive caller data: names differing only by case
+	// decode, while an exact repeat is still refused.
+	tags := "/api/v1/vpcs/" + vpc + "/tags"
+	if rec := do(tags, `{"tags":{"Name":"web","name":"x"}}`, "amb-tags-case"); rec.Code != http.StatusAccepted {
+		t.Fatalf("tag keys differing by case: status %d body %s", rec.Code, rec.Body)
+	}
+	if rec := do(tags, `{"tags":{"Name":"web","Name":"x"}}`, "amb-tags-dup"); rec.Code != http.StatusBadRequest ||
+		!strings.Contains(rec.Body.String(), `"field":"Name"`) {
+		t.Fatalf("repeated tag key: status %d body %s", rec.Code, rec.Body)
+	}
 }
