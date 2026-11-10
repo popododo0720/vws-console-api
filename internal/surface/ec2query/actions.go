@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/xml"
+	"fmt"
 	"maps"
 	"net/http"
 	"slices"
@@ -798,6 +799,55 @@ func checkPart[I any, R resource.Request[R]](ids []I, req R) error {
 	return err
 }
 
+// laterKindsExist reads the ids of each kind after the first one a tag
+// request writes, so a missing id of a later kind fails the request before
+// any kind is written (#702). The first kind needs no read: its backend
+// checks every id before it writes. A resource deleted between this read
+// and its kind's write still fails the request after an earlier kind wrote.
+func (h *handler) laterKindsExist(ctx context.Context, c resource.Caller, t tagTargets) error {
+	if len(t.insts) > 0 && len(t.vpcs) > 0 {
+		page, err := h.svc.DescribeVpcs(ctx, c, resource.VpcQuery{IDs: t.vpcs})
+		if err != nil {
+			return err
+		}
+		if err := allListed(t.vpcs, page.Items, resource.KindVpc); err != nil {
+			return err
+		}
+	}
+	if (len(t.insts) > 0 || len(t.vpcs) > 0) && len(t.subs) > 0 {
+		page, err := h.svc.DescribeSubnets(ctx, c, resource.SubnetQuery{IDs: t.subs})
+		if err != nil {
+			return err
+		}
+		if err := allListed(t.subs, page.Items, resource.KindSubnet); err != nil {
+			return err
+		}
+	}
+	if (len(t.insts) > 0 || len(t.vpcs) > 0 || len(t.subs) > 0) && len(t.vols) > 0 {
+		page, err := h.svc.DescribeVolumes(ctx, c, resource.VolumeQuery{IDs: t.vols})
+		if err != nil {
+			return err
+		}
+		return allListed(t.vols, page.Items, resource.KindVolume)
+	}
+	return nil
+}
+
+// allListed is the NotFound of the first id items lacks. A describe of
+// several ids lists the ones it finds and drops the rest.
+func allListed[I fmt.Stringer, T resource.Owned](ids []I, items []T, kind resource.Kind) error {
+	found := make(map[string]struct{}, len(items))
+	for _, item := range items {
+		found[item.Identity()] = struct{}{}
+	}
+	for _, id := range ids {
+		if _, ok := found[id.String()]; !ok {
+			return resource.NotFound(kind, id.String())
+		}
+	}
+	return nil
+}
+
 func firstErr(errs ...error) error {
 	for _, err := range errs {
 		if err != nil {
@@ -816,7 +866,7 @@ func partToken(token resource.ClientToken, kinds int, kind string) (resource.Cli
 	return derivedToken(token, kind)
 }
 
-// createTags tags instances, VPCs and subnets, which may be mixed in one call
+// createTags tags instances, VPCs, subnets and volumes, which may be mixed in one call
 // (parseTagTargets). Each kind is its own
 // backend mutation; with a ClientToken and more than one kind, each kind gets
 // a token derived from the caller's, so a retry replays every part.
@@ -852,6 +902,10 @@ func (h *handler) createTags(w http.ResponseWriter, r *http.Request, c resource.
 	if err := firstErr(
 		checkPart(t.insts, instReq), checkPart(t.vpcs, vpcReq), checkPart(t.subs, subReq), checkPart(t.vols, volReq),
 	); err != nil {
+		writeErr(w, r, err)
+		return
+	}
+	if err := h.laterKindsExist(r.Context(), c, t); err != nil {
 		writeErr(w, r, err)
 		return
 	}
@@ -947,6 +1001,10 @@ func (h *handler) deleteTags(w http.ResponseWriter, r *http.Request, c resource.
 	vpcReq := resource.UntagVpcsRequest{IDs: t.vpcs, Tags: sel}
 	subReq := resource.UntagSubnetsRequest{IDs: t.subs, Tags: sel}
 	if err := firstErr(checkPart(t.insts, instReq), checkPart(t.vpcs, vpcReq), checkPart(t.subs, subReq)); err != nil {
+		writeErr(w, r, err)
+		return
+	}
+	if err := h.laterKindsExist(r.Context(), c, t); err != nil {
 		writeErr(w, r, err)
 		return
 	}
