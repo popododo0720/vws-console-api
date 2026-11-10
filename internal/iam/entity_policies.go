@@ -69,6 +69,27 @@ func InlinePolicyNotFound(kind Entity, policy string) error {
 // 1 to 128 characters.
 func CheckInlinePolicyName(name string) error { return checkName(policyName, "policyName", name) }
 
+// CheckManagedPolicy checks a CreatePolicy request as AWS does: the policy
+// name, the path (normalized, "" is "/"), the description and the document,
+// including the 6,144 character managed policy size. It returns the
+// normalized path.
+func CheckManagedPolicy(name, path, document, description string) (string, error) {
+	if err := checkName(policyName, "policyName", name); err != nil {
+		return "", err
+	}
+	path, err := normPath(path)
+	if err != nil {
+		return "", err
+	}
+	if err := ValidatePolicyDescription(description); err != nil {
+		return "", err
+	}
+	if _, err := parsePolicy(document, false); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
 // ValidateIdentityPolicy checks an inline identity policy document against
 // the policy grammar. Its size is checked per entity by
 // CheckInlinePolicySize.
