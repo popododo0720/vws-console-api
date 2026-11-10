@@ -218,6 +218,18 @@ func (s *Service) CreateSnapshot(ctx context.Context, c resource.Caller, token r
 	return mutate(ctx, s, c, token, req, s.backends.Compute.CreateSnapshot)
 }
 
+// RegisterImage accepts an image copied from a snapshot and returns the
+// operation.
+func (s *Service) RegisterImage(
+	ctx context.Context, c resource.Caller, token resource.ClientToken, req resource.RegisterImageRequest,
+) (resource.Accepted[resource.Image], error) {
+	token, err := fillToken(token)
+	if err != nil {
+		return resource.Accepted[resource.Image]{}, err
+	}
+	return mutate(ctx, s, c, token, req, s.backends.Compute.RegisterImage)
+}
+
 // DeleteSnapshot accepts a delete and returns the operation.
 func (s *Service) DeleteSnapshot(ctx context.Context, c resource.Caller, token resource.ClientToken, req resource.DeleteSnapshotRequest) (resource.Accepted[resource.Snapshot], error) {
 	token, err := fillToken(token)

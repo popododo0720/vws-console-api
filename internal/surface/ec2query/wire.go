@@ -374,6 +374,7 @@ type imageItem struct {
 	RootDeviceType     string `xml:"rootDeviceType"`
 	VirtualizationType string `xml:"virtualizationType"`
 	Public             bool   `xml:"isPublic"`
+	Description        string `xml:"description,omitempty"`
 }
 
 type createKeyXML struct {
@@ -830,7 +831,7 @@ func imageXML(img resource.Image) imageItem {
 	return imageItem{
 		ImageID: img.ID.String(), Name: img.Name, State: img.State, OwnerID: img.OwnerID.String(),
 		Public: img.Public, Architecture: "x86_64", ImageType: "machine", RootDeviceType: "ebs",
-		VirtualizationType: "hvm",
+		VirtualizationType: "hvm", Description: img.Description,
 	}
 }
 

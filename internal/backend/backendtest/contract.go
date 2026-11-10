@@ -334,6 +334,7 @@ func Run(t *testing.T, newSet Harness) {
 	exerciseLaunchExtraVolumes(ctx, t, set, account, created.Items[0].ID, img)
 	exerciseTerminateRelease(ctx, t, set, account, created.Items[0].ID, img)
 	exerciseVolumeTypes(ctx, t, set, account)
+	exerciseRegisterImage(ctx, t, set, account, other)
 }
 
 // exerciseImageRegion checks that a launch refuses an image the process cannot

@@ -155,6 +155,8 @@ func (h *handler) serve(w http.ResponseWriter, r *http.Request) {
 		h.createSnapshot(w, r, caller)
 	case resource.ActionDeleteSnapshot.String():
 		h.deleteSnapshot(w, r, caller)
+	case resource.ActionRegisterImage.String():
+		h.registerImage(w, r, caller)
 	case resource.ActionAssociateAddress.String():
 		h.associateAddress(w, r, caller)
 	case resource.ActionDisassociateAddress.String():
@@ -842,6 +844,8 @@ func rejectUnknown(r *http.Request, action string) error {
 		allow = allowCreateSnapshot
 	case resource.ActionDeleteSnapshot.String():
 		allow = allowDeleteSnapshot
+	case resource.ActionRegisterImage.String():
+		allow = allowRegisterImage
 	case resource.ActionAssociateAddress.String():
 		allow = allowAssociateAddress
 	case resource.ActionDisassociateAddress.String():
@@ -1505,6 +1509,7 @@ func dispatchedAction(action string) bool {
 		resource.ActionReleaseAddress.String(),
 		resource.ActionCreateSnapshot.String(),
 		resource.ActionDeleteSnapshot.String(),
+		resource.ActionRegisterImage.String(),
 		resource.ActionAssociateAddress.String(),
 		resource.ActionDisassociateAddress.String(),
 		"DescribeInstances",
@@ -1601,6 +1606,9 @@ func ec2Refinement(e *resource.Error) (errs.AWSEntry, bool) {
 		}
 		if resource.IsAttachmentLimitExceeded(e) {
 			return badRequest("AttachmentLimitExceeded")
+		}
+		if resource.IsInvalidImageName(e) {
+			return badRequest("InvalidAMIName.Malformed")
 		}
 		// EC2 names a malformed instance ID separately (#246).
 		if e.Kind == resource.KindInstance {

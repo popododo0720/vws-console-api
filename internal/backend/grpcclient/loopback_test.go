@@ -78,7 +78,7 @@ func dialLoopbackClock(t *testing.T, world *fake.World, now time.Time, clock fun
 	)
 	loop := newLoopWorld(world.Set(), now)
 	computev1.RegisterInstanceServiceServer(computeSrv, &instanceSrv{w: loop})
-	computev1.RegisterImageServiceServer(computeSrv, imageSrv{})
+	computev1.RegisterImageServiceServer(computeSrv, &imageSrv{w: loop, names: map[string]resource.ImageID{}})
 	computev1.RegisterKeyPairServiceServer(computeSrv, &keySrv{w: loop})
 	networkv1.RegisterAddressServiceServer(computeSrv, &addressSrv{w: loop})
 	networkv1.RegisterVpcServiceServer(computeSrv, &vpcSrv{w: loop})
@@ -520,22 +520,6 @@ func (w *loopWorld) lookup(ctx context.Context, name string) (resource.Operation
 	return op, nil
 }
 
-// imageSrv is compute's image store. The loop world holds no images, so every
-// read is not found and a launch of any non-catalog image is refused before a
-// volume or instance exists. A list is empty, so DescribeImages reports the
-// catalog alone.
-type imageSrv struct {
-	computev1.UnimplementedImageServiceServer
-}
-
-func (imageSrv) GetImage(context.Context, *computev1.GetImageRequest) (*computev1.Image, error) {
-	return nil, toStatus(resource.NotFound(resource.KindImage, ""))
-}
-
-func (imageSrv) ListImages(context.Context, *computev1.ListImagesRequest) (*computev1.ListImagesResponse, error) {
-	return &computev1.ListImagesResponse{}, nil
-}
-
 type instanceSrv struct {
 	computev1.UnimplementedInstanceServiceServer
 	w *loopWorld
@@ -731,7 +715,8 @@ func (s *instanceSrv) changePower(ctx context.Context, req *computev1.UpdateInst
 		resource.ActionDeleteKeyPair, resource.ActionDeleteSecurityGroup, resource.ActionDeleteSubnet,
 		resource.ActionAllocateAddress, resource.ActionReleaseAddress, resource.ActionCreateSnapshot, resource.ActionDeleteSnapshot,
 		resource.ActionAssociateAddress, resource.ActionDisassociateAddress,
-		resource.ActionModifyVolume, resource.ActionCreateTags, resource.ActionDetachVolume, resource.ActionDeleteTags:
+		resource.ActionModifyVolume, resource.ActionCreateTags, resource.ActionDetachVolume, resource.ActionDeleteTags,
+		resource.ActionRegisterImage:
 		return nil, toStatus(resource.Invalid("power", "unsupported"))
 	default:
 		return nil, toStatus(resource.Invalid("power", "unsupported"))
@@ -1600,7 +1585,10 @@ func operationVerb(action resource.Action) commonv1.OperationVerb {
 		return commonv1.OperationVerb_OPERATION_VERB_UPDATE
 	case resource.ActionTerminateInstances, resource.ActionDeleteVpc, resource.ActionDeleteVolume, resource.ActionDeleteKeyPair, resource.ActionDeleteSecurityGroup, resource.ActionDeleteSubnet, resource.ActionReleaseAddress, resource.ActionDeleteSnapshot:
 		return commonv1.OperationVerb_OPERATION_VERB_DELETE
-	case resource.ActionRunInstances, resource.ActionCreateSubnet, resource.ActionCreateVpc, resource.ActionCreateVolume, resource.ActionCreateSecurityGroup, resource.ActionCreateKeyPair, resource.ActionAllocateAddress, resource.ActionCreateSnapshot:
+	case resource.ActionRunInstances, resource.ActionCreateSubnet, resource.ActionCreateVpc, resource.ActionCreateVolume,
+		resource.ActionCreateSecurityGroup, resource.ActionCreateKeyPair, resource.ActionAllocateAddress,
+		resource.ActionCreateSnapshot,
+		resource.ActionRegisterImage:
 		return commonv1.OperationVerb_OPERATION_VERB_CREATE
 	default:
 		return commonv1.OperationVerb_OPERATION_VERB_UNSPECIFIED
@@ -1655,7 +1643,14 @@ func targetName(projectID string, ref resource.Ref, vpcID string) string {
 		return addressName(projectID, ref.ID())
 	case resource.KindSnapshot:
 		return snapshotName(projectID, ref.ID())
-	case resource.KindImage, resource.KindReservation, resource.KindBucket, resource.KindObject, resource.KindOperation, resource.KindUnspecified:
+	case resource.KindImage:
+		id, err := resource.Parse[resource.ImageID](ref.ID())
+		if err != nil {
+			return ""
+		}
+		return copiedImageName(projectID, id)
+	case resource.KindReservation, resource.KindBucket, resource.KindObject, resource.KindOperation,
+		resource.KindUnspecified:
 		return ""
 	default:
 		return ""

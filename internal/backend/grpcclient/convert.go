@@ -102,6 +102,8 @@ func actionOf(resourceName string, verb commonv1.OperationVerb) (resource.Action
 			return resource.ActionAllocateAddress, nil
 		case containsSegment(resourceName, "snapshots"):
 			return resource.ActionCreateSnapshot, nil
+		case containsSegment(resourceName, "images"):
+			return resource.ActionRegisterImage, nil
 		default:
 			return 0, resource.Internal(errors.New("unsupported operation"))
 		}
@@ -230,6 +232,12 @@ func refFromResource(name string) (resource.Ref, bool) {
 		return parsed.Ref(), true
 	case "snapshots":
 		parsed, err := resource.Parse[resource.SnapshotID](id)
+		if err != nil {
+			return resource.Ref{}, false
+		}
+		return parsed.Ref(), true
+	case "images":
+		parsed, err := imageIDOf(id)
 		if err != nil {
 			return resource.Ref{}, false
 		}
@@ -462,7 +470,7 @@ func imageModel(in *computev1.Image, caller resource.AccountID) (resource.Image,
 	}
 	return resource.Image{
 		ID: id, OwnerID: owner, Name: name, State: imageStateOf(in.GetStatus().GetObserved().GetState()),
-		Public: owner != caller, SizeGiB: in.GetStatus().GetSizeGib(),
+		Public: owner != caller, SizeGiB: in.GetStatus().GetSizeGib(), Description: in.GetSpec().GetDescription(),
 	}, nil
 }
 

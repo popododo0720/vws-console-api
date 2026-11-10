@@ -66,10 +66,11 @@ var EC2ByKind = map[errs.Code]map[errs.Kind]errs.AWSEntry{
 	errs.CodeConflict: {
 		// A key pair is not an instance: EC2's IncorrectState is the
 		// resource-neutral state error (#291).
-		errs.KindVolume:  {HTTP: http.StatusBadRequest, Code: "IncorrectState"},
-		errs.KindKeyPair: {HTTP: http.StatusBadRequest, Code: "IncorrectState"},
-		errs.KindVpc:     {HTTP: http.StatusBadRequest, Code: "DependencyViolation"},
-		errs.KindSubnet:  {HTTP: http.StatusBadRequest, Code: "DependencyViolation"},
+		errs.KindVolume:   {HTTP: http.StatusBadRequest, Code: "IncorrectState"},
+		errs.KindKeyPair:  {HTTP: http.StatusBadRequest, Code: "IncorrectState"},
+		errs.KindSnapshot: {HTTP: http.StatusBadRequest, Code: "IncorrectState"},
+		errs.KindVpc:      {HTTP: http.StatusBadRequest, Code: "DependencyViolation"},
+		errs.KindSubnet:   {HTTP: http.StatusBadRequest, Code: "DependencyViolation"},
 	},
 }
 
