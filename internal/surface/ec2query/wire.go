@@ -336,9 +336,33 @@ type createGroupXML struct {
 }
 
 type authorizeXML struct {
-	XMLName   struct{} `xml:"AuthorizeSecurityGroupIngressResponse"`
-	RequestID string   `xml:"requestId"`
-	Return    bool     `xml:"return"`
+	XMLName   struct{}               `xml:"AuthorizeSecurityGroupIngressResponse"`
+	RequestID string                 `xml:"requestId"`
+	Return    bool                   `xml:"return"`
+	Rules     []securityGroupRuleXML `xml:"securityGroupRuleSet>item"`
+}
+
+// securityGroupRuleXML is one EC2 SecurityGroupRule.
+type securityGroupRuleXML struct {
+	ID       string `xml:"securityGroupRuleId"`
+	GroupID  string `xml:"groupId"`
+	OwnerID  string `xml:"groupOwnerId"`
+	IsEgress bool   `xml:"isEgress"`
+	Protocol string `xml:"ipProtocol"`
+	FromPort int    `xml:"fromPort"`
+	ToPort   int    `xml:"toPort"`
+	CidrIpv4 string `xml:"cidrIpv4"`
+}
+
+func securityGroupRulesXML(rules []resource.SecurityGroupRule) []securityGroupRuleXML {
+	out := make([]securityGroupRuleXML, 0, len(rules))
+	for _, r := range rules {
+		out = append(out, securityGroupRuleXML{
+			ID: r.ID, GroupID: r.GroupID.String(), OwnerID: r.OwnerID.String(), IsEgress: r.IsEgress,
+			Protocol: r.Protocol, FromPort: r.FromPort, ToPort: r.ToPort, CidrIpv4: r.CidrIpv4,
+		})
+	}
+	return out
 }
 
 type revokeXML struct {

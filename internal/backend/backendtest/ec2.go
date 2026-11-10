@@ -400,6 +400,27 @@ func exerciseEC2(ctx context.Context, t *testing.T, set backend.Set, account res
 	if err != nil || replayedMore.Operation.ID != openedMore.Operation.ID || len(replayedMore.Items[0].Rules) != 3 {
 		t.Fatalf("several rules retry: %v %+v", err, replayedMore)
 	}
+	// #596: every rule gets an sgr- id that does not move, and a retry names
+	// the same ids.
+	ssh := resource.IngressRule{Protocol: "tcp", FromPort: 22, ToPort: 22, Cidr: "10.0.0.0/16"}
+	sshIDs := opened.Items[0].RulesOf([]resource.IngressRule{ssh})
+	moreIDs := openedMore.Items[0].RulesOf(moreRules.Rules)
+	if len(sshIDs) != 1 || len(moreIDs) != 2 {
+		t.Fatalf("rule ids: %+v %+v", sshIDs, moreIDs)
+	}
+	seenIDs := map[string]bool{}
+	for _, r := range append(slices.Clone(sshIDs), moreIDs...) {
+		if !resource.IsRuleID(r.ID) || seenIDs[r.ID] || r.GroupID != group.Items[0].ID || r.OwnerID != scope.Account || r.IsEgress {
+			t.Fatalf("rule id %+v", r)
+		}
+		seenIDs[r.ID] = true
+	}
+	if got := openedMore.Items[0].RulesOf([]resource.IngressRule{ssh}); len(got) != 1 || got[0].ID != sshIDs[0].ID {
+		t.Fatalf("ssh rule id moved: %+v, was %+v", got, sshIDs)
+	}
+	if got := replayedMore.Items[0].RulesOf(moreRules.Rules); !slices.Equal(got, moreIDs) {
+		t.Fatalf("retry rule ids %+v, want %+v", got, moreIDs)
+	}
 	smtp := resource.IngressRule{Protocol: "tcp", FromPort: 25, ToPort: 25, Cidr: "10.0.0.0/16"}
 	for _, rules := range [][]resource.IngressRule{moreRules.Rules[:1], {moreRules.Rules[0], smtp}} {
 		_, err := set.Network.AuthorizeSecurityGroupIngress(ctx,
@@ -437,7 +458,8 @@ func exerciseEC2(ctx context.Context, t *testing.T, set backend.Set, account res
 		ID: group.Items[0].ID, Rule: resource.IngressRule{Protocol: "udp", FromPort: 53, ToPort: 53, Cidr: "10.0.0.0/16"},
 	})
 	if err != nil || len(revoked.Items[0].Rules) != 1 ||
-		revoked.Operation.Action != resource.ActionRevokeSecurityGroupIngress {
+		revoked.Operation.Action != resource.ActionRevokeSecurityGroupIngress ||
+		!slices.Equal(revoked.Items[0].RulesOf([]resource.IngressRule{ssh}), sshIDs) {
 		t.Fatalf("revoke: %v %+v", err, revoked)
 	}
 	last := backend.Mutation{Scope: scope, Key: "k-revoke-last", Fingerprint: "fp-revoke-last"}

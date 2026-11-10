@@ -418,13 +418,18 @@ func (h *handler) authorizeIngress(w http.ResponseWriter, r *http.Request, c res
 		writeErr(w, r, err)
 		return
 	}
-	if _, err := h.svc.AuthorizeSecurityGroupIngress(r.Context(), c, token, resource.AuthorizeSecurityGroupIngressRequest{
+	acc, err := h.svc.AuthorizeSecurityGroupIngress(r.Context(), c, token, resource.AuthorizeSecurityGroupIngressRequest{
 		ID: id, Rules: rules,
-	}); err != nil {
+	})
+	if err != nil {
 		writeErr(w, r, err)
 		return
 	}
-	writeXML(w, authorizeXML{RequestID: requestID(r), Return: true})
+	var added []resource.SecurityGroupRule
+	if len(acc.Items) == 1 {
+		added = acc.Items[0].RulesOf(rules)
+	}
+	writeXML(w, authorizeXML{RequestID: requestID(r), Return: true, Rules: securityGroupRulesXML(added)})
 }
 
 func (h *handler) revokeIngress(w http.ResponseWriter, r *http.Request, c resource.Caller) {

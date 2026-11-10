@@ -488,6 +488,9 @@ type SecurityGroup struct {
 	// and request id there so a retry and a polled operation name the action.
 	Labels map[string]string `json:"-"`
 	Rules  []IngressRule     `json:"ipPermissions,omitempty"`
+	// RuleIDs holds the stable id of each rule, index for index with Rules.
+	// Surfaces show them through RulesOf.
+	RuleIDs []string `json:"-"`
 }
 
 // Owner returns the account that owns the group.

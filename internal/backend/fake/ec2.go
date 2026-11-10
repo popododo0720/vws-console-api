@@ -722,15 +722,25 @@ func (n network) AuthorizeSecurityGroupIngress(ctx context.Context, m backend.Mu
 	if len(group.Rules)+len(req.Rules) > resource.MaxIngressRules {
 		return resource.Accepted[resource.SecurityGroup]{}, resource.RulesPerSecurityGroupLimitExceeded(req.ID.String())
 	}
-	previous := group.Rules
+	ids := make([]string, 0, len(req.Rules))
+	for range req.Rules {
+		id, err := resource.MintRuleID(n.w.entropy)
+		if err != nil {
+			return resource.Accepted[resource.SecurityGroup]{}, err
+		}
+		ids = append(ids, id)
+	}
+	previous, previousIDs := group.Rules, group.RuleIDs
 	group.Rules = append(slices.Clone(previous), req.Rules...)
+	group.RuleIDs = append(slices.Clone(previousIDs), ids...)
 	op, err := n.w.newOp(m.Account, resource.ServiceNetwork, resource.ActionAuthorizeSecurityGroupIngress, []resource.Ref{group.ID.Ref()}, func(time.Time) {})
 	if err != nil {
-		group.Rules = previous
+		group.Rules, group.RuleIDs = previous, previousIDs
 		return resource.Accepted[resource.SecurityGroup]{}, err
 	}
 	item := *group
 	item.Rules = append([]resource.IngressRule(nil), group.Rules...)
+	item.RuleIDs = slices.Clone(group.RuleIDs)
 	acc := resource.Accepted[resource.SecurityGroup]{Operation: op, Items: []resource.SecurityGroup{item}}
 	n.w.finish(m.Key, m.Fingerprint, acc)
 	return acc, nil
@@ -762,19 +772,20 @@ func (n network) RevokeSecurityGroupIngress(
 	if index < 0 {
 		return resource.Accepted[resource.SecurityGroup]{}, resource.PermissionNotFound(req.ID.String())
 	}
-	previous := group.Rules
-	rules := make([]resource.IngressRule, 0, len(previous)-1)
-	rules = append(rules, previous[:index]...)
-	rules = append(rules, previous[index+1:]...)
-	group.Rules = rules
+	previous, previousIDs := group.Rules, group.RuleIDs
+	group.Rules = slices.Delete(slices.Clone(previous), index, index+1)
+	if index < len(previousIDs) {
+		group.RuleIDs = slices.Delete(slices.Clone(previousIDs), index, index+1)
+	}
 	op, err := n.w.newOp(m.Account, resource.ServiceNetwork, resource.ActionRevokeSecurityGroupIngress,
 		[]resource.Ref{group.ID.Ref()}, func(time.Time) {})
 	if err != nil {
-		group.Rules = previous
+		group.Rules, group.RuleIDs = previous, previousIDs
 		return resource.Accepted[resource.SecurityGroup]{}, err
 	}
 	item := *group
 	item.Rules = append([]resource.IngressRule(nil), group.Rules...)
+	item.RuleIDs = slices.Clone(group.RuleIDs)
 	acc := resource.Accepted[resource.SecurityGroup]{Operation: op, Items: []resource.SecurityGroup{item}}
 	n.w.finish(m.Key, m.Fingerprint, acc)
 	return acc, nil
