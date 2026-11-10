@@ -162,6 +162,9 @@ func TestBadDescriptionBlockIsAnError(t *testing.T) {
 			t.Fatalf("ReadTags accepted the description %q", desc)
 		}
 	}
+	if got, err := WithDescriptionTags("vws:tags {}\nvws:tags {\"a\":\"b\"}", nil); err == nil {
+		t.Fatalf("WithDescriptionTags dropped two blocks: %q", got)
+	}
 }
 
 // Only a "vws:tags {" line is the block: other text an operator writes, a JSON
@@ -173,6 +176,12 @@ func TestOnlyAJSONObjectLineIsTheBlock(t *testing.T) {
 		got, err := ReadTags([]string{"vws.t.a.b"}, desc)
 		if err != nil || !reflect.DeepEqual(got.User, map[string]string{"a": "b"}) {
 			t.Fatalf("ReadTags(%q) = %v, %v", desc, got.User, err)
+		}
+		if desc == "vws:tags {}" {
+			continue
+		}
+		if kept, err := WithDescriptionTags(desc, nil); err != nil || kept != desc {
+			t.Fatalf("WithDescriptionTags(%q, nil) = %q, %v; want the text kept", desc, kept, err)
 		}
 	}
 	got, err := ReadTags(nil, "note\r\nvws:tags {\"k\":\"v\"}\r\n")

@@ -224,13 +224,20 @@ func descriptionTags(description string) (map[string]string, error) {
 }
 
 // WithDescriptionTags returns the description with its vws:tags block replaced
-// by one holding tags, or removed when tags is empty. Other lines stay.
+// by one holding tags, or removed when tags is empty. Other lines stay, the
+// ones ReadTags reads as text included. Two blocks are an error, as in ReadTags.
 func WithDescriptionTags(description string, tags map[string]string) (string, error) {
 	var kept []string
+	found := false
 	for line := range strings.SplitSeq(description, "\n") {
-		if !strings.HasPrefix(line, descriptionPrefix) {
+		if _, ok := descriptionBlock(line); !ok {
 			kept = append(kept, line)
+			continue
 		}
+		if found {
+			return "", fmt.Errorf("proxmox: the description has more than one %q block", descriptionPrefix)
+		}
+		found = true
 	}
 	rest := strings.TrimRight(strings.Join(kept, "\n"), "\n")
 	if len(tags) == 0 {
