@@ -21,6 +21,7 @@ project is someone else's cloud.
 | `internal/backend/grpcclient` | The contract over gRPC. The only package that sees protobuf. |
 | `internal/backend/launch` | The RunInstances launch record and the tracker that writes it on transitions. |
 | `internal/backend/launch/kubestore` | Launch records as ConfigMaps. The only package that sees Kubernetes types. |
+| `internal/backend/proxmox` | The Proxmox VE backend; `ids.go` computes EC2 ids from Proxmox data. |
 | `internal/sigv4` | Signature verification, plus `Sign` for tests. |
 | `internal/surface/*` | `console` (JSON), `ec2query`, `s3rest` codecs; `interop` drives several surfaces against one world. |
 | `internal/server` | One listener per surface, request IDs, shutdown. |
@@ -46,6 +47,7 @@ change both files together.
 | TerminateInstances clears each Elastic IP association that names an instance of the request before it deletes any of them; compute deletes the delete-on-termination boot volume after it. Each step's request id comes from the client token, so a retry finishes a terminate cut short before its deletes or at a single instance's delete; one cut short between two deletes is #645. | `TestTerminateReleasesTheAddressBeforeTheInstance`, `TestTerminateCutShortIsFinishedByTheRetry`, `TestTerminateOfTwoReleasesBothBeforeEitherDelete`, `backendtest.Run` (`exerciseTerminateRelease`) |
 | Untrusted strings become IDs only through `resource.Parse` or JSON decoding. | The compiler (unexported ID fields) |
 | Only `internal/backend` mints IDs and operation IDs. | `internal/hygiene` |
+| Proxmox ids are computed by `proxmox.IDs` from the cluster name and Proxmox data: a VM's `i-` with a uuid never takes its VMID, no two id forms hash the same input, and an empty, NUL or malformed input is an error, never an id. | `TestInstanceIDIgnoresVMID`, `TestFormulasArePinned`, `TestFormsNeverShareHashInput`, `TestBadInputsAreRefused` |
 | Every switch over a model enum handles every value. | `exhaustive` |
 | No package-level mutable state. | `gochecknoglobals` |
 | A long-running mutation takes a client token and returns `resource.Accepted` through `cloud.mutate`. | The compiler (kernel signatures) |
