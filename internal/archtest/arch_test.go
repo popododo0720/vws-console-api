@@ -97,6 +97,11 @@ var ownerRules = []struct {
 		[]string{"internal/backend/launch/kubestore"},
 		"Kubernetes types stay inside internal/backend/launch/kubestore",
 	},
+	{
+		hasPrefix(module + "/internal/backend/proxmox/pveclient"),
+		[]string{"internal/backend/proxmox"},
+		"PVE API types stay inside internal/backend/proxmox",
+	},
 }
 
 func constrainedDirs() []string {
@@ -172,14 +177,19 @@ func TestArchitectureRules(t *testing.T) {
 		"internal/widget/kube.go":                 `package widget; import _ "k8s.io/client-go/kubernetes"`,
 		"internal/widget/runtime.go":              `package widget; import _ "sigs.k8s.io/controller-runtime/pkg/client"`,
 		"internal/backend/launch/kubestore/ok.go": `package kubestore; import _ "k8s.io/api/core/v1"`,
-		"internal/surface/ec2query/ok.go":         `package ec2query; import _ "` + module + `/internal/cloud"`,
-		"internal/resource/std.go":                `package resource; import _ "fmt"`,
-		"internal/cloud/backend.go":               `package cloud; import _ "` + module + `/internal/backend"`,
-		"internal/surface/s3rest/surface.go":      `package s3rest; import _ "` + module + `/internal/sigv4"`,
+		"internal/backend/grpcclient/pve.go": `package grpcclient; import _ "` +
+			module + `/internal/backend/proxmox/pveclient"`,
+		"internal/backend/proxmox/ok.go":     `package proxmox; import _ "` + module + `/internal/backend/proxmox/pveclient"`,
+		"internal/surface/ec2query/ok.go":    `package ec2query; import _ "` + module + `/internal/cloud"`,
+		"internal/resource/std.go":           `package resource; import _ "fmt"`,
+		"internal/cloud/backend.go":          `package cloud; import _ "` + module + `/internal/backend"`,
+		"internal/surface/s3rest/surface.go": `package s3rest; import _ "` + module + `/internal/sigv4"`,
 	} {
 		writeFile(t, filepath.Join(probe, rel), src)
 	}
 	want := []string{
+		"internal/backend/grpcclient imports " + module + "/internal/backend/proxmox/pveclient: " +
+			"PVE API types stay inside internal/backend/proxmox",
 		"internal/cloud imports net/http: the kernel takes and returns resource types, " +
 			"never HTTP, a signature, or a surface",
 		"internal/cloud imports net/http/httptest: the kernel takes and returns resource types, " +

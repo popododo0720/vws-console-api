@@ -114,6 +114,13 @@ linters:
               desc: only internal/backend/launch/kubestore speaks to the Kubernetes API
             - pkg: sigs.k8s.io
               desc: only internal/backend/launch/kubestore speaks to the Kubernetes API
+        pve-stays-in-proxmox:
+          files:
+            - "$all"
+            - "!**/internal/backend/proxmox/**"
+          deny:
+            - pkg: github.com/popododo0720/vws-console-api/internal/backend/proxmox/pveclient
+              desc: PVE API types stay inside internal/backend/proxmox
     exhaustive:
       default-signifies-exhaustive: false
     tagliatelle:
