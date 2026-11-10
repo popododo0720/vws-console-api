@@ -102,6 +102,11 @@ var ownerRules = []struct {
 		[]string{"internal/backend/proxmox"},
 		"PVE API types stay inside internal/backend/proxmox",
 	},
+	{
+		hasPrefix("go.etcd.io"),
+		[]string{"internal/admin/store/etcdstore"},
+		"etcd types stay inside internal/admin/store/etcdstore",
+	},
 }
 
 func constrainedDirs() []string {
@@ -179,11 +184,14 @@ func TestArchitectureRules(t *testing.T) {
 		"internal/backend/launch/kubestore/ok.go": `package kubestore; import _ "k8s.io/api/core/v1"`,
 		"internal/backend/grpcclient/pve.go": `package grpcclient; import _ "` +
 			module + `/internal/backend/proxmox/pveclient"`,
-		"internal/backend/proxmox/ok.go":     `package proxmox; import _ "` + module + `/internal/backend/proxmox/pveclient"`,
-		"internal/surface/ec2query/ok.go":    `package ec2query; import _ "` + module + `/internal/cloud"`,
-		"internal/resource/std.go":           `package resource; import _ "fmt"`,
-		"internal/cloud/backend.go":          `package cloud; import _ "` + module + `/internal/backend"`,
-		"internal/surface/s3rest/surface.go": `package s3rest; import _ "` + module + `/internal/sigv4"`,
+		"internal/backend/proxmox/ok.go": `package proxmox; import _ "` +
+			module + `/internal/backend/proxmox/pveclient"`,
+		"internal/surface/ec2query/ok.go":      `package ec2query; import _ "` + module + `/internal/cloud"`,
+		"internal/resource/std.go":             `package resource; import _ "fmt"`,
+		"internal/cloud/backend.go":            `package cloud; import _ "` + module + `/internal/backend"`,
+		"internal/surface/s3rest/surface.go":   `package s3rest; import _ "` + module + `/internal/sigv4"`,
+		"internal/widget/etcd.go":              `package widget; import _ "go.etcd.io/etcd/client/v3"`,
+		"internal/admin/store/etcdstore/ok.go": `package etcdstore; import _ "go.etcd.io/etcd/client/v3"`,
 	} {
 		writeFile(t, filepath.Join(probe, rel), src)
 	}
@@ -214,6 +222,8 @@ func TestArchitectureRules(t *testing.T) {
 			"protobuf and gRPC types stay inside internal/backend/grpcclient",
 		"internal/widget imports google.golang.org/protobuf/proto: " +
 			"protobuf and gRPC types stay inside internal/backend/grpcclient",
+		"internal/widget imports go.etcd.io/etcd/client/v3: " +
+			"etcd types stay inside internal/admin/store/etcdstore",
 		"internal/widget imports k8s.io/client-go/kubernetes: " +
 			"Kubernetes types stay inside internal/backend/launch/kubestore",
 		"internal/widget imports sigs.k8s.io/controller-runtime/pkg/client: " +
