@@ -137,8 +137,8 @@ func (f *Fake) config(t *Token, r *http.Request) (any, *failure) {
 }
 
 // permissions answers for the path asked or, as get_effective_permissions
-// does, for the fixed top paths, every ACL path of any token and every pool
-// member, leaving out the paths t holds nothing on.
+// does, for the fixed top paths, every node of the ACL tree of any token and
+// every pool member, leaving out the paths t holds nothing on.
 func (f *Fake) permissions(t *Token, r *http.Request) (any, *failure) {
 	out := map[string]map[string]int{}
 	if p := r.URL.Query().Get("path"); p != "" {
@@ -148,7 +148,7 @@ func (f *Fake) permissions(t *Token, r *http.Request) (any, *failure) {
 	paths := []string{"/", "/access", "/access/groups", "/nodes", "/pool", "/sdn", "/storage", "/vms"}
 	for _, tok := range f.s.Tokens {
 		for _, a := range tok.ACL {
-			paths = append(paths, a.Path)
+			paths = append(paths, levels(a.Path)...)
 		}
 	}
 	for _, vm := range f.s.VMs {

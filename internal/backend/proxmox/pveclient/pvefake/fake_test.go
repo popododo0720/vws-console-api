@@ -169,6 +169,7 @@ func TestDeeperACLReplacesInherited(t *testing.T) {
 		{Path: "/", Role: "PVEAuditor"},
 		{Path: "/vms/101", Role: "NoAccess"},
 		{Path: "/nodes/pve1", Role: "VMReader"},
+		{Path: "/sdn/zones/z1", Role: "VMReader"},
 	}})
 	s.Tokens[1].ACL[0].Propagate = &no
 	s.Tokens[1].ACL = append(s.Tokens[1].ACL, pvefake.ACE{Path: "/vms", Role: "VMReader", Propagate: &no})
@@ -184,6 +185,10 @@ func TestDeeperACLReplacesInherited(t *testing.T) {
 	}
 	if perms, err := mixed.AccessPermissions(ctx, ""); err != nil || perms["/vms/101"] != nil || perms["/"] == nil {
 		t.Errorf("permissions = %v, %v; want / and no NoAccess path", perms, err)
+	}
+	perms, err = client(t, srv, auditor, auditorKey).AccessPermissions(ctx, "")
+	if err != nil || perms["/sdn/zones"]["Sys.Audit"] != 1 {
+		t.Errorf("auditor permissions = %v, %v; want the ACL tree node /sdn/zones", perms, err)
 	}
 	pool := client(t, srv, poolA, poolAKey)
 	if _, err := pool.VMConfig(ctx, pveclient.VM{Node: "pve1", VMID: 100}); err != nil {

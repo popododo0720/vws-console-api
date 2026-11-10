@@ -150,16 +150,22 @@ func (f *Fake) privs(t *Token, p string) map[string]int {
 	return held
 }
 
-func (f *Fake) walk(t *Token, p string) map[string]int {
-	levels := []string{"/"}
+// levels is p and every path above it, "/" first.
+func levels(p string) []string {
+	out := []string{"/"}
 	for i := 1; i < len(p); i++ {
 		if p[i] == '/' {
-			levels = append(levels, p[:i])
+			out = append(out, p[:i])
 		}
 	}
 	if p != "/" {
-		levels = append(levels, p)
+		out = append(out, p)
 	}
+	return out
+}
+
+func (f *Fake) walk(t *Token, p string) map[string]int {
+	levels := levels(p)
 	// From "/" down, a level with entries for the token replaces the roles it
 	// inherited; above p itself only propagating entries count.
 	roles := map[string]int{}
