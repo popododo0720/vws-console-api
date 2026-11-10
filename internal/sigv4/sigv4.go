@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -14,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/popododo0720/vws-console-api/internal/backend"
 	"github.com/popododo0720/vws-console-api/internal/resource"
 )
 
@@ -193,10 +195,12 @@ func (f Lookup) Authenticate(ctx context.Context, req AuthRequest) (Identity, er
 	return Identity{Account: cred.Account, Principal: cred.Principal, Root: cred.Root}, nil
 }
 
-// Verifier checks one service and region.
+// Verifier checks one service in any region of a catalog.
 type Verifier struct {
 	Service Service
-	Region  string
+	// Regions is read on every request, so a region added to it at runtime
+	// is accepted at once. A nil catalog accepts no region.
+	Regions backend.RegionCatalog
 	Auth    Authenticator
 	Now     func() time.Time
 	Skew    time.Duration
@@ -219,6 +223,20 @@ func NewVerifier(v Verifier) *Verifier {
 }
 
 const maxQueryParams = 128
+
+func (v *Verifier) checkRegion(ctx context.Context, region string) error {
+	if v.Regions == nil {
+		return Reject(FailureMalformed, resource.Unauthenticated("credential scope rejected"))
+	}
+	known, err := backend.HasRegion(ctx, v.Regions, region)
+	if err != nil {
+		return resource.Internal(fmt.Errorf("read region catalog: %w", err))
+	}
+	if !known {
+		return Reject(FailureMalformed, resource.Unauthenticated("credential scope rejected"))
+	}
+	return nil
+}
 
 // Verify checks r, replaces r.Body with the bytes that were signed, and
 // returns who signed it. The Authenticator checks the signature, so no secret
@@ -248,8 +266,12 @@ func (v *Verifier) Verify(r *http.Request) (resource.Caller, error) {
 			resource.Unauthenticated("request time is outside the allowed window"))
 	}
 	parts := strings.Split(auth.credential, "/")
-	if len(parts) != 5 || parts[1] != stamp.Format("20060102") || parts[2] != v.Region || parts[3] != string(v.Service) || parts[4] != "aws4_request" {
+	if len(parts) != 5 || parts[1] != stamp.Format("20060102") || parts[3] != string(v.Service) ||
+		parts[4] != "aws4_request" {
 		return resource.Caller{}, Reject(FailureMalformed, resource.Unauthenticated("credential scope rejected"))
+	}
+	if err := v.checkRegion(r.Context(), parts[2]); err != nil {
+		return resource.Caller{}, err
 	}
 	if v.Auth == nil {
 		return resource.Caller{}, unknownKey()

@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/popododo0720/vws-console-api/internal/backend"
 	"github.com/popododo0720/vws-console-api/internal/backend/fake"
 	"github.com/popododo0720/vws-console-api/internal/cloud"
 	"github.com/popododo0720/vws-console-api/internal/iam"
@@ -285,7 +286,7 @@ func harnessWith(t *testing.T, buckets []resource.Bucket) (http.Handler, sigv4.C
 	cred := sigv4.Credential{AccessKey: "AKIDEXAMPLE", Secret: "secret", Account: account}
 	h := New(Config{Service: svc, Authorizer: iam.NewStatic(cred.AccessKey, cred.Secret, cred.Account), Verifier: sigv4.NewVerifier(sigv4.Verifier{
 		Service: sigv4.ServiceS3,
-		Region:  resource.RegionName,
+		Regions: backend.DefaultRegions(),
 		Now:     func() time.Time { return now },
 		Auth:    iam.Authenticator(iam.NewStatic(cred.AccessKey, cred.Secret, cred.Account)),
 	})})

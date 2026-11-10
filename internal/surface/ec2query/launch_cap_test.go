@@ -60,7 +60,7 @@ func TestLaunchCapRefusesAnInFlightAccount(t *testing.T) {
 		Service:    cloud.New(cloud.Config{Backends: set, Launches: throttle.NewLaunches(limits)}),
 		Authorizer: client,
 		Verifier: sigv4.NewVerifier(sigv4.Verifier{
-			Service: sigv4.ServiceEC2, Region: resource.RegionName,
+			Service: sigv4.ServiceEC2, Regions: backend.DefaultRegions(),
 			Now: func() time.Time { return now }, Auth: iam.Authenticator(client),
 		}),
 	})

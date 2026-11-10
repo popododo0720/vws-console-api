@@ -25,6 +25,7 @@ import (
 	"github.com/popododo0720/vws-lib/obs/httpobs"
 	"github.com/popododo0720/vws-lib/obs/report"
 
+	"github.com/popododo0720/vws-console-api/internal/backend"
 	"github.com/popododo0720/vws-console-api/internal/resource"
 	"github.com/popododo0720/vws-console-api/internal/service"
 	"github.com/popododo0720/vws-console-api/internal/sigv4"
@@ -367,7 +368,7 @@ func TestSigV4SignedClientHeadersSurviveInboundGuard(t *testing.T) {
 		t.Run(sf.name, func(t *testing.T) {
 			verifier := sigv4.NewVerifier(sigv4.Verifier{
 				Service: sf.service,
-				Region:  resource.RegionName,
+				Regions: backend.DefaultRegions(),
 				Now:     func() time.Time { return now },
 				Auth: sigv4.Lookup(func(_ context.Context, key string) (sigv4.Credential, bool) {
 					return cred, key == cred.AccessKey

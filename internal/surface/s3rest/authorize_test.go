@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/popododo0720/vws-console-api/internal/backend"
 	"github.com/popododo0720/vws-console-api/internal/backend/fake"
 	"github.com/popododo0720/vws-console-api/internal/cloud"
 	"github.com/popododo0720/vws-console-api/internal/iam"
@@ -40,7 +41,10 @@ func TestS3ActionsAndARNs(t *testing.T) {
 	rec := &recorder{Client: iam.WithRoot(iam.NewStatic("AKIDEXAMPLE", "secret", account), f)}
 	svc := cloud.New(cloud.Config{Backends: fake.New(fake.Options{Now: func() time.Time { return now }}).Set()})
 	h := New(Config{Service: svc, Authorizer: rec, Verifier: sigv4.NewVerifier(sigv4.Verifier{
-		Service: sigv4.ServiceS3, Region: resource.RegionName, Now: func() time.Time { return now }, Auth: iam.Authenticator(rec),
+		Service: sigv4.ServiceS3,
+		Regions: backend.DefaultRegions(),
+		Now:     func() time.Time { return now },
+		Auth:    iam.Authenticator(rec),
 	})})
 	cred := sigv4.Credential{AccessKey: "AKIDBOB", Secret: "bobsecret", Account: account}
 	base := "http://127.0.0.1:8082"

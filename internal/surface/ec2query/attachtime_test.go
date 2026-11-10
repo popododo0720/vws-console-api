@@ -35,7 +35,7 @@ func TestAttachTimeIsWhenTheAttachmentInitiated(t *testing.T) {
 	svc := cloud.New(cloud.Config{Backends: fake.New(fake.Options{Now: clock}).Set()})
 	static := iam.NewStatic(cred.AccessKey, cred.Secret, cred.Account)
 	h := New(Config{Service: svc, Authorizer: static, Verifier: sigv4.NewVerifier(sigv4.Verifier{
-		Service: sigv4.ServiceEC2, Region: resource.RegionName, Now: clock, Auth: iam.Authenticator(static),
+		Service: sigv4.ServiceEC2, Regions: backend.DefaultRegions(), Now: clock, Auth: iam.Authenticator(static),
 	})})
 	send := func(f url.Values) string {
 		t.Helper()
@@ -182,7 +182,7 @@ func TestAttachVolumeAttachTimeFallsBackToTheAccept(t *testing.T) {
 	cred := sigv4.Credential{AccessKey: "AKIDEXAMPLE", Secret: "secret", Account: account}
 	static := iam.NewStatic(cred.AccessKey, cred.Secret, cred.Account)
 	h := New(Config{Service: svc, Authorizer: static, Verifier: sigv4.NewVerifier(sigv4.Verifier{
-		Service: sigv4.ServiceEC2, Region: resource.RegionName, Now: func() time.Time { return accepted },
+		Service: sigv4.ServiceEC2, Regions: backend.DefaultRegions(), Now: func() time.Time { return accepted },
 		Auth: iam.Authenticator(static),
 	})})
 	res := signed(t, h, cred, accepted, url.Values{

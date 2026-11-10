@@ -25,6 +25,7 @@ import (
 
 	iamv1 "github.com/popododo0720/vws-proto/gen/go/vws/iam/v1"
 
+	"github.com/popododo0720/vws-console-api/internal/backend"
 	"github.com/popododo0720/vws-console-api/internal/iam"
 	"github.com/popododo0720/vws-console-api/internal/resource"
 	"github.com/popododo0720/vws-console-api/internal/sigv4"
@@ -894,7 +895,12 @@ func TestPrincipalTypes(t *testing.T) {
 func TestVerifierToAuthorizeKeepsThePrincipal(t *testing.T) {
 	c, s := harness(t)
 	now := time.Now().UTC()
-	v := sigv4.NewVerifier(sigv4.Verifier{Service: sigv4.ServiceEC2, Region: resource.RegionName, Now: func() time.Time { return now }, Auth: iam.Authenticator(c)})
+	v := sigv4.NewVerifier(sigv4.Verifier{
+		Service: sigv4.ServiceEC2,
+		Regions: backend.DefaultRegions(),
+		Now:     func() time.Time { return now },
+		Auth:    iam.Authenticator(c),
+	})
 	account, err := resource.Parse[resource.AccountID]("123456789012")
 	if err != nil {
 		t.Fatal(err)

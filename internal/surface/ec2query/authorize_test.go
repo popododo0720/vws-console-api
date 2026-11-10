@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/popododo0720/vws-console-api/internal/backend"
 	"github.com/popododo0720/vws-console-api/internal/backend/fake"
 	"github.com/popododo0720/vws-console-api/internal/cloud"
 	"github.com/popododo0720/vws-console-api/internal/iam"
@@ -29,7 +30,10 @@ func TestLimitedUserIsAuthorizedPerAction(t *testing.T) {
 	client := iam.WithRoot(iam.NewStatic("AKIDEXAMPLE", "secret", account), f)
 	svc := cloud.New(cloud.Config{Backends: fake.New(fake.Options{Now: func() time.Time { return now }}).Set()})
 	h := New(Config{Service: svc, Authorizer: client, Verifier: sigv4.NewVerifier(sigv4.Verifier{
-		Service: sigv4.ServiceEC2, Region: resource.RegionName, Now: func() time.Time { return now }, Auth: iam.Authenticator(client),
+		Service: sigv4.ServiceEC2,
+		Regions: backend.DefaultRegions(),
+		Now:     func() time.Time { return now },
+		Auth:    iam.Authenticator(client),
 	})})
 	bobCred := sigv4.Credential{AccessKey: "AKIDBOB", Secret: "bobsecret", Account: account}
 	root := sigv4.Credential{AccessKey: "AKIDEXAMPLE", Secret: "secret", Account: account}

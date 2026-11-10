@@ -243,8 +243,9 @@ func run(ctx context.Context, args []string) (err error) {
 	}
 	warnSignIn(ctx, logger, *iamMode, *rootPasswordFile)
 	authn := iam.Authenticator(auth)
+	regions := backend.DefaultRegions()
 	verifier := func(s sigv4.Service) *sigv4.Verifier {
-		return sigv4.NewVerifier(sigv4.Verifier{Service: s, Region: resource.RegionName, Auth: authn})
+		return sigv4.NewVerifier(sigv4.Verifier{Service: s, Regions: regions, Auth: authn})
 	}
 	ec2, s3 := verifier(sigv4.ServiceEC2), verifier(sigv4.ServiceS3)
 

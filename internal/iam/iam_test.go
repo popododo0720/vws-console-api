@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/popododo0720/vws-console-api/internal/backend"
 	"github.com/popododo0720/vws-console-api/internal/resource"
 	"github.com/popododo0720/vws-console-api/internal/sigv4"
 )
@@ -40,7 +41,7 @@ func verifyContext(ctx context.Context, t *testing.T, client Client, c sigv4.Cre
 		t.Fatal(err)
 	}
 	v := sigv4.NewVerifier(sigv4.Verifier{
-		Service: sigv4.ServiceEC2, Region: resource.RegionName, Now: func() time.Time { return now },
+		Service: sigv4.ServiceEC2, Regions: backend.DefaultRegions(), Now: func() time.Time { return now },
 		Auth: Authenticator(client),
 	})
 	return v.Verify(req)
@@ -177,7 +178,7 @@ func authReq(t *testing.T, key, secret, token string) sigv4.AuthRequest {
 		t.Fatal(err)
 	}
 	v := sigv4.NewVerifier(sigv4.Verifier{
-		Service: sigv4.ServiceEC2, Region: resource.RegionName, Now: func() time.Time { return now },
+		Service: sigv4.ServiceEC2, Regions: backend.DefaultRegions(), Now: func() time.Time { return now },
 		Auth: captureAuth(func(r sigv4.AuthRequest) { got = r }),
 	})
 	_, _ = v.Verify(req)

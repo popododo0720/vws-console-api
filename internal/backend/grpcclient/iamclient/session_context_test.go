@@ -12,6 +12,7 @@ import (
 
 	iamv1 "github.com/popododo0720/vws-proto/gen/go/vws/iam/v1"
 
+	"github.com/popododo0720/vws-console-api/internal/backend"
 	"github.com/popododo0720/vws-console-api/internal/iam"
 	"github.com/popododo0720/vws-console-api/internal/resource"
 	"github.com/popododo0720/vws-console-api/internal/sigv4"
@@ -47,7 +48,7 @@ func TestSessionContextReachesAuthorizeByteForByte(t *testing.T) {
 	s.assumedCtx = assumeSealed
 	now := time.Now().UTC()
 	v := sigv4.NewVerifier(sigv4.Verifier{
-		Service: sigv4.ServiceEC2, Region: resource.RegionName,
+		Service: sigv4.ServiceEC2, Regions: backend.DefaultRegions(),
 		Now: func() time.Time { return now }, Auth: iam.Authenticator(c),
 	})
 	body := strings.NewReader("Action=DescribeVpcs&Version=2016-11-15")

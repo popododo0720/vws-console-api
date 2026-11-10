@@ -25,6 +25,7 @@ import (
 
 	computev1 "github.com/popododo0720/vws-proto/gen/go/vws/compute/v1"
 
+	"github.com/popododo0720/vws-console-api/internal/backend"
 	"github.com/popododo0720/vws-console-api/internal/cloud"
 	"github.com/popododo0720/vws-console-api/internal/iam"
 	"github.com/popododo0720/vws-console-api/internal/resource"
@@ -66,7 +67,7 @@ func TestOneTraceCrossesFromHTTPToTheBackend(t *testing.T) {
 	}
 	cred := sigv4.Credential{AccessKey: "AKIDTRACE", Secret: "trace-secret", Account: account}
 	root := iam.NewStatic(cred.AccessKey, cred.Secret, account)
-	verifier := sigv4.Verifier{Service: sigv4.ServiceEC2, Region: resource.RegionName, Auth: iam.Authenticator(root)}
+	verifier := sigv4.Verifier{Service: sigv4.ServiceEC2, Regions: backend.DefaultRegions(), Auth: iam.Authenticator(root)}
 	ec2 := ec2query.New(ec2query.Config{
 		Service:    cloud.New(cloud.Config{Backends: client.Set(), Audit: slog.New(slog.DiscardHandler)}),
 		Verifier:   sigv4.NewVerifier(verifier),

@@ -18,6 +18,7 @@ import (
 
 	storagev1 "github.com/popododo0720/vws-proto/gen/go/vws/storage/v1"
 
+	"github.com/popododo0720/vws-console-api/internal/backend"
 	"github.com/popododo0720/vws-console-api/internal/backend/grpcclient"
 	"github.com/popododo0720/vws-console-api/internal/cloud"
 	"github.com/popododo0720/vws-console-api/internal/iam"
@@ -115,7 +116,7 @@ func ec2OverGRPC(t *testing.T, vols storagev1.VolumeServiceServer) (http.Handler
 		Authorizer: iam.NewStatic(cred.AccessKey, cred.Secret, cred.Account),
 		Verifier: sigv4.NewVerifier(sigv4.Verifier{
 			Service: sigv4.ServiceEC2,
-			Region:  resource.RegionName,
+			Regions: backend.DefaultRegions(),
 			Now:     func() time.Time { return now },
 			Auth:    iam.Authenticator(iam.NewStatic(cred.AccessKey, cred.Secret, cred.Account)),
 		}),

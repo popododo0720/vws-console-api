@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/popododo0720/vws-console-api/internal/backend"
 	"github.com/popododo0720/vws-console-api/internal/resource"
 )
 
@@ -19,7 +20,7 @@ func TestSourceIPAndPrincipalRef(t *testing.T) {
 	ref := resource.PrincipalRef{UniqueID: "AIDABOB", Resource: "projects/123456789012/users/bob", ProofKind: resource.ProofSigV4, Proof: "p"}
 	var seen AuthRequest
 	v := NewVerifier(Verifier{
-		Service: ServiceEC2, Region: resource.RegionName, Now: func() time.Time { return now },
+		Service: ServiceEC2, Regions: backend.DefaultRegions(), Now: func() time.Time { return now },
 		Auth: authFunc(func(ctx context.Context, r AuthRequest) (Identity, error) {
 			seen = r
 			if !r.VerifiedBy(cred.Secret) {

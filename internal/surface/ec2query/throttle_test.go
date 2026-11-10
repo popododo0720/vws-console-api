@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/popododo0720/vws-console-api/internal/backend"
 	"github.com/popododo0720/vws-console-api/internal/backend/fake"
 	"github.com/popododo0720/vws-console-api/internal/cloud"
 	"github.com/popododo0720/vws-console-api/internal/iam"
@@ -45,7 +46,7 @@ func TestRequestLimitExceededIsAWSShaped(t *testing.T) {
 	h := New(Config{
 		Service: svc, Authorizer: client,
 		Verifier: sigv4.NewVerifier(sigv4.Verifier{
-			Service: sigv4.ServiceEC2, Region: resource.RegionName,
+			Service: sigv4.ServiceEC2, Regions: backend.DefaultRegions(),
 			Now: func() time.Time { return now }, Auth: iam.Authenticator(client),
 		}),
 		Requests: throttle.New(throttle.DefaultLimits(), func() time.Time { return clock }),
@@ -101,7 +102,7 @@ func TestUnknownActionsCannotResetALaunchBucket(t *testing.T) {
 		Service:    cloud.New(cloud.Config{Backends: fake.New(fake.Options{}).Set()}),
 		Authorizer: client,
 		Verifier: sigv4.NewVerifier(sigv4.Verifier{
-			Service: sigv4.ServiceEC2, Region: resource.RegionName,
+			Service: sigv4.ServiceEC2, Regions: backend.DefaultRegions(),
 			Now: func() time.Time { return now }, Auth: iam.Authenticator(client),
 		}),
 		Requests: throttle.New(limits, func() time.Time { return now }),

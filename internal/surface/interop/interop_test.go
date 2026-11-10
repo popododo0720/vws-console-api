@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/popododo0720/vws-console-api/internal/backend"
 	"github.com/popododo0720/vws-console-api/internal/backend/backendtest"
 	"github.com/popododo0720/vws-console-api/internal/backend/fake"
 	"github.com/popododo0720/vws-console-api/internal/cloud"
@@ -437,7 +438,7 @@ func TestMissingResourceStatusIsPerSurface(t *testing.T) {
 func verifier(cred sigv4.Credential, service sigv4.Service, now time.Time) *sigv4.Verifier {
 	return sigv4.NewVerifier(sigv4.Verifier{
 		Service: service,
-		Region:  resource.RegionName,
+		Regions: backend.DefaultRegions(),
 		Now:     func() time.Time { return now },
 		Auth:    iam.Authenticator(iam.NewStatic(cred.AccessKey, cred.Secret, cred.Account)),
 	})

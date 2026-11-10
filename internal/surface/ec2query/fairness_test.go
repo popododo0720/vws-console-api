@@ -142,7 +142,7 @@ func floodAndQuiet(t *testing.T, requests throttle.Limits, held int) {
 		Service:    cloud.New(cloud.Config{Backends: set, Launches: throttle.NewLaunches(launches)}),
 		Authorizer: authz,
 		Verifier: sigv4.NewVerifier(sigv4.Verifier{
-			Service: sigv4.ServiceEC2, Region: resource.RegionName,
+			Service: sigv4.ServiceEC2, Regions: backend.DefaultRegions(),
 			Now: func() time.Time { return now }, Auth: iam.Authenticator(client),
 		}),
 		Requests: throttle.New(requests, func() time.Time { return now }),

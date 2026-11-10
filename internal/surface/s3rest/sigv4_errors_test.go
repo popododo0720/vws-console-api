@@ -10,6 +10,7 @@ import (
 
 	"github.com/popododo0720/vws-lib/obs"
 
+	"github.com/popododo0720/vws-console-api/internal/backend"
 	"github.com/popododo0720/vws-console-api/internal/backend/fake"
 	"github.com/popododo0720/vws-console-api/internal/cloud"
 	"github.com/popododo0720/vws-console-api/internal/iam"
@@ -73,7 +74,7 @@ func TestSigV4FailuresUseS3ErrorCodes(t *testing.T) {
 	}
 	svc := cloud.New(cloud.Config{Backends: fake.New(fake.Options{Now: func() time.Time { return now }}).Set()})
 	h := New(Config{Service: svc, Authorizer: f, Verifier: sigv4.NewVerifier(sigv4.Verifier{
-		Service: sigv4.ServiceS3, Region: resource.RegionName, Now: func() time.Time { return now },
+		Service: sigv4.ServiceS3, Regions: backend.DefaultRegions(), Now: func() time.Time { return now },
 		Auth: iam.Authenticator(f),
 	})})
 	bob := sigv4.Credential{AccessKey: "AKIDBOB", Secret: "bobsecret", Account: account}

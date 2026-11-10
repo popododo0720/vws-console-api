@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/popododo0720/vws-console-api/internal/backend"
 	"github.com/popododo0720/vws-console-api/internal/resource"
 )
 
@@ -28,7 +29,7 @@ func TestVerifierDelegatesToAuthenticator(t *testing.T) {
 	temp := Credential{AccessKey: "ASIATEMP", Secret: "tmpsecret", Account: account, SessionToken: "tok-1"}
 	var got AuthRequest
 	v := NewVerifier(Verifier{
-		Service: ServiceEC2, Region: resource.RegionName, Now: func() time.Time { return now },
+		Service: ServiceEC2, Regions: backend.DefaultRegions(), Now: func() time.Time { return now },
 		Auth: authFunc(func(_ context.Context, req AuthRequest) (Identity, error) {
 			got = req
 			switch req.AccessKeyID {

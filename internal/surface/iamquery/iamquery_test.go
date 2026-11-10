@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/popododo0720/vws-console-api/internal/backend"
 	"github.com/popododo0720/vws-console-api/internal/backend/backendtest"
 	"github.com/popododo0720/vws-console-api/internal/iam"
 	"github.com/popododo0720/vws-console-api/internal/resource"
@@ -69,7 +70,12 @@ func harnessWith(
 	f.Now = func() time.Time { return now }
 	rec := &recorder{Client: iam.WithRoot(iam.NewStatic("AKIDEXAMPLE", "secret", account), f)}
 	verifier := func(s sigv4.Service) *sigv4.Verifier {
-		return sigv4.NewVerifier(sigv4.Verifier{Service: s, Region: resource.RegionName, Now: func() time.Time { return now }, Auth: iam.Authenticator(rec)})
+		return sigv4.NewVerifier(sigv4.Verifier{
+			Service: s,
+			Regions: backend.DefaultRegions(),
+			Now:     func() time.Time { return now },
+			Auth:    iam.Authenticator(rec),
+		})
 	}
 	var admin iam.Directory = f
 	if wrap != nil {
