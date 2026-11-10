@@ -172,6 +172,55 @@ func TestUpdateRole(t *testing.T) {
 	}
 }
 
+// #625: a role deleted and created again on a denied path after the client
+// bound it, and before vws-iam writes, is not changed. Both role writes send
+// the bound read's etag, vws-iam refuses the new role's other etag with
+// ABORTED, and the client answers ConcurrentModification. The same stale
+// principal sent again is refused at the bind and sends no write.
+func TestRoleWritesFailClosedWhenTheRoleIsRecreatedDuringTheCall(t *testing.T) {
+	bound := &iamv1.Role{
+		Name: "projects/123456789012/roles/ops", Etag: "7",
+		Spec:   &iamv1.RoleSpec{Path: "/team/"},
+		Status: &iamv1.RoleStatus{Arn: "arn:vws:iam::123456789012:role/team/ops"},
+	}
+	recreated := &iamv1.Role{
+		Name: "projects/123456789012/roles/ops", Etag: "9",
+		Spec:   &iamv1.RoleSpec{Path: "/denied/"},
+		Status: &iamv1.RoleStatus{Arn: "arn:vws:iam::123456789012:role/denied/ops"},
+	}
+	description := "new"
+	writes := map[string]func(*testing.T, STSAdmin, iam.AuthorizedPrincipal) error{
+		"UpdateRole": func(t *testing.T, a STSAdmin, w iam.AuthorizedPrincipal) error {
+			return a.UpdateRole(t.Context(), accountID(t), "ops", iam.RoleUpdate{Description: &description}, w)
+		},
+		"UpdateRoleDescription": func(t *testing.T, a STSAdmin, w iam.AuthorizedPrincipal) error {
+			_, err := a.UpdateRoleDescription(t.Context(), accountID(t), "ops", description, w)
+			return err
+		},
+	}
+	for name, write := range writes {
+		t.Run(name, func(t *testing.T) {
+			c, s := harness(t)
+			admin := STSAdmin{Client: c}
+			s.getRoleRes, s.roleRace = bound, recreated
+			s.updateRoleRes = roleOperation(t, bound)
+			grant := backendtest.RoleGrant(t.Context(), t, admin, accountID(t), "ops")
+			for attempt := range 2 {
+				err := write(t, admin, grant)
+				if !iam.IsChanged(err) || resource.AsError(err).Message != iam.RoleChanged {
+					t.Errorf("attempt %d on a role recreated during the call: %v, want ConcurrentModification", attempt, err)
+				}
+			}
+			if len(s.updateRole) != 1 || s.updateRole[0].GetRole().GetEtag() != "7" {
+				t.Errorf("UpdateRole requests %v, want one with etag 7", s.updateRole)
+			}
+			if s.roleUpdated != 0 {
+				t.Errorf("the recreated role was changed %d times, want 0", s.roleUpdated)
+			}
+		})
+	}
+}
+
 func TestUpdateRoleErrors(t *testing.T) {
 	c, s := harness(t)
 	admin := STSAdmin{Client: c}
