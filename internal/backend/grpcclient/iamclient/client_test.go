@@ -54,6 +54,7 @@ type server struct {
 	decision    iamv1.Decision
 	authnResult *iamv1.AuthenticateResponse
 	assumeErr   error
+	assumedCtx  string // AssumeRoleResponse.assumed_role_user.session_context
 	login       []*iamv1.LoginRequest
 	validate    []*iamv1.ValidateSessionRequest
 	logout      []*iamv1.LogoutRequest
@@ -665,6 +666,7 @@ func (s *server) AssumeRole(ctx context.Context, req *iamv1.AssumeRoleRequest) (
 		AssumedRoleUser: &iamv1.Principal{
 			Type: iamv1.PrincipalType_PRINCIPAL_TYPE_ASSUMED_ROLE, Arn: "arn:vws:sts::123456789012:assumed-role/ops/s1",
 			Project: "123456789012", UniqueId: "AROAOPS:s1", Resource: "projects/123456789012/roles/ops", SessionName: "s1",
+			SessionContext: s.assumedCtx,
 		},
 	}, nil
 }

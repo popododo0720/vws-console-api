@@ -195,7 +195,10 @@ func (c *Client) Authenticate(ctx context.Context, r sigv4.AuthRequest) (iam.Pri
 }
 
 func refOf(pr *iamv1.Principal) resource.PrincipalRef {
-	ref := resource.PrincipalRef{UniqueID: pr.GetUniqueId(), Resource: pr.GetResource(), SessionName: pr.GetSessionName(), MFA: pr.GetMfaAuthenticated()}
+	ref := resource.PrincipalRef{
+		UniqueID: pr.GetUniqueId(), Resource: pr.GetResource(), SessionName: pr.GetSessionName(),
+		MFA: pr.GetMfaAuthenticated(), SessionContext: pr.GetSessionContext(),
+	}
 	if pr.GetAuthTime() != nil {
 		ref.AuthTime = pr.GetAuthTime().AsTime()
 	}
@@ -208,6 +211,7 @@ func principalProto(p iam.Principal) *iamv1.Principal {
 	out := &iamv1.Principal{
 		Arn: p.ARN, Project: p.Account.String(), UniqueId: p.Ref.UniqueID, Resource: p.Ref.Resource,
 		SessionName: p.Ref.SessionName, MfaAuthenticated: p.Ref.MFA,
+		SessionContext: p.Ref.SessionContext,
 	}
 	if !p.Ref.AuthTime.IsZero() {
 		out.AuthTime = timestamppb.New(p.Ref.AuthTime)
