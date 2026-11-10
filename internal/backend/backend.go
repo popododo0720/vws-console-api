@@ -99,6 +99,9 @@ type Compute interface {
 	StopInstances(ctx context.Context, m Mutation, req resource.StopInstancesRequest) (resource.Accepted[resource.InstanceStateChange], error)
 	StartInstances(ctx context.Context, m Mutation, req resource.StartInstancesRequest) (resource.Accepted[resource.InstanceStateChange], error)
 	TerminateInstances(ctx context.Context, m Mutation, req resource.TerminateInstancesRequest) (resource.Accepted[resource.InstanceStateChange], error)
+	RebootInstances(
+		ctx context.Context, m Mutation, req resource.RebootInstancesRequest,
+	) (resource.Accepted[resource.InstanceStateChange], error)
 	DescribeInstances(ctx context.Context, s Scope, q resource.InstanceQuery) (resource.Page[resource.Instance], error)
 	CreateTags(ctx context.Context, m Mutation, req resource.CreateTagsRequest) (resource.Accepted[resource.Instance], error)
 	DeleteTags(

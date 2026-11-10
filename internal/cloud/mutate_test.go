@@ -139,6 +139,12 @@ func (foreignCompute) DescribeInstances(context.Context, backend.Scope, resource
 	return resource.Page[resource.Instance]{}, errors.New("unused")
 }
 
+func (foreignCompute) RebootInstances(
+	context.Context, backend.Mutation, resource.RebootInstancesRequest,
+) (resource.Accepted[resource.InstanceStateChange], error) {
+	return resource.Accepted[resource.InstanceStateChange]{}, errors.New("unused")
+}
+
 func (foreignCompute) StartInstances(context.Context, backend.Mutation, resource.StartInstancesRequest) (resource.Accepted[resource.InstanceStateChange], error) {
 	return resource.Accepted[resource.InstanceStateChange]{}, errors.New("unused")
 }

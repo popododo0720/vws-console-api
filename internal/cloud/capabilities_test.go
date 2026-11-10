@@ -128,6 +128,39 @@ func TestEmptyReadAnswersAnEmptyPageWithoutTheBackend(t *testing.T) {
 // reached fails every read that reaches the backend.
 type reachedCompute struct{ backend.Compute }
 
+func (reachedCompute) RebootInstances(
+	context.Context, backend.Mutation, resource.RebootInstancesRequest,
+) (resource.Accepted[resource.InstanceStateChange], error) {
+	return resource.Accepted[resource.InstanceStateChange]{}, errReached
+}
+
+func TestUnsupportedRebootIsRefusedBeforeTheBackend(t *testing.T) {
+	account, err := resource.Parse[resource.AccountID]("123456789012")
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := resource.Parse[resource.InstanceID]("i-0123456789abcdef0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc := New(Config{
+		Backends: backend.Set{Compute: reachedCompute{}},
+		Capabilities: stubCapabilities{doc: resource.RegionCapabilities{
+			Region: resource.RegionName, Kind: resource.RegionKindProxmox,
+			Actions: map[string]resource.ActionCapability{
+				resource.ActionRebootInstances.CapabilityKey(): {
+					State: resource.ActionUnsupported, ReasonCode: "NoReboot", Reason: "reboot unavailable",
+				},
+			},
+		}},
+	})
+	_, err = svc.RebootInstances(t.Context(), resource.Caller{Account: account}, token(t, "caps-reboot"),
+		resource.RebootInstancesRequest{IDs: []resource.InstanceID{id}})
+	if !resource.IsUnsupported(resource.AsError(err)) {
+		t.Fatalf("RebootInstances error = %v, want UnsupportedOperation", err)
+	}
+}
+
 type reachedNetwork struct{ backend.Network }
 
 var errReached = errors.New("read reached the backend")

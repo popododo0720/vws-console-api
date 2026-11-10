@@ -46,6 +46,17 @@ func (s *Service) StartInstances(ctx context.Context, c resource.Caller, token r
 	return mutate(ctx, s, c, token, req, s.backends.Compute.StartInstances)
 }
 
+// RebootInstances accepts a reboot and returns the operation.
+func (s *Service) RebootInstances(
+	ctx context.Context, c resource.Caller, token resource.ClientToken, req resource.RebootInstancesRequest,
+) (resource.Accepted[resource.InstanceStateChange], error) {
+	token, err := fillToken(token)
+	if err != nil {
+		return resource.Accepted[resource.InstanceStateChange]{}, err
+	}
+	return mutate(ctx, s, c, token, req, s.backends.Compute.RebootInstances)
+}
+
 // TerminateInstances accepts a terminate and returns the operation.
 func (s *Service) TerminateInstances(ctx context.Context, c resource.Caller, token resource.ClientToken, req resource.TerminateInstancesRequest) (resource.Accepted[resource.InstanceStateChange], error) {
 	token, err := fillToken(token)

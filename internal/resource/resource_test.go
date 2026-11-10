@@ -292,7 +292,7 @@ func TestVolumeErrorMessages(t *testing.T) {
 
 func TestActionsAreDerived(t *testing.T) {
 	got := Actions()
-	if len(got) != 28 {
+	if len(got) != 29 {
 		t.Fatalf("actions: %v", got)
 	}
 	for _, a := range got {

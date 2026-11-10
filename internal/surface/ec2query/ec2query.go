@@ -137,6 +137,8 @@ func (h *handler) serve(w http.ResponseWriter, r *http.Request) {
 		h.startInstances(w, r, caller)
 	case resource.ActionTerminateInstances.String():
 		h.terminateInstances(w, r, caller)
+	case resource.ActionRebootInstances.String():
+		h.rebootInstances(w, r, caller)
 	case resource.ActionCreateKeyPair.String():
 		h.createKeyPair(w, r, caller)
 	case resource.ActionDeleteKeyPair.String():
@@ -833,6 +835,8 @@ func rejectUnknown(r *http.Request, action string) error {
 		allow = allowStop
 	case resource.ActionTerminateInstances.String():
 		allow = allowStop
+	case resource.ActionRebootInstances.String():
+		allow = allowReboot
 	case resource.ActionCreateKeyPair.String():
 		allow = allowCreateKey
 	case resource.ActionDeleteKeyPair.String():
@@ -1509,6 +1513,7 @@ func dispatchedAction(action string) bool {
 		resource.ActionRevokeSecurityGroupIngress.String(),
 		resource.ActionStartInstances.String(),
 		resource.ActionTerminateInstances.String(),
+		resource.ActionRebootInstances.String(),
 		resource.ActionCreateKeyPair.String(),
 		resource.ActionDeleteKeyPair.String(),
 		"ImportKeyPair",

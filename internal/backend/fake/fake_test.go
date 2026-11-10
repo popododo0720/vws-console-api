@@ -24,6 +24,14 @@ func TestContract(t *testing.T) {
 	}, caps)
 }
 
+// TestRebootContract runs the RebootInstances group on the fake.
+func TestRebootContract(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0).UTC()
+	backendtest.Reboot(t, func() backend.Set {
+		return New(Options{Now: func() time.Time { return now }, Entropy: &Sequence{}}).Set()
+	})
+}
+
 // TestDetachReplayContract runs the #213 DetachVolume client-token table on
 // the fake.
 func TestDetachReplayContract(t *testing.T) {

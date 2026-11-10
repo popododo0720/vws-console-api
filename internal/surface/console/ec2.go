@@ -289,6 +289,26 @@ func (h *handler) startInstance(w http.ResponseWriter, r *http.Request) {
 	writeAccepted(w, acc)
 }
 
+func (h *handler) rebootInstance(w http.ResponseWriter, r *http.Request) {
+	c, token, ok := h.begin(w, r)
+	if !ok {
+		return
+	}
+	id, err := resource.Parse[resource.InstanceID](r.PathValue("id"))
+	if err != nil {
+		writeErr(w, r, err)
+		return
+	}
+	acc, err := h.svc.RebootInstances(r.Context(), c, token, resource.RebootInstancesRequest{
+		IDs: []resource.InstanceID{id},
+	})
+	if err != nil {
+		writeErr(w, r, err)
+		return
+	}
+	writeAccepted(w, acc)
+}
+
 func (h *handler) terminateInstance(w http.ResponseWriter, r *http.Request) {
 	c, token, ok := h.begin(w, r)
 	if !ok {

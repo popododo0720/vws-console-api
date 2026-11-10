@@ -765,6 +765,15 @@ func NextInstanceState(action Action, from InstanceState) (transitional, settled
 		default:
 			return 0, 0, Conflict(KindInstance, "", "instance cannot be terminated from "+from.String())
 		}
+	case ActionRebootInstances:
+		switch from {
+		case InstanceRunning:
+			return InstanceRunning, InstanceRunning, nil
+		case InstancePending, InstanceStopping, InstanceStopped, InstanceShuttingDown, InstanceTerminated, instanceStateNone:
+			return 0, 0, Conflict(KindInstance, "", "instance cannot be rebooted from "+from.String())
+		default:
+			return 0, 0, Conflict(KindInstance, "", "instance cannot be rebooted from "+from.String())
+		}
 	case ActionRunInstances, ActionCreateSubnet, ActionCreateVpc, ActionDeleteVpc,
 		ActionCreateVolume, ActionAttachVolume, ActionDeleteVolume, ActionCreateSecurityGroup,
 		ActionAuthorizeSecurityGroupIngress, ActionCreateKeyPair, ActionDeleteKeyPair,

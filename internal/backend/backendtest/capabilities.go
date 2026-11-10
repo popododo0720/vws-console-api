@@ -99,6 +99,8 @@ func mutationProbes(ctx context.Context, set backend.Set, m backend.Mutation) ma
 			resource.StopInstancesRequest{IDs: []resource.InstanceID{instance}})},
 		resource.ActionStartInstances: {mutationProbe(ctx, m, set.Compute.StartInstances,
 			resource.StartInstancesRequest{IDs: []resource.InstanceID{instance}})},
+		resource.ActionRebootInstances: {mutationProbe(ctx, m, set.Compute.RebootInstances,
+			resource.RebootInstancesRequest{IDs: []resource.InstanceID{instance}})},
 		resource.ActionTerminateInstances: {
 			mutationProbe(ctx, m, set.Compute.TerminateInstances,
 				resource.TerminateInstancesRequest{IDs: []resource.InstanceID{instance}}),
