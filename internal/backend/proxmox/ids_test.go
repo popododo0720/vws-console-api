@@ -1,6 +1,7 @@
 package proxmox
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -10,15 +11,32 @@ import (
 
 const testUUID = "11111111-2222-4333-8444-555555555555"
 
-func TestFormulasArePinned(t *testing.T) {
-	c := NewIDs("pve-seoul")
-	str := func(id fmt.Stringer, err error) string {
+func newIDs(t *testing.T, cluster string) IDs {
+	t.Helper()
+	c, err := NewIDs(cluster)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c
+}
+
+func must[T any](t *testing.T) func(T, error) T {
+	return func(v T, err error) T {
 		t.Helper()
 		if err != nil {
 			t.Fatal(err)
 		}
-		return id.String()
+		return v
 	}
+}
+
+func TestFormulasArePinned(t *testing.T) {
+	c := newIDs(t, "pve-seoul")
+	str := func(id fmt.Stringer, err error) string {
+		t.Helper()
+		return must[fmt.Stringer](t)(id, err).String()
+	}
+	serial := must[string](t)
 	inst := func(vm VM) string {
 		id, _, err := c.Instance(vm)
 		return str(id, err)
@@ -35,10 +53,13 @@ func TestFormulasArePinned(t *testing.T) {
 		{"unknown image", str(c.UnknownImage()), "ami-76ae8c59cae0848c1"},
 		{"snapshot", str(c.Snapshot(testUUID, "before-upgrade")), "snap-27a0d1f7e3a8e71dd"},
 		{"reservation", str(c.Reservation("key1")), "r-74e47d2393c7d380d"},
-		{"volume serial", c.VolumeSerial("key1", 0), "64789ba320027f896"},
-		{"root volume serial", c.RootVolumeSerial(testUUID), "1242e29aa9300a558"},
+		{"volume serial", serial(c.VolumeSerial("key1", 0)), "64789ba320027f896"},
+		{"root volume serial", serial(c.RootVolumeSerial(testUUID)), "1242e29aa9300a558"},
 		{"volume by serial", vol("64789ba320027f896"), "vol-64789ba320027f896"},
+		{"volume by upper-case serial", vol("64789BA320027F896"), "vol-64789ba320027f896"},
 		{"volume by name", vol(""), "vol-605b08b939ebcfc8e"},
+		{"volume with a foreign 17-character serial", vol("64789ba320027f89z"), "vol-605b08b939ebcfc8e"},
+		{"volume with a foreign 20-byte serial", vol("QM00001-ABCDEFGHIJK"), "vol-605b08b939ebcfc8e"},
 		{"bridge vpc", str(c.BridgeVPC("vmbr0")), "vpc-04858cd8262694c9d"},
 		{"bridge subnet", str(c.BridgeSubnet("vmbr0", "10.0.0.0/24")), "subnet-29f9256c6bad386c4"},
 		{"sdn vpc", str(c.SDNVPC("zone1", "vnet1")), "vpc-ea91b128a0c0a85ee"},
@@ -54,45 +75,77 @@ func TestFormulasArePinned(t *testing.T) {
 // Two id forms of one kind must never hash the same input: a zone named
 // "bridge" once gave its VNet the id of the bridge of the same name.
 func TestFormsNeverShareHashInput(t *testing.T) {
-	c := NewIDs("pve-seoul")
-	uuid := testUUID
-	bridgeVPC, err := c.BridgeVPC("vmbr0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	sdnVPC, err := c.SDNVPC("bridge", "vmbr0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if bridgeVPC == sdnVPC {
+	c := newIDs(t, "pve-seoul")
+	serial := must[string](t)
+	bridgeVPC := must[resource.VpcID](t)(c.BridgeVPC("vmbr0"))
+	if sdnVPC := must[resource.VpcID](t)(c.SDNVPC("bridge", "vmbr0")); bridgeVPC == sdnVPC {
 		t.Errorf("SDNVPC(bridge, vmbr0) = BridgeVPC(vmbr0) = %v", sdnVPC)
 	}
-	bridgeSubnet, err := c.BridgeSubnet("vmbr0", "10.0.0.0/24")
-	if err != nil {
-		t.Fatal(err)
-	}
-	sdnSubnet, err := c.SDNSubnet("bridge\x00vmbr0", "10.0.0.0/24")
-	if err == nil && bridgeSubnet == sdnSubnet {
+	bridgeSubnet := must[resource.SubnetID](t)(c.BridgeSubnet("vmbr0", "10.0.0.0/24"))
+	if sdnSubnet, err := c.SDNSubnet("bridge\x00vmbr0", "10.0.0.0/24"); err == nil && bridgeSubnet == sdnSubnet {
 		t.Errorf("SDNSubnet(bridge NUL vmbr0) = BridgeSubnet(vmbr0) = %v", sdnSubnet)
 	}
-	named, _, err := c.Volume("", uuid, "root")
+	named, _, err := c.Volume("", testUUID, "root")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if root := c.RootVolumeSerial(uuid); named.String() == "vol-"+root {
-		t.Errorf("Volume(storage %s, volname root) = the root volume %v", uuid, named)
+	if root := serial(c.RootVolumeSerial(testUUID)); named.String() == "vol-"+root {
+		t.Errorf("Volume(storage %s, volname root) = the root volume %v", testUUID, named)
 	}
 	named, _, err = c.Volume("", "key1", "0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if created := c.VolumeSerial("key1", 0); named.String() == "vol-"+created {
+	if created := serial(c.VolumeSerial("key1", 0)); named.String() == "vol-"+created {
 		t.Errorf("Volume(storage key1, volname 0) = the created volume %v", named)
 	}
 }
 
+// Each input no id can be computed from is an error, never a shared id.
+func TestBadInputsAreRefused(t *testing.T) {
+	c := newIDs(t, "pve-seoul")
+	short := IDs{cluster: "c", hash: func(string) string { return "abc" }}
+	pair := func(_ any, err error) error { return err }
+	triple := func(_ any, _ IDSource, err error) error { return err }
+	for _, tc := range []struct {
+		name  string
+		err   error
+		input bool
+	}{
+		{"empty cluster", pair(NewIDs("")), true},
+		{"NUL in the cluster", pair(NewIDs("pve\x00seoul")), true},
+		{"IDs not made by NewIDs", pair(IDs{}.Reservation("key1")), true},
+		{"a hash shorter than 17 digits", pair(short.Reservation("key1")), false},
+		{"malformed uuid", triple(c.Instance(VM{UUID: "not-a-uuid", VMID: 100})), true},
+		{"all-zero uuid", triple(c.Instance(VM{UUID: "00000000-0000-0000-0000-000000000000"})), true},
+		{"ctime that is not decimal", triple(c.Instance(VM{VMID: 100, Ctime: "nometa"})), true},
+		{"ctime with a leading zero", triple(c.Instance(VM{VMID: 100, Ctime: "01700000000"})), true},
+		{"no uuid and no VMID", triple(c.Instance(VM{})), true},
+		{"image without a uuid", pair(c.Image("")), true},
+		{"image named like the unknown image", pair(c.Image("unknown")), true},
+		{"snapshot without a uuid", pair(c.Snapshot("", "before-upgrade")), true},
+		{"snapshot without a name", pair(c.Snapshot(testUUID, "")), true},
+		{"empty reservation key", pair(c.Reservation("")), true},
+		{"negative volume index", pair(c.VolumeSerial("key1", -1)), true},
+		{"root volume without a uuid", pair(c.RootVolumeSerial("")), true},
+		{"volume without storage or volname", triple(c.Volume("", "", "")), true},
+		{"empty bridge", pair(c.BridgeVPC("")), true},
+		{"empty cidr", pair(c.BridgeSubnet("vmbr0", "")), true},
+		{"empty SDN zone", pair(c.SDNVPC("", "vnet1")), true},
+		{"NUL in a VNet", pair(c.SDNSubnet("vnet1\x00x", "10.0.0.0/24")), true},
+		{"empty security group", pair(c.SecurityGroup("")), true},
+	} {
+		switch {
+		case tc.err == nil:
+			t.Errorf("%s: no error", tc.name)
+		case errors.Is(tc.err, ErrInput) != tc.input:
+			t.Errorf("%s: errors.Is(%v, ErrInput) = %t, want %t", tc.name, tc.err, !tc.input, tc.input)
+		}
+	}
+}
+
 func TestIDSources(t *testing.T) {
-	c := NewIDs("pve-seoul")
+	c := newIDs(t, "pve-seoul")
 	for _, tc := range []struct {
 		vm   VM
 		want IDSource
@@ -114,7 +167,7 @@ func TestIDSources(t *testing.T) {
 }
 
 func TestInstanceIDIgnoresVMID(t *testing.T) {
-	c := NewIDs("pve-seoul")
+	c := newIDs(t, "pve-seoul")
 	id := func(vm VM) string {
 		got, _, err := c.Instance(vm)
 		if err != nil {
@@ -134,12 +187,26 @@ func TestInstanceIDIgnoresVMID(t *testing.T) {
 	}
 }
 
-func TestInputsAreLowerCased(t *testing.T) {
-	lower, _, err := NewIDs("pve-seoul").Instance(VM{UUID: testUUID})
+func TestClusterIsAnInput(t *testing.T) {
+	seoul, _, err := newIDs(t, "pve-seoul").Instance(VM{UUID: testUUID})
 	if err != nil {
 		t.Fatal(err)
 	}
-	upper, _, err := NewIDs("PVE-Seoul").Instance(VM{UUID: strings.ToUpper(testUUID)})
+	busan, _, err := newIDs(t, "pve-busan").Instance(VM{UUID: testUUID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if seoul == busan {
+		t.Fatalf("one uuid in two clusters gave one id %v", seoul)
+	}
+}
+
+func TestInputsAreLowerCased(t *testing.T) {
+	lower, _, err := newIDs(t, "pve-seoul").Instance(VM{UUID: testUUID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	upper, _, err := newIDs(t, "PVE-Seoul").Instance(VM{UUID: strings.ToUpper(testUUID)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,16 +218,16 @@ func TestInputsAreLowerCased(t *testing.T) {
 func TestInputsAreNULJoined(t *testing.T) {
 	var got string
 	c := IDs{cluster: "A", hash: func(s string) string { got = s; return sha256Hex(s) }}
-	if _, err := c.Snapshot("U", "S"); err != nil {
+	if _, err := c.Snapshot(strings.ToUpper(testUUID), "S"); err != nil {
 		t.Fatal(err)
 	}
-	if want := "vws-pve-snapshot-v1\x00a\x00u\x00s"; got != want {
+	if want := "vws-pve-snapshot-v1\x00a\x00" + testUUID + "\x00s"; got != want {
 		t.Fatalf("hash input %q, want %q", got, want)
 	}
 }
 
 func TestOutputsParseAsSeventeenHex(t *testing.T) {
-	id, _, err := NewIDs("pve-seoul").Instance(VM{UUID: testUUID})
+	id, _, err := newIDs(t, "pve-seoul").Instance(VM{UUID: testUUID})
 	if err != nil {
 		t.Fatal(err)
 	}
