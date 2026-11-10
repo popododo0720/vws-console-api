@@ -1447,6 +1447,13 @@ func writeXML(w http.ResponseWriter, v any) {
 
 func writeErr(w http.ResponseWriter, r *http.Request, err error) {
 	e := resource.AsError(err)
+	// A backend names the caller's NextToken pageToken when it cannot place
+	// it. The kernel also pages with backend-issued tokens, so only a request
+	// that carried a NextToken is answered InvalidNextToken.
+	if e.Code == resource.CodeInvalidArgument && e.Field == "pageToken" &&
+		(r.Form.Get("NextToken") != "" || r.Form.Get("nextToken") != "") {
+		e = resource.Invalid("NextToken", invalidNextTokenMessage)
+	}
 	entry := ec2Entry(e)
 	if entry.HTTP >= http.StatusInternalServerError {
 		server.RecordFailure(w, err)

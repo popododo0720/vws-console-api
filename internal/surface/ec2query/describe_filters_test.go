@@ -137,6 +137,34 @@ func TestFilteredDescribesRejectAnUnknownNextToken(t *testing.T) {
 	}
 }
 
+// The backend rejects a token it cannot place as pageToken; the caller sent it
+// as NextToken, so EC2 answers InvalidNextToken on unfiltered calls too (#502).
+func TestUnfilteredDescribesRejectABadNextToken(t *testing.T) {
+	h, cred, now := harness(t)
+	for _, action := range []string{"DescribeVpcs", "DescribeVolumes", "DescribeInstances", "DescribeSubnets"} {
+		for _, token := range []string{"stale", "vpc-00000000000000000", "bad\x01token"} {
+			t.Run(action+"/"+token, func(t *testing.T) {
+				form := url.Values{"Action": {action}, "Version": {Version}, "NextToken": {token}}
+				res := signed(t, h, cred, now, form.Encode())
+				if res.Code != http.StatusBadRequest {
+					t.Fatalf("%d %s", res.Code, res.Body)
+				}
+				body := ec2ErrorXML(t, res.Body.Bytes())
+				if body.Code != "InvalidNextToken" || body.Message != wantNextTokenMessage {
+					t.Fatalf("code %q message %q", body.Code, body.Message)
+				}
+			})
+		}
+		t.Run(action+"/page size", func(t *testing.T) {
+			form := url.Values{"Action": {action}, "Version": {Version}, "MaxResults": {"-1"}}
+			res := signed(t, h, cred, now, form.Encode())
+			if body := ec2ErrorXML(t, res.Body.Bytes()); body.Code != "InvalidParameterValue" {
+				t.Fatalf("%d code %q", res.Code, body.Code)
+			}
+		})
+	}
+}
+
 func TestFilterWithNoValuesMatchesNothing(t *testing.T) {
 	h, cred, now := harness(t)
 	vpc := xmlText(t, callEC2(t, h, cred, now, url.Values{
