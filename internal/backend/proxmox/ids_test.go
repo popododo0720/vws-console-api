@@ -247,9 +247,18 @@ func TestMarkCollisionsMarksBothRows(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rows := []Row{{first.String(), srcA}, {"i-0000000000000001", SourceUUID}, {second.String(), srcB}}
+	third, srcC, err := c.Instance(VM{VMID: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	unique := must[resource.InstanceID](t)(resource.Parse[resource.InstanceID]("i-0000000000000001"))
+	vpc := must[resource.VpcID](t)(c.BridgeVPC("vmbr0"))
+	rows := []Row{
+		{first.Ref(), srcA}, {unique.Ref(), SourceUUID}, {second.Ref(), srcB}, {third.Ref(), srcC}, {vpc.Ref(), ""},
+	}
 	MarkCollisions(rows)
-	want := []IDSource{SourceCollision, SourceUUID, SourceCollision}
+	MarkCollisions(nil)
+	want := []IDSource{SourceCollision, SourceUUID, SourceCollision, SourceCollision, ""}
 	for i, r := range rows {
 		if r.Source != want[i] {
 			t.Fatalf("row %d source = %q, want %q", i, r.Source, want[i])

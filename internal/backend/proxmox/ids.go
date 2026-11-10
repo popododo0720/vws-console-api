@@ -254,19 +254,22 @@ func wrap(prefix string, err error) error {
 
 // Row is one inventory row's identifier and where it came from.
 type Row struct {
-	ID     string
+	Ref    resource.Ref
 	Source IDSource
 }
 
-// MarkCollisions sets SourceCollision on every row whose ID another row also
-// has. Two VMs with one id would be one instance to the API.
+// MarkCollisions sets SourceCollision on every row whose Ref another row also
+// has, replacing its source. Two VMs with one id would be one instance to the
+// API. The caller passes one row per Proxmox object (a bridge seen on every
+// node is one row) and the whole region's listing, before a pool filter or a
+// page, or a duplicate in another pool hides.
 func MarkCollisions(rows []Row) {
-	seen := make(map[string]int, len(rows))
+	seen := make(map[resource.Ref]int, len(rows))
 	for _, r := range rows {
-		seen[r.ID]++
+		seen[r.Ref]++
 	}
 	for i := range rows {
-		if seen[rows[i].ID] > 1 {
+		if seen[rows[i].Ref] > 1 {
 			rows[i].Source = SourceCollision
 		}
 	}
