@@ -363,8 +363,19 @@ func unsupportedVolumeType(err error) error {
 // added) is logged and answered as the volumeType error EC2 calls
 // UnknownVolumeType. It is never guessed, and it is not Internal, which SDKs
 // retry although the answer cannot change.
-func (c computeClient) getTypedVolume(ctx context.Context, projectID, id, call string) (resource.Volume, error) {
+func (c computeClient) getTypedVolume(
+	ctx context.Context, projectID, id, call string, needTags bool,
+) (resource.Volume, error) {
 	vol, err := c.getVolume(ctx, projectID, id)
+	var badTags *badTagLabelsError
+	if !needTags && errors.As(err, &badTags) {
+		// The call reads no tags, so it acts on the volume as it did before
+		// volumes had tags. volumeModel reports an unknown type first, so vol
+		// has its type here.
+		c.logger().WarnContext(ctx, "acting on a volume whose tag labels do not decode",
+			slog.String("call", call), slog.String("id", id), slog.Any("err", err))
+		return vol, nil
+	}
 	var unknownType *unknownVolumeTypeError
 	if errors.As(err, &unknownType) {
 		c.logger().WarnContext(ctx, "refusing a call on a volume with an unknown volume type",
@@ -379,7 +390,7 @@ func (c computeClient) getTypedVolume(ctx context.Context, projectID, id, call s
 func (c computeClient) AttachVolume(ctx context.Context, m backend.Mutation, req resource.AttachVolumeRequest) (resource.Accepted[resource.Volume], error) {
 	var zero resource.Accepted[resource.Volume]
 	projectID := project(m.Account)
-	vol, err := c.getTypedVolume(ctx, projectID, req.VolumeID.String(), resource.ActionAttachVolume.String())
+	vol, err := c.getTypedVolume(ctx, projectID, req.VolumeID.String(), resource.ActionAttachVolume.String(), false)
 	if err != nil {
 		return zero, err
 	}
@@ -1546,7 +1557,7 @@ func (c computeClient) DeleteVolume(ctx context.Context, m backend.Mutation, req
 // target Volume.Modify checks and returns here.
 func (c computeClient) ModifyVolume(ctx context.Context, m backend.Mutation, req resource.ModifyVolumeRequest) (resource.Accepted[resource.Volume], error) {
 	projectID := project(m.Account)
-	vol, err := c.getTypedVolume(ctx, projectID, req.ID.String(), resource.ActionModifyVolume.String())
+	vol, err := c.getTypedVolume(ctx, projectID, req.ID.String(), resource.ActionModifyVolume.String(), false)
 	if err != nil {
 		return resource.Accepted[resource.Volume]{}, err
 	}
@@ -1595,7 +1606,7 @@ func (c computeClient) DescribeVolumes(ctx context.Context, s backend.Scope, q r
 	if len(q.IDs) > 0 {
 		items := make([]resource.Volume, 0, len(q.IDs))
 		for _, id := range q.IDs {
-			vol, err := c.getTypedVolume(ctx, projectID, id.String(), "DescribeVolumes")
+			vol, err := c.getTypedVolume(ctx, projectID, id.String(), "DescribeVolumes", true)
 			if resource.CodeOf(err) == resource.CodeNotFound {
 				if len(q.IDs) == 1 {
 					return resource.Page[resource.Volume]{}, err
@@ -2591,13 +2602,13 @@ func volumeModel(in *storagev1.Volume) (resource.Volume, error) {
 		// reports does (markAttachState, #448).
 		vol.AttachState = resource.AttachmentAttaching
 	}
-	if tagErr != nil {
-		return vol, tagErr
-	}
 	if vol.Type == "" {
 		// The volume is returned whole, with no type, beside the error, so
 		// actions that need no type (DeleteVolume, DetachVolume) can act on it.
 		return vol, resource.Internal(&unknownVolumeTypeError{id: id, typ: in.GetSpec().GetType()})
+	}
+	if tagErr != nil {
+		return vol, tagErr
 	}
 	return vol, nil
 }

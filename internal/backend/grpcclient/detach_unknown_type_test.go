@@ -2,6 +2,7 @@ package grpcclient
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	commonv1 "github.com/popododo0720/vws-proto/gen/go/vws/common/v1"
@@ -111,5 +112,41 @@ func TestDetachVolumeWithUndecodableTagsDetaches(t *testing.T) {
 	}
 	if item := detached.Items[0]; item.Status != resource.AttachmentDetaching || item.Device != "/dev/sdf" {
 		t.Fatalf("detach %+v", item)
+	}
+}
+
+// A volume whose tag labels do not decode still takes calls that read no
+// tags (ModifyVolume and DeleteVolume reach storage), while a read of its
+// tags by id stays Internal, as for an instance (#568).
+func TestUndecodableVolumeTagsBlockOnlyTagReads(t *testing.T) {
+	account := mustAccount(t)
+	projectID := project(account)
+	const badID = "vol-0fedcba9876543210"
+	bad := observedVolume(projectID, badID, commonv1.ReconciliationState_RECONCILIATION_STATE_READY, "")
+	bad.Labels = map[string]string{tagChunkKey(1): `{"a":"b"}`} // chunk 01 with no chunk 00
+	client := dialDetachWorld(t, &detachWorld{vol: bad, byRequest: map[string]*detachRecord{}})
+	id, err := resource.Parse[resource.VolumeID](badID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scope := backend.Scope{Account: account}
+	_, err = client.DescribeVolumes(context.Background(), scope,
+		resource.VolumeQuery{IDs: []resource.VolumeID{id}, Page: resource.PageRequest{Size: 5}})
+	if resource.CodeOf(err) != resource.CodeInternal {
+		t.Fatalf("DescribeVolumes by id: %v, want Internal", err)
+	}
+	_, err = client.ModifyVolume(context.Background(),
+		backend.Mutation{Scope: scope, Key: "k-mod", Fingerprint: "fp-mod"},
+		resource.ModifyVolumeRequest{ID: id, SizeGiB: 16})
+	// This world serves no UpdateVolume or DeleteVolume, so reaching storage
+	// shows up as that RPC being unimplemented.
+	if err == nil || !strings.Contains(err.Error(), "UpdateVolume") {
+		t.Fatalf("ModifyVolume did not reach storage's UpdateVolume: %v", err)
+	}
+	_, err = client.DeleteVolume(context.Background(),
+		backend.Mutation{Scope: scope, Key: "k-del", Fingerprint: "fp-del"},
+		resource.DeleteVolumeRequest{ID: id})
+	if err == nil || !strings.Contains(err.Error(), "DeleteVolume") {
+		t.Fatalf("DeleteVolume did not reach storage's DeleteVolume: %v", err)
 	}
 }
