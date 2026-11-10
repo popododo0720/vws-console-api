@@ -768,3 +768,90 @@ func xmlField(body, tag string) string {
 	out, _, _ := strings.Cut(rest, "</"+tag+">")
 	return out
 }
+
+func TestConsoleAndQueryRebootTheSameInstance(t *testing.T) {
+	now := time.Date(2026, 10, 9, 10, 0, 0, 0, time.UTC)
+	account := mustParse[resource.AccountID](t, "123456789012")
+	caller := resource.Caller{Account: account, Subject: "console", Principal: iam.RootARN(account), Root: true}
+	world := fake.New(fake.Options{Now: func() time.Time { return now }})
+	svc := cloud.New(cloud.Config{Backends: world.Set()})
+	static := iam.NewStatic("AKIDEXAMPLE", "secret", account)
+	ui := console.New(console.Config{Service: svc, IAM: static, Auth: console.BearerTokens{"tok-console": caller}})
+	cred := sigv4.Credential{AccessKey: "AKIDEXAMPLE", Secret: "secret", Account: account}
+	query := ec2query.New(ec2query.Config{
+		Service: svc, Authorizer: static, Verifier: verifier(cred, sigv4.ServiceEC2, now),
+	})
+	ec2 := func(form url.Values) *httptest.ResponseRecorder {
+		form.Set("Version", ec2query.Version)
+		return serveSigned(t, query, cred, sigv4.ServiceEC2, now, http.MethodPost, "http://127.0.0.1:8081/", form.Encode())
+	}
+	reboot := func(id, key string) *httptest.ResponseRecorder {
+		return call(t, ui, http.MethodPost, "/api/v1/instances/"+id+"/reboot", "", map[string]string{
+			"Authorization": "Bearer tok-console", "Content-Type": "application/json", "Idempotency-Key": key,
+		})
+	}
+	vpc := ec2(url.Values{"Action": {"CreateVpc"}, "CidrBlock": {"10.5.0.0/16"}})
+	subnet := ec2(url.Values{
+		"Action": {"CreateSubnet"}, "VpcId": {xmlField(vpc.Body.String(), "vpcId")}, "CidrBlock": {"10.5.1.0/24"},
+	})
+	run := ec2(url.Values{
+		"Action": {"RunInstances"}, "ImageId": {"ami-0123456789abcdef0"}, "InstanceType": {"vws.small"},
+		"SubnetId": {xmlField(subnet.Body.String(), "subnetId")}, "MinCount": {"1"}, "MaxCount": {"1"},
+		"ClientToken": {"run-reboot"},
+	})
+	if run.Code != http.StatusOK {
+		t.Fatalf("run %d %s", run.Code, run.Body)
+	}
+	id := xmlField(run.Body.String(), "instanceId")
+
+	rebooted := reboot(id, "reboot-web-1")
+	var acc struct {
+		Items []struct {
+			ID       string `json:"instanceId"`
+			Previous string `json:"previousState"`
+			Current  string `json:"currentState"`
+		} `json:"items"`
+		Operation struct {
+			ID string `json:"id"`
+		} `json:"operation"`
+	}
+	if rebooted.Code != http.StatusAccepted {
+		t.Fatalf("console reboot %d %s", rebooted.Code, rebooted.Body)
+	}
+	if err := json.Unmarshal(rebooted.Body.Bytes(), &acc); err != nil {
+		t.Fatal(err)
+	}
+	if len(acc.Items) != 1 || acc.Items[0].ID != id || acc.Items[0].Previous != "running" ||
+		acc.Items[0].Current != "running" || !strings.HasPrefix(acc.Operation.ID, "op-compute-") {
+		t.Fatalf("console reboot %s", rebooted.Body)
+	}
+	if again := reboot(id, "reboot-web-1"); again.Code != http.StatusAccepted ||
+		!strings.Contains(again.Body.String(), acc.Operation.ID) {
+		t.Fatalf("console retry %d %s", again.Code, again.Body)
+	}
+	if res := ec2(url.Values{"Action": {"RebootInstances"}, "InstanceId.1": {id}}); res.Code != http.StatusOK ||
+		xmlField(res.Body.String(), "return") != "true" {
+		t.Fatalf("query reboot %d %s", res.Code, res.Body)
+	}
+	got := call(t, ui, http.MethodGet, "/api/v1/instances/"+id, "", map[string]string{
+		"Authorization": "Bearer tok-console",
+	})
+	if got.Code != http.StatusOK || !strings.Contains(got.Body.String(), `"state":"running"`) {
+		t.Fatalf("console describe %d %s", got.Code, got.Body)
+	}
+	if res := ec2(url.Values{"Action": {"DescribeInstances"}, "InstanceId.1": {id}}); res.Code != http.StatusOK ||
+		!strings.Contains(res.Body.String(), "<name>running</name>") {
+		t.Fatalf("query describe %d %s", res.Code, res.Body)
+	}
+
+	if res := ec2(url.Values{"Action": {"StopInstances"}, "InstanceId.1": {id}}); res.Code != http.StatusOK {
+		t.Fatalf("stop %d %s", res.Code, res.Body)
+	}
+	if res := ec2(url.Values{"Action": {"RebootInstances"}, "InstanceId.1": {id}}); res.Code != http.StatusBadRequest ||
+		!strings.Contains(res.Body.String(), "<Code>IncorrectInstanceState</Code>") {
+		t.Fatalf("query reboot of a stopped instance %d %s", res.Code, res.Body)
+	}
+	if res := reboot(id, "reboot-web-2"); res.Code != http.StatusConflict {
+		t.Fatalf("console reboot of a stopped instance %d %s", res.Code, res.Body)
+	}
+}
