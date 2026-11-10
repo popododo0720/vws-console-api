@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -21,16 +22,27 @@ const obsHealthChild = "VWS_TEST_OBS_HEALTH_CHILD"
 // That readiness is health.Default, and shutdown marks it not ready for the
 // life of the process. A second run in one process, as under -count=20, got
 // /readyz 503 (issue #486). Each run therefore starts a fresh test process.
+//
+// freeAddr releases a port before serve binds it, so a busy machine can hand
+// the port to another process. serve then fails with EADDRINUSE, which the
+// child reports, and the parent starts a new child (issue #547).
 func TestServeServesObsHealth(t *testing.T) {
 	if os.Getenv(obsHealthChild) == "" {
-		cmd := exec.CommandContext(t.Context(), os.Args[0],
-			"-test.run=^TestServeServesObsHealth$", "-test.count=1", "-test.v")
-		cmd.Env = append(os.Environ(), obsHealthChild+"=1")
-		out, err := cmd.CombinedOutput()
-		if err != nil || !strings.Contains(string(out), "--- PASS: TestServeServesObsHealth") {
-			t.Fatalf("child test process: %v\n%s", err, out)
+		var out []byte
+		for range smokeAttempts {
+			cmd := exec.CommandContext(t.Context(), os.Args[0],
+				"-test.run=^TestServeServesObsHealth$", "-test.count=1", "-test.v")
+			cmd.Env = append(os.Environ(), obsHealthChild+"=1")
+			var err error
+			out, err = cmd.CombinedOutput()
+			if err == nil && strings.Contains(string(out), "--- PASS: TestServeServesObsHealth") {
+				return
+			}
+			if !strings.Contains(string(out), syscall.EADDRINUSE.Error()) {
+				t.Fatalf("child test process: %v\n%s", err, out)
+			}
 		}
-		return
+		t.Fatalf("child test process could not bind after %d attempts\n%s", smokeAttempts, out)
 	}
 
 	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
@@ -47,9 +59,15 @@ func TestServeServesObsHealth(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	errc := make(chan error, 1)
-	go func() { errc <- serve(ctx, args) }()
+	done := make(chan struct{})
+	go func() {
+		errc <- serve(ctx, args)
+		close(done)
+	}()
 	t.Cleanup(cancel)
-	waitListen(t, healthAddr)
+	if err := waitListening(ctx, []string{healthAddr}, errc, done); err != nil {
+		t.Fatal(err)
+	}
 	client := &http.Client{Transport: &http.Transport{}}
 	for _, path := range []string{"/healthz", "/readyz"} {
 		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://"+healthAddr+path, nil)
