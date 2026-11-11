@@ -910,7 +910,7 @@ func tagSelectors(r *http.Request) ([]resource.TagSelector, error) {
 		if !hasKey && !hasValue {
 			continue
 		}
-		if !hasKey || keys[0] == "" {
+		if !hasKey {
 			return nil, resource.Invalid(prefix+"Key", "required")
 		}
 		sel := resource.TagSelector{Key: keys[0]}

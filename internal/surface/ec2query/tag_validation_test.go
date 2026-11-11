@@ -7,6 +7,33 @@ import (
 	"testing"
 )
 
+func TestDeleteTagsDistinguishesEmptyAndMissingKeys(t *testing.T) {
+	h, cred, now := harness(t)
+	for _, kind := range []string{"i", "vol", "vpc", "subnet"} {
+		for _, keyState := range []string{"empty", "missing"} {
+			t.Run(kind+"/"+keyState, func(t *testing.T) {
+				form := url.Values{
+					"Action": {"DeleteTags"}, "Version": {Version},
+					"ResourceId.1": {kind + "-0123456789abcdef0"}, "Tag.1.Value": {"v"},
+				}
+				want := "required"
+				if keyState == "empty" {
+					form.Set("Tag.1.Key", "")
+					want = "Value () for parameter key is invalid. Tag key must not be empty"
+				}
+				for range 2 {
+					res := signed(t, h, cred, now, form.Encode())
+					body := res.Body.String()
+					if res.Code != http.StatusBadRequest ||
+						xmlText(t, body, "Code") != "InvalidParameterValue" || xmlText(t, body, "Message") != want {
+						t.Fatalf("got %d %s, want 400 InvalidParameterValue %q", res.Code, body, want)
+					}
+				}
+			})
+		}
+	}
+}
+
 func TestTagValidationUsesAWSMessages(t *testing.T) {
 	h, cred, now := harness(t)
 	for _, action := range []string{"CreateTags", "DeleteTags"} {
