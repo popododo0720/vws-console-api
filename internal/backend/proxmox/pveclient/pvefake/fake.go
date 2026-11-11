@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 // Fake answers the PVE API from one Scenario.
@@ -21,6 +22,10 @@ type Fake struct {
 	mux      *http.ServeMux
 	methods  []string
 	requests []string
+	now      time.Time
+	delay    time.Duration
+	tasks    []*task
+	failNext map[string]string
 }
 
 // failure is a PVE error answer: the status and PVE's message.
@@ -31,12 +36,14 @@ type failure struct {
 
 // New checks s and returns a Fake with every node online and with quorum.
 // The Fake keeps its own copy: editing s afterwards does not change it.
+// Tasks last one fake-clock second by default; Advance completes them.
 func New(s Scenario) (*Fake, error) {
 	if err := s.check(); err != nil {
 		return nil, fmt.Errorf("pvefake: %w", err)
 	}
 	s = s.clone()
 	f := &Fake{s: s, roles: map[string][]string{}, quorate: true, online: map[string]bool{}, mux: http.NewServeMux()}
+	f.now, f.delay, f.failNext = time.Unix(1700000000, 0), time.Second, map[string]string{}
 	for _, r := range s.Roles {
 		f.roles[r.ID] = r.Privs
 	}
@@ -243,8 +250,8 @@ func (f *Fake) vm(vmid int) *VM {
 	return nil
 }
 
-// guest is the VM of the path once t may audit it.
-func (f *Fake) guest(t *Token, r *http.Request) (*VM, *failure) {
+// guest checks permissions before revealing whether the VM exists.
+func (f *Fake) guest(t *Token, r *http.Request, privs ...string) (*VM, *failure) {
 	node, fail := f.node(r)
 	if fail != nil {
 		return nil, fail
@@ -253,7 +260,10 @@ func (f *Fake) guest(t *Token, r *http.Request) (*VM, *failure) {
 	if err != nil || vmid < 1 {
 		return nil, &failure{http.StatusBadRequest, "Parameter verification failed. vmid: type check ('integer') failed"}
 	}
-	if fail := f.need(t, "/vms/"+strconv.Itoa(vmid), "VM.Audit"); fail != nil {
+	if len(privs) == 0 {
+		privs = []string{"VM.Audit"}
+	}
+	if fail := f.need(t, "/vms/"+strconv.Itoa(vmid), privs...); fail != nil {
 		return nil, fail
 	}
 	vm := f.vm(vmid)

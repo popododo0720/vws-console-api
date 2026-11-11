@@ -11,7 +11,7 @@ import (
 	"strings"
 )
 
-// routes registers the cluster, node, VM config and permission read paths of
+// routes registers the cluster, node, VM config, task and clone paths of
 // pveclient. Permissions follow the
 // api-viewer: a "check" is a 403 without the privilege, "user: all" lists
 // only what the token may see.
@@ -28,6 +28,10 @@ func (f *Fake) routes() {
 	f.handle("/nodes/{node}/qemu/{vmid}/snapshot", f.snapshots)
 	f.handle("/nodes/{node}/storage/{storage}/content", f.storageContent)
 	f.handle("/access/permissions", f.permissions)
+	f.handle("/cluster/nextid", f.nextID)
+	f.handle("/nodes/{node}/tasks", f.taskList)
+	f.handle("/nodes/{node}/tasks/{upid}/status", f.taskStatus)
+	f.mutate("POST /nodes/{node}/qemu/{vmid}/clone", f.cloneVM)
 	f.mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		msg := fmt.Sprintf("Method '%s %s' not implemented", r.Method, r.URL.Path)
 		reply(w, nil, &failure{http.StatusNotImplemented, msg})
