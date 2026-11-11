@@ -167,9 +167,15 @@ func (c *Connection) Register(ctx context.Context, data json.RawMessage) error {
 	if err := c.Helper.Lock(ctx, "registration"); err != nil {
 		return &resource.Error{Code: resource.CodeConflict, Message: "registration write in progress"}
 	}
+	cleanupFingerprint := ""
 	defer func() {
 		if err := c.Helper.Unlock(context.WithoutCancel(ctx), "registration"); err != nil {
 			slog.WarnContext(ctx, "registration unlock failed")
+		}
+		if cleanupFingerprint != "" {
+			if err := c.Helper.DeleteToken(context.WithoutCancel(ctx), cleanupFingerprint); err != nil {
+				slog.WarnContext(ctx, "previous registration token cleanup failed")
+			}
 		}
 	}()
 	if reuse {
@@ -200,9 +206,7 @@ func (c *Connection) Register(ctx context.Context, data json.RawMessage) error {
 		return err
 	}
 	if old.Fingerprint != "" && old.Fingerprint != s.Fingerprint {
-		if err := c.Helper.DeleteToken(context.WithoutCancel(ctx), old.Fingerprint); err != nil {
-			slog.WarnContext(ctx, "previous registration token cleanup failed")
-		}
+		cleanupFingerprint = old.Fingerprint
 	}
 	return nil
 }

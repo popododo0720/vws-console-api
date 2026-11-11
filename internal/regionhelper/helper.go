@@ -104,6 +104,15 @@ func (h helper) run(args []string, stdin io.Reader) (err error) {
 		root, name = h.private, "pve-token."+args[1]
 		write, encrypt = args[0] == "token-write", args[0] == "token-write"
 		if !write {
+			locks, openErr := os.OpenRoot(h.locks)
+			if openErr != nil {
+				return fmt.Errorf("open registration lock root: %w", openErr)
+			}
+			defer func() { err = errors.Join(err, locks.Close()) }()
+			if err := locks.Mkdir("registration", 0o700); err != nil {
+				return fmt.Errorf("acquire registration lock: %w", err)
+			}
+			defer func() { err = errors.Join(err, locks.Remove("registration")) }()
 			path := filepath.Join(h.public, "registration.json")
 			f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 			if err != nil && !errors.Is(err, os.ErrNotExist) {
