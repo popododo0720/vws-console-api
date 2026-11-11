@@ -70,6 +70,7 @@ linters:
         surfaces-use-the-kernel:
           files:
             - "**/internal/surface/**"
+            - "!**/internal/surface/regionapi/*.go"
             - "!$test"
           deny:
             - pkg: github.com/popododo0720/vws-console-api/internal/backend

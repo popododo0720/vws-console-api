@@ -9,7 +9,7 @@ it. When you add or change a rule, change its row here and its line in
 
 | Rule | Enforced by |
 | --- | --- |
-| Surfaces call `internal/cloud`, never `internal/backend`. | `TestArchitectureRules`; depguard `surfaces-use-the-kernel` |
+| Surfaces call `internal/cloud`; only the exact `internal/surface/regionapi` package may import `internal/backend`, because it transports the region backend after the global kernel has run (design 3.3.7). Other surfaces and regionapi subpackages remain restricted. | `TestArchitectureRules`; depguard `surfaces-use-the-kernel` |
 | `internal/resource` imports only the standard library. | `TestArchitectureRules`; depguard `model-is-a-leaf` |
 | The kernel never sees HTTP, signatures, or a surface. | `TestArchitectureRules`; depguard `kernel-knows-no-wire` |
 | Protobuf and gRPC types stay inside `internal/backend/grpcclient`. | `TestArchitectureRules`; depguard `grpc-stays-in-grpcclient` |

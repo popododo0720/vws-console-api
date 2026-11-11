@@ -122,6 +122,9 @@ func archViolations(pkgs map[string][]*ast.File) []string {
 			for _, spec := range f.Imports {
 				imp, _ := strconv.Unquote(spec.Path.Value)
 				for _, r := range packageRules {
+					if dir == "internal/surface/regionapi" && imp == module+"/internal/backend" {
+						continue
+					}
 					if under(dir, r.dirs...) && r.forbid(imp) {
 						bad = append(bad, fmt.Sprintf("%s imports %s: %s", dir, imp, r.why))
 					}
@@ -159,15 +162,17 @@ func loadProduction(t *testing.T, root string) map[string][]*ast.File {
 func TestArchitectureRules(t *testing.T) {
 	probe := t.TempDir()
 	for rel, src := range map[string]string{
-		"internal/resource/pure.go":     `package resource; import _ "` + module + `/internal/cloud"`,
-		"internal/resource/dep.go":      `package resource; import _ "golang.org/x/crypto/argon2"`,
-		"internal/surface/console/s.go": `package console; import _ "` + module + `/internal/backend"`,
-		"internal/cloud/wire.go":        `package cloud; import _ "net/http"`,
-		"internal/cloud/httptest.go":    `package cloud; import _ "net/http/httptest"`,
-		"internal/cloud/signature.go":   `package cloud; import _ "` + module + `/internal/sigv4"`,
-		"internal/cloud/surface.go":     `package cloud; import _ "` + module + `/internal/surface/console"`,
-		"internal/widget/grpc.go":       `package widget; import _ "google.golang.org/grpc"`,
-		"internal/widget/protobuf.go":   `package widget; import _ "google.golang.org/protobuf/proto"`,
+		"internal/resource/pure.go":              `package resource; import _ "` + module + `/internal/cloud"`,
+		"internal/resource/dep.go":               `package resource; import _ "golang.org/x/crypto/argon2"`,
+		"internal/surface/console/s.go":          `package console; import _ "` + module + `/internal/backend"`,
+		"internal/surface/regionapi/ok.go":       `package regionapi; import _ "` + module + `/internal/backend"`,
+		"internal/surface/regionapi/nested/s.go": `package nested; import _ "` + module + `/internal/backend"`,
+		"internal/cloud/wire.go":                 `package cloud; import _ "net/http"`,
+		"internal/cloud/httptest.go":             `package cloud; import _ "net/http/httptest"`,
+		"internal/cloud/signature.go":            `package cloud; import _ "` + module + `/internal/sigv4"`,
+		"internal/cloud/surface.go":              `package cloud; import _ "` + module + `/internal/surface/console"`,
+		"internal/widget/grpc.go":                `package widget; import _ "google.golang.org/grpc"`,
+		"internal/widget/protobuf.go":            `package widget; import _ "google.golang.org/protobuf/proto"`,
 		"internal/widget/genproto.go": `package widget; import _ "` +
 			`google.golang.org/genproto/googleapis/rpc/errdetails"`,
 		"internal/widget/proto.go": `package widget; import _ "` + vwsProto + `/gen/go/vws/common/v1"`,
@@ -203,6 +208,8 @@ func TestArchitectureRules(t *testing.T) {
 		"internal/resource imports golang.org/x/crypto/argon2: " +
 			"internal/resource imports only the standard library",
 		"internal/surface/console imports " + module + "/internal/backend: " +
+			"surfaces reach backends only through internal/cloud",
+		"internal/surface/regionapi/nested imports " + module + "/internal/backend: " +
 			"surfaces reach backends only through internal/cloud",
 		"internal/widget imports cloud.google.com/go/longrunning/autogen/longrunningpb: " +
 			"protobuf and gRPC types stay inside internal/backend/grpcclient",
