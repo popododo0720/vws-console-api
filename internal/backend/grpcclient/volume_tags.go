@@ -22,6 +22,11 @@ func (c computeClient) TagVolumes(
 }
 
 // UntagVolumes deletes the selected tags with a labels-only UpdateVolume.
+// All volumes are read and validated before any write. Updates then run
+// sequentially: a later failure leaves earlier updates applied. With no
+// intervening tag changes, a retry with the same mutation key sends the same
+// per-volume request IDs, replaying accepted updates and retrying failed ones.
+// Tokenless EC2 DeleteTags calls get a fresh key and apply the removal again.
 func (c computeClient) UntagVolumes(
 	ctx context.Context, m backend.Mutation, req resource.UntagVolumesRequest,
 ) (resource.Accepted[resource.Volume], error) {

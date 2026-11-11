@@ -85,6 +85,26 @@ func TestDeleteTags(t *testing.T) {
 			t.Fatalf("%s tags after DeleteTags: %s", id, got)
 		}
 	}
+	for range 2 {
+		send(url.Values{
+			"Action": {"CreateTags"}, "ResourceId.1": {vpc}, "ResourceId.2": {sub},
+			"ResourceId.3": {inst}, "ResourceId.4": {vol}, "Tag.1.Key": {"cycle"}, "Tag.1.Value": {"again"},
+		})
+		for _, id := range []string{vpc, sub, inst, vol} {
+			if got := tagSet(id); !strings.Contains(got, "<key>cycle</key>") {
+				t.Fatalf("%s tags after re-tagging: %s", id, got)
+			}
+		}
+		send(url.Values{
+			"Action": {"DeleteTags"}, "ResourceId.1": {vpc}, "ResourceId.2": {sub},
+			"ResourceId.3": {inst}, "ResourceId.4": {vol}, "Tag.1.Key": {"cycle"},
+		})
+		for _, id := range []string{vpc, sub, inst, vol} {
+			if got := tagSet(id); got != want {
+				t.Fatalf("%s tags after deleting a re-added tag: %s", id, got)
+			}
+		}
+	}
 
 	// The same request again changes nothing and still succeeds.
 	send(url.Values{"Action": {"DeleteTags"}, "ResourceId.1": {vpc}, "Tag.1.Key": {"Name"}})
