@@ -58,6 +58,16 @@ func (f *Fake) clusterResources(t *Token, r *http.Request) (any, *failure) {
 			"' does not have a value in the enumeration 'vm, storage, node, sdn'"}
 	}
 	rows := []map[string]any{}
+	if kind == "" || kind == "storage" {
+		for _, s := range f.s.Storages {
+			if f.can(t, "/storage/"+s.Name, "Datastore.Audit") {
+				rows = append(rows, map[string]any{
+					"type": "storage", "storage": s.Name, "node": s.Node,
+					"id": "storage/" + s.Node + "/" + s.Name,
+				})
+			}
+		}
+	}
 	if kind == "" || kind == "vm" {
 		for _, vm := range f.s.VMs {
 			if !f.can(t, "/vms/"+strconv.Itoa(vm.VMID), "VM.Audit") {

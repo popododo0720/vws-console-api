@@ -23,11 +23,18 @@ type Scenario struct {
 	Version Version `yaml:"version"`
 	// Cluster is the corosync cluster name. Empty is a standalone node, whose
 	// /cluster/status has no type=cluster row.
-	Cluster string  `yaml:"cluster"`
-	Nodes   []Node  `yaml:"nodes"`
-	VMs     []VM    `yaml:"vms"`
-	Roles   []Role  `yaml:"roles"`
-	Tokens  []Token `yaml:"tokens"`
+	Cluster  string    `yaml:"cluster"`
+	Nodes    []Node    `yaml:"nodes"`
+	VMs      []VM      `yaml:"vms"`
+	Roles    []Role    `yaml:"roles"`
+	Tokens   []Token   `yaml:"tokens"`
+	Storages []Storage `yaml:"storages"`
+}
+
+// Storage is one node's storage inventory entry.
+type Storage struct {
+	Node string `yaml:"node"`
+	Name string `yaml:"name"`
 }
 
 // Version is GET /version.
@@ -153,6 +160,7 @@ func (s Scenario) check() error {
 func (s Scenario) clone() Scenario {
 	s.Nodes, s.VMs = slices.Clone(s.Nodes), slices.Clone(s.VMs)
 	s.Roles, s.Tokens = slices.Clone(s.Roles), slices.Clone(s.Tokens)
+	s.Storages = slices.Clone(s.Storages)
 	for i := range s.VMs {
 		s.VMs[i].Config = maps.Clone(s.VMs[i].Config)
 	}

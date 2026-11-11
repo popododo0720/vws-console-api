@@ -19,6 +19,7 @@ type Fake struct {
 	quorate bool
 	online  map[string]bool
 	mux     *http.ServeMux
+	methods []string
 }
 
 // failure is a PVE error answer: the status and PVE's message.
@@ -65,7 +66,19 @@ func (f *Fake) SetNodeOnline(node string, online bool) error {
 }
 
 // ServeHTTP answers one API call.
-func (f *Fake) ServeHTTP(w http.ResponseWriter, r *http.Request) { f.mux.ServeHTTP(w, r) }
+func (f *Fake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	f.mu.Lock()
+	f.methods = append(f.methods, r.Method)
+	f.mu.Unlock()
+	f.mux.ServeHTTP(w, r)
+}
+
+// RequestMethods returns every request method, including rejected requests.
+func (f *Fake) RequestMethods() []string {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	return append([]string(nil), f.methods...)
+}
 
 func (f *Fake) handle(pattern string, h func(*Token, *http.Request) (any, *failure)) {
 	f.mux.HandleFunc("GET /api2/json"+pattern, func(w http.ResponseWriter, r *http.Request) {
