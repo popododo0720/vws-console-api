@@ -3,6 +3,7 @@ package resource
 import (
 	"encoding"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"strings"
@@ -114,6 +115,26 @@ func (id *ID[K]) UnmarshalText(b []byte) error {
 	}
 	id.v = s
 	return nil
+}
+
+// UnmarshalJSON decodes identifiers in resource records and backend requests.
+// Bucket creation validates its chosen name with Parse; a stored name must
+// remain readable after the create policy gains a reserved prefix or suffix.
+func (id *ID[K]) UnmarshalJSON(data []byte) error {
+	var s string
+	if err := json.Unmarshal(data, &s); err != nil {
+		return fmt.Errorf("decode resource ID: %w", err)
+	}
+	var k K
+	if k.kind() == KindBucket {
+		name, err := ParseStoredBucketName(s)
+		if err != nil {
+			return err
+		}
+		id.v = name.v
+		return nil
+	}
+	return id.UnmarshalText([]byte(s))
 }
 
 func (id *ID[K]) mint(entropy io.Reader) error {

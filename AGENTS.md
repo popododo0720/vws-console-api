@@ -38,7 +38,7 @@ change both files together.
 
 | Rule | Enforced by |
 | --- | --- |
-| Surfaces call `internal/cloud`, never `internal/backend`. | depguard `surfaces-use-the-kernel` |
+| Surfaces call `internal/cloud`; `internal/surface/regionapi` alone transports `internal/backend` after the global kernel has run. | depguard `surfaces-use-the-kernel`; `TestArchitectureRules` |
 | `internal/resource` imports only the standard library. | depguard `model-is-a-leaf` |
 | The kernel never sees HTTP, signatures or a surface. | depguard `kernel-knows-no-wire` |
 | Protobuf and gRPC types stay in `internal/backend/grpcclient`. | depguard `grpc-stays-in-grpcclient` |
