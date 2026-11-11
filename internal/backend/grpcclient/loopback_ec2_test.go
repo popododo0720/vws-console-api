@@ -261,7 +261,15 @@ func (s *groupSrv) UpdateSecurityGroup(ctx context.Context, req *networkv1.Updat
 		return nil, toStatus(err)
 	}
 	decoded := make([]resource.IngressRule, 0, len(rules))
+	ruleIDs := make([]string, 0, len(rules))
+	seen := map[string]bool{}
 	for _, rule := range rules {
+		// The real service keys rules by id and rejects duplicates.
+		if seen[rule.GetId()] {
+			return nil, vwsStatus(codes.InvalidArgument, "INVALID_ARGUMENT", "duplicate rule id")
+		}
+		seen[rule.GetId()] = true
+		ruleIDs = append(ruleIDs, rule.GetId())
 		decoded = append(decoded, resource.IngressRule{
 			Protocol: protocolName(rule.GetProtocol()),
 			FromPort: int(rule.GetFromPort()),
@@ -269,7 +277,7 @@ func (s *groupSrv) UpdateSecurityGroup(ctx context.Context, req *networkv1.Updat
 			Cidr:     rule.GetCidr(),
 		})
 	}
-	group, err := s.w.updateGroup(id.String(), account, req.GetSecurityGroup().GetEtag(), decoded,
+	group, err := s.w.updateGroup(id.String(), account, req.GetSecurityGroup().GetEtag(), decoded, ruleIDs,
 		req.GetSecurityGroup().GetLabels())
 	if err != nil {
 		if errors.Is(err, etagMismatchError{}) {
@@ -348,7 +356,8 @@ func (w *loopWorld) saveGroup(group resource.SecurityGroup) {
 // updateGroup replaces the rules only while etag still matches and rotates the
 // etag, like the network service's compare-and-swap.
 func (w *loopWorld) updateGroup(
-	id string, owner resource.AccountID, etag string, rules []resource.IngressRule, labels map[string]string,
+	id string, owner resource.AccountID, etag string, rules []resource.IngressRule, ruleIDs []string,
+	labels map[string]string,
 ) (resource.SecurityGroup, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -362,6 +371,7 @@ func (w *loopWorld) updateGroup(
 	w.etagN++
 	group.Etag = strconv.Itoa(w.etagN)
 	group.Rules = rules
+	group.RuleIDs = ruleIDs
 	group.Labels = labels
 	w.groups[id] = group
 	return group, nil
@@ -381,8 +391,12 @@ func groupProto(group resource.SecurityGroup, projectID string) *networkv1.Secur
 	rules := make([]*networkv1.SecurityGroupRule, 0, len(group.Rules))
 	for i, rule := range group.Rules {
 		protocol, _ := protocolOf(rule.Protocol)
+		ruleID := "r" + hexByte(i)
+		if i < len(group.RuleIDs) && group.RuleIDs[i] != "" {
+			ruleID = group.RuleIDs[i]
+		}
 		rules = append(rules, &networkv1.SecurityGroupRule{
-			Id:        "r" + hexByte(i),
+			Id:        ruleID,
 			Direction: networkv1.Direction_DIRECTION_INGRESS,
 			Protocol:  protocol,
 			FromPort:  int32(rule.FromPort),

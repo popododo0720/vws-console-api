@@ -2367,7 +2367,7 @@ func (c networkClient) writeGroupRules(
 	var zero resource.Accepted[resource.SecurityGroup]
 	protoRules := make([]*networkv1.SecurityGroupRule, 0, len(rules))
 	for i, rule := range rules {
-		protoRule, err := ruleProto(rule, derivedID("r", m.Key, "rule", hex.EncodeToString([]byte{byte(i)})))
+		protoRule, err := ruleProto(rule, ruleID(current, rule, m.Key, i))
 		if err != nil {
 			return zero, err
 		}
@@ -2408,6 +2408,24 @@ func (c networkClient) writeGroupRules(
 	op.Action = action
 	op.Targets = []resource.Ref{got.ID.Ref()}
 	return resource.Accepted[resource.SecurityGroup]{Operation: op, Items: []resource.SecurityGroup{got}}, nil
+}
+
+// ruleID keeps the id of a rule the group already holds, so ids are stable
+// across writes: the network service identifies rules by id, not position. A
+// rule stored before #596 has a non-EC2 id and gets an sgr- id derived from
+// the group and that id. A new rule gets one derived from the request key and
+// its position, so a retry of the same request names the same rule.
+func ruleID(current resource.SecurityGroup, rule resource.IngressRule, key string, i int) string {
+	if j := slices.Index(current.Rules, rule); j >= 0 && j < len(current.RuleIDs) {
+		if have := current.RuleIDs[j]; resource.IsRuleID(have) {
+			return have
+		} else if have != "" {
+			sum := hashParts("sgr", current.ID.String(), have)
+			return resource.RuleIDFromHash(sum[:])
+		}
+	}
+	sum := hashParts("sgr", key, "rule", strconv.Itoa(i))
+	return resource.RuleIDFromHash(sum[:])
 }
 
 func (c computeClient) getVolume(ctx context.Context, projectID, id string) (resource.Volume, error) {
@@ -2732,10 +2750,12 @@ func groupModel(in *networkv1.SecurityGroup) (resource.SecurityGroup, error) {
 		return resource.SecurityGroup{}, resource.Internal(err)
 	}
 	var rules []resource.IngressRule
+	var ids []string
 	for _, rule := range in.GetSpec().GetRules() {
 		if rule.GetDirection() != networkv1.Direction_DIRECTION_INGRESS {
 			continue
 		}
+		ids = append(ids, rule.GetId())
 		rules = append(rules, resource.IngressRule{
 			Protocol: protocolName(rule.GetProtocol()),
 			FromPort: int(rule.GetFromPort()),
@@ -2745,7 +2765,7 @@ func groupModel(in *networkv1.SecurityGroup) (resource.SecurityGroup, error) {
 	}
 	return resource.SecurityGroup{
 		ID: id, OwnerID: owner, Name: in.GetSpec().GetDescription(), VpcID: vpcID,
-		Etag: in.GetEtag(), Labels: maps.Clone(in.GetLabels()), Rules: rules,
+		Etag: in.GetEtag(), Labels: maps.Clone(in.GetLabels()), Rules: rules, RuleIDs: ids,
 	}, nil
 }
 

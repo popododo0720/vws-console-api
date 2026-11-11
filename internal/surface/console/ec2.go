@@ -231,7 +231,17 @@ func (h *handler) authorizeIngress(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, r, err)
 		return
 	}
-	writeAccepted(w, acc)
+	added := []resource.SecurityGroupRule{}
+	if len(acc.Items) == 1 {
+		added = acc.Items[0].RulesOf(rules)
+	}
+	w.Header().Set("Location", "/api/v1/operations/"+acc.Operation.ID.String())
+	// Accepted has its own MarshalJSON, so embedding it would drop the rules.
+	writeJSON(w, http.StatusAccepted, struct {
+		Operation          resource.Operation           `json:"operation"`
+		Items              []resource.SecurityGroup     `json:"items"`
+		SecurityGroupRules []resource.SecurityGroupRule `json:"securityGroupRules"`
+	}{acc.Operation, acc.Items, added})
 }
 
 func (h *handler) revokeIngress(w http.ResponseWriter, r *http.Request) {

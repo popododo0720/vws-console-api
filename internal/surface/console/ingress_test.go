@@ -70,11 +70,22 @@ func TestAuthorizeIngressTakesIPPermissions(t *testing.T) {
 		{"ipProtocol":"tcp","fromPort":22,"toPort":22,"ipRanges":[{"cidrIp":"10.0.0.0/16"},{"cidrIp":"10.1.0.0/16"}]},
 		{"ipProtocol":"udp","fromPort":53,"toPort":53,"ipRanges":[{"cidrIp":"0.0.0.0/0"}]}]}`
 	rec := do(http.MethodPost, path, body, "auth-several-1")
-	var acc struct {
-		Items []resource.SecurityGroup `json:"items"`
+	type accepted struct {
+		Items []resource.SecurityGroup     `json:"items"`
+		Rules []resource.SecurityGroupRule `json:"securityGroupRules"`
 	}
+	var acc accepted
 	if rec.Code != http.StatusAccepted || json.Unmarshal(rec.Body.Bytes(), &acc) != nil || len(acc.Items) != 1 {
 		t.Fatalf("authorize %d %s", rec.Code, rec.Body)
+	}
+	// #596: the added rules come back with stable sgr- ids.
+	if len(acc.Rules) != 3 || acc.Rules[0].ID == acc.Rules[1].ID || acc.Rules[1].ID == acc.Rules[2].ID {
+		t.Fatalf("securityGroupRules %+v", acc.Rules)
+	}
+	for _, r := range acc.Rules {
+		if !resource.IsRuleID(r.ID) || r.GroupID.String() != sg || r.IsEgress {
+			t.Fatalf("rule %+v", r)
+		}
 	}
 	want := []resource.IngressRule{
 		{Protocol: "tcp", FromPort: 22, ToPort: 22, Cidr: "10.0.0.0/16"},
@@ -84,8 +95,13 @@ func TestAuthorizeIngressTakesIPPermissions(t *testing.T) {
 	if got := acc.Items[0].Rules; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] || got[2] != want[2] {
 		t.Fatalf("rules %+v, want %+v", got, want)
 	}
-	if again := do(http.MethodPost, path, body, "auth-several-1"); again.Code != http.StatusAccepted {
+	again := do(http.MethodPost, path, body, "auth-several-1")
+	var replay accepted
+	if again.Code != http.StatusAccepted || json.Unmarshal(again.Body.Bytes(), &replay) != nil {
 		t.Fatalf("retry %d %s", again.Code, again.Body)
+	}
+	if len(replay.Rules) != 3 || replay.Rules[0] != acc.Rules[0] || replay.Rules[2] != acc.Rules[2] {
+		t.Fatalf("retry rules %+v, want %+v", replay.Rules, acc.Rules)
 	}
 	single := `{"ipPermissions":{"ipProtocol":"tcp","fromPort":80,"toPort":80,"cidrIp":"10.0.0.0/16"}}`
 	if old := do(http.MethodPost, path, single, "auth-old-1"); old.Code != http.StatusBadRequest {
