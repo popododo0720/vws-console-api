@@ -2,7 +2,6 @@ package iam
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -54,9 +53,8 @@ func TestFakeCreateVirtualMFADevice(t *testing.T) {
 	}
 }
 
-// The fake stores the create's tags on the device. More than MaxTags tags is
-// LimitExceeded, a bad tag or an aws: key is InvalidInput, and a refused
-// create leaves no device behind.
+// The fake stores the create's tags on the device. The tags it refuses are the
+// shared contract, TestFakeCreateMFADeviceTagContract.
 func TestFakeCreateVirtualMFADeviceTags(t *testing.T) {
 	ctx := t.Context()
 	f := NewFake()
@@ -68,34 +66,6 @@ func TestFakeCreateVirtualMFADeviceTags(t *testing.T) {
 	page, err := f.ListMFADeviceTags(ctx, a, dev.SerialNumber, "", 0)
 	if err != nil || len(page.Tags) != 2 {
 		t.Fatalf("tags %v, %v", page.Tags, err)
-	}
-	tooMany := make([]Tag, MaxTags+1)
-	for i := range tooMany {
-		tooMany[i] = Tag{Key: fmt.Sprint("k", i)}
-	}
-	for name, tc := range map[string]struct {
-		tags []Tag
-		code resource.Code
-		msg  string
-	}{
-		"51 tags":    {tooMany, resource.CodeResourceExhausted, mfaDeviceTagQuotaMsg},
-		"bad key":    {[]Tag{{"bad#key", "v"}}, resource.CodeInvalidArgument, "tags.member.key"},
-		"aws: key":   {[]Tag{{"aws:owner", "v"}}, resource.CodeInvalidArgument, "reserved prefix"},
-		"aws: value": {[]Tag{{"team", "aws:x"}}, resource.CodeInvalidArgument, "reserved prefix"},
-	} {
-		t.Run(name, func(t *testing.T) {
-			_, err := f.CreateVirtualMFADevice(ctx, a, "refused", "/", tc.tags)
-			if resource.CodeOf(err) != tc.code || !strings.Contains(err.Error(), tc.msg) {
-				t.Fatalf("got %v, want %v %q", err, tc.code, tc.msg)
-			}
-			var e *resource.Error
-			if tc.code == resource.CodeInvalidArgument && (!errors.As(err, &e) || e.Field != "Tags") {
-				t.Errorf("field of %v is not Tags, so it is not InvalidInput", err)
-			}
-			if _, err := f.ListMFADeviceTags(ctx, a, VirtualMFADeviceSerial(a, "/", "refused"), "", 0); err == nil {
-				t.Error("a refused create left a device")
-			}
-		})
 	}
 }
 
