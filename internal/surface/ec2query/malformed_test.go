@@ -50,7 +50,7 @@ func TestMalformedInstanceIDIsInvalidInstanceIDMalformed(t *testing.T) {
 // the kind's own malformed code, as the EC2 error reference lists it.
 func TestTaggingMalformedResourceIDIsInvalidID(t *testing.T) {
 	for _, action := range []string{"CreateTags", "DeleteTags"} {
-		for _, id := range []string{"i-xyz", "vpc-xyz", "subnet-xyz"} {
+		for _, id := range []string{"i-xyz", "vpc-xyz", "subnet-xyz", "vol-xyz"} {
 			t.Run(action+"/"+id, func(t *testing.T) {
 				h, cred, now := harness(t)
 				form := url.Values{}

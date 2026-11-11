@@ -134,4 +134,19 @@ func TestVpcAndSubnetTags(t *testing.T) {
 	if got := tagsAt("/api/v1/instances/" + inst); !maps.Equal(got, map[string]string{"env": "dev"}) {
 		t.Fatalf("instance tags after deleting Name %v", got)
 	}
+	vol := created(do(http.MethodPost, "/api/v1/volumes",
+		`{"size":8,"availabilityZone":"vws-1a","tags":{"Name":"v"}}`, "vol-tags-1"), "volumeId")
+	if got := tagsAt("/api/v1/volumes/" + vol); !maps.Equal(got, map[string]string{"Name": "v"}) {
+		t.Fatalf("volume tags %v", got)
+	}
+	volTags := "/api/v1/volumes/" + vol + "/tags"
+	if rec := do(http.MethodPost, volTags, `{"tags":{"Name":"w","env":"dev"}}`, "volt"); rec.Code != http.StatusAccepted {
+		t.Fatalf("tag volume: %d %s", rec.Code, rec.Body)
+	}
+	if got := tagsAt("/api/v1/volumes/" + vol); !maps.Equal(got, map[string]string{"Name": "w", "env": "dev"}) {
+		t.Fatalf("volume tags after tagging %v", got)
+	}
+	if rec := do(http.MethodPost, volTags, `{"tags":{"aws:x":"y"}}`, "volt-aws"); rec.Code != http.StatusBadRequest {
+		t.Fatalf("aws: tag on a volume: %d %s", rec.Code, rec.Body)
+	}
 }

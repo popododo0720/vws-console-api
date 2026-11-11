@@ -130,6 +130,8 @@ type Volume struct {
 	// EC2 returns.
 	Iops       int64 `json:"iops,omitempty"`
 	Throughput int64 `json:"throughput,omitempty"`
+	// Tags are the user tags, without the aws: ones EC2 keeps for itself.
+	Tags map[string]string `json:"tags,omitempty"`
 }
 
 // Owner returns the account that owns the volume.
@@ -171,12 +173,14 @@ type CreateVolumeRequest struct {
 	SnapshotID SnapshotID `json:"snapshotId,omitzero"`
 	Iops       int64      `json:"iops,omitempty"`
 	Throughput int64      `json:"throughput,omitempty"`
+	// Tags come from TagSpecification with ResourceType volume.
+	Tags map[string]string `json:"tags,omitempty"`
 }
 
 // Action returns CreateVolume.
 func (CreateVolumeRequest) Action() Action { return ActionCreateVolume }
 
-// Normalize checks the type, size, zone, Iops and Throughput. The type
+// Normalize checks the type, size, zone, Iops, Throughput and tags. The type
 // defaults to gp2, and gp3 Iops and Throughput to 3000 and 125. A volume
 // restored from a snapshot may leave the size 0, which is the snapshot size;
 // WithSize checks it once the backend knows it.
@@ -211,6 +215,9 @@ func (r CreateVolumeRequest) Normalize() (CreateVolumeRequest, error) {
 	}
 	if r.Zone != ZoneName {
 		return CreateVolumeRequest{}, Invalid("availabilityZone", "unsupported")
+	}
+	if err := validRequestTags(r.Tags); err != nil {
+		return CreateVolumeRequest{}, err
 	}
 	return r, nil
 }

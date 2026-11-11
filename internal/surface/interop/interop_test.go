@@ -634,6 +634,72 @@ func TestConsoleAndQueryDeleteTheSameTags(t *testing.T) {
 	}
 }
 
+// TestConsoleAndQueryTagTheSameVolume tags a volume through each surface and
+// reads its tags through the other.
+func TestConsoleAndQueryTagTheSameVolume(t *testing.T) {
+	now := time.Date(2026, 11, 10, 10, 0, 0, 0, time.UTC)
+	account := mustParse[resource.AccountID](t, "123456789012")
+	caller := resource.Caller{
+		Account: account, Subject: "console", Principal: iam.RootARN(account), Root: true,
+	}
+	world := fake.New(fake.Options{Now: func() time.Time { return now }})
+	svc := cloud.New(cloud.Config{Backends: world.Set()})
+	ui := console.New(console.Config{
+		Service: svc, IAM: iam.NewStatic("AKIDEXAMPLE", "secret", account),
+		Auth: console.BearerTokens{"tok-console": caller},
+	})
+	cred := sigv4.Credential{AccessKey: "AKIDEXAMPLE", Secret: "secret", Account: account}
+	query := ec2query.New(ec2query.Config{
+		Service: svc, Authorizer: iam.NewStatic(cred.AccessKey, cred.Secret, cred.Account),
+		Verifier: verifier(cred, sigv4.ServiceEC2, now),
+	})
+	signed := func(form url.Values) *httptest.ResponseRecorder {
+		t.Helper()
+		return serveSigned(t, query, cred, sigv4.ServiceEC2, now, http.MethodPost, "http://127.0.0.1:8081/", form.Encode())
+	}
+	write := func(key string) map[string]string {
+		return map[string]string{
+			"Authorization": "Bearer tok-console", "Content-Type": "application/json", "Idempotency-Key": key,
+		}
+	}
+
+	created := call(t, ui, http.MethodPost, "/api/v1/volumes",
+		`{"size":2,"availabilityZone":"`+resource.ZoneName+`","tags":{"Name":"data"}}`, write("vol-tags-1"))
+	var acc struct {
+		Items []struct {
+			ID string `json:"volumeId"`
+		} `json:"items"`
+	}
+	if created.Code != http.StatusAccepted || json.Unmarshal(created.Body.Bytes(), &acc) != nil || len(acc.Items) != 1 {
+		t.Fatalf("create %d %s", created.Code, created.Body)
+	}
+	vol := acc.Items[0].ID
+	form := url.Values{
+		"Action": {"CreateTags"}, "Version": {ec2query.Version}, "ResourceId.1": {vol},
+		"Tag.1.Key": {"Cost Center"}, "Tag.1.Value": {"42"},
+	}
+	tagged := signed(form)
+	if tagged.Code != http.StatusOK {
+		t.Fatalf("CreateTags %d %s", tagged.Code, tagged.Body)
+	}
+	auth := map[string]string{"Authorization": "Bearer tok-console"}
+	got := call(t, ui, http.MethodGet, "/api/v1/volumes/"+vol, "", auth)
+	var view struct {
+		Tags map[string]string `json:"tags"`
+	}
+	if got.Code != http.StatusOK || json.Unmarshal(got.Body.Bytes(), &view) != nil ||
+		len(view.Tags) != 2 || view.Tags["Name"] != "data" || view.Tags["Cost Center"] != "42" {
+		t.Fatalf("console volume after an EC2 CreateTags: %d %s", got.Code, got.Body)
+	}
+	describe := url.Values{"Action": {"DescribeVolumes"}, "Version": {ec2query.Version}, "VolumeId.1": {vol}}
+	described := signed(describe)
+	body := described.Body.String()
+	if described.Code != http.StatusOK || !strings.Contains(body, "<key>Name</key><value>data</value>") ||
+		!strings.Contains(body, "<key>Cost Center</key><value>42</value>") {
+		t.Fatalf("DescribeVolumes after a console create: %d %s", described.Code, body)
+	}
+}
+
 func TestConsoleAndQueryRegisterTheSameImage(t *testing.T) {
 	now := time.Date(2026, 10, 9, 10, 0, 0, 0, time.UTC)
 	account := mustParse[resource.AccountID](t, "123456789012")

@@ -298,6 +298,10 @@ func (c computeClient) CreateVolume(ctx context.Context, m backend.Mutation, req
 		return resource.Accepted[resource.Volume]{}, resource.Invalid("volumeType", "unsupported")
 	}
 	projectID := project(m.Account)
+	labels, err := withInternalLabels(req.Tags, map[string]string{labelFingerprint: clip(m.Fingerprint, 63)})
+	if err != nil {
+		return resource.Accepted[resource.Volume]{}, err
+	}
 	spec := &storagev1.VolumeSpec{SizeGib: req.SizeGiB, Type: typ, Iops: req.Iops, ThroughputMibps: req.Throughput}
 	if !req.SnapshotID.IsZero() {
 		// A size of 0 is the snapshot size, which only the snapshot knows.
@@ -321,7 +325,7 @@ func (c computeClient) CreateVolume(ctx context.Context, m backend.Mutation, req
 		VolumeId:  derivedID("vol-", m.Key, "blank"),
 		RequestId: requestUUID(m.Key, "blank-vol"),
 		Volume: &storagev1.Volume{
-			Labels: map[string]string{labelFingerprint: clip(m.Fingerprint, 63)},
+			Labels: labels,
 			Spec:   spec,
 		},
 	})
@@ -359,8 +363,19 @@ func unsupportedVolumeType(err error) error {
 // added) is logged and answered as the volumeType error EC2 calls
 // UnknownVolumeType. It is never guessed, and it is not Internal, which SDKs
 // retry although the answer cannot change.
-func (c computeClient) getTypedVolume(ctx context.Context, projectID, id, call string) (resource.Volume, error) {
+func (c computeClient) getTypedVolume(
+	ctx context.Context, projectID, id, call string, needTags bool,
+) (resource.Volume, error) {
 	vol, err := c.getVolume(ctx, projectID, id)
+	var badTags *badTagLabelsError
+	if !needTags && errors.As(err, &badTags) {
+		// The call reads no tags, so it acts on the volume as it did before
+		// volumes had tags. volumeModel reports an unknown type first, so vol
+		// has its type here.
+		c.logger().WarnContext(ctx, "acting on a volume whose tag labels do not decode",
+			slog.String("call", call), slog.String("id", id), slog.Any("err", err))
+		return vol, nil
+	}
 	var unknownType *unknownVolumeTypeError
 	if errors.As(err, &unknownType) {
 		c.logger().WarnContext(ctx, "refusing a call on a volume with an unknown volume type",
@@ -375,7 +390,7 @@ func (c computeClient) getTypedVolume(ctx context.Context, projectID, id, call s
 func (c computeClient) AttachVolume(ctx context.Context, m backend.Mutation, req resource.AttachVolumeRequest) (resource.Accepted[resource.Volume], error) {
 	var zero resource.Accepted[resource.Volume]
 	projectID := project(m.Account)
-	vol, err := c.getTypedVolume(ctx, projectID, req.VolumeID.String(), resource.ActionAttachVolume.String())
+	vol, err := c.getTypedVolume(ctx, projectID, req.VolumeID.String(), resource.ActionAttachVolume.String(), false)
 	if err != nil {
 		return zero, err
 	}
@@ -1542,7 +1557,7 @@ func (c computeClient) DeleteVolume(ctx context.Context, m backend.Mutation, req
 // target Volume.Modify checks and returns here.
 func (c computeClient) ModifyVolume(ctx context.Context, m backend.Mutation, req resource.ModifyVolumeRequest) (resource.Accepted[resource.Volume], error) {
 	projectID := project(m.Account)
-	vol, err := c.getTypedVolume(ctx, projectID, req.ID.String(), resource.ActionModifyVolume.String())
+	vol, err := c.getTypedVolume(ctx, projectID, req.ID.String(), resource.ActionModifyVolume.String(), false)
 	if err != nil {
 		return resource.Accepted[resource.Volume]{}, err
 	}
@@ -1591,7 +1606,7 @@ func (c computeClient) DescribeVolumes(ctx context.Context, s backend.Scope, q r
 	if len(q.IDs) > 0 {
 		items := make([]resource.Volume, 0, len(q.IDs))
 		for _, id := range q.IDs {
-			vol, err := c.getTypedVolume(ctx, projectID, id.String(), "DescribeVolumes")
+			vol, err := c.getTypedVolume(ctx, projectID, id.String(), "DescribeVolumes", true)
 			if resource.CodeOf(err) == resource.CodeNotFound {
 				if len(q.IDs) == 1 {
 					return resource.Page[resource.Volume]{}, err
@@ -2437,14 +2452,23 @@ func (c computeClient) getVolume(ctx context.Context, projectID, id string) (res
 	return volumeModel(out)
 }
 
-// getUntypedVolume reads a volume for an action that needs no volume type,
-// such as DeleteVolume and DetachVolume. A stored type this build cannot name
-// is logged and the rest of the volume is returned, so the volume can still be
-// detached and cleaned up (#335 review, #337).
+// getUntypedVolume reads a volume for an action that needs no volume type
+// and no tags, such as DeleteVolume and DetachVolume. A stored type this build
+// cannot name, or tag labels that do not decode, are logged and the rest of
+// the volume is returned, so the volume can still be detached and cleaned up
+// (#335 review, #337).
 func (c computeClient) getUntypedVolume(
 	ctx context.Context, projectID, id string, action resource.Action,
 ) (resource.Volume, error) {
 	vol, err := c.getVolume(ctx, projectID, id)
+	var badTags *badTagLabelsError
+	if errors.As(err, &badTags) {
+		c.logger().WarnContext(ctx, "acting on a volume whose tag labels do not decode",
+			slog.String("action", action.String()),
+			slog.String("id", id),
+			slog.Any("err", err))
+		return vol, nil
+	}
 	var unknownType *unknownVolumeTypeError
 	if errors.As(err, &unknownType) {
 		c.logger().WarnContext(ctx, "acting on a volume with an unknown volume type",
@@ -2514,7 +2538,7 @@ func acceptedVolume(op *longrunningpb.Operation, req resource.CreateVolumeReques
 	vol := resource.Volume{
 		ID: id, OwnerID: named, SizeGiB: req.SizeGiB, Zone: req.Zone, Type: req.Type, State: state,
 		SnapshotID: req.SnapshotID, CreateTime: parsed.CreateTime,
-		Iops: req.Iops, Throughput: req.Throughput,
+		Iops: req.Iops, Throughput: req.Throughput, Tags: maps.Clone(req.Tags),
 	}
 	parsed.Action = resource.ActionCreateVolume
 	parsed.Targets = []resource.Ref{id.Ref()}
@@ -2579,11 +2603,16 @@ func volumeModel(in *storagev1.Volume) (resource.Volume, error) {
 		}
 		snap = parsed
 	}
+	// Tags that do not decode are returned as an error beside the rest of
+	// the volume, like an unknown type below, so actions that read no tags
+	// (DeleteVolume, DetachVolume) can still act on it.
+	tags, tagErr := userTags(in.GetLabels())
 	vol := resource.Volume{
 		ID: id, OwnerID: owner, SizeGiB: in.GetSpec().GetSizeGib(), Zone: parts[3], SnapshotID: snap,
 		Type: volumeTypeOf(in.GetSpec().GetType()), State: state, InstanceID: inst,
 		Device: in.GetStatus().GetDeviceName(), CreateTime: in.GetCreateTime().AsTime().UTC(),
 		Iops: in.GetSpec().GetIops(), Throughput: in.GetSpec().GetThroughputMibps(),
+		Tags: tags,
 	}
 	if !vol.InstanceID.IsZero() {
 		// Storage names the instance before hot-plug finishes, so storage
@@ -2595,6 +2624,9 @@ func volumeModel(in *storagev1.Volume) (resource.Volume, error) {
 		// The volume is returned whole, with no type, beside the error, so
 		// actions that need no type (DeleteVolume, DetachVolume) can act on it.
 		return vol, resource.Internal(&unknownVolumeTypeError{id: id, typ: in.GetSpec().GetType()})
+	}
+	if tagErr != nil {
+		return vol, tagErr
 	}
 	return vol, nil
 }
@@ -2623,7 +2655,7 @@ func volumeStateOf(in *storagev1.Volume) resource.VolumeState {
 	}
 }
 
-func volumeProto(v resource.Volume, projectID string) *storagev1.Volume {
+func volumeProto(v resource.Volume, projectID string) (*storagev1.Volume, error) {
 	obs := commonv1.ReconciliationState_RECONCILIATION_STATE_PENDING
 	switch v.State {
 	case resource.VolumeAvailable, resource.VolumeInUse:
@@ -2657,12 +2689,17 @@ func volumeProto(v resource.Volume, projectID string) *storagev1.Volume {
 	if v.DeleteOnTermination {
 		spec.Source = &storagev1.VolumeSpec_Image{Image: imageName(projectID, "ami-0123456789abcdef0")}
 	}
+	labels, err := withInternalLabels(v.Tags, nil)
+	if err != nil {
+		return nil, err
+	}
 	return &storagev1.Volume{
 		CreateTime: created,
+		Labels:     labels,
 		Name:       volumeName(projectID, v.ID.String()),
 		Spec:       spec,
 		Status:     status,
-	}
+	}, nil
 }
 
 func vpcModel(in *networkv1.Vpc) (resource.Vpc, error) {

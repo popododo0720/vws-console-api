@@ -31,7 +31,11 @@ func (s *volumeSrv) GetVolume(ctx context.Context, req *storagev1.GetVolumeReque
 	if len(page.Items) == 0 {
 		return nil, toStatus(resource.NotFound(resource.KindVolume, id.String()))
 	}
-	return volumeProto(page.Items[0], projectID), nil
+	vol, err := volumeProto(page.Items[0], projectID)
+	if err != nil {
+		return nil, toStatus(err)
+	}
+	return vol, nil
 }
 
 func (s *volumeSrv) ListVolumes(ctx context.Context, req *storagev1.ListVolumesRequest) (*storagev1.ListVolumesResponse, error) {
@@ -55,7 +59,11 @@ func (s *volumeSrv) ListVolumes(ctx context.Context, req *storagev1.ListVolumesR
 	}
 	items := make([]*storagev1.Volume, 0, len(page.Items))
 	for _, vol := range page.Items {
-		items = append(items, volumeProto(vol, projectID))
+		item, err := volumeProto(vol, projectID)
+		if err != nil {
+			return nil, toStatus(err)
+		}
+		items = append(items, item)
 	}
 	items = append(items, s.w.bootsFor(projectID)...)
 	return &storagev1.ListVolumesResponse{Volumes: items, NextPageToken: page.NextToken}, nil
@@ -69,6 +77,21 @@ func (s *volumeSrv) UpdateVolume(ctx context.Context, req *storagev1.UpdateVolum
 	fp, err := protoFingerprint(req)
 	if err != nil {
 		return nil, toStatus(err)
+	}
+	if paths := req.GetUpdateMask().GetPaths(); len(paths) == 1 && paths[0] == "labels" {
+		// A labels-only update is a tag change; the fake stores the tags.
+		tags, err := userTags(req.GetVolume().GetLabels())
+		if err != nil {
+			return nil, toStatus(err)
+		}
+		acc, err := s.w.set.Compute.TagVolumes(ctx, backend.Mutation{
+			Scope: backend.Scope{Account: account}, Key: req.GetRequestId(), Fingerprint: fp,
+		}, resource.TagVolumesRequest{IDs: []resource.VolumeID{id}, Tags: tags})
+		if err != nil {
+			return nil, toStatus(err)
+		}
+		return runningOp(projectID, acc.Operation, volumeName(projectID, id.String()),
+			commonv1.OperationVerb_OPERATION_VERB_UPDATE, s.w.now)
 	}
 	spec, mod := req.GetVolume().GetSpec(), resource.ModifyVolumeRequest{ID: id}
 	for _, path := range req.GetUpdateMask().GetPaths() {

@@ -2,6 +2,7 @@ package resource
 
 import (
 	"errors"
+	"reflect"
 	"testing"
 )
 
@@ -90,7 +91,7 @@ func TestModifyChangesTypeAndPerformance(t *testing.T) {
 		},
 	} {
 		got, err := tc.v.Modify(tc.req)
-		if err != nil || got != tc.want {
+		if err != nil || !reflect.DeepEqual(got, tc.want) {
 			t.Errorf("%s: got %+v, %v; want %+v", tc.name, got, err, tc.want)
 		}
 	}
@@ -159,7 +160,7 @@ func TestModifyRefusesAnIllegalTarget(t *testing.T) {
 				tc.combo,
 			)
 		}
-		if tc.v != before {
+		if !reflect.DeepEqual(tc.v, before) {
 			t.Errorf("%s: the refusal changed the volume to %+v", tc.name, tc.v)
 		}
 	}
