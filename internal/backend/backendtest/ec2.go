@@ -750,9 +750,11 @@ func exerciseEC2(
 	}
 	snap, err := set.Compute.CreateSnapshot(ctx, backend.Mutation{Scope: scope, Key: "k-snap", Fingerprint: "fp-snap"}, resource.CreateSnapshotRequest{
 		VolumeID: src.Items[0].ID, Description: "daily",
+		Tags: map[string]string{"Name": "daily backup", "env": "dev"},
 	})
 	if err != nil || snap.Items[0].VolumeID != src.Items[0].ID ||
-		snap.Items[0].State != resource.SnapshotPending || snap.Items[0].VolumeSize != src.Items[0].SizeGiB {
+		snap.Items[0].State != resource.SnapshotPending || snap.Items[0].VolumeSize != src.Items[0].SizeGiB ||
+		snap.Items[0].Tags["Name"] != "daily backup" || snap.Items[0].Tags["env"] != "dev" {
 		t.Fatalf("snapshot: %v %+v", err, snap.Items)
 	}
 	snapOp, err := set.Compute.GetOperation(ctx, scope, snap.Operation.ID)
@@ -764,6 +766,16 @@ func exerciseEC2(
 	})
 	if err != nil || len(snaps.Items) != 1 || snaps.Items[0].State != resource.SnapshotCompleted || snaps.Items[0].Description != "daily" {
 		t.Fatalf("describe snapshots: %v %+v", err, snaps.Items)
+	}
+	if len(snaps.Items[0].Tags) != 2 ||
+		snaps.Items[0].Tags["Name"] != "daily backup" || snaps.Items[0].Tags["env"] != "dev" {
+		t.Fatalf("describe snapshot tags: %+v", snaps.Items[0].Tags)
+	}
+	listedSnaps, err := set.Compute.DescribeSnapshots(ctx, scope, resource.SnapshotQuery{
+		Page: resource.PageRequest{Size: 50},
+	})
+	if err != nil || len(listedSnaps.Items) != 1 || listedSnaps.Items[0].Tags["Name"] != "daily backup" {
+		t.Fatalf("list snapshot tags: %v %+v", err, listedSnaps.Items)
 	}
 	restored, err := set.Compute.CreateVolume(ctx, backend.Mutation{Scope: scope, Key: "k-restore", Fingerprint: "fp-restore"}, resource.CreateVolumeRequest{
 		Zone: resource.ZoneName, Type: resource.VolumeGP2, SnapshotID: snap.Items[0].ID,

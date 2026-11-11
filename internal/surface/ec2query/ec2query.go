@@ -1099,7 +1099,8 @@ func allowDisassociateAddress(key string) bool {
 }
 
 func allowCreateSnapshot(key string) bool {
-	return key == "Action" || key == "Version" || key == "ClientToken" || key == "VolumeId" || key == "Description"
+	return key == "Action" || key == "Version" || key == "ClientToken" ||
+		key == "VolumeId" || key == "Description" || tagSpecField(key)
 }
 
 func allowDeleteSnapshot(key string) bool {
@@ -1214,7 +1215,7 @@ func rejectDryRun(r *http.Request) error {
 func describeTakesFilters(action string) bool {
 	switch action {
 	case "DescribeInstances", "DescribeInstanceStatus", "DescribeInstanceTypes", "DescribeSubnets",
-		"DescribeTags", "DescribeVolumes", "DescribeVolumesModifications", "DescribeVpcs",
+		"DescribeTags", "DescribeVolumes", "DescribeVolumesModifications", "DescribeVpcs", "DescribeSnapshots",
 		"DescribeAvailabilityZones", "DescribeRegions", "DescribeRouteTables":
 		return true
 	default:

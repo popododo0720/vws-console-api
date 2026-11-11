@@ -542,6 +542,7 @@ type createSnapshotXML struct {
 	Status      string   `xml:"status"`
 	VolumeSize  int64    `xml:"volumeSize"`
 	Description string   `xml:"description,omitempty"`
+	Tags        *tagSet  `xml:"tagSet,omitempty"`
 }
 
 type deleteSnapshotXML struct {
@@ -560,11 +561,12 @@ type describeSnapshotsXML struct {
 }
 
 type snapshotItem struct {
-	SnapshotID  string `xml:"snapshotId"`
-	VolumeID    string `xml:"volumeId"`
-	Status      string `xml:"status"`
-	VolumeSize  int64  `xml:"volumeSize"`
-	Description string `xml:"description,omitempty"`
+	SnapshotID  string  `xml:"snapshotId"`
+	VolumeID    string  `xml:"volumeId"`
+	Status      string  `xml:"status"`
+	VolumeSize  int64   `xml:"volumeSize"`
+	Description string  `xml:"description,omitempty"`
+	Tags        *tagSet `xml:"tagSet,omitempty"`
 }
 
 type describeInstanceStatusXML struct {
@@ -842,6 +844,7 @@ func snapshotXML(snap resource.Snapshot) snapshotItem {
 	return snapshotItem{
 		SnapshotID: snap.ID.String(), VolumeID: snap.VolumeID.String(), Status: snap.State,
 		VolumeSize: snap.VolumeSize, Description: snap.Description,
+		Tags: tagSetOf(snap.Tags),
 	}
 }
 
@@ -850,6 +853,7 @@ func snapshotCreatedXML(requestID string, snap resource.Snapshot) createSnapshot
 	return createSnapshotXML{
 		RequestID: requestID, SnapshotID: item.SnapshotID, VolumeID: item.VolumeID,
 		Status: item.Status, VolumeSize: item.VolumeSize, Description: item.Description,
+		Tags: item.Tags,
 	}
 }
 

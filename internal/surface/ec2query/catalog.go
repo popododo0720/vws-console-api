@@ -237,13 +237,22 @@ func (h *handler) createSnapshot(w http.ResponseWriter, r *http.Request, c resou
 		writeErr(w, r, err)
 		return
 	}
+	if r.Form.Get("VolumeId") == "" {
+		writeErr(w, r, missing("VolumeId"))
+		return
+	}
 	vol, err := resource.Parse[resource.VolumeID](r.Form.Get("VolumeId"))
 	if err != nil {
 		writeErr(w, r, err)
 		return
 	}
+	tags, err := tagSpecificationsFor(r, "snapshot")
+	if err != nil {
+		writeErr(w, r, err)
+		return
+	}
 	acc, err := h.svc.CreateSnapshot(r.Context(), c, token, resource.CreateSnapshotRequest{
-		VolumeID: vol, Description: r.Form.Get("Description"),
+		VolumeID: vol, Description: r.Form.Get("Description"), Tags: tags,
 	})
 	if err != nil {
 		writeErr(w, r, err)
@@ -280,21 +289,52 @@ func (h *handler) describeSnapshots(w http.ResponseWriter, r *http.Request, c re
 		writeErr(w, r, err)
 		return
 	}
+	filters, err := queryFilters(r)
+	if err != nil {
+		writeErr(w, r, err)
+		return
+	}
+	if err := checkTagFilterNames(filters); err != nil {
+		writeErr(w, r, err)
+		return
+	}
 	pageReq, err := pageForm(r)
 	if err != nil {
 		writeErr(w, r, err)
 		return
 	}
-	page, err := h.svc.DescribeSnapshots(r.Context(), c, resource.SnapshotQuery{IDs: ids, Page: pageReq})
-	if err != nil {
-		writeErr(w, r, err)
-		return
+	var rows []resource.Snapshot
+	next := ""
+	if len(filters) == 0 {
+		out, err := h.svc.DescribeSnapshots(r.Context(), c, resource.SnapshotQuery{IDs: ids, Page: pageReq})
+		if err != nil {
+			writeErr(w, r, err)
+			return
+		}
+		rows, next = out.Items, out.NextToken
+	} else {
+		rows, err = collectPages(r.Context(), c, func(p resource.PageRequest) resource.SnapshotQuery {
+			return resource.SnapshotQuery{IDs: ids, Page: p}
+		}, h.svc.DescribeSnapshots)
+		if err != nil {
+			writeErr(w, r, err)
+			return
+		}
+		rows = filterRows(rows, filters, func(s resource.Snapshot, name string) []string {
+			values, _ := tagFilterValue(s.Tags, name)
+			return values
+		})
+		rows, next, err = pageRows(rows, pageReq, func(s resource.Snapshot) string { return s.ID.String() })
+		if err != nil {
+			writeErr(w, r, err)
+			return
+		}
 	}
 	var items []snapshotItem
-	for _, snap := range page.Items {
+	for _, snap := range rows {
 		items = append(items, snapshotXML(snap))
 	}
-	writeXML(w, describeSnapshotsXML{RequestID: requestID(r), NextToken: page.NextToken, Snapshots: struct {
+	writeXML(w, describeSnapshotsXML{RequestID: requestID(r), NextToken: next, Snapshots: struct {
 		Items []snapshotItem `xml:"item"`
 	}{Items: items}})
 }

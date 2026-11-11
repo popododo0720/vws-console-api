@@ -8,12 +8,13 @@ const (
 
 // Snapshot is a copy of one volume.
 type Snapshot struct {
-	ID          SnapshotID `json:"snapshotId"`
-	OwnerID     AccountID  `json:"ownerId"`
-	VolumeID    VolumeID   `json:"volumeId"`
-	VolumeSize  int64      `json:"volumeSize"`
-	State       string     `json:"state"`
-	Description string     `json:"description,omitempty"`
+	ID          SnapshotID        `json:"snapshotId"`
+	OwnerID     AccountID         `json:"ownerId"`
+	VolumeID    VolumeID          `json:"volumeId"`
+	VolumeSize  int64             `json:"volumeSize"`
+	State       string            `json:"state"`
+	Description string            `json:"description,omitempty"`
+	Tags        map[string]string `json:"tags,omitempty"`
 }
 
 // Owner returns the account that owns the snapshot.
@@ -24,8 +25,9 @@ func (s Snapshot) Identity() string { return s.ID.String() }
 
 // CreateSnapshotRequest copies a volume.
 type CreateSnapshotRequest struct {
-	VolumeID    VolumeID `json:"volumeId"`
-	Description string   `json:"description,omitempty"`
+	VolumeID    VolumeID          `json:"volumeId"`
+	Description string            `json:"description,omitempty"`
+	Tags        map[string]string `json:"tags,omitempty"`
 }
 
 // Action returns CreateSnapshot.
@@ -38,6 +40,9 @@ func (r CreateSnapshotRequest) Normalize() (CreateSnapshotRequest, error) {
 	}
 	if len(r.Description) > 255 {
 		return CreateSnapshotRequest{}, Invalid("description", "malformed")
+	}
+	if err := validRequestTags(r.Tags); err != nil {
+		return CreateSnapshotRequest{}, err
 	}
 	return r, nil
 }

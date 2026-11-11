@@ -700,6 +700,79 @@ func TestConsoleAndQueryTagTheSameVolume(t *testing.T) {
 	}
 }
 
+func TestConsoleAndQueryCreateTaggedSnapshots(t *testing.T) {
+	now := time.Date(2026, 11, 10, 10, 0, 0, 0, time.UTC)
+	account := mustParse[resource.AccountID](t, "123456789012")
+	caller := resource.Caller{Account: account, Subject: "console", Principal: iam.RootARN(account), Root: true}
+	world := fake.New(fake.Options{Now: func() time.Time { return now }})
+	svc := cloud.New(cloud.Config{Backends: world.Set()})
+	ui := console.New(console.Config{
+		Service: svc, IAM: iam.NewStatic("AKIDEXAMPLE", "secret", account),
+		Auth: console.BearerTokens{"tok-console": caller},
+	})
+	cred := sigv4.Credential{AccessKey: "AKIDEXAMPLE", Secret: "secret", Account: account}
+	query := ec2query.New(ec2query.Config{
+		Service: svc, Authorizer: iam.NewStatic(cred.AccessKey, cred.Secret, cred.Account),
+		Verifier: verifier(cred, sigv4.ServiceEC2, now),
+	})
+	signed := func(form url.Values) *httptest.ResponseRecorder {
+		t.Helper()
+		form.Set("Version", ec2query.Version)
+		return serveSigned(t, query, cred, sigv4.ServiceEC2, now, http.MethodPost, "http://127.0.0.1:8081/", form.Encode())
+	}
+	vol := signed(url.Values{"Action": {"CreateVolume"}, "Size": {"8"}, "AvailabilityZone": {"vws-1a"}})
+	if vol.Code != http.StatusOK {
+		t.Fatalf("volume %d %s", vol.Code, vol.Body)
+	}
+	volumeID := xmlField(vol.Body.String(), "volumeId")
+	write := map[string]string{
+		"Authorization": "Bearer tok-console", "Content-Type": "application/json", "Idempotency-Key": "snapshot-tags",
+	}
+	body := `{"volumeId":"` + volumeID + `","tags":{"Name":"backup"}}`
+	created := call(t, ui, http.MethodPost, "/api/v1/snapshots", body, write)
+	var acc resource.Accepted[resource.Snapshot]
+	if created.Code != http.StatusAccepted || json.Unmarshal(created.Body.Bytes(), &acc) != nil ||
+		len(acc.Items) != 1 || acc.Items[0].Tags["Name"] != "backup" {
+		t.Fatalf("console create %d %s", created.Code, created.Body)
+	}
+	described := signed(url.Values{
+		"Action": {"DescribeSnapshots"}, "Filter.1.Name": {"tag:Name"}, "Filter.1.Value.1": {"backup"},
+	})
+	if described.Code != http.StatusOK || !strings.Contains(described.Body.String(), acc.Items[0].ID.String()) ||
+		!strings.Contains(described.Body.String(), "<key>Name</key><value>backup</value>") {
+		t.Fatalf("query describe %d %s", described.Code, described.Body)
+	}
+	queryCreated := signed(url.Values{
+		"Action": {"CreateSnapshot"}, "VolumeId": {volumeID},
+		"TagSpecification.1.ResourceType": {"snapshot"},
+		"TagSpecification.1.Tag.1.Key":    {"Name"}, "TagSpecification.1.Tag.1.Value": {"query backup"},
+	})
+	if queryCreated.Code != http.StatusOK {
+		t.Fatalf("query create %d %s", queryCreated.Code, queryCreated.Body)
+	}
+	got := call(t, ui, http.MethodGet, "/api/v1/snapshots", "", map[string]string{"Authorization": "Bearer tok-console"})
+	var page resource.Page[resource.Snapshot]
+	if got.Code != http.StatusOK || json.Unmarshal(got.Body.Bytes(), &page) != nil || len(page.Items) != 2 {
+		t.Fatalf("console list %d %s", got.Code, got.Body)
+	}
+	id := xmlField(queryCreated.Body.String(), "snapshotId")
+	found := false
+	for _, snap := range page.Items {
+		if snap.ID.String() == id && snap.Tags["Name"] == "query backup" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("console did not read Query tags: %s", got.Body)
+	}
+	write["Idempotency-Key"] = "snapshot-reserved"
+	bad := call(t, ui, http.MethodPost, "/api/v1/snapshots",
+		`{"volumeId":"`+volumeID+`","tags":{"AWS:owner":"x"}}`, write)
+	if bad.Code != http.StatusBadRequest {
+		t.Fatalf("reserved console tag %d %s", bad.Code, bad.Body)
+	}
+}
+
 func TestConsoleAndQueryRegisterTheSameImage(t *testing.T) {
 	now := time.Date(2026, 10, 9, 10, 0, 0, 0, time.UTC)
 	account := mustParse[resource.AccountID](t, "123456789012")
