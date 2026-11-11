@@ -43,16 +43,8 @@ type ObjectResult struct {
 	Body   []byte          `json:"body"`
 }
 
-type wireError struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
-	Kind    string `json:"kind,omitempty"`
-	ID      string `json:"id,omitempty"`
-	Field   string `json:"field,omitempty"`
-}
-
 type errorBody struct {
-	Error wireError `json:"error"`
+	Error *resource.Error `json:"error"`
 }
 
 // New returns the region's read-only HTTP handler.
@@ -140,10 +132,7 @@ func writeJSON(w http.ResponseWriter, value any, err error) {
 			server.RecordFailure(w, err)
 		}
 		w.WriteHeader(http.StatusBadRequest)
-		value = errorBody{Error: wireError{
-			Code: e.Code.String(), Message: e.Message,
-			Kind: e.Kind.String(), ID: e.ID, Field: e.Field,
-		}}
+		value = errorBody{Error: e}
 	}
 	server.RecordFailure(w, json.NewEncoder(w).Encode(value))
 }

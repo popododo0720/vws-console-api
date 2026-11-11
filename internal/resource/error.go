@@ -133,28 +133,31 @@ func (e *Error) WithCause(cause error) *Error {
 func (e *Error) MarshalJSON() ([]byte, error) {
 	//nolint:wrapcheck // MarshalJSON returns encoding/json's own error to encoding/json.
 	return json.Marshal(struct {
-		Code    string `json:"code"`
-		Kind    string `json:"kind,omitempty"`
-		ID      string `json:"id,omitempty"`
-		Field   string `json:"field,omitempty"`
-		Message string `json:"message"`
+		Code       string `json:"code"`
+		Kind       string `json:"kind,omitempty"`
+		ID         string `json:"id,omitempty"`
+		Field      string `json:"field,omitempty"`
+		Message    string `json:"message"`
+		Refinement string `json:"refinement,omitempty"`
 	}{
-		Code:    e.Code.String(),
-		Kind:    e.Kind.String(),
-		ID:      e.ID,
-		Field:   e.Field,
-		Message: e.Message,
+		Code:       e.Code.String(),
+		Kind:       e.Kind.String(),
+		ID:         e.ID,
+		Field:      e.Field,
+		Message:    e.Message,
+		Refinement: e.refinement(),
 	})
 }
 
 // UnmarshalJSON restores the caller-visible fields of an error, never its cause.
 func (e *Error) UnmarshalJSON(data []byte) error {
 	var wire struct {
-		Code    string `json:"code"`
-		Kind    string `json:"kind"`
-		ID      string `json:"id"`
-		Field   string `json:"field"`
-		Message string `json:"message"`
+		Code       string `json:"code"`
+		Kind       string `json:"kind"`
+		ID         string `json:"id"`
+		Field      string `json:"field"`
+		Message    string `json:"message"`
+		Refinement string `json:"refinement"`
 	}
 	if err := json.Unmarshal(data, &wire); err != nil {
 		return fmt.Errorf("decode resource error: %w", err)
@@ -181,8 +184,67 @@ func (e *Error) UnmarshalJSON(data []byte) error {
 		return Invalid("kind", "unknown resource error kind")
 	}
 	decoded.ID, decoded.Field, decoded.Message = wire.ID, wire.Field, wire.Message
+	switch wire.Refinement {
+	case "":
+	case "missing":
+		decoded.invalid = invalidMissing
+	case "combination":
+		decoded.invalid = invalidCombination
+	case "unsupported":
+		decoded.invalid = invalidUnsupported
+	case "tagLimit":
+		decoded.invalid = invalidTagLimit
+	case "taggedID":
+		decoded.invalid = invalidTaggedID
+	case "attachmentLimit":
+		decoded.invalid = invalidAttachmentLimit
+	case "owned":
+		decoded.owned = true
+	case "duplicate":
+		decoded.duplicate = true
+	case "permissionMissing":
+		decoded.permissionMissing = true
+	case "rulesLimit":
+		decoded.rulesLimit = true
+	case "deleting":
+		decoded.deleting = true
+	default:
+		return Invalid("refinement", "unknown resource error refinement")
+	}
 	*e = decoded
 	return nil
+}
+
+func (e *Error) refinement() string {
+	switch e.invalid {
+	case invalidMissing:
+		return "missing"
+	case invalidCombination:
+		return "combination"
+	case invalidUnsupported:
+		return "unsupported"
+	case invalidTagLimit:
+		return "tagLimit"
+	case invalidTaggedID:
+		return "taggedID"
+	case invalidAttachmentLimit:
+		return "attachmentLimit"
+	case invalidValue:
+	}
+	switch {
+	case e.owned:
+		return "owned"
+	case e.duplicate:
+		return "duplicate"
+	case e.permissionMissing:
+		return "permissionMissing"
+	case e.rulesLimit:
+		return "rulesLimit"
+	case e.deleting:
+		return "deleting"
+	default:
+		return ""
+	}
 }
 
 // CodeOf returns the Code of the first *Error in err's chain.

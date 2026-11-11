@@ -100,22 +100,10 @@ func (c *Client) do(ctx context.Context, method, path string, data []byte, dst a
 		if err := json.Unmarshal(body, &envelope); err != nil {
 			return fmt.Errorf("decode region error: %w", err)
 		}
-		for _, code := range append(resource.Codes(), resource.CodeUnspecified) {
-			if code.String() == envelope.Error.Code {
-				e := &resource.Error{
-					Code: code, Message: envelope.Error.Message,
-					ID: envelope.Error.ID, Field: envelope.Error.Field,
-				}
-				for _, kind := range resource.Kinds() {
-					if kind.String() == envelope.Error.Kind {
-						e.Kind = kind
-						break
-					}
-				}
-				return e
-			}
+		if envelope.Error == nil {
+			return resource.Internal(fmt.Errorf("missing region error"))
 		}
-		return resource.Internal(fmt.Errorf("unknown region error code %q", envelope.Error.Code))
+		return envelope.Error
 	}
 	if err := json.Unmarshal(body, dst); err != nil {
 		return fmt.Errorf("decode region result: %w", err)
