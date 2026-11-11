@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	longrunningpb "cloud.google.com/go/longrunning/autogen/longrunningpb"
@@ -1434,6 +1435,8 @@ func pageByID[T any](items []T, q resource.PageRequest, id func(T) string) (reso
 	if size < 1 {
 		size = 50
 	}
+	items = slices.Clone(items)
+	slices.SortStableFunc(items, func(a, b T) int { return strings.Compare(id(a), id(b)) })
 	start := 0
 	if q.Token != "" {
 		found := false

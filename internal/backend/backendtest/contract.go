@@ -18,8 +18,12 @@ import (
 type Harness func() backend.Set
 
 // Run checks idempotency, tenancy, and the instance lifecycle.
-func Run(t *testing.T, newSet Harness, caps resource.RegionCapabilities) {
+func Run(t *testing.T, newSet Harness, caps resource.RegionCapabilities, opts ...Option) {
 	t.Helper()
+	var o options
+	for _, opt := range opts {
+		opt(&o)
+	}
 	if err := caps.Validate(); err != nil {
 		t.Fatal(err)
 	}
@@ -261,6 +265,16 @@ func Run(t *testing.T, newSet Harness, caps resource.RegionCapabilities) {
 			})
 		exerciseRegisterImage(ctx, t, set, account, other)
 	})
+	t.Run("IDStability", func(t *testing.T) {
+		second := set
+		if o.seeded {
+			second = newSet()
+		}
+		idStability(t, set, second, caps, backend.Scope{Account: account}, o.seeded)
+	})
+	t.Run("ReadTenancy", func(t *testing.T) {
+		readTenancy(t, set, caps, backend.Scope{Account: account}, backend.Scope{Account: other}, o.seeded)
+	})
 }
 
 func contractSubnet(ctx context.Context, t *testing.T, set backend.Set, account resource.AccountID) resource.SubnetID {
@@ -487,6 +501,10 @@ func contractObjects(ctx context.Context, t *testing.T, set backend.Set, account
 		t.Fatal(err)
 	}
 	if _, err := set.Storage.CreateBucket(ctx, backend.Scope{Account: account}, name); err != nil {
+		// Region capabilities describe EC2 only; S3 support is reported by storage.
+		if resource.IsUnsupported(resource.AsError(err)) {
+			t.Skipf("s3:CreateBucket: %v", err)
+		}
 		t.Fatal(err)
 	}
 	if _, err := set.Storage.CreateBucket(ctx, backend.Scope{Account: account}, name); !resource.OwnedByCaller(err) {
