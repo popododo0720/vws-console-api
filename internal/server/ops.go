@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -108,15 +109,21 @@ func (c *codeRecorder) WriteHeader(code int) {
 // opsHandler serves the liveness, readiness, and metrics endpoints. It runs
 // on its own listener so no path collides with a bucket name on the object
 // surface or with console routes.
-func opsHandler(m *Metrics, ready *atomic.Bool) http.Handler {
+func opsHandler(m *Metrics, ready *atomic.Bool, check func(context.Context) error) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		writeText(w, http.StatusOK, "ok\n")
 	})
-	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, r *http.Request) {
 		if !ready.Load() {
 			writeText(w, http.StatusServiceUnavailable, "not ready\n")
 			return
+		}
+		if check != nil {
+			if err := check(r.Context()); err != nil {
+				writeText(w, http.StatusServiceUnavailable, "not ready\n")
+				return
+			}
 		}
 		writeText(w, http.StatusOK, "ok\n")
 	})

@@ -35,6 +35,8 @@ type Options struct {
 	// listener. /readyz is 200 while the surfaces serve and 503 once
 	// shutdown starts.
 	OpsAddr string
+	// Ready checks dependencies after listeners have started and before shutdown.
+	Ready func(context.Context) error
 }
 
 // Serve serves surfaces, plus an optional operations listener, until ctx is
@@ -59,7 +61,7 @@ func Serve(ctx context.Context, opts Options) error {
 		listeners = append(listeners, listener{sf.Name, surfaceHandler(logger, metrics, sf), sf.Addr})
 	}
 	if opts.OpsAddr != "" {
-		listeners = append(listeners, listener{"ops", opsHandler(metrics, &ready), opts.OpsAddr})
+		listeners = append(listeners, listener{"ops", opsHandler(metrics, &ready, opts.Ready), opts.OpsAddr})
 	}
 	servers := make([]*http.Server, 0, len(listeners))
 	errc := make(chan error, len(listeners))
