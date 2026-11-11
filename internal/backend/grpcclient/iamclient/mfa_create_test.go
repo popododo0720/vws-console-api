@@ -2,6 +2,7 @@ package iamclient
 
 import (
 	"bytes"
+	"errors"
 	"log/slog"
 	"net/url"
 	"strconv"
@@ -67,8 +68,10 @@ func TestCreateVirtualMFADeviceOverGRPC(t *testing.T) {
 	}
 }
 
-// The create's tags go to vws-iam in the same request, in order. More than
-// MaxTags tags or an aws: key is refused before any call.
+// The create's tags go to vws-iam in the same request, in order. The refusals
+// are the rows of TestFakeCreateVirtualMFADeviceTags: more than MaxTags tags is
+// LimitExceeded, a bad tag or an aws: key or value is InvalidInput on Tags, and
+// none of them reaches vws-iam, so no device is created.
 func TestCreateVirtualMFADeviceForwardsTags(t *testing.T) {
 	c, s := harness(t)
 	tags := []iam.Tag{{Key: "team", Value: "eng"}, {Key: "Env", Value: ""}}
@@ -87,15 +90,22 @@ func TestCreateVirtualMFADeviceForwardsTags(t *testing.T) {
 	for name, tc := range map[string]struct {
 		tags []iam.Tag
 		code resource.Code
+		msg  string
 	}{
-		"51 tags":  {tooMany, resource.CodeResourceExhausted},
-		"aws: key": {[]iam.Tag{{Key: "aws:owner", Value: "v"}}, resource.CodeInvalidArgument},
+		"51 tags":    {tooMany, resource.CodeResourceExhausted, iam.MFADeviceTagsExceeded().Error()},
+		"bad key":    {[]iam.Tag{{Key: "bad#key", Value: "v"}}, resource.CodeInvalidArgument, "tags.member.key"},
+		"aws: key":   {[]iam.Tag{{Key: "aws:owner", Value: "v"}}, resource.CodeInvalidArgument, "reserved prefix"},
+		"aws: value": {[]iam.Tag{{Key: "team", Value: "aws:x"}}, resource.CodeInvalidArgument, "reserved prefix"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			c, s := harness(t)
 			_, err := STSAdmin{Client: c}.CreateVirtualMFADevice(t.Context(), accountID(t), "tagged", "/", tc.tags)
-			if resource.CodeOf(err) != tc.code {
-				t.Fatalf("got %v, want %v", err, tc.code)
+			if resource.CodeOf(err) != tc.code || !strings.Contains(err.Error(), tc.msg) {
+				t.Fatalf("got %v, want %v %q", err, tc.code, tc.msg)
+			}
+			var e *resource.Error
+			if tc.code == resource.CodeInvalidArgument && (!errors.As(err, &e) || e.Field != "Tags") {
+				t.Errorf("field of %v is not Tags, so it is not InvalidInput", err)
 			}
 			if len(s.createMfa) != 0 {
 				t.Fatalf("sent %v", s.createMfa)
