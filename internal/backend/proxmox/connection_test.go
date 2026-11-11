@@ -55,6 +55,46 @@ func TestConnectionRequiresConfigRegistrationAndSelfCheck(t *testing.T) {
 	}
 }
 
+func TestRegistrationIdentityIsBounded(t *testing.T) {
+	dir := t.TempDir()
+	config := filepath.Join(dir, "region.yaml")
+	if err := os.WriteFile(config, []byte("read_only: true\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	reg := filepath.Join(dir, "registration.json")
+	write := func(region, cluster, tokenID string) {
+		t.Helper()
+		body := `{"region":"` + region + `","clusterName":"` + cluster + `","tokenId":"` + tokenID +
+			`","token":"do-not-echo"}`
+		if err := os.WriteFile(reg, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	long := strings.Repeat("a", 64)
+	for _, c := range []struct{ region, cluster, tokenID string }{
+		{"", "test", "vws@pve!inventory"},
+		{long, "test", "vws@pve!inventory"},
+		{"PVE-Test-1", "test", "vws@pve!inventory"},
+		{"pve-test-1-", "test", "vws@pve!inventory"},
+		{"pve/../1", "test", "vws@pve!inventory"},
+		{"pve-test-1", "", "vws@pve!inventory"},
+		{"pve-test-1", long, "vws@pve!inventory"},
+		{"pve-test-1", "te st", "vws@pve!inventory"},
+		{"pve-test-1", "test", "vws@pve"},
+		{"pve-test-1", "test", "vws@pve!" + long + "a"},
+		{"pve-test-1", "test", "vws@pve!in=ventory"},
+	} {
+		write(c.region, c.cluster, c.tokenID)
+		if _, err := Open(config, reg, "https://unused", nil); err == nil || strings.Contains(err.Error(), "do-not-echo") {
+			t.Fatalf("accepted %+v: %v", c, err)
+		}
+	}
+	write("pve-test-1", "test", "vws@pve!inventory")
+	if _, err := Open(config, reg, "https://unused", nil); err != nil {
+		t.Fatalf("refused a valid registration: %v", err)
+	}
+}
+
 func TestConnectionRejectsMutationTokenEvenWithoutReadOnlyConfig(t *testing.T) {
 	s := scenario()
 	s.Roles[0].Privs = append(s.Roles[0].Privs, "VM.PowerMgmt")

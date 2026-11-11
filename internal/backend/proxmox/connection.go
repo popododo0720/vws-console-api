@@ -8,9 +8,18 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"regexp"
 
 	"github.com/popododo0720/vws-console-api/internal/backend"
 	"github.com/popododo0720/vws-console-api/internal/backend/proxmox/pveclient"
+)
+
+// The registration names a region as design.md does (pve-seoul-1), a PVE
+// cluster, and a PVE API token id, user@realm!name.
+var (
+	registrationRegion  = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
+	registrationCluster = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,62})$`)
+	registrationTokenID = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}@[A-Za-z0-9._-]{1,32}![A-Za-z][A-Za-z0-9._-]{0,63}$`)
 )
 
 // Connection keeps PVE credentials and transport inside the Proxmox boundary.
@@ -58,6 +67,14 @@ func Open(configPath, registrationPath, endpoint string, transport *http.Client)
 	var extra any
 	if err := dec.Decode(&extra); !errors.Is(err, io.EOF) {
 		return nil, errors.New("registration must contain one JSON document")
+	}
+	switch {
+	case !registrationRegion.MatchString(snapshot.Region):
+		return nil, errors.New("registration region must be 1-63 lowercase letters, digits or hyphens")
+	case !registrationCluster.MatchString(snapshot.ClusterName):
+		return nil, errors.New("registration clusterName must be 1-63 letters, digits, dots, underscores or hyphens")
+	case !registrationTokenID.MatchString(snapshot.TokenID):
+		return nil, errors.New("registration tokenId must be user@realm!name within PVE's character set")
 	}
 	client, err := pveclient.New(pveclient.Config{
 		BaseURL: endpoint, TokenID: snapshot.TokenID, Secret: snapshot.Token, HTTPClient: transport,
