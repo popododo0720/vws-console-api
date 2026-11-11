@@ -147,6 +147,44 @@ func (e *Error) MarshalJSON() ([]byte, error) {
 	})
 }
 
+// UnmarshalJSON restores the caller-visible fields of an error, never its cause.
+func (e *Error) UnmarshalJSON(data []byte) error {
+	var wire struct {
+		Code    string `json:"code"`
+		Kind    string `json:"kind"`
+		ID      string `json:"id"`
+		Field   string `json:"field"`
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return fmt.Errorf("decode resource error: %w", err)
+	}
+	var decoded Error
+	found := false
+	for _, code := range append(Codes(), CodeUnspecified) {
+		if code.String() == wire.Code {
+			decoded.Code = code
+			found = true
+			break
+		}
+	}
+	if !found {
+		return Invalid("code", "unknown resource error code")
+	}
+	for _, kind := range Kinds() {
+		if kind.String() == wire.Kind {
+			decoded.Kind = kind
+			break
+		}
+	}
+	if wire.Kind != "" && decoded.Kind == KindUnspecified {
+		return Invalid("kind", "unknown resource error kind")
+	}
+	decoded.ID, decoded.Field, decoded.Message = wire.ID, wire.Field, wire.Message
+	*e = decoded
+	return nil
+}
+
 // CodeOf returns the Code of the first *Error in err's chain.
 // A non-nil error that is not an *Error is CodeInternal. Nil is CodeUnspecified.
 func CodeOf(err error) Code {
