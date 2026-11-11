@@ -143,6 +143,11 @@ func TestEveryReadRoundTrips(t *testing.T) {
 			}
 			t.Run(service.name+"/"+method.Name, func(t *testing.T) {
 				q := reflect.New(method.Type.In(2)).Elem()
+				if q.Kind() == reflect.Struct {
+					if page := q.FieldByName("Page"); page.IsValid() {
+						page.Set(reflect.ValueOf(resource.PageRequest{Size: 100}))
+					}
+				}
 				switch method.Name {
 				case "GetBucket":
 					q.Set(reflect.ValueOf(bucket))

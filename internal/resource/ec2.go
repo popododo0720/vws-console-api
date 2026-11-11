@@ -1,6 +1,7 @@
 package resource
 
 import (
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net"
@@ -130,6 +131,38 @@ type Volume struct {
 	// EC2 returns.
 	Iops       int64 `json:"iops,omitempty"`
 	Throughput int64 `json:"throughput,omitempty"`
+}
+
+// UnmarshalJSON accepts the empty instanceId emitted for an unbound volume.
+// Keep MarshalJSON's existing representation, including instanceId: "";
+// required instance IDs in attachments and requests still decode strictly.
+func (v *Volume) UnmarshalJSON(data []byte) error {
+	type volume Volume
+	decoded := volume(*v)
+	wire := struct {
+		*volume
+		InstanceID json.RawMessage `json:"instanceId"`
+	}{volume: &decoded}
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return fmt.Errorf("decode volume: %w", err)
+	}
+	if wire.InstanceID != nil {
+		var id *string
+		if err := json.Unmarshal(wire.InstanceID, &id); err != nil {
+			return fmt.Errorf("decode volume instance ID: %w", err)
+		}
+		if id == nil {
+			return Invalid("instanceId", "must be a string")
+		}
+		decoded.InstanceID = InstanceID{}
+		if *id != "" {
+			if err := decoded.InstanceID.UnmarshalText([]byte(*id)); err != nil {
+				return fmt.Errorf("decode volume instance ID: %w", err)
+			}
+		}
+	}
+	*v = Volume(decoded)
+	return nil
 }
 
 // Owner returns the account that owns the volume.
