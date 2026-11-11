@@ -200,27 +200,24 @@ func TestTaskFiltersFollowPVEAPI2Tasks(t *testing.T) {
 		}
 		return answer.Data
 	}
-	for _, tc := range []struct {
-		query string
-		want  int
-	}{
-		{"", 3},
-		{"userfilter=VWS%40PVE", 2},
-		{"userfilter=missing", 0},
-		{"typefilter=qmclone", 3},
-		{"typefilter=qmstart", 0},
-		{"vmid=9000", 2},
-		{"vmid=100", 1},
-		{"vmid=999999999", 0},
-		{"since=1700000001&until=1700000001", 2},
-		{"since=1700000002", 0},
-		{"until=1699999999", 0},
-		{"source=active", 0},
-		{"start=1&limit=1", 1},
-		{"limit=0", 0},
+	for query, want := range map[string]int{
+		"":                                  3,
+		"userfilter=VWS%40PVE":              2,
+		"userfilter=missing":                0,
+		"typefilter=qmclone":                3,
+		"typefilter=qmstart":                0,
+		"vmid=9000":                         2,
+		"vmid=100":                          1,
+		"vmid=999999999":                    0,
+		"since=1700000001&until=1700000001": 2,
+		"since=1700000002":                  0,
+		"until=1699999999":                  0,
+		"source=active":                     0,
+		"start=1&limit=1":                   1,
+		"limit=0":                           0,
 	} {
-		if rows := list(auditor, tc.query); len(rows) != tc.want {
-			t.Errorf("%s: %d rows, want %d", tc.query, len(rows), tc.want)
+		if rows := list(auditor, query); len(rows) != want {
+			t.Errorf("%s: %d rows, want %d", query, len(rows), want)
 		}
 	}
 	rows := list(writer, "")
@@ -231,10 +228,19 @@ func TestTaskFiltersFollowPVEAPI2Tasks(t *testing.T) {
 	if len(list(poolA, "")) != 0 {
 		t.Fatal("unprivileged token listed another token's tasks")
 	}
-	clone(t, f, 105)
+	active := clone(t, f, 105)
 	if len(list(writer, "")) != 2 || len(list(writer, "source=all")) != 3 ||
 		len(list(writer, "source=active")) != 1 {
 		t.Fatal("running task archive/source filtering")
+	}
+	if err := f.SetTaskDelay(0); err != nil {
+		t.Fatal(err)
+	}
+	archived := clone(t, f, 106)
+	for i, want := range []string{active, archived} {
+		if page := list(writer, "source=all&start="+strconv.Itoa(i)+"&limit=1"); len(page) != 1 || page[0]["upid"] != want {
+			t.Errorf("page %d = %+v, want %s", i, page, want)
+		}
 	}
 	for _, query := range []string{
 		"since=x", "until=9223372036854775808", "vmid=-1", "vmid=0", "vmid=99", "vmid=1000000000",

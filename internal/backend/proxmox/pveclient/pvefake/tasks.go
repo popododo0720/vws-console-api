@@ -137,10 +137,7 @@ func (f *Fake) taskList(tok *Token, r *http.Request) (any, *failure) {
 	}
 	q := r.URL.Query()
 	source := q.Get("source")
-	if source == "" {
-		source = "archive"
-	}
-	if source != "archive" && source != "active" && source != "all" {
+	if source != "" && source != "archive" && source != "active" && source != "all" {
 		return nil, &failure{http.StatusBadRequest, "Parameter verification failed. source: invalid value"}
 	}
 	filterVMID := ""
@@ -162,24 +159,21 @@ func (f *Fake) taskList(tok *Token, r *http.Request) (any, *failure) {
 		}
 	}
 	rows := []map[string]any{}
-	auditor := f.can(tok, "/nodes/"+node, "Sys.Audit")
-	skip := numbers["start"]
-	for i := len(f.tasks) - 1; i >= 0; i-- {
-		t := f.tasks[i]
-		user, _, _ := strings.Cut(t.owner, "!")
-		if t.node != node || (!auditor && t.owner != tok.ID) ||
-			(source == "archive" && t.end == 0) || (source == "active" && t.end != 0) ||
-			(q.Get("typefilter") != "" && q.Get("typefilter") != t.status.Type) ||
-			!strings.Contains(strings.ToLower(user), strings.ToLower(q.Get("userfilter"))) ||
-			(filterVMID != "" && filterVMID != t.status.ID) ||
-			t.status.StartTime < numbers["since"] || t.status.StartTime > numbers["until"] {
-			continue
-		}
-		if skip > 0 {
-			skip--
-		} else if int64(len(rows)) < numbers["limit"] {
+	for _, active := range []bool{true, false} {
+		for i := len(f.tasks) - 1; i >= 0; i-- {
+			t := f.tasks[i]
+			user, _, _ := strings.Cut(t.owner, "!")
+			if (t.end == 0) != active || (t.owner != tok.ID && !f.can(tok, "/nodes/"+node, "Sys.Audit")) ||
+				((source == "" || source == "archive") && t.end == 0) || (source == "active" && t.end != 0) ||
+				(q.Get("typefilter") != "" && q.Get("typefilter") != t.status.Type) ||
+				!strings.Contains(strings.ToLower(user), strings.ToLower(q.Get("userfilter"))) ||
+				t.node != node || (filterVMID != "" && filterVMID != t.status.ID) ||
+				t.status.StartTime < numbers["since"] || t.status.StartTime > numbers["until"] {
+				continue
+			}
 			rows = append(rows, t.row(true))
 		}
 	}
-	return rows, nil
+	start := min(numbers["start"], int64(len(rows)))
+	return rows[start : start+min(numbers["limit"], int64(len(rows))-start)], nil
 }
