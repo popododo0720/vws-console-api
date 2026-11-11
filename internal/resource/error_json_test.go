@@ -29,3 +29,22 @@ func TestErrorJSONRoundTrip(t *testing.T) {
 		}
 	}
 }
+
+func TestInsufficientInstanceCapacityJSON(t *testing.T) {
+	want := InsufficientInstanceCapacity()
+	if want.Code != CodeUnavailable || want.Kind != KindInstance || !IsInsufficientInstanceCapacity(want) ||
+		IsInsufficientInstanceCapacity(nil) || IsInsufficientInstanceCapacity(&Error{Code: CodeUnavailable}) {
+		t.Fatalf("capacity classification: %+v", want)
+	}
+	data, err := json.Marshal(want.WithCause(errors.New("private upstream detail")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got Error
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatal(err)
+	}
+	if !IsInsufficientInstanceCapacity(&got) || !reflect.DeepEqual(&got, want) {
+		t.Fatalf("capacity round trip = %+v, want %+v", &got, want)
+	}
+}

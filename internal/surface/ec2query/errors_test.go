@@ -1,6 +1,7 @@
 package ec2query
 
 import (
+	"encoding/json"
 	"encoding/xml"
 	"net/http"
 	"net/http/httptest"
@@ -15,6 +16,29 @@ import (
 type wireErr struct {
 	Status int
 	Code   string
+}
+
+// EC2 lists this as a server error, returned as HTTP 500.
+// https://docs.aws.amazon.com/AWSEC2/latest/APIReference/errors-overview.html#api-error-codes-table-server
+func TestInsufficientInstanceCapacityWire(t *testing.T) {
+	original := resource.InsufficientInstanceCapacity()
+	data, err := json.Marshal(original)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var transported resource.Error
+	if err := json.Unmarshal(data, &transported); err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range []*resource.Error{original, &transported} {
+		rec := httptest.NewRecorder()
+		writeErr(rec, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/", nil), e)
+		body := ec2ErrorXML(t, rec.Body.Bytes())
+		if rec.Code != http.StatusInternalServerError || body.Code != "InsufficientInstanceCapacity" ||
+			body.Message != original.Message {
+			t.Fatalf("capacity response: %d %s", rec.Code, rec.Body)
+		}
+	}
 }
 
 func ec2Wire(t *testing.T, e *resource.Error) wireErr {

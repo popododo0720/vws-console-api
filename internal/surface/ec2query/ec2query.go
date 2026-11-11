@@ -1552,6 +1552,10 @@ func ec2Refinement(e *resource.Error) (errs.AWSEntry, bool) {
 		return errs.AWSEntry{HTTP: http.StatusBadRequest, Code: code}, true
 	}
 	switch e.Code {
+	case resource.CodeUnavailable:
+		if resource.IsInsufficientInstanceCapacity(e) {
+			return errs.AWSEntry{HTTP: http.StatusInternalServerError, Code: "InsufficientInstanceCapacity"}, true
+		}
 	case resource.CodeNotFound:
 		// A missing route table gets the code from the errors page, because
 		// VWS has no route table model to name it from.

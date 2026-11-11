@@ -97,6 +97,7 @@ type Error struct {
 	// deleting marks a bucket create refused because the caller's own bucket
 	// of that name is still being deleted (#321).
 	deleting bool
+	capacity bool
 }
 
 type invalidReason uint8
@@ -209,6 +210,8 @@ func (e *Error) UnmarshalJSON(data []byte) error {
 		decoded.rulesLimit = true
 	case "deleting":
 		decoded.deleting = true
+	case "capacity":
+		decoded.capacity = true
 	default:
 		return Invalid("refinement", "unknown resource error refinement")
 	}
@@ -243,6 +246,8 @@ func (e *Error) refinement() string {
 		return "rulesLimit"
 	case e.deleting:
 		return "deleting"
+	case e.capacity:
+		return "capacity"
 	default:
 		return ""
 	}
@@ -547,6 +552,19 @@ func RequestLimitExceeded() *Error {
 func LaunchLimitExceeded() *Error {
 	return &Error{Code: CodeResourceExhausted, Message: "Too many instance launches in flight; retry later."}
 }
+
+// InsufficientInstanceCapacity reports unavailable placement capacity.
+// https://docs.aws.amazon.com/AWSEC2/latest/APIReference/errors-overview.html
+func InsufficientInstanceCapacity() *Error {
+	return &Error{
+		Code: CodeUnavailable, Kind: KindInstance, capacity: true,
+		Message: "There is not enough capacity to fulfill your request. Reduce the number of instances " +
+			"in your request, or wait for additional capacity to become available.",
+	}
+}
+
+// IsInsufficientInstanceCapacity reports whether e names a placement shortage.
+func IsInsufficientInstanceCapacity(e *Error) bool { return e != nil && e.capacity }
 
 // TooLarge reports a body or object that exceeds the size this process accepts.
 // It is not a quota, so callers must not retry it unchanged.
