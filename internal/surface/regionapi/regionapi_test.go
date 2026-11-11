@@ -84,7 +84,10 @@ func certificates(t *testing.T) (tls.Certificate, tls.Certificate, *x509.CertPoo
 func loopback(t *testing.T, cfg Config) (*Client, *httptest.Server) {
 	t.Helper()
 	serverCert, clientCert, pool := certificates(t)
-	h := New(cfg)
+	h, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
 	srv := httptest.NewUnstartedServer(h)
 	srv.TLS = NewServer("", h, serverCert, pool).http.TLSConfig
 	srv.StartTLS()
@@ -277,7 +280,10 @@ func TestMTLSRejectsUntrustedClients(t *testing.T) {
 }
 
 func TestInputAndRouteBounds(t *testing.T) {
-	h := New(config(fake.New(fake.Options{}).Set()))
+	h, err := New(config(fake.New(fake.Options{}).Set()))
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, body := range []string{
 		"null", `{}`, `{"scope":null,"req":{}}`,
 		`{"scope":{"Account":"123456789012"},"req":{},"unknown":1}`,

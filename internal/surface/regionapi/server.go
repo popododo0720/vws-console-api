@@ -48,7 +48,16 @@ type errorBody struct {
 }
 
 // New returns the region's read-only HTTP handler.
-func New(cfg Config) http.Handler {
+func New(cfg Config) (http.Handler, error) {
+	if cfg.Backend.Compute == nil || cfg.Backend.Storage == nil || cfg.Backend.Network == nil {
+		return nil, fmt.Errorf("new region API: compute, storage and network backends are required")
+	}
+	if cfg.Capabilities == nil || cfg.Region == "" {
+		return nil, fmt.Errorf("new region API: capabilities and region are required")
+	}
+	if cfg.Version.ReleaseLine == "" || cfg.Version.ClusterName == "" {
+		return nil, fmt.Errorf("new region API: release line and cluster name are required")
+	}
 	mux := http.NewServeMux()
 	c, s, n := cfg.Backend.Compute, cfg.Backend.Storage, cfg.Backend.Network
 	register(mux, "Compute", "DescribeInstances", c.DescribeInstances)
@@ -89,7 +98,7 @@ func New(cfg Config) http.Handler {
 		caps, err := cfg.Capabilities.RegionCapabilities(r.Context(), cfg.Region)
 		writeJSON(w, caps, err)
 	})
-	return httpobs.Middleware("regionapi", nil)(mux)
+	return httpobs.Middleware("regionapi", nil)(mux), nil
 }
 
 func register[Q, R any](mux *http.ServeMux, iface, method string,

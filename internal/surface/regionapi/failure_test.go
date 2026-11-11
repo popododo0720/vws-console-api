@@ -52,7 +52,10 @@ func TestObjectFailureClosesTheStream(t *testing.T) {
 			body := &trackedBody{Reader: tc.reader, closeErr: tc.closeErr}
 			set := fake.New(fake.Options{}).Set()
 			set.Storage = objectStorage{Storage: set.Storage, body: body}
-			h := New(config(set))
+			h, err := New(config(set))
+			if err != nil {
+				t.Fatal(err)
+			}
 			w := httptest.NewRecorder()
 			h.ServeHTTP(w, httptest.NewRequestWithContext(context.Background(), http.MethodPost,
 				"/internal/v1/Storage/GetObject", strings.NewReader(`{"scope":{"Account":"123456789012"},"req":{}}`)))

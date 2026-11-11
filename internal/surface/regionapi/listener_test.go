@@ -14,7 +14,11 @@ import (
 
 func TestServerServeRequiresTLS(t *testing.T) {
 	cert, clientCert, pool := certificates(t)
-	srv := NewServer("", New(config(fake.New(fake.Options{}).Set())), cert, pool)
+	h, err := New(config(fake.New(fake.Options{}).Set()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := NewServer("", h, cert, pool)
 	lc := net.ListenConfig{}
 	ln, err := lc.Listen(t.Context(), "tcp", "127.0.0.1:0")
 	if err != nil {
