@@ -115,6 +115,7 @@ change both files together.
 | A region's capability document (`resource.RegionCapabilities`, design.md 3.2.4) never marks a mutation `empty` or a read `unsupported`, and `partial` and `unsupported` name `reason` and `reasonCode`. The kernel refuses a mutation the document does not mark `supported` or `partial`, one it omits included, as `UnsupportedOperation` before the backend, and answers such a read of `resource.ReadActions` with an empty result; an unreadable document fails the call (#739). | `TestCapabilityDocumentGolden`, `TestCapabilityDocumentValidation`, `TestUnsupportedMutationIsRefusedBeforeTheBackend`, `TestEmptyReadAnswersAnEmptyPageWithoutTheBackend`, `TestEveryDeclaredReadIsGated`, `TestUnreadableCapabilitiesFailClosed`, `TestRegionWithoutAnActionAnswersAsEC2` |
 | A resource is the same on every surface. | `internal/surface/interop` |
 | Console JSON field names are camelCase. | `tagliatelle` |
+| EC2 tag length, empty key, UTF-8 and control character errors use `Value (...) for parameter ... is invalid.` with the reason, preserving `InvalidParameterValue`; DeleteTags validates selectors before rejecting volume targets. | `TestInvalidTagMessages`, `TestTagValidationUsesAWSMessages`, `TestTagSpecificationValidationUsesAWSMessages` |
 | vws-proto comes from a release tag; no local proto tree. | `TestProtoModuleRules` |
 | Google Go style. | CI job `lint` |
 | Tests pass under the race detector. | CI job `test` |

@@ -3,7 +3,6 @@ package resource
 import (
 	"slices"
 	"strings"
-	"unicode/utf8"
 )
 
 // TagSelector names a tag to delete. With no Value it matches the key
@@ -23,19 +22,22 @@ const maxTagSelectors = MaxTags
 // them and a caller may not name them.
 const awsTagPrefix = "aws:"
 
-func validSelectors(sel []TagSelector) error {
+// ValidateTagSelectors checks DeleteTags selectors before any resource kind is handled.
+func ValidateTagSelectors(sel []TagSelector) error {
 	if len(sel) > maxTagSelectors {
 		return Invalid("tags", "too many")
 	}
 	for _, s := range sel {
-		if n := utf8.RuneCountInString(s.Key); n < 1 || n > 128 || !tagText(s.Key) {
-			return Invalid("tags", "malformed key")
+		if err := validTagText(s.Key, "key", 1, 128); err != nil {
+			return err
 		}
 		if strings.HasPrefix(s.Key, awsTagPrefix) {
 			return Invalid("tags", "tag keys starting with 'aws:' are reserved")
 		}
-		if s.Value != nil && (utf8.RuneCountInString(*s.Value) > 256 || !tagText(*s.Value)) {
-			return Invalid("tags", "malformed value")
+		if s.Value != nil {
+			if err := validTagText(*s.Value, "value", 0, 256); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -80,7 +82,7 @@ func (r DeleteTagsRequest) Normalize() (DeleteTagsRequest, error) {
 	if err := instanceIDs(r.IDs); err != nil {
 		return DeleteTagsRequest{}, err
 	}
-	if err := validSelectors(r.Tags); err != nil {
+	if err := ValidateTagSelectors(r.Tags); err != nil {
 		return DeleteTagsRequest{}, err
 	}
 	return r, nil
@@ -103,7 +105,7 @@ func (r UntagVpcsRequest) Normalize() (UntagVpcsRequest, error) {
 	if slices.ContainsFunc(r.IDs, IsDirectVpc) {
 		return UntagVpcsRequest{}, DirectReadOnly()
 	}
-	if err := validSelectors(r.Tags); err != nil {
+	if err := ValidateTagSelectors(r.Tags); err != nil {
 		return UntagVpcsRequest{}, err
 	}
 	return r, nil
@@ -126,7 +128,7 @@ func (r UntagSubnetsRequest) Normalize() (UntagSubnetsRequest, error) {
 	if slices.ContainsFunc(r.IDs, IsDirectSubnet) {
 		return UntagSubnetsRequest{}, DirectReadOnly()
 	}
-	if err := validSelectors(r.Tags); err != nil {
+	if err := ValidateTagSelectors(r.Tags); err != nil {
 		return UntagSubnetsRequest{}, err
 	}
 	return r, nil

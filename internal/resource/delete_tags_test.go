@@ -61,11 +61,15 @@ func TestDeleteTagsRequestNormalize(t *testing.T) {
 	}{
 		"no ids":    {UntagVpcsRequest{}, "must list from 1 to 20 ids"},
 		"duplicate": {UntagVpcsRequest{IDs: []VpcID{id, id}}, "duplicate"},
-		"empty key": {UntagVpcsRequest{IDs: []VpcID{id}, Tags: []TagSelector{{Key: ""}}}, "malformed key"},
+		"empty key": {UntagVpcsRequest{IDs: []VpcID{id}, Tags: []TagSelector{{Key: ""}}}, "Tag key must not be empty"},
 		"long key": {
-			UntagVpcsRequest{IDs: []VpcID{id}, Tags: []TagSelector{{Key: strings.Repeat("k", 129)}}}, "malformed key",
+			UntagVpcsRequest{IDs: []VpcID{id}, Tags: []TagSelector{{Key: strings.Repeat("k", 129)}}},
+			"Tag key exceeds the maximum length of 128 characters",
 		},
-		"long value":  {UntagVpcsRequest{IDs: []VpcID{id}, Tags: []TagSelector{{Key: "k", Value: &long}}}, "malformed value"},
+		"long value": {
+			UntagVpcsRequest{IDs: []VpcID{id}, Tags: []TagSelector{{Key: "k", Value: &long}}},
+			"Tag value exceeds the maximum length of 256 characters",
+		},
 		"aws: prefix": {UntagVpcsRequest{IDs: []VpcID{id}, Tags: []TagSelector{{Key: "aws:x"}}}, "reserved"},
 		"ok, all":     {UntagVpcsRequest{IDs: []VpcID{id}}, ""},
 		"51 selectors": {
