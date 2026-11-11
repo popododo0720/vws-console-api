@@ -5,6 +5,7 @@ import (
 	"io"
 
 	"github.com/popododo0720/vws-console-api/internal/backend"
+	"github.com/popododo0720/vws-console-api/internal/backend/proxmox/pveclient"
 	"github.com/popododo0720/vws-console-api/internal/resource"
 )
 
@@ -12,12 +13,14 @@ import (
 type Backend struct {
 	region  string
 	cluster string
+	client  *pveclient.Client
+	cfg     RegionConfig
 }
 
 // Set returns the three services sharing this backend.
 func (b *Backend) Set() backend.Set { return backend.Set{Compute: b, Storage: b, Network: b} }
 
-// RegionCapabilities declares the phase-one empty inventory and disabled writes.
+// RegionCapabilities declares bridge inventory and disabled writes.
 func (b *Backend) RegionCapabilities(_ context.Context, region string) (resource.RegionCapabilities, error) {
 	if region != b.region {
 		return resource.RegionCapabilities{}, resource.Invalid("region", "not served by this backend")
@@ -34,6 +37,15 @@ func (b *Backend) RegionCapabilities(_ context.Context, region string) (resource
 	}
 	for _, r := range resource.ReadActions() {
 		doc.Actions[r.CapabilityKey()] = resource.ActionCapability{State: resource.ActionEmpty}
+	}
+	for _, key := range []string{"ec2:DescribeVpcs", "ec2:DescribeSubnets"} {
+		doc.Actions[key] = resource.ActionCapability{
+			State: resource.ActionPartial, ReasonCode: "BridgeInventory",
+			Reason: "bridge inventory; SDN inventory is not yet served",
+		}
+	}
+	for _, key := range []string{"ec2:DescribeRouteTables", "ec2:DescribeVolumesModifications"} {
+		doc.Actions[key] = resource.ActionCapability{State: resource.ActionEmpty}
 	}
 	return doc, nil
 }
@@ -252,13 +264,6 @@ func (b *Backend) CreateSubnet(
 	return resource.Accepted[resource.Subnet]{}, resource.Unsupported("CreateSubnet", "read-only")
 }
 
-// DescribeSubnets answers the phase-one empty inventory.
-func (b *Backend) DescribeSubnets(
-	ctx context.Context, s backend.Scope, q resource.SubnetQuery,
-) (resource.Page[resource.Subnet], error) {
-	return resource.Page[resource.Subnet]{}, nil
-}
-
 // CreateVpc is unavailable in the phase-one backend.
 func (b *Backend) CreateVpc(
 	ctx context.Context, m backend.Mutation, req resource.CreateVpcRequest,
@@ -271,11 +276,6 @@ func (b *Backend) DeleteVpc(
 	ctx context.Context, m backend.Mutation, req resource.DeleteVpcRequest,
 ) (resource.Accepted[resource.Vpc], error) {
 	return resource.Accepted[resource.Vpc]{}, resource.Unsupported("DeleteVpc", "read-only")
-}
-
-// DescribeVpcs answers the phase-one empty inventory.
-func (b *Backend) DescribeVpcs(context.Context, backend.Scope, resource.VpcQuery) (resource.Page[resource.Vpc], error) {
-	return resource.Page[resource.Vpc]{}, nil
 }
 
 // TagVpcs is unavailable in the phase-one backend.

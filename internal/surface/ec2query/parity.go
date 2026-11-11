@@ -825,9 +825,16 @@ func (h *handler) describeVolumesModifications(w http.ResponseWriter, r *http.Re
 		writeErr(w, r, resource.Invalid("NextToken", invalidNextTokenMessage))
 		return
 	}
-	if err := h.checkVolumesExist(r.Context(), c, ids); err != nil {
+	empty, err := h.svc.ReadIsEmpty(r.Context(), "DescribeVolumesModifications")
+	if err != nil {
 		writeErr(w, r, err)
 		return
+	}
+	if !empty {
+		if err := h.checkVolumesExist(r.Context(), c, ids); err != nil {
+			writeErr(w, r, err)
+			return
+		}
 	}
 	// VWS has no modification history to return; vws-storage#157 tracks it.
 	writeXML(w, describeVolumesModificationsXML{
@@ -1062,7 +1069,13 @@ func (h *handler) describeRouteTables(w http.ResponseWriter, r *http.Request, c 
 		writeErr(w, r, err)
 		return
 	}
-	if err := checkRouteTableIDs(indexedStrings(r, "RouteTableId")); err != nil {
+	ids := indexedStrings(r, "RouteTableId")
+	empty, err := h.svc.ReadIsEmpty(r.Context(), "DescribeRouteTables")
+	if err != nil {
+		writeErr(w, r, err)
+		return
+	}
+	if err := checkRouteTableIDs(ids, empty); err != nil {
 		writeErr(w, r, err)
 		return
 	}
@@ -1091,10 +1104,9 @@ func routeTableNotFound(id string) *resource.Error {
 	}
 }
 
-// checkRouteTableIDs refuses the first malformed id of the request, then the
-// first id that names no route table. VWS has no route table model, so every
-// well-formed id is unknown.
-func checkRouteTableIDs(ids []string) error {
+// An explicit empty capability accepts unknown selectors while still
+// rejecting malformed identifiers.
+func checkRouteTableIDs(ids []string, empty bool) error {
 	for _, id := range ids {
 		if !validRouteTableID(id) {
 			return &resource.Error{
@@ -1103,7 +1115,7 @@ func checkRouteTableIDs(ids []string) error {
 			}
 		}
 	}
-	if len(ids) > 0 {
+	if len(ids) > 0 && !empty {
 		return routeTableNotFound(ids[0])
 	}
 	return nil

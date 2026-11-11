@@ -29,6 +29,15 @@ type Scenario struct {
 	Roles    []Role    `yaml:"roles"`
 	Tokens   []Token   `yaml:"tokens"`
 	Storages []Storage `yaml:"storages"`
+	Networks []Network `yaml:"networks"`
+}
+
+// Network is one node's bridge interface.
+type Network struct {
+	Node  string `yaml:"node"`
+	Iface string `yaml:"iface"`
+	Type  string `yaml:"type"`
+	CIDR  string `yaml:"cidr"`
 }
 
 // Storage is one node's storage inventory entry.
@@ -161,6 +170,7 @@ func (s Scenario) clone() Scenario {
 	s.Nodes, s.VMs = slices.Clone(s.Nodes), slices.Clone(s.VMs)
 	s.Roles, s.Tokens = slices.Clone(s.Roles), slices.Clone(s.Tokens)
 	s.Storages = slices.Clone(s.Storages)
+	s.Networks = slices.Clone(s.Networks)
 	for i := range s.VMs {
 		s.VMs[i].Config = maps.Clone(s.VMs[i].Config)
 	}

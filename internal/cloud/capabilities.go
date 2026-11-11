@@ -8,6 +8,16 @@ import (
 	"github.com/popododo0720/vws-console-api/internal/resource"
 )
 
+// ReadIsEmpty lets derived surface reads honor an explicit empty capability.
+// A missing entry keeps the surface's existing behavior.
+func (s *Service) ReadIsEmpty(ctx context.Context, action string) (bool, error) {
+	caps, err := s.caps.RegionCapabilities(ctx, resource.RegionName)
+	if err != nil {
+		return false, fmt.Errorf("capabilities of %s: %w", resource.RegionName, err)
+	}
+	return caps.Actions["ec2:"+action].State == resource.ActionEmpty, nil
+}
+
 // admit refuses a mutation the region does not serve, before the backend
 // sees it. Until Scope carries a region the kernel serves resource.RegionName.
 func (s *Service) admit(ctx context.Context, a resource.Action) error {

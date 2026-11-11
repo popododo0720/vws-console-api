@@ -233,7 +233,7 @@ func (c *Client) Network(ctx context.Context, node string) ([]NetworkInterface, 
 	if err != nil {
 		return nil, err
 	}
-	return get[[]NetworkInterface](ctx, c, "/nodes"+n+"/network", nil)
+	return get[[]NetworkInterface](ctx, c, "/nodes"+n+"/network", url.Values{"type": {"any_bridge"}})
 }
 
 // SDNZones reads GET /cluster/sdn/zones.
