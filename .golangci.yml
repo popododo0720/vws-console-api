@@ -95,8 +95,6 @@ linters:
           files:
             - "$all"
             - "!**/internal/backend/grpcclient/**"
-            # The shipped-command regression hosts its loopback AuthService fixture here.
-            - "!**/cmd/vws-console-api/shared_sessions_test.go"
           deny:
             - pkg: google.golang.org/grpc
               desc: only internal/backend/grpcclient speaks gRPC

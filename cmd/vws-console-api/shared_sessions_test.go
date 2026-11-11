@@ -17,90 +17,13 @@ import (
 	"testing"
 	"time"
 
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/types/known/timestamppb"
-
-	iamv1 "github.com/popododo0720/vws-proto/gen/go/vws/iam/v1"
-
+	"github.com/popododo0720/vws-console-api/internal/backend/grpcclient/iamclient/iamtest"
 	"github.com/popododo0720/vws-console-api/internal/surface/console"
 )
 
-// These sessions belong to the AuthService, not either command instance.
-type commandSessions struct {
-	iamv1.UnimplementedAuthServiceServer
-	mu     sync.Mutex
-	tokens map[string]*iamv1.Principal
-	logins []string
-}
-
-func (s *commandSessions) Login(_ context.Context, r *iamv1.LoginRequest) (*iamv1.LoginResponse, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if r.GetProject() != "123456789012" || r.GetPassword() != "correct horse 1" ||
-		(r.GetUserName() != "bob" && r.GetUserName() != "root") {
-		return nil, status.Error(codes.Unauthenticated, "invalid credentials")
-	}
-	p := &iamv1.Principal{
-		Type: iamv1.PrincipalType_PRINCIPAL_TYPE_USER, Project: r.GetProject(),
-		Arn: "arn:vws:iam::123456789012:user/bob", UniqueId: "AIDABOB",
-	}
-	if r.GetUserName() == "root" {
-		p.Type, p.Arn, p.UniqueId = iamv1.PrincipalType_PRINCIPAL_TYPE_ROOT,
-			"arn:vws:iam::123456789012:root", r.GetProject()
-	}
-	s.logins = append(s.logins, r.GetUserName())
-	token := fmt.Sprintf("session-%d", len(s.logins))
-	s.tokens[token] = p
-	return &iamv1.LoginResponse{
-		SessionToken: token, Principal: p, ExpireTime: timestamppb.New(time.Now().Add(time.Hour)),
-	}, nil
-}
-
-func (s *commandSessions) ValidateSession(
-	_ context.Context, r *iamv1.ValidateSessionRequest,
-) (*iamv1.ValidateSessionResponse, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	p, ok := s.tokens[r.GetSessionToken()]
-	if !ok {
-		return nil, status.Error(codes.Unauthenticated, "invalid session")
-	}
-	return &iamv1.ValidateSessionResponse{
-		Principal: p, ExpireTime: timestamppb.New(time.Now().Add(time.Hour)),
-	}, nil
-}
-
-func (s *commandSessions) Logout(_ context.Context, r *iamv1.LogoutRequest) (*iamv1.LogoutResponse, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	delete(s.tokens, r.GetSessionToken())
-	return &iamv1.LogoutResponse{}, nil
-}
-
 func TestShippedCommandSharesConsoleSessions(t *testing.T) {
 	clearCredentialEnv(t)
-	store := &commandSessions{tokens: make(map[string]*iamv1.Principal)}
-	lis, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	g := grpc.NewServer()
-	iamv1.RegisterAuthServiceServer(g, store)
-	grpcDone := make(chan error, 1)
-	go func() { grpcDone <- g.Serve(lis) }()
-	t.Cleanup(func() {
-		g.Stop()
-		select {
-		case err := <-grpcDone:
-			if err != nil {
-				t.Errorf("AuthService: %v", err)
-			}
-		case <-time.After(smokeTimeout):
-			t.Error("AuthService did not stop")
-		}
-	})
+	endpoint, store := iamtest.Serve(t)
 
 	transport := &http.Transport{}
 	t.Cleanup(transport.CloseIdleConnections)
@@ -128,8 +51,8 @@ func TestShippedCommandSharesConsoleSessions(t *testing.T) {
 		instances[index] = p
 		mu.Unlock()
 	}
-	first, stopFirst := startSharedCommand(t, lis.Addr().String(), proxy.URL)
-	second, _ := startSharedCommand(t, lis.Addr().String(), proxy.URL)
+	first, stopFirst := startSharedCommand(t, endpoint, proxy.URL)
+	second, _ := startSharedCommand(t, endpoint, proxy.URL)
 	setInstance(0, first.console)
 	setInstance(1, second.console)
 	client := proxy.Client()
@@ -214,7 +137,7 @@ func TestShippedCommandSharesConsoleSessions(t *testing.T) {
 	}
 	transport.CloseIdleConnections()
 	stopFirst()
-	restarted, _ := startSharedCommand(t, lis.Addr().String(), proxy.URL)
+	restarted, _ := startSharedCommand(t, endpoint, proxy.URL)
 	setInstance(0, restarted.console)
 	for _, s := range sessions {
 		checkSession(s, 0)
@@ -227,10 +150,9 @@ func TestShippedCommandSharesConsoleSessions(t *testing.T) {
 		request(http.MethodGet, "/api/v1/auth/session", "", s.cookie, "", 0, http.StatusUnauthorized)
 		request(http.MethodGet, "/api/v1/auth/session", "", s.cookie, "", 1, http.StatusUnauthorized)
 	}
-	store.mu.Lock()
-	defer store.mu.Unlock()
-	if strings.Join(store.logins, ",") != "root,bob" || len(store.tokens) != 0 {
-		t.Fatalf("AuthService logins %v, remaining sessions %d", store.logins, len(store.tokens))
+	logins, remaining := store.Snapshot()
+	if strings.Join(logins, ",") != "root,bob" || remaining != 0 {
+		t.Fatalf("AuthService logins %v, remaining sessions %d", logins, remaining)
 	}
 }
 

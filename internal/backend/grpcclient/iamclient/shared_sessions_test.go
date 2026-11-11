@@ -1,101 +1,30 @@
 package iamclient
 
 import (
-	"context"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
-	"google.golang.org/grpc/status"
-	"google.golang.org/grpc/test/bufconn"
-	"google.golang.org/protobuf/types/known/timestamppb"
-
-	iamv1 "github.com/popododo0720/vws-proto/gen/go/vws/iam/v1"
 
 	"github.com/popododo0720/vws-console-api/internal/backend/fake"
+	"github.com/popododo0720/vws-console-api/internal/backend/grpcclient/iamclient/iamtest"
 	"github.com/popododo0720/vws-console-api/internal/cloud"
 	"github.com/popododo0720/vws-console-api/internal/iam"
 	"github.com/popododo0720/vws-console-api/internal/surface/console"
 )
 
-// The AuthService owns these tokens independently of any console client.
-type sharedSessions struct {
-	iamv1.UnimplementedAuthServiceServer
-	mu       sync.Mutex
-	tokens   map[string]*iamv1.Principal
-	sequence int
-	logins   []string
-}
-
-func (s *sharedSessions) Login(_ context.Context, r *iamv1.LoginRequest) (*iamv1.LoginResponse, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if r.GetProject() != "123456789012" || r.GetPassword() != "correct horse 1" ||
-		(r.GetUserName() != "bob" && r.GetUserName() != "root") {
-		return nil, status.Error(codes.Unauthenticated, "invalid credentials")
-	}
-	p := &iamv1.Principal{
-		Type: iamv1.PrincipalType_PRINCIPAL_TYPE_USER, Project: r.GetProject(),
-		Arn: "arn:vws:iam::123456789012:user/bob", UniqueId: "AIDABOB",
-	}
-	if r.GetUserName() == "root" {
-		p.Type, p.Arn, p.UniqueId = iamv1.PrincipalType_PRINCIPAL_TYPE_ROOT,
-			"arn:vws:iam::123456789012:root", r.GetProject()
-	}
-	s.sequence++
-	token := fmt.Sprintf("session-%d", s.sequence)
-	s.tokens[token] = p
-	s.logins = append(s.logins, r.GetUserName())
-	return &iamv1.LoginResponse{
-		SessionToken: token, Principal: p, ExpireTime: timestamppb.New(time.Now().Add(time.Hour)),
-	}, nil
-}
-
-func (s *sharedSessions) ValidateSession(
-	_ context.Context, r *iamv1.ValidateSessionRequest,
-) (*iamv1.ValidateSessionResponse, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	p, ok := s.tokens[r.GetSessionToken()]
-	if !ok {
-		return nil, status.Error(codes.Unauthenticated, "invalid session")
-	}
-	return &iamv1.ValidateSessionResponse{
-		Principal: p, ExpireTime: timestamppb.New(time.Now().Add(time.Hour)),
-	}, nil
-}
-
-func (s *sharedSessions) Logout(_ context.Context, r *iamv1.LogoutRequest) (*iamv1.LogoutResponse, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	delete(s.tokens, r.GetSessionToken())
-	return &iamv1.LogoutResponse{}, nil
-}
-
 func TestConsoleSessionsSharedAcrossInstancesAndRestart(t *testing.T) {
 	for _, user := range []string{"bob", "root"} {
 		t.Run(user, func(t *testing.T) {
-			store := &sharedSessions{tokens: make(map[string]*iamv1.Principal)}
-			lis := bufconn.Listen(1 << 20)
-			g := grpc.NewServer()
-			iamv1.RegisterAuthServiceServer(g, store)
-			go func() { _ = g.Serve(lis) }()
-			t.Cleanup(g.Stop)
+			endpoint, store := iamtest.Serve(t)
 			newInstance := func() (http.Handler, func()) {
-				conn, err := grpc.NewClient("passthrough:///shared-iam",
-					grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) {
-						return lis.DialContext(ctx)
-					}),
-					grpc.WithTransportCredentials(insecure.NewCredentials()))
+				conn, err := grpc.NewClient(endpoint, grpc.WithTransportCredentials(insecure.NewCredentials()))
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -188,10 +117,9 @@ func TestConsoleSessionsSharedAcrossInstancesAndRestart(t *testing.T) {
 			request(http.MethodPost, "/api/v1/auth/logout", "", cookie, csrf, 1, http.StatusNoContent)
 			request(http.MethodGet, "/api/v1/auth/session", "", cookie, "", 0, http.StatusUnauthorized)
 			request(http.MethodGet, "/api/v1/auth/session", "", cookie, "", 1, http.StatusUnauthorized)
-			store.mu.Lock()
-			defer store.mu.Unlock()
-			if len(store.logins) != 1 || store.logins[0] != user || len(store.tokens) != 0 {
-				t.Fatalf("IAM login calls %v, remaining sessions %d", store.logins, len(store.tokens))
+			logins, remaining := store.Snapshot()
+			if len(logins) != 1 || logins[0] != user || remaining != 0 {
+				t.Fatalf("IAM login calls %v, remaining sessions %d", logins, remaining)
 			}
 		})
 	}

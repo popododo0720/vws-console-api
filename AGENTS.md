@@ -50,7 +50,7 @@ change both files together.
 | Surfaces call `internal/cloud`; `internal/surface/regionapi` alone transports `internal/backend` after the global kernel has run. | depguard `surfaces-use-the-kernel`; `TestArchitectureRules` |
 | `internal/resource` imports only the standard library. | depguard `model-is-a-leaf` |
 | The kernel never sees HTTP, signatures or a surface. | depguard `kernel-knows-no-wire` |
-| Protobuf and gRPC types stay in `internal/backend/grpcclient`; the loopback AuthService fixture in `cmd/vws-console-api/shared_sessions_test.go` is the sole test exception. | depguard `grpc-stays-in-grpcclient` |
+| Protobuf and gRPC types stay in `internal/backend/grpcclient`. | depguard `grpc-stays-in-grpcclient` |
 | The deprecated vws-proto compute, network and storage services are used only by the retired `grpc` backend and go with it. | depguard `grpc-stays-in-grpcclient`; `.golangci.yml` SA1019 exclusion |
 | Kubernetes types stay in `internal/backend/launch/kubestore`. | depguard `kube-stays-in-kubestore` |
 | PVE API types (`pveclient`) stay in `internal/backend/proxmox`. | depguard `pve-stays-in-proxmox` |
