@@ -708,6 +708,14 @@ func TestConsoleAndQueryTagTheSameVolume(t *testing.T) {
 		strings.Contains(body, "<key>Cost Center</key>") || !strings.Contains(body, "<key>Name</key>") {
 		t.Fatalf("DescribeVolumes after a console delete: %d %s", described.Code, body)
 	}
+	listed := signed(url.Values{
+		"Action": {"DescribeTags"}, "Version": {ec2query.Version},
+		"Filter.1.Name": {"resource-id"}, "Filter.1.Value.1": {vol},
+	})
+	if body := listed.Body.String(); listed.Code != http.StatusOK ||
+		strings.Contains(body, "<key>Cost Center</key>") || !strings.Contains(body, "<key>Name</key>") {
+		t.Fatalf("DescribeTags after a console delete: %d %s", listed.Code, body)
+	}
 	deleted = signed(url.Values{
 		"Action": {"DeleteTags"}, "Version": {ec2query.Version}, "ResourceId.1": {vol},
 	})
@@ -718,6 +726,21 @@ func TestConsoleAndQueryTagTheSameVolume(t *testing.T) {
 	view.Tags = nil
 	if got.Code != http.StatusOK || json.Unmarshal(got.Body.Bytes(), &view) != nil || len(view.Tags) != 0 {
 		t.Fatalf("console volume after an EC2 DeleteTags: %d %s", got.Code, got.Body)
+	}
+
+	const missing = "vol-0123456789abcdef0"
+	missingConsole := call(t, ui, http.MethodPost, "/api/v1/volumes/"+missing+"/tags/delete", `{}`,
+		write("vol-untag-missing"))
+	if missingConsole.Code != http.StatusNotFound ||
+		!strings.Contains(missingConsole.Body.String(), `"code":"NotFound"`) {
+		t.Fatalf("console delete on a missing volume: %d %s", missingConsole.Code, missingConsole.Body)
+	}
+	missingQuery := signed(url.Values{
+		"Action": {"DeleteTags"}, "Version": {ec2query.Version}, "ResourceId.1": {missing},
+	})
+	if missingQuery.Code != http.StatusBadRequest ||
+		!strings.Contains(missingQuery.Body.String(), "<Code>InvalidVolume.NotFound</Code>") {
+		t.Fatalf("query DeleteTags on a missing volume: %d %s", missingQuery.Code, missingQuery.Body)
 	}
 }
 
