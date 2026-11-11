@@ -21,15 +21,29 @@ func (c Client) WriteRegistration(ctx context.Context, data []byte) error {
 	return c.run(ctx, data, "registration-write")
 }
 
-// WriteToken replaces the encrypted PVE token.
-func (c Client) WriteToken(ctx context.Context, data []byte) error {
-	return c.run(ctx, data, "token-write")
+// WriteToken seals the PVE token under its fingerprint.
+func (c Client) WriteToken(ctx context.Context, fingerprint string, data []byte) error {
+	if !validFingerprint(fingerprint) {
+		return errors.New("invalid token fingerprint")
+	}
+	return c.run(ctx, data, "token-write", fingerprint)
+}
+
+// DeleteToken removes an inactive token file.
+func (c Client) DeleteToken(ctx context.Context, fingerprint string) error {
+	if !validFingerprint(fingerprint) {
+		return errors.New("invalid token fingerprint")
+	}
+	return c.run(ctx, nil, "token-delete", fingerprint)
 }
 
 // ReadToken decrypts the helper's encrypted response in the daemon's memory.
-func (c Client) ReadToken(ctx context.Context) ([]byte, error) {
+func (c Client) ReadToken(ctx context.Context, fingerprint string) ([]byte, error) {
+	if !validFingerprint(fingerprint) {
+		return nil, errors.New("invalid token fingerprint")
+	}
 	var out bytes.Buffer
-	if err := c.execute(ctx, nil, &out, "token-read"); err != nil {
+	if err := c.execute(ctx, nil, &out, "token-read", fingerprint); err != nil {
 		return nil, err
 	}
 	path := filepath.Join(os.Getenv("CREDENTIALS_DIRECTORY"), "region-kek")

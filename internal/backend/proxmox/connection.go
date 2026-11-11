@@ -142,7 +142,7 @@ func (c *Connection) Register(ctx context.Context, data json.RawMessage) error {
 		if err != nil || stored.Token != "" {
 			return errors.New("invalid registration identity")
 		}
-		token, err := c.Helper.ReadToken(ctx)
+		token, err := c.Helper.ReadToken(ctx, stored.Fingerprint)
 		if err != nil {
 			return err
 		}
@@ -172,24 +172,36 @@ func (c *Connection) Register(ctx context.Context, data json.RawMessage) error {
 		}
 	}()
 	if reuse {
+		current, _, err := c.registration()
+		if err != nil {
+			return err
+		}
+		if current.Fingerprint != s.Fingerprint {
+			return &resource.Error{Code: resource.CodeConflict, Message: "registration changed during self-check"}
+		}
 		return c.Helper.WriteRegistration(ctx, identity)
 	}
-	var previous []byte
-	if _, statErr := os.Stat(c.path); !errors.Is(statErr, os.ErrNotExist) {
-		if statErr != nil {
-			return errors.New("registration unreadable")
-		}
-		previous, err = c.Helper.ReadToken(ctx)
+	previous, err := os.ReadFile(c.path)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return errors.New("registration unreadable")
+	}
+	var old registrationSnapshot
+	if err == nil {
+		old, err = decodeRegistration(previous)
 		if err != nil {
 			return err
 		}
 	}
-	err = c.Helper.WriteToken(ctx, token)
-	if err == nil {
-		err = c.Helper.WriteRegistration(ctx, identity)
+	if err := c.Helper.WriteToken(ctx, s.Fingerprint, token); err != nil {
+		return err
 	}
-	if err != nil {
-		return errors.Join(err, c.Helper.WriteToken(context.WithoutCancel(ctx), previous))
+	if err := c.Helper.WriteRegistration(ctx, identity); err != nil {
+		return err
+	}
+	if old.Fingerprint != "" && old.Fingerprint != s.Fingerprint {
+		if err := c.Helper.DeleteToken(context.WithoutCancel(ctx), old.Fingerprint); err != nil {
+			slog.WarnContext(ctx, "previous registration token cleanup failed")
+		}
 	}
 	return nil
 }
@@ -198,26 +210,22 @@ func (c *Connection) Register(ctx context.Context, data json.RawMessage) error {
 func (c *Connection) Check(ctx context.Context) (*Backend, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	f, err := os.OpenFile(c.path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, errors.New("unregistered")
-	}
-	if err != nil {
-		return nil, errors.New("registration unreadable")
-	}
-	info, statErr := f.Stat()
-	data, readErr := io.ReadAll(io.LimitReader(f, maxRegistrationIdentityBytes+1))
-	if err := errors.Join(statErr, readErr, f.Close()); err != nil || len(data) > maxRegistrationIdentityBytes ||
-		!info.Mode().IsRegular() || info.Mode().Perm()&0o022 != 0 {
-		return nil, errors.New("registration unreadable")
-	}
-	s, err := decodeRegistration(data)
-	if err != nil || s.Token != "" {
-		return nil, errors.New("invalid registration identity")
-	}
-	token, err := c.Helper.ReadToken(ctx)
+	s, data, err := c.registration()
 	if err != nil {
 		return nil, err
+	}
+	token, err := c.Helper.ReadToken(ctx, s.Fingerprint)
+	if err != nil {
+		// A writer may have committed and collected this reader's old token.
+		next, identity, readErr := c.registration()
+		if readErr != nil || next.Fingerprint == s.Fingerprint {
+			return nil, err
+		}
+		s, data = next, identity
+		token, err = c.Helper.ReadToken(ctx, s.Fingerprint)
+		if err != nil {
+			return nil, err
+		}
 	}
 	s.Token = pveclient.Secret(token)
 	if s.Fingerprint != tokenFingerprint(s.Token) {
@@ -232,4 +240,26 @@ func (c *Connection) Check(ctx context.Context) (*Backend, error) {
 		c.current, c.digest = b, digest
 	}
 	return b, err
+}
+
+func (c *Connection) registration() (registrationSnapshot, []byte, error) {
+	var s registrationSnapshot
+	f, err := os.OpenFile(c.path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	if errors.Is(err, os.ErrNotExist) {
+		return s, nil, errors.New("unregistered")
+	}
+	if err != nil {
+		return s, nil, errors.New("registration unreadable")
+	}
+	info, statErr := f.Stat()
+	data, readErr := io.ReadAll(io.LimitReader(f, maxRegistrationIdentityBytes+1))
+	if err := errors.Join(statErr, readErr, f.Close()); err != nil || len(data) > maxRegistrationIdentityBytes ||
+		!info.Mode().IsRegular() || info.Mode().Perm()&0o022 != 0 {
+		return s, nil, errors.New("registration unreadable")
+	}
+	s, err = decodeRegistration(data)
+	if err != nil || s.Token != "" {
+		return s, nil, errors.New("invalid registration identity")
+	}
+	return s, data, nil
 }
