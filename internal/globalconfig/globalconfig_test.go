@@ -87,6 +87,9 @@ func TestParseRefusesWhatIsNotBootstrap(t *testing.T) {
 		{"no default project", with("default_project: default\n", ""), ErrInvalid},
 		{"default project with a space", with("default_project: default", "default_project: a b"), ErrInvalid},
 		{"oversized", valid + "#" + strings.Repeat("x", MaxBytes) + "\n", ErrInvalid},
+		{"mistyped field quoting a secret", with(
+			"etcd_endpoints: [https://10.0.0.1:2379, https://10.0.0.2:2379]", "etcd_endpoints: hunter2"), ErrInvalid},
+		{"unterminated quote around a secret", with("default_project: default", `default_project: "hunter2`), ErrInvalid},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := Parse([]byte(tc.yaml))
