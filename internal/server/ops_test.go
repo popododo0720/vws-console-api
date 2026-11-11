@@ -1,6 +1,8 @@
 package server
 
 import (
+	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -8,6 +10,30 @@ import (
 	"sync/atomic"
 	"testing"
 )
+
+func TestOpsDependencyReadiness(t *testing.T) {
+	var ready atomic.Bool
+	dependency := false
+	h := opsHandler(NewMetrics(), &ready, func(context.Context) error {
+		if !dependency {
+			return errors.New("dependency unavailable")
+		}
+		return nil
+	})
+	for _, state := range []struct {
+		started, dependency bool
+		want                int
+	}{{false, true, 503}, {true, false, 503}, {true, true, 200}, {false, true, 503}} {
+		ready.Store(state.started)
+		dependency = state.dependency
+		if rec := get(t, h, "/readyz"); rec.Code != state.want {
+			t.Fatalf("state=%+v: readiness=%d", state, rec.Code)
+		}
+		if rec := get(t, h, "/healthz"); rec.Code != http.StatusOK {
+			t.Fatalf("healthz=%d", rec.Code)
+		}
+	}
+}
 
 func get(t *testing.T, h http.Handler, path string) *httptest.ResponseRecorder {
 	t.Helper()
@@ -19,7 +45,7 @@ func get(t *testing.T, h http.Handler, path string) *httptest.ResponseRecorder {
 func TestOpsEndpoints(t *testing.T) {
 	m := NewMetrics()
 	var ready atomic.Bool
-	h := opsHandler(m, &ready)
+	h := opsHandler(m, &ready, nil)
 	if rec := get(t, h, "/healthz"); rec.Code != http.StatusOK {
 		t.Fatalf("healthz %d", rec.Code)
 	}
@@ -49,7 +75,7 @@ func TestMetricsCountRequestsWithTheVWSPrefix(t *testing.T) {
 	get(t, boom, "/")
 
 	var ready atomic.Bool
-	body := get(t, opsHandler(m, &ready), "/metrics").Body.String()
+	body := get(t, opsHandler(m, &ready, nil), "/metrics").Body.String()
 	for _, want := range []string{
 		`vws_console_api_http_requests_total{surface="ec2",code="204"} 2`,
 		`vws_console_api_http_requests_total{surface="s3",code="500"} 1`,
