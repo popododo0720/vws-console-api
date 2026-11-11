@@ -23,6 +23,7 @@ func Run(t *testing.T, newSet Harness, caps resource.RegionCapabilities) {
 	if err := caps.Validate(); err != nil {
 		t.Fatal(err)
 	}
+	t.Run("Capabilities", func(t *testing.T) { capabilityContract(t, newSet(), caps) })
 	ctx := context.Background()
 	set := newSet()
 	account, err := resource.Parse[resource.AccountID]("123456789012")
