@@ -210,6 +210,22 @@ func TestEveryReadRoundTrips(t *testing.T) {
 	}
 }
 
+func TestNilConsoleCapabilityIsUnsupported(t *testing.T) {
+	set := fake.New(fake.Options{}).Set()
+	set.Console = nil
+	client, _ := loopback(t, config(set))
+	doc, err := client.Capabilities(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := doc.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if got := doc.Actions["vws:OpenConsole"]; got.State != resource.ActionUnsupported {
+		t.Fatalf("OpenConsole capability = %+v, want unsupported", got)
+	}
+}
+
 type errorCompute struct {
 	backend.Compute
 	err error

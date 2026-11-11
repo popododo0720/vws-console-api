@@ -35,7 +35,10 @@ func New(cfg Config) *Service {
 	if cfg.Capabilities == nil {
 		cfg.Capabilities = backend.AllSupported{Kind: resource.RegionKindProxmox}
 	}
-	return &Service{backends: cfg.Backends, audit: cfg.Audit, launches: cfg.Launches, caps: cfg.Capabilities}
+	return &Service{
+		backends: cfg.Backends, audit: cfg.Audit, launches: cfg.Launches,
+		caps: cfg.Backends.Capabilities(cfg.Capabilities),
+	}
 }
 
 func scope(c resource.Caller) backend.Scope {

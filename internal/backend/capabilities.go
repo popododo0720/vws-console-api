@@ -2,6 +2,8 @@ package backend
 
 import (
 	"context"
+	"fmt"
+	"maps"
 
 	"github.com/popododo0720/vws-console-api/internal/resource"
 )
@@ -12,6 +14,33 @@ import (
 // passes resource.RegionCapabilities.Validate.
 type Capabilities interface {
 	RegionCapabilities(ctx context.Context, region string) (resource.RegionCapabilities, error)
+}
+
+type setCapabilities struct {
+	set      Set
+	provider Capabilities
+}
+
+// Capabilities binds the region document to the services this set offers.
+func (s Set) Capabilities(provider Capabilities) Capabilities {
+	return setCapabilities{set: s, provider: provider}
+}
+
+func (s setCapabilities) RegionCapabilities(ctx context.Context, region string) (resource.RegionCapabilities, error) {
+	doc, err := s.provider.RegionCapabilities(ctx, region)
+	if err != nil {
+		return resource.RegionCapabilities{}, fmt.Errorf("backend capabilities: %w", err)
+	}
+	if s.set.Console == nil {
+		doc.Actions = maps.Clone(doc.Actions)
+		if doc.Actions == nil {
+			doc.Actions = map[string]resource.ActionCapability{}
+		}
+		doc.Actions["vws:OpenConsole"] = resource.ActionCapability{
+			State: resource.ActionUnsupported, ReasonCode: "NoConsole", Reason: "backend offers no instance consoles",
+		}
+	}
+	return doc, nil
 }
 
 // AllSupported declares every action and read supported in a region of
@@ -25,6 +54,7 @@ type AllSupported struct {
 func (a AllSupported) RegionCapabilities(_ context.Context, region string) (resource.RegionCapabilities, error) {
 	actions := map[string]resource.ActionCapability{}
 	supported := resource.ActionCapability{State: resource.ActionSupported}
+	actions["vws:OpenConsole"] = supported
 	for _, m := range resource.Actions() {
 		actions[m.CapabilityKey()] = supported
 	}
