@@ -7,6 +7,9 @@ on:
     paths:
       - docs/formal/**
       - scripts/tla-detach.sh
+      - scripts/tla-instance.sh
+      - scripts/tla-instance_test.sh
+      - internal/backend/proxmox/lifecycle*.go
       - .github/workflows/tla.yml
       - internal/backend/grpcclient/ec2.go
       - internal/backend/grpcclient/names.go
@@ -16,6 +19,9 @@ on:
     paths:
       - docs/formal/**
       - scripts/tla-detach.sh
+      - scripts/tla-instance.sh
+      - scripts/tla-instance_test.sh
+      - internal/backend/proxmox/lifecycle*.go
       - .github/workflows/tla.yml
       - internal/backend/grpcclient/ec2.go
       - internal/backend/grpcclient/names.go
@@ -29,6 +35,30 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  instance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - id: pin
+        run: grep -E '^TLA_SHA256=[0-9a-f]{64}$' scripts/tla-detach.sh >>"$GITHUB_OUTPUT"
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/vws
+          key: tla2tools-${{ steps.pin.outputs.TLA_SHA256 }}
+      - name: Runner rejects failed processes and conflicting verdicts
+        run: scripts/tla-instance_test.sh
+      - name: TLC passes the lifecycle design and fails each seeded bug
+        run: scripts/tla-instance.sh
+      - name: Go lifecycle table agrees with the model
+        run: go test ./internal/backend/proxmox -run TestInstanceTransition -count=1
   detach:
     runs-on: ubuntu-latest
     timeout-minutes: 45
