@@ -68,11 +68,18 @@ type Node struct {
 // VMConfig is GET /nodes/{node}/qemu/{vmid}/config. Digest goes back on
 // every config write (design.md 3.3.6).
 type VMConfig struct {
-	Digest   string `json:"digest"`
-	Name     string `json:"name"`
-	Tags     string `json:"tags"`
-	Lock     string `json:"lock"`
-	Template int    `json:"template"`
+	Digest      string `json:"digest"`
+	Name        string `json:"name"`
+	Tags        string `json:"tags"`
+	Lock        string `json:"lock"`
+	Template    int    `json:"template"`
+	SMBIOS1     string `json:"smbios1"`
+	Meta        string `json:"meta"`
+	Cores       int    `json:"cores"`
+	Sockets     int    `json:"sockets"`
+	Memory      int    `json:"memory"`
+	Description string `json:"description"`
+	QMPStatus   string `json:"qmpstatus"`
 }
 
 // Snapshot is one entry of GET /nodes/{node}/qemu/{vmid}/snapshot.

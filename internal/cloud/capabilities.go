@@ -3,10 +3,50 @@ package cloud
 import (
 	"context"
 	"fmt"
+	"slices"
 
 	"github.com/popododo0720/vws-console-api/internal/backend"
 	"github.com/popododo0720/vws-console-api/internal/resource"
 )
+
+// AvailabilityZones returns the region's zone inventory.
+func (s *Service) AvailabilityZones(ctx context.Context, c resource.Caller) ([]resource.RegionZone, error) {
+	if err := requireCaller(c); err != nil {
+		return nil, err
+	}
+	caps, err := s.caps.RegionCapabilities(ctx, resource.RegionName)
+	if err != nil {
+		return nil, fmt.Errorf("availability zones: %w", err)
+	}
+	if len(caps.Zones) == 0 {
+		return []resource.RegionZone{{ZoneName: resource.ZoneName, ZoneID: resource.ZoneName, State: "available"}}, nil
+	}
+	return caps.Zones, nil
+}
+
+// RegionNames reads registrations without contacting a region backend.
+func (s *Service) RegionNames(ctx context.Context, c resource.Caller) ([]string, error) {
+	if err := requireCaller(c); err != nil {
+		return nil, err
+	}
+	regions, err := s.regions.ProxmoxRegions(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("describe regions: %w", err)
+	}
+	accounts, err := s.regions.AWSAccounts(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("describe regions: %w", err)
+	}
+	var names []string
+	for _, region := range regions {
+		names = append(names, region.Name)
+	}
+	for _, account := range accounts {
+		names = append(names, account.AllowedRegions...)
+	}
+	slices.Sort(names)
+	return slices.Compact(names), nil
+}
 
 // ReadIsEmpty lets derived surface reads honor an explicit empty capability.
 // A missing entry keeps the surface's existing behavior.

@@ -13,13 +13,14 @@ import (
 
 // Fake answers the PVE API from one Scenario.
 type Fake struct {
-	mu      sync.RWMutex
-	s       Scenario
-	roles   map[string][]string
-	quorate bool
-	online  map[string]bool
-	mux     *http.ServeMux
-	methods []string
+	mu       sync.RWMutex
+	s        Scenario
+	roles    map[string][]string
+	quorate  bool
+	online   map[string]bool
+	mux      *http.ServeMux
+	methods  []string
+	requests []string
 }
 
 // failure is a PVE error answer: the status and PVE's message.
@@ -69,8 +70,28 @@ func (f *Fake) SetNodeOnline(node string, online bool) error {
 func (f *Fake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	f.methods = append(f.methods, r.Method)
+	f.requests = append(f.requests, r.Method+" "+r.URL.RequestURI())
 	f.mu.Unlock()
 	f.mux.ServeHTTP(w, r)
+}
+
+// Requests returns method and path for every request, including rejected ones.
+func (f *Fake) Requests() []string {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	return append([]string(nil), f.requests...)
+}
+
+// MoveVM changes pool membership between inventory calls.
+func (f *Fake) MoveVM(vmid int, pool string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	vm := f.vm(vmid)
+	if vm == nil {
+		return fmt.Errorf("pvefake: unknown VM %d", vmid)
+	}
+	vm.Pool = pool
+	return nil
 }
 
 // RequestMethods returns every request method, including rejected requests.

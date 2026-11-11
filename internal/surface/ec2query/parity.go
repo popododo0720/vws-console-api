@@ -938,29 +938,33 @@ func (h *handler) describeAvailabilityZones(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	zoneNames := indexedStrings(r, "ZoneName")
+	zones, err := h.svc.AvailabilityZones(r.Context(), c)
+	if err != nil {
+		writeErr(w, r, err)
+		return
+	}
+	known := map[string]struct{}{}
+	for _, zone := range zones {
+		known[zone.ZoneName] = struct{}{}
+	}
 	// EC2 answers a ZoneName.N it does not know as InvalidParameterValue,
 	// "Invalid availability zone: [us-west-2-lax-1a]" (floci-io/floci#5519,
 	// from eksctl-io/eksctl#8174).
-	if unknown := unknownNames(zoneNames, map[string]struct{}{resource.ZoneName: {}}); len(unknown) > 0 {
+	if unknown := unknownNames(zoneNames, known); len(unknown) > 0 {
 		writeErr(w, r, resource.Invalid("ZoneName",
 			"Invalid availability zone: ["+strings.Join(unknown, ", ")+"]"))
 		return
 	}
 	names := stringSetOf(zoneNames)
 	ids := stringSetOf(indexedStrings(r, "ZoneId"))
-	all := []availabilityZoneItem{{
-		ZoneName:           resource.ZoneName,
-		ZoneID:             zoneID,
-		State:              "available",
-		RegionName:         resource.RegionName,
-		OptInStatus:        "opt-in-not-required",
-		GroupName:          resource.RegionName,
-		GroupLongName:      "VWS " + resource.RegionName,
-		NetworkBorderGroup: resource.RegionName,
-		ZoneType:           "availability-zone",
-	}}
 	var rows []availabilityZoneItem
-	for _, zone := range all {
+	for _, z := range zones {
+		zone := availabilityZoneItem{
+			ZoneName: z.ZoneName, ZoneID: z.ZoneID, State: z.State,
+			RegionName: resource.RegionName, OptInStatus: "opt-in-not-required",
+			GroupName: resource.RegionName, GroupLongName: "VWS " + resource.RegionName,
+			NetworkBorderGroup: resource.RegionName, ZoneType: "availability-zone",
+		}
 		if len(names) > 0 {
 			if _, ok := names[zone.ZoneName]; !ok {
 				continue
@@ -1023,13 +1027,16 @@ func (h *handler) describeRegions(w http.ResponseWriter, r *http.Request, c reso
 		return
 	}
 	names := stringSetOf(indexedStrings(r, "RegionName"))
-	all := []regionItem{{
-		RegionName:  resource.RegionName,
-		Endpoint:    "ec2." + resource.RegionName + ".vws.internal",
-		OptInStatus: "opt-in-not-required",
-	}}
+	all, err := h.svc.RegionNames(r.Context(), c)
+	if err != nil {
+		writeErr(w, r, err)
+		return
+	}
 	var rows []regionItem
-	for _, region := range all {
+	for _, name := range all {
+		region := regionItem{
+			RegionName: name, Endpoint: "ec2." + resource.RegionName + ".vws.internal", OptInStatus: "opt-in-not-required",
+		}
 		if len(names) > 0 {
 			if _, ok := names[region.RegionName]; !ok {
 				continue

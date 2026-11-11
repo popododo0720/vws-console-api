@@ -16,6 +16,7 @@ type Backend struct {
 	cluster         string
 	client          *pveclient.Client
 	cfg             RegionConfig
+	zones           []backend.Zone
 	statusMu        sync.Mutex
 	lastStatusError *resource.RegionStatusError
 }
@@ -23,7 +24,7 @@ type Backend struct {
 // Set returns the three services sharing this backend.
 func (b *Backend) Set() backend.Set { return backend.Set{Compute: b, Storage: b, Network: b} }
 
-// RegionCapabilities declares the regional catalog, bridge inventory and disabled writes.
+// RegionCapabilities declares the regional inventory and disabled writes.
 func (b *Backend) RegionCapabilities(ctx context.Context, region string) (resource.RegionCapabilities, error) {
 	if region != b.region {
 		return resource.RegionCapabilities{}, resource.Invalid("region", "not served by this backend")
@@ -36,9 +37,13 @@ func (b *Backend) RegionCapabilities(ctx context.Context, region string) (resour
 		// Node capacity limits the catalog, not the action policy used by every kernel gate.
 		types = []resource.RegionInstanceType{}
 	}
+	zones, err := b.availabilityZones(ctx)
+	if err != nil {
+		return resource.RegionCapabilities{}, err
+	}
 	doc := resource.RegionCapabilities{
 		Region: region, Kind: resource.RegionKindProxmox,
-		Cluster: &resource.RegionCluster{Name: b.cluster}, Zones: []resource.RegionZone{},
+		Cluster: &resource.RegionCluster{Name: b.cluster}, Zones: zones,
 		Actions: map[string]resource.ActionCapability{}, InstanceTypes: types,
 	}
 	for _, a := range resource.Actions() {
@@ -48,6 +53,9 @@ func (b *Backend) RegionCapabilities(ctx context.Context, region string) (resour
 	}
 	for _, r := range resource.ReadActions() {
 		doc.Actions[r.CapabilityKey()] = resource.ActionCapability{State: resource.ActionEmpty}
+	}
+	for _, key := range []string{"ec2:DescribeInstances", "ec2:DescribeAvailabilityZones", "ec2:DescribeRegions"} {
+		doc.Actions[key] = resource.ActionCapability{State: resource.ActionSupported}
 	}
 	for _, key := range []string{"ec2:DescribeVpcs", "ec2:DescribeSubnets"} {
 		doc.Actions[key] = resource.ActionCapability{
@@ -101,13 +109,6 @@ func (b *Backend) TerminateInstances(
 	ctx context.Context, m backend.Mutation, req resource.TerminateInstancesRequest,
 ) (resource.Accepted[resource.InstanceStateChange], error) {
 	return resource.Accepted[resource.InstanceStateChange]{}, resource.Unsupported("TerminateInstances", "read-only")
-}
-
-// DescribeInstances answers the phase-one empty inventory.
-func (b *Backend) DescribeInstances(
-	ctx context.Context, s backend.Scope, q resource.InstanceQuery,
-) (resource.Page[resource.Instance], error) {
-	return resource.Page[resource.Instance]{}, nil
 }
 
 // CreateTags is unavailable in the phase-one backend.

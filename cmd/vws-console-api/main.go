@@ -221,7 +221,13 @@ func run(ctx context.Context, args []string) (err error) {
 	if err != nil {
 		return err
 	}
-	svc := cloud.New(cloud.Config{Backends: set, Audit: logger, Launches: throttle.NewLaunches(launchLimits)})
+	var regions backend.RegionCatalog = backend.DefaultRegions()
+	if *backendKind != "fake" {
+		regions = registry.Catalog()
+	}
+	svc := cloud.New(cloud.Config{
+		Backends: set, Regions: regions, Audit: logger, Launches: throttle.NewLaunches(launchLimits),
+	})
 	// The static key is the account root; with -iam=fake or -iam=grpc it
 	// sits in front of the IAM client through iam.WithRoot.
 	root := iam.NewStatic(*accessKey, *secret, account)
@@ -260,7 +266,6 @@ func run(ctx context.Context, args []string) (err error) {
 	}
 	warnSignIn(ctx, logger, *iamMode, *rootPasswordFile)
 	authn := iam.Authenticator(auth)
-	regions := backend.DefaultRegions()
 	verifier := func(s sigv4.Service) *sigv4.Verifier {
 		return sigv4.NewVerifier(sigv4.Verifier{Service: s, Regions: regions, Auth: authn})
 	}
