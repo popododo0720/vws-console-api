@@ -22,6 +22,7 @@ import (
 // Scope is the tenancy of a call.
 type Scope struct {
 	Account resource.AccountID
+	Region  string
 }
 
 // Mutation identifies one client attempt at a long-running change.
