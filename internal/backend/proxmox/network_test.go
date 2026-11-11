@@ -117,6 +117,46 @@ func TestBridgeInventory(t *testing.T) {
 	}
 }
 
+func TestBridgeSubnetNeedsOnlineNodesToAgree(t *testing.T) {
+	s := scenario()
+	s.Nodes = append(s.Nodes, pvefake.Node{Name: "pve2"})
+	s.Networks = []pvefake.Network{
+		{Node: "pve1", Iface: "vmbr0", Type: "bridge", CIDR: "192.0.2.10/24"},
+		{Node: "pve2", Iface: "vmbr0", Type: "bridge", CIDR: "198.51.100.7/24"},
+		{Node: "pve1", Iface: "vmbr1", Type: "bridge", CIDR: "192.0.2.10/24"},
+		{Node: "pve2", Iface: "vmbr1", Type: "bridge", CIDR: "198.51.100.7/24"},
+	}
+	b, f := networkBackend(t, s, RegionConfig{Subnets: map[string]SubnetConfig{"vmbr1": {CIDR: "10.1.0.0/24"}}})
+	account, err := resource.Parse[resource.AccountID]("123456789012")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sc := backend.Scope{Account: account}
+	ids, _ := NewIDs("test")
+	configured, _ := ids.BridgeSubnet("vmbr1", "10.1.0.0/24")
+	subnets, err := b.DescribeSubnets(t.Context(), sc, resource.SubnetQuery{})
+	if err != nil || len(subnets.Items) != 1 || subnets.Items[0].ID != configured {
+		t.Fatalf("disagreeing nodes must leave vmbr0 without a subnet: %+v %v", subnets, err)
+	}
+	vpcs, err := b.DescribeVpcs(t.Context(), sc, resource.VpcQuery{})
+	if err != nil || len(vpcs.Items) != 2 {
+		t.Fatalf("vpcs=%+v error=%v", vpcs, err)
+	}
+	vmbr0, _ := ids.BridgeVPC("vmbr0")
+	for _, v := range vpcs.Items {
+		if v.ID == vmbr0 && v.Cidr != "" {
+			t.Fatalf("vmbr0 took one node's CIDR: %+v", v)
+		}
+	}
+	if err := f.SetNodeOnline("pve1", false); err != nil {
+		t.Fatal(err)
+	}
+	after, err := b.DescribeSubnets(t.Context(), sc, resource.SubnetQuery{})
+	if err != nil || len(after.Items) != 2 {
+		t.Fatalf("with one node online its network is the bridge's: %+v %v", after, err)
+	}
+}
+
 func TestBridgeReadFailures(t *testing.T) {
 	t.Run("permission denied", func(t *testing.T) {
 		s := scenario()

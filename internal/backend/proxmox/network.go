@@ -4,25 +4,38 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/netip"
 	"slices"
 	"sort"
 
 	"github.com/popododo0720/vws-console-api/internal/backend"
-	"github.com/popododo0720/vws-console-api/internal/backend/proxmox/pveclient"
 	"github.com/popododo0720/vws-console-api/internal/resource"
 )
 
+// bridge is one cluster bridge with its ids. Subnet is set only when CIDR is.
+type bridge struct {
+	Iface  string
+	CIDR   string
+	VPC    resource.VpcID
+	Subnet resource.SubnetID
+}
+
 // bridges merges the same cluster bridge seen on several online nodes.
-// Configuration wins over a node's host address, which may differ per node.
-func (b *Backend) bridges(ctx context.Context) ([]pveclient.NetworkInterface, error) {
+// Configuration wins over the nodes' host addresses. Without configuration a
+// bridge has a CIDR only when every online node that reports one masks to the
+// same network, so the subnet never depends on which node answers first.
+// A bridge whose ids cannot be derived is skipped, never failing the listing.
+func (b *Backend) bridges(ctx context.Context) ([]bridge, error) {
+	ids, err := NewIDs(b.cluster)
+	if err != nil {
+		return nil, err
+	}
 	nodes, err := b.client.Nodes(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("proxmox: list network nodes: %w", err)
 	}
-	sort.Slice(nodes, func(i, j int) bool { return nodes[i].Node < nodes[j].Node })
-	seen := map[string]bool{}
-	var out []pveclient.NetworkInterface
+	host := map[string]map[string]bool{}
 	for _, node := range nodes {
 		if node.Status != "online" {
 			continue
@@ -32,32 +45,56 @@ func (b *Backend) bridges(ctx context.Context) ([]pveclient.NetworkInterface, er
 			return nil, fmt.Errorf("proxmox: read bridges on %s: %w", node.Node, err)
 		}
 		for _, row := range rows {
-			if seen[row.Iface] {
-				continue
-			}
 			if row.Type != "bridge" && row.Type != "OVSBridge" {
 				continue
 			}
-			if err := checkPart(row.Iface); err != nil {
-				slog.WarnContext(ctx, "skipping invalid bridge", slog.String("iface", row.Iface), slog.Any("error", err))
-				continue
-			}
-			seen[row.Iface] = true
-			if cfg, ok := b.cfg.Subnets[row.Iface]; ok {
-				row.CIDR = cfg.CIDR
+			if host[row.Iface] == nil {
+				host[row.Iface] = map[string]bool{}
 			}
 			if row.CIDR != "" {
-				prefix, err := netip.ParsePrefix(row.CIDR)
-				if err != nil || !prefix.Addr().Is4() {
-					slog.WarnContext(ctx, "skipping invalid bridge CIDR",
-						slog.String("iface", row.Iface), slog.String("cidr", row.CIDR))
-					row.CIDR = ""
-				} else {
-					row.CIDR = prefix.Masked().String()
-				}
+				host[row.Iface][row.CIDR] = true
 			}
-			out = append(out, row)
 		}
+	}
+	var out []bridge
+	for _, iface := range slices.Sorted(maps.Keys(host)) {
+		vpc, err := ids.BridgeVPC(iface)
+		if err != nil {
+			slog.WarnContext(ctx, "skipping invalid bridge", slog.String("iface", iface), slog.Any("error", err))
+			continue
+		}
+		br := bridge{Iface: iface, VPC: vpc}
+		var cidrs []string
+		if cfg, ok := b.cfg.Subnets[iface]; ok {
+			cidrs = []string{cfg.CIDR}
+		} else {
+			cidrs = slices.Sorted(maps.Keys(host[iface]))
+		}
+		networks := map[string]bool{}
+		for _, cidr := range cidrs {
+			prefix, err := netip.ParsePrefix(cidr)
+			if err != nil || !prefix.Addr().Is4() {
+				slog.WarnContext(ctx, "skipping invalid bridge CIDR", slog.String("iface", iface), slog.String("cidr", cidr))
+				continue
+			}
+			networks[prefix.Masked().String()] = true
+		}
+		switch len(networks) {
+		case 0:
+		case 1:
+			br.CIDR = slices.Collect(maps.Keys(networks))[0]
+			subnet, err := ids.BridgeSubnet(iface, br.CIDR)
+			if err != nil {
+				slog.WarnContext(ctx, "skipping bridge subnet", slog.String("iface", iface), slog.Any("error", err))
+				br.CIDR = ""
+			} else {
+				br.Subnet = subnet
+			}
+		default:
+			slog.WarnContext(ctx, "bridge nodes disagree on its network; set subnets in region.yaml",
+				slog.String("iface", iface), slog.Any("cidrs", slices.Sorted(maps.Keys(networks))))
+		}
+		out = append(out, br)
 	}
 	return out, nil
 }
@@ -70,19 +107,11 @@ func (b *Backend) DescribeVpcs(
 	if err != nil {
 		return resource.Page[resource.Vpc]{}, err
 	}
-	ids, err := NewIDs(b.cluster)
-	if err != nil {
-		return resource.Page[resource.Vpc]{}, err
-	}
 	var out []resource.Vpc
 	for _, row := range rows {
-		id, err := ids.BridgeVPC(row.Iface)
-		if err != nil {
-			return resource.Page[resource.Vpc]{}, err
-		}
-		if len(q.IDs) == 0 || slices.Contains(q.IDs, id) {
+		if len(q.IDs) == 0 || slices.Contains(q.IDs, row.VPC) {
 			out = append(out, resource.Vpc{
-				ID: id, OwnerID: s.Account, Cidr: row.CIDR,
+				ID: row.VPC, OwnerID: s.Account, Cidr: row.CIDR,
 				State: resource.VpcAvailable, IsDefault: row.Iface == b.cfg.DefaultBridge,
 			})
 		}
@@ -101,26 +130,14 @@ func (b *Backend) DescribeSubnets(
 	if err != nil {
 		return resource.Page[resource.Subnet]{}, err
 	}
-	ids, err := NewIDs(b.cluster)
-	if err != nil {
-		return resource.Page[resource.Subnet]{}, err
-	}
 	var out []resource.Subnet
 	for _, row := range rows {
 		if row.CIDR == "" {
 			continue
 		}
-		vpc, err := ids.BridgeVPC(row.Iface)
-		if err != nil {
-			return resource.Page[resource.Subnet]{}, err
-		}
-		id, err := ids.BridgeSubnet(row.Iface, row.CIDR)
-		if err != nil {
-			return resource.Page[resource.Subnet]{}, err
-		}
-		if len(q.IDs) == 0 || slices.Contains(q.IDs, id) {
+		if len(q.IDs) == 0 || slices.Contains(q.IDs, row.Subnet) {
 			out = append(out, resource.Subnet{
-				ID: id, OwnerID: s.Account, VpcID: vpc, Cidr: row.CIDR,
+				ID: row.Subnet, OwnerID: s.Account, VpcID: row.VPC, Cidr: row.CIDR,
 				State: resource.SubnetAvailable, DefaultForAz: row.Iface == b.cfg.DefaultBridge,
 			})
 		}
