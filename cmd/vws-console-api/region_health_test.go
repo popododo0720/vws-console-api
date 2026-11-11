@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -56,8 +57,9 @@ default_project: default
 	if err != nil || !got.Quorate || got.Nodes == nil {
 		t.Fatalf("bootstrap health: %+v %v", got, err)
 	}
-	if _, err := health(t.Context(), "https://user:credential@127.0.0.1:1234"); err == nil {
-		t.Fatal("credential-bearing region endpoint accepted")
+	if _, err := health(t.Context(), "https://user:credential@127.0.0.1:1234"); err == nil ||
+		strings.Contains(err.Error(), "credential") || strings.Contains(err.Error(), "user:") {
+		t.Fatalf("credential-bearing region endpoint was not safely refused: %v", err)
 	}
 	if err := os.Remove(keyPath); err != nil {
 		t.Fatal(err)

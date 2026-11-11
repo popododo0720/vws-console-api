@@ -10,6 +10,9 @@ import (
 // Status reads PVE live and retains only the last failure in process memory.
 func (b *Backend) Status(ctx context.Context) (resource.RegionStatus, error) {
 	rows, err := b.client.ClusterStatus(ctx)
+	if err != nil && ctx.Err() != nil {
+		return resource.RegionStatus{}, ctx.Err()
+	}
 	result := resource.RegionStatus{Nodes: []resource.RegionNode{}}
 	cluster, localOnline := false, false
 	for _, row := range rows {

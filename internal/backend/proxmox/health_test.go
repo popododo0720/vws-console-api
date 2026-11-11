@@ -214,6 +214,11 @@ func TestStatusRemembersFailureAndRedactsCredentials(t *testing.T) {
 		strings.Contains(first.LastError.Message, "vws@pve!inventory") {
 		t.Fatalf("failed status: %+v %v", first, err)
 	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, err := b.Status(ctx); err == nil {
+		t.Fatal("canceled caller returned success")
+	}
 	fail.Store(false)
 	next, err := b.Status(t.Context())
 	if err != nil || !next.Quorate || next.LastError == nil || *next.LastError != *first.LastError {

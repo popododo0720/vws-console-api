@@ -2,6 +2,8 @@ package console
 
 import (
 	"context"
+	"errors"
+	"net"
 	"net/http"
 	"regexp"
 	"time"
@@ -33,9 +35,19 @@ func (h *handler) adminHealth(w http.ResponseWriter, r *http.Request) {
 	state := "ok"
 	if err != nil {
 		state = "unreachable"
+		message := "region status unavailable"
+		var dial *net.OpError
+		switch {
+		case errors.Is(err, context.DeadlineExceeded):
+			message = context.DeadlineExceeded.Error()
+		case errors.Is(err, context.Canceled):
+			message = context.Canceled.Error()
+		case errors.As(err, &dial) && dial.Op == "dial":
+			message = dial.Error()
+		}
 		status = resource.RegionStatus{
 			Nodes:     []resource.RegionNode{},
-			LastError: &resource.RegionStatusError{Time: h.now().UTC(), Message: err.Error()},
+			LastError: &resource.RegionStatusError{Time: h.now().UTC(), Message: message},
 		}
 	}
 	writeJSON(w, http.StatusOK, struct {
