@@ -48,8 +48,10 @@ lowercase SHA-256 fingerprint matching `^[0-9a-f]{64}$`, checked by both
 helper and client before exec. Token files are
 `/etc/pve/priv/vws/pve-token.<fp>`. token-write refuses stdin whose hash
 differs and seals only that file; token-read returns only its encrypted
-envelope. token-delete refuses the fingerprint named by the current
-registration; an absent inactive file is already deleted.
+envelope. token-delete acquires the registration lock across the identity check
+and removal, refuses the current fingerprint, and releases its lock on success
+or error. A busy lock refuses deletion without removing any file or that lock;
+an absent inactive file is already deleted.
 Identity and lease writes atomically replace `/etc/pve/vws/registration.json`
 and `/etc/pve/vws/leader`.
 Public identity and lease files use mode 0640 (pmxcfs owns them as root:www-data);
@@ -63,8 +65,9 @@ Registration runs the PVE self-check, acquires the registration lock, writes
 the candidate token, then commits by renaming registration.json. That rename
 is the only commit point. There are no compensation writes: a helper failure,
 including a nonzero exit after rename, leaves a matching old or new pair.
-A retry converges. After success, deletion of a different previous token is
-best effort; a secret-free warning does not change the successful result.
+A retry converges. After success and registration unlock, deletion of a different
+previous token is best effort. A busy lock or other cleanup failure produces a
+secret-free warning without changing the successful result.
 An omitted token is read by the stored fingerprint, verified and self-checked;
 only the identity is written. Readers select the named file and verify its
 content hash. If an old token was deleted during rotation, the reader re-reads
@@ -74,6 +77,8 @@ mismatched pairs fail readiness and serving until repaired.
 failures, retry, rotation, failed candidates, reader races, torn pairs and
 recovery. `TestTokenFingerprintGrammar`, `TestTokenWriteEncrypted` and
 `TestTokenReadAndCredentialFallback` enforce the helper contract.
+`TestTokenDeleteSerializesRegistration` enforces deletion/publication
+serialization, busy-lock refusal and lock release after success or refusal.
 
 `lock NAME` uses mkdir under `/etc/pve/priv/lock/vws-region/`; a duplicate
 lock fails. `unlock NAME` removes an empty directory; an absent lock succeeds.
