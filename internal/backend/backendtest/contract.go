@@ -34,6 +34,30 @@ func Run(t *testing.T, newSet Harness) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	var subnet resource.SubnetID
+	var stopped resource.InstanceID
+	t.Run("Subnet", func(t *testing.T) { subnet = contractSubnet(ctx, t, set, account) })
+	t.Run("NetworkTags", func(t *testing.T) { networkTags(t, set, account) })
+	t.Run("VolumeTags", func(t *testing.T) { volumeTags(t, set, account) })
+	t.Run("Lifecycle", func(t *testing.T) { stopped = contractLifecycle(ctx, t, set, account, other, img, subnet) })
+	t.Run("Objects", func(t *testing.T) { contractObjects(ctx, t, set, account, other) })
+	t.Run("EC2", func(t *testing.T) { exerciseEC2(ctx, t, set, account, stopped) })
+	t.Run("KeyLaunch", func(t *testing.T) { exerciseKeyLaunch(ctx, t, set, account, subnet, img) })
+	t.Run("KeyRetry", func(t *testing.T) { exerciseKeyRetry(ctx, t, set, account) })
+	t.Run("RootDevice", func(t *testing.T) { exerciseRootDevice(ctx, t, set, account, subnet, img) })
+	t.Run("RootVolumeType", func(t *testing.T) { exerciseRootVolumeType(ctx, t, set, account, subnet, img) })
+	t.Run("RootVolumeSize", func(t *testing.T) { exerciseRootVolumeSize(ctx, t, set, account, subnet, img) })
+	t.Run("RootDeleteOnTermination", func(t *testing.T) {
+		exerciseRootDeleteOnTermination(ctx, t, set, account, subnet, img)
+	})
+	t.Run("LaunchExtraVolumes", func(t *testing.T) { exerciseLaunchExtraVolumes(ctx, t, set, account, subnet, img) })
+	t.Run("TerminateRelease", func(t *testing.T) { exerciseTerminateRelease(ctx, t, set, account, subnet, img) })
+	t.Run("VolumeTypes", func(t *testing.T) { exerciseVolumeTypes(ctx, t, set, account) })
+	t.Run("RegisterImage", func(t *testing.T) { exerciseRegisterImage(ctx, t, set, account, other) })
+}
+
+func contractSubnet(ctx context.Context, t *testing.T, set backend.Set, account resource.AccountID) resource.SubnetID {
+	t.Helper()
 	subReq := resource.CreateSubnetRequest{Cidr: "10.2.0.0/24"}
 	sm := backend.Mutation{Scope: backend.Scope{Account: account}, Key: "k3", Fingerprint: "fp3"}
 	created, err := set.Network.CreateSubnet(ctx, sm, subReq)
@@ -47,11 +71,17 @@ func Run(t *testing.T, newSet Harness) {
 	if _, err := set.Network.GetOperation(ctx, backend.Scope{Account: account}, created.Operation.ID); err != nil {
 		t.Fatal(err)
 	}
-	exerciseImageRegion(ctx, t, set, account, created.Items[0].ID)
-	networkTags(t, set, account)
-	volumeTags(t, set, account)
+	return created.Items[0].ID
+}
+
+func contractLifecycle(
+	ctx context.Context, t *testing.T, set backend.Set, account, other resource.AccountID,
+	img resource.ImageID, subnet resource.SubnetID,
+) resource.InstanceID {
+	t.Helper()
+	exerciseImageRegion(ctx, t, set, account, subnet)
 	req := resource.RunInstancesRequest{
-		ImageID: img, InstanceType: "vws.small", SubnetID: created.Items[0].ID, Count: 1,
+		ImageID: img, InstanceType: "vws.small", SubnetID: subnet, Count: 1,
 		Tags: map[string]string{"Name": "web-1", "env": "dev"},
 	}
 	m := backend.Mutation{Scope: backend.Scope{Account: account}, Key: "k1", Fingerprint: "fp1"}
@@ -103,7 +133,7 @@ func Run(t *testing.T, newSet Harness) {
 		t.Fatalf("launch time missing: %+v", got)
 	}
 	subs, err := set.Network.DescribeSubnets(ctx, backend.Scope{Account: account}, resource.SubnetQuery{
-		IDs: []resource.SubnetID{created.Items[0].ID}, Page: resource.PageRequest{Size: 50},
+		IDs: []resource.SubnetID{subnet}, Page: resource.PageRequest{Size: 50},
 	})
 	if err != nil || subs.Items[0].Zone != resource.ZoneName {
 		t.Fatalf("subnet zone: %v %+v", err, subs.Items)
@@ -114,46 +144,50 @@ func Run(t *testing.T, newSet Harness) {
 	if got := page.Items[0].Tags; got["Name"] != "web-1" || got["env"] != "dev" || len(got) != 2 {
 		t.Fatalf("tags %v, want Name=web-1 env=dev", got)
 	}
-	tagged, err := set.Compute.CreateTags(ctx, backend.Mutation{Scope: backend.Scope{Account: account}, Key: "k-tags", Fingerprint: "fp-tags"}, resource.CreateTagsRequest{
-		IDs: []resource.InstanceID{first.Items[0].ID}, Tags: unlabelableTags("web-2"),
+	t.Run("InstanceTags", func(t *testing.T) {
+		tagged, err := set.Compute.CreateTags(ctx,
+			backend.Mutation{Scope: backend.Scope{Account: account}, Key: "k-tags", Fingerprint: "fp-tags"},
+			resource.CreateTagsRequest{
+				IDs: []resource.InstanceID{first.Items[0].ID}, Tags: unlabelableTags("web-2"),
+			})
+		if err != nil || tagged.Operation.Action != resource.ActionCreateTags {
+			t.Fatalf("create tags: %v %+v", err, tagged)
+		}
+		if _, err := set.Compute.GetOperation(ctx, backend.Scope{Account: account}, tagged.Operation.ID); err != nil {
+			t.Fatal(err)
+		}
+		retagged, err := set.Compute.DescribeInstances(ctx, backend.Scope{Account: account}, resource.InstanceQuery{
+			IDs: []resource.InstanceID{first.Items[0].ID}, Page: resource.PageRequest{Size: 50},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		wantTags := unlabelableTags("web-2")
+		wantTags["env"] = "dev"
+		if got := retagged.Items[0].Tags; !maps.Equal(got, wantTags) {
+			t.Fatalf("tags after CreateTags\n got %q\nwant %q", got, wantTags)
+		}
+		if retagged.Items[0].State != resource.InstanceRunning {
+			t.Fatalf("CreateTags changed the state to %s", retagged.Items[0].State)
+		}
+		untagMut := backend.Mutation{Scope: backend.Scope{Account: account}, Key: "k-untag", Fingerprint: "fp-untag"}
+		untagged, err := set.Compute.DeleteTags(ctx, untagMut, resource.DeleteTagsRequest{
+			IDs: []resource.InstanceID{first.Items[0].ID}, Tags: []resource.TagSelector{{Key: "Cost Center"}},
+		})
+		if err != nil || untagged.Operation.Action != resource.ActionDeleteTags {
+			t.Fatalf("delete tags: %v %+v", err, untagged)
+		}
+		untaggedPage, err := set.Compute.DescribeInstances(ctx, backend.Scope{Account: account}, resource.InstanceQuery{
+			IDs: []resource.InstanceID{first.Items[0].ID}, Page: resource.PageRequest{Size: 50},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		delete(wantTags, "Cost Center")
+		if got := untaggedPage.Items[0].Tags; !maps.Equal(got, wantTags) {
+			t.Fatalf("tags after DeleteTags\n got %q\nwant %q", got, wantTags)
+		}
 	})
-	if err != nil || tagged.Operation.Action != resource.ActionCreateTags {
-		t.Fatalf("create tags: %v %+v", err, tagged)
-	}
-	if _, err := set.Compute.GetOperation(ctx, backend.Scope{Account: account}, tagged.Operation.ID); err != nil {
-		t.Fatal(err)
-	}
-	retagged, err := set.Compute.DescribeInstances(ctx, backend.Scope{Account: account}, resource.InstanceQuery{
-		IDs: []resource.InstanceID{first.Items[0].ID}, Page: resource.PageRequest{Size: 50},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	wantTags := unlabelableTags("web-2")
-	wantTags["env"] = "dev"
-	if got := retagged.Items[0].Tags; !maps.Equal(got, wantTags) {
-		t.Fatalf("tags after CreateTags\n got %q\nwant %q", got, wantTags)
-	}
-	if retagged.Items[0].State != resource.InstanceRunning {
-		t.Fatalf("CreateTags changed the state to %s", retagged.Items[0].State)
-	}
-	untagMut := backend.Mutation{Scope: backend.Scope{Account: account}, Key: "k-untag", Fingerprint: "fp-untag"}
-	untagged, err := set.Compute.DeleteTags(ctx, untagMut, resource.DeleteTagsRequest{
-		IDs: []resource.InstanceID{first.Items[0].ID}, Tags: []resource.TagSelector{{Key: "Cost Center"}},
-	})
-	if err != nil || untagged.Operation.Action != resource.ActionDeleteTags {
-		t.Fatalf("delete tags: %v %+v", err, untagged)
-	}
-	untaggedPage, err := set.Compute.DescribeInstances(ctx, backend.Scope{Account: account}, resource.InstanceQuery{
-		IDs: []resource.InstanceID{first.Items[0].ID}, Page: resource.PageRequest{Size: 50},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	delete(wantTags, "Cost Center")
-	if got := untaggedPage.Items[0].Tags; !maps.Equal(got, wantTags) {
-		t.Fatalf("tags after DeleteTags\n got %q\nwant %q", got, wantTags)
-	}
 	filtered, err := set.Compute.DescribeInstances(ctx, backend.Scope{Account: account}, resource.InstanceQuery{
 		IDs:    []resource.InstanceID{first.Items[0].ID},
 		States: []resource.InstanceState{resource.InstancePending},
@@ -228,6 +262,11 @@ func Run(t *testing.T, newSet Harness) {
 		t.Fatalf("partial stop applied %+v", left.Items)
 	}
 
+	return first.Items[0].ID
+}
+
+func contractObjects(ctx context.Context, t *testing.T, set backend.Set, account, other resource.AccountID) {
+	t.Helper()
 	name, err := resource.Parse[resource.BucketName]("build-logs")
 	if err != nil {
 		t.Fatal(err)
@@ -325,17 +364,6 @@ func Run(t *testing.T, newSet Harness) {
 		t.Fatalf("over cap: %v", err)
 	}
 	exerciseObjectList(ctx, t, set, account, other)
-	exerciseEC2(ctx, t, set, account, first.Items[0].ID)
-	exerciseKeyLaunch(ctx, t, set, account, created.Items[0].ID, img)
-	exerciseKeyRetry(ctx, t, set, account)
-	exerciseRootDevice(ctx, t, set, account, created.Items[0].ID, img)
-	exerciseRootVolumeType(ctx, t, set, account, created.Items[0].ID, img)
-	exerciseRootVolumeSize(ctx, t, set, account, created.Items[0].ID, img)
-	exerciseRootDeleteOnTermination(ctx, t, set, account, created.Items[0].ID, img)
-	exerciseLaunchExtraVolumes(ctx, t, set, account, created.Items[0].ID, img)
-	exerciseTerminateRelease(ctx, t, set, account, created.Items[0].ID, img)
-	exerciseVolumeTypes(ctx, t, set, account)
-	exerciseRegisterImage(ctx, t, set, account, other)
 }
 
 // exerciseImageRegion checks that a launch refuses an image the process cannot
