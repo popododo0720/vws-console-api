@@ -39,12 +39,12 @@ func (a countingAdmin) Calls() int {
 	return n
 }
 
-// #358: STSAdmin resolves a named user or group as the fake does, with one
-// GroupService.GetGroup and no member read for a group. Roles are not
-// created over vws-iam, so the role row runs on the fake only.
+// #358: STSAdmin resolves a named user, group or role as the fake does, with
+// one GroupService.GetGroup and no member read for a group. #573 serves
+// CreateRole, so the role row runs here too.
 func TestGRPCResolverContract(t *testing.T) {
 	backendtest.IAMResolver(t, func(t *testing.T) iam.Directory {
 		c, d := dirHarness(t)
 		return countingAdmin{STSAdmin{Client: c}, d}
-	}, 0)
+	}, backendtest.ServesRoles)
 }
