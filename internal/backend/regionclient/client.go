@@ -72,6 +72,13 @@ func (c compute) TerminateInstances(
 		resource.Unsupported("TerminateInstances", "region API does not serve mutations")
 }
 
+func (c compute) RebootInstances(
+	ctx context.Context, _ backend.Mutation, _ resource.RebootInstancesRequest,
+) (resource.Accepted[resource.InstanceStateChange], error) {
+	return resource.Accepted[resource.InstanceStateChange]{},
+		resource.Unsupported("RebootInstances", "region API does not serve mutations")
+}
+
 func (c compute) DescribeInstances(
 	ctx context.Context, s backend.Scope, q resource.InstanceQuery,
 ) (resource.Page[resource.Instance], error) {
