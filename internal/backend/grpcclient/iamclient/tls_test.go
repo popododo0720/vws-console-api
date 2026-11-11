@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/cryptotest"
 	"time"
 
 	"google.golang.org/grpc"
@@ -33,48 +34,58 @@ type pki struct {
 	pool                 *x509.CertPool
 }
 
-func newPKI(t *testing.T) *pki {
+func newPKI(t *testing.T, seeds ...uint64) *pki {
 	t.Helper()
 	dir := t.TempDir()
-	caKey := newKey(t)
-	caTmpl := &x509.Certificate{
-		SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "vws-test-ca"},
-		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour),
-		IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign,
+	seed := uint64(1)
+	if len(seeds) != 0 {
+		seed = seeds[0]
 	}
-	caDER, err := x509.CreateCertificate(rand.Reader, caTmpl, caTmpl, &caKey.PublicKey, caKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ca, err := x509.ParseCertificate(caDER)
-	if err != nil {
-		t.Fatal(err)
-	}
-	p := &pki{dir: dir, caFile: filepath.Join(dir, "ca.crt"), pool: x509.NewCertPool()}
-	p.pool.AddCert(ca)
-	writePEM(t, p.caFile, "CERTIFICATE", caDER)
-
-	issue := func(
-		serial int64, cn string, usage x509.ExtKeyUsage, ips []net.IP, dns []string,
-	) ([]byte, *ecdsa.PrivateKey) {
-		key := newKey(t)
-		tmpl := &x509.Certificate{
-			SerialNumber: big.NewInt(serial), Subject: pkix.Name{CommonName: cn},
+	var p *pki
+	if !t.Run("certificates", func(t *testing.T) {
+		cryptotest.SetGlobalRandom(t, seed)
+		caKey := newKey(t)
+		caTmpl := &x509.Certificate{
+			SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "vws-test-ca"},
 			NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour),
-			ExtKeyUsage: []x509.ExtKeyUsage{usage}, KeyUsage: x509.KeyUsageDigitalSignature,
-			IPAddresses: ips, DNSNames: dns,
+			IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign,
 		}
-		der, err := x509.CreateCertificate(rand.Reader, tmpl, ca, &key.PublicKey, caKey)
+		caDER, err := x509.CreateCertificate(rand.Reader, caTmpl, caTmpl, &caKey.PublicKey, caKey)
 		if err != nil {
 			t.Fatal(err)
 		}
-		return der, key
+		ca, err := x509.ParseCertificate(caDER)
+		if err != nil {
+			t.Fatal(err)
+		}
+		p = &pki{dir: dir, caFile: filepath.Join(dir, "ca.crt"), pool: x509.NewCertPool()}
+		p.pool.AddCert(ca)
+		writePEM(t, p.caFile, "CERTIFICATE", caDER)
+
+		issue := func(
+			serial int64, cn string, usage x509.ExtKeyUsage, ips []net.IP, dns []string,
+		) ([]byte, *ecdsa.PrivateKey) {
+			key := newKey(t)
+			tmpl := &x509.Certificate{
+				SerialNumber: big.NewInt(serial), Subject: pkix.Name{CommonName: cn},
+				NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour),
+				ExtKeyUsage: []x509.ExtKeyUsage{usage}, KeyUsage: x509.KeyUsageDigitalSignature,
+				IPAddresses: ips, DNSNames: dns,
+			}
+			der, err := x509.CreateCertificate(rand.Reader, tmpl, ca, &key.PublicKey, caKey)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return der, key
+		}
+		srvDER, srvKey := issue(2, "vws-iam", x509.ExtKeyUsageServerAuth,
+			[]net.IP{net.IPv4(127, 0, 0, 1)}, []string{"vws-iam.vws-system"})
+		p.serverCert = tls.Certificate{Certificate: [][]byte{srvDER}, PrivateKey: srvKey}
+		p.clientCert, p.clientKy = filepath.Join(dir, "tls.crt"), filepath.Join(dir, "tls.key")
+		p.writeClient(t, issue, 3)
+	}) {
+		t.FailNow()
 	}
-	srvDER, srvKey := issue(2, "vws-iam", x509.ExtKeyUsageServerAuth,
-		[]net.IP{net.IPv4(127, 0, 0, 1)}, []string{"vws-iam.vws-system"})
-	p.serverCert = tls.Certificate{Certificate: [][]byte{srvDER}, PrivateKey: srvKey}
-	p.clientCert, p.clientKy = filepath.Join(dir, "tls.crt"), filepath.Join(dir, "tls.key")
-	p.writeClient(t, issue, 3)
 	return p
 }
 
@@ -177,7 +188,7 @@ func TestDialTLSChecksTheServerName(t *testing.T) {
 }
 
 func TestDialTLSRejectsAServerFromAnotherCA(t *testing.T) {
-	trusted, other := newPKI(t), newPKI(t)
+	trusted, other := newPKI(t), newPKI(t, 2)
 	target, s := serveTLS(t, other, nil)
 	c := dialTLS(t, target, TLSFiles{CAFile: trusted.caFile})
 	if _, err := c.Authenticate(t.Context(), signed); err == nil {
@@ -216,7 +227,7 @@ func TestClientCertificateIsReadOnEveryHandshake(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rotated := newPKI(t)
+	rotated := newPKI(t, 2)
 	for _, f := range [][2]string{{rotated.clientCert, p.clientCert}, {rotated.clientKy, p.clientKy}} {
 		b, err := os.ReadFile(f[0])
 		if err != nil {

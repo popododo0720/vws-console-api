@@ -2,7 +2,6 @@ package grpcclient
 
 import (
 	"context"
-	"crypto/rand"
 	"sync/atomic"
 	"testing"
 
@@ -10,7 +9,6 @@ import (
 
 	"github.com/popododo0720/vws-console-api/internal/backend"
 	"github.com/popododo0720/vws-console-api/internal/resource"
-	"github.com/popododo0720/vws-console-api/internal/sshkey"
 )
 
 // TestLegacyDeleteBetweenLookupAndCreateKeepsOneKeyPair is #278. A key pair
@@ -20,18 +18,15 @@ import (
 // and create B, which finds the name free, succeeds. Then A goes on. Exactly
 // one of A and B may hold the name; the other is InvalidKeyPair.Duplicate.
 func TestLegacyDeleteBetweenLookupAndCreateKeepsOneKeyPair(t *testing.T) {
+	public := mustPublicKey(t)
 	ctx := context.Background()
 	client, world := dialKeyWorld(t)
 	account := mustAccount(t)
 	scope := backend.Scope{Account: account}
-	pair, err := sshkey.Generate(resource.KeyTypeEd25519, rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
 	legacyID := derivedID("key-", "old-mutation-key", "key")
 	legacyName := keyPairName(project(account), legacyID)
 	world.keys[legacyName] = &computev1.KeyPair{
-		Name: legacyName, Labels: nameLabels("legacy"), Spec: &computev1.KeyPairSpec{PublicKey: pair.Public},
+		Name: legacyName, Labels: nameLabels("legacy"), Spec: &computev1.KeyPairSpec{PublicKey: public},
 	}
 
 	// Pause create A right after its name lookup has seen the legacy key pair.
@@ -88,14 +83,11 @@ func TestLegacyDeleteBetweenLookupAndCreateKeepsOneKeyPair(t *testing.T) {
 // create target. An import retried under its token with the same key is the
 // same compute request at the same name-derived id, so compute replays it.
 func TestImportRetryUnderTheTokenStillReplays(t *testing.T) {
+	public := mustPublicKey(t)
 	ctx := context.Background()
 	client, world := dialKeyWorld(t)
-	pair, err := sshkey.Generate(resource.KeyTypeEd25519, rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
 	m := backend.Mutation{Scope: backend.Scope{Account: mustAccount(t)}, Key: "import-token", Fingerprint: "import-fp"}
-	req := resource.CreateKeyPairRequest{Name: "laptop", PublicKey: pair.Public}
+	req := resource.CreateKeyPairRequest{Name: "laptop", PublicKey: public}
 	first, err := client.CreateKeyPair(ctx, m, req)
 	if err != nil || len(first.Items) != 1 {
 		t.Fatalf("import: %v %+v", err, first.Items)

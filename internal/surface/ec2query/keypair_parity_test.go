@@ -2,7 +2,6 @@ package ec2query
 
 import (
 	"crypto/md5" //nolint:gosec // EC2's imported RSA fingerprint
-	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha1" //nolint:gosec // EC2's created RSA fingerprint
 	"crypto/sha256"
@@ -12,10 +11,12 @@ import (
 	"encoding/pem"
 	"html"
 	"math/big"
+	"math/rand/v2"
 	"net/http"
 	"net/url"
 	"strings"
 	"testing"
+	"testing/cryptotest"
 
 	"github.com/popododo0720/vws-console-api/internal/sshkey"
 )
@@ -35,6 +36,7 @@ func sshRSA(k *rsa.PublicKey) string {
 // #128 follow-ups: fingerprints, import formats, RSA sizes, ppk and
 // MissingParameter, as EC2 has them.
 func TestKeyPairAWSParity(t *testing.T) {
+	cryptotest.SetGlobalRandom(t, 1)
 	h, cred, now := harness(t)
 	send := func(f url.Values, want int) string {
 		t.Helper()
@@ -132,10 +134,12 @@ func TestKeyPairAWSParity(t *testing.T) {
 // under -race (#200).
 func rsaPublic(t *testing.T, bits int) *rsa.PublicKey {
 	t.Helper()
-	n, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), uint(bits-1)))
-	if err != nil {
+	data := make([]byte, (bits+7)/8)
+	if _, err := rand.NewChaCha8([32]byte{1}).Read(data); err != nil {
 		t.Fatal(err)
 	}
+	n := new(big.Int).SetBytes(data)
+	n.Mod(n, new(big.Int).Lsh(big.NewInt(1), uint(bits-1)))
 	n.SetBit(n, bits-1, 1).SetBit(n, 0, 1)
 	return &rsa.PublicKey{N: n, E: 65537}
 }

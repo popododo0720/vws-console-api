@@ -1,5 +1,7 @@
 package regionapi
 
+//vws:unseeded TLS shutdown can outlive the test, so replacing crypto/rand.Reader races with connection cleanup
+
 import (
 	"context"
 	"crypto/ecdsa"
