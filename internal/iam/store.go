@@ -859,20 +859,11 @@ func (f *Fake) ListGroupsForUser(
 
 // CreateRole implements Admin.
 func (f *Fake) CreateRole(_ context.Context, a resource.AccountID, in RoleInput) (Role, error) {
-	if err := checkName(entityName, "roleName", in.Name); err != nil {
-		return Role{}, err
-	}
-	path, err := normPath(in.Path)
+	in, err := CheckRoleInput(in)
 	if err != nil {
 		return Role{}, err
 	}
-	maxSession := in.MaxSessionDuration
-	if maxSession == 0 {
-		maxSession = defaultMaxSession
-	}
-	if err := ValidateMaxSessionDuration(maxSession); err != nil {
-		return Role{}, err
-	}
+	path, maxSession := in.Path, in.MaxSessionDuration
 	trust, err := parsePolicy(in.TrustPolicy, true)
 	if err != nil {
 		return Role{}, err
@@ -1004,6 +995,9 @@ func (f *Fake) UpdateAssumeRolePolicy(
 	if err := want.Require(); err != nil {
 		return err
 	}
+	if err := CheckRoleName(name); err != nil {
+		return err
+	}
 	trust, err := parsePolicy(document, true)
 	if err != nil {
 		return err
@@ -1025,6 +1019,9 @@ func (f *Fake) UpdateAssumeRolePolicy(
 // DeleteRole implements Admin. want must be the role's ARN.
 func (f *Fake) DeleteRole(_ context.Context, a resource.AccountID, name string, want AuthorizedPrincipal) error {
 	if err := want.Require(); err != nil {
+		return err
+	}
+	if err := CheckRoleName(name); err != nil {
 		return err
 	}
 	f.mu.Lock()

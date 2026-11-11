@@ -39,12 +39,17 @@ type directory struct {
 	iamv1.UnimplementedGroupServiceServer
 	iamv1.UnimplementedAccessKeyServiceServer
 	iamv1.UnimplementedPolicyServiceServer
+	iamv1.UnimplementedRoleServiceServer
 
 	mu     sync.Mutex
 	seq    int
 	users  map[string]*dirEntity // folded resource name
 	groups map[string]*dirEntity
-	ops    map[string]dirOp // request_id
+	roles  map[string]*dirEntity
+	// roleRace is the number of UpdateRole and DeleteRole calls that find the
+	// role changed by another writer since it was read.
+	roleRace int
+	ops      map[string]dirOp // request_id
 	// maxPage caps a List page below vws-iam's 1000, so tests see paging.
 	maxPage int
 	// failBefore answers UNAVAILABLE that many times per method without
@@ -102,6 +107,9 @@ type dirEntity struct {
 	created        time.Time
 	version        int
 	members        []string // groups: user resource names
+	trust, desc    string   // roles
+	maxSession     int32    // roles
+	noARN          bool     // roles: served with an empty status.arn
 	attached       []string // policy ids
 	inline         map[string]string
 }
@@ -116,7 +124,8 @@ var dirNameRE = regexp.MustCompile(`^[A-Za-z0-9+=,.@_-]{1,64}$`)
 
 func newDirectory() *directory {
 	return &directory{
-		users: map[string]*dirEntity{}, groups: map[string]*dirEntity{}, ops: map[string]dirOp{}, keys: map[string]*dirKey{},
+		users: map[string]*dirEntity{}, groups: map[string]*dirEntity{}, roles: map[string]*dirEntity{},
+		ops: map[string]dirOp{}, keys: map[string]*dirKey{},
 		maxPage: 1000, failBefore: map[string]int{}, failAfter: map[string]int{}, calls: map[string][]proto.Message{},
 		policies: map[string]*dirPolicy{},
 	}
@@ -132,6 +141,7 @@ func dirHarness(t *testing.T) (*Client, *directory) {
 	iamv1.RegisterGroupServiceServer(g, d)
 	iamv1.RegisterAccessKeyServiceServer(g, d)
 	iamv1.RegisterPolicyServiceServer(g, d)
+	iamv1.RegisterRoleServiceServer(g, d)
 	go func() { _ = g.Serve(lis) }()
 	t.Cleanup(g.Stop)
 	conn, err := grpc.NewClient("passthrough:///bufnet",

@@ -116,11 +116,6 @@ func lastUsedOf(key *iamv1.AccessKey, user *iamv1.User) (iam.AccessKeyLastUsed, 
 	return out, nil
 }
 
-// CreateRole implements iam.Admin.
-func (STSAdmin) CreateRole(_ context.Context, _ resource.AccountID, _ iam.RoleInput) (iam.Role, error) {
-	return iam.Role{}, notServed("CreateRole")
-}
-
 // GetRole implements iam.Admin over RoleService.GetRole. want must be the
 // role's ARN; the zero value sends nothing.
 func (a STSAdmin) GetRole(
@@ -155,7 +150,7 @@ func (a STSAdmin) ResolveRole(ctx context.Context, account resource.AccountID, n
 func (a STSAdmin) role(ctx context.Context, account resource.AccountID, name string) (*iamv1.Role, error) {
 	role, err := retry(ctx, a.backoff, a.roles.GetRole, &iamv1.GetRoleRequest{Name: roleName(account, name)})
 	if err != nil {
-		return nil, authError(err)
+		return nil, roleError(err, name)
 	}
 	return role, nil
 }
@@ -292,24 +287,6 @@ func roleFromProto(r *iamv1.Role, name string) iam.Role {
 		out.Created = t.AsTime()
 	}
 	return out
-}
-
-// ListRoles implements iam.Admin.
-func (STSAdmin) ListRoles(_ context.Context, _ resource.AccountID, _ string) ([]iam.Role, error) {
-	return nil, notServed("ListRoles")
-}
-
-// UpdateAssumeRolePolicy implements iam.Admin. The zero want is refused
-// first, as on every bound call.
-func (STSAdmin) UpdateAssumeRolePolicy(
-	_ context.Context, _ resource.AccountID, _, _ string, want iam.AuthorizedPrincipal,
-) error {
-	return unboundOrNotServed(want, "UpdateAssumeRolePolicy")
-}
-
-// DeleteRole implements iam.Admin.
-func (STSAdmin) DeleteRole(_ context.Context, _ resource.AccountID, _ string, want iam.AuthorizedPrincipal) error {
-	return unboundOrNotServed(want, "DeleteRole")
 }
 
 // CreatePolicyVersion implements iam.Admin over
