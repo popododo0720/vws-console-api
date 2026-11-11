@@ -35,6 +35,9 @@ type Config struct {
 	Capabilities backend.Capabilities
 	Region       string
 	Version      Version
+	Status       interface {
+		Status(context.Context) (resource.RegionStatus, error)
+	}
 }
 
 // ObjectResult keeps the object metadata and bytes together on the JSON wire.
@@ -93,6 +96,14 @@ func New(cfg Config) (http.Handler, error) {
 	})
 	mux.HandleFunc("GET /internal/v1/version", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, cfg.Version, nil)
+	})
+	mux.HandleFunc("GET /internal/v1/status", func(w http.ResponseWriter, r *http.Request) {
+		if cfg.Status == nil {
+			writeJSON(w, nil, &resource.Error{Code: resource.CodeUnavailable, Message: "region status unavailable"})
+			return
+		}
+		status, err := cfg.Status.Status(r.Context())
+		writeJSON(w, status, err)
 	})
 	mux.HandleFunc("GET /internal/v1/capabilities", func(w http.ResponseWriter, r *http.Request) {
 		caps, err := cfg.Backend.Capabilities(cfg.Capabilities).RegionCapabilities(r.Context(), cfg.Region)

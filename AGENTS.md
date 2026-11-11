@@ -39,6 +39,7 @@ change both files together.
 | Rule | Enforced by |
 | --- | --- |
 | AWS account writes require root and a global KEK, validate IAM/STS inputs, use version CAS, and audit once to stderr or -audit-log, separate from the app log; external ids stay sealed and off responses and logs. | `TestAccountSeal`, `TestKEKFile`, `TestAdminAccountValidation`, `TestAdminAccountLifecycleAndCanary`, `TestAdminAccountWritesRequireRootKeyAndCSRF`, `TestAdminAuditFileIsSeparate` |
+| Admin region health reads quorum and nodes live through regionapi, is root-only, ends within 5 s and writes no registry state; standalone quorum follows the local node; the last status failure stays in memory without credentials. | `TestAdminHealthReadsRegionWithoutWrites`, `TestAdminHealthStalledRegionIsBounded`, `TestStandaloneStatusFollowsLocalOnline`, `TestStatusRemembersFailureAndRedactsCredentials` |
 | Surfaces call `internal/cloud`; `internal/surface/regionapi` alone transports `internal/backend` after the global kernel has run. | depguard `surfaces-use-the-kernel`; `TestArchitectureRules` |
 | `internal/resource` imports only the standard library. | depguard `model-is-a-leaf` |
 | The kernel never sees HTTP, signatures or a surface. | depguard `kernel-knows-no-wire` |

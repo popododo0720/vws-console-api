@@ -3,6 +3,7 @@ package proxmox
 import (
 	"context"
 	"io"
+	"sync"
 
 	"github.com/popododo0720/vws-console-api/internal/backend"
 	"github.com/popododo0720/vws-console-api/internal/backend/proxmox/pveclient"
@@ -11,10 +12,12 @@ import (
 
 // Backend is the phase-one read-only Proxmox backend.
 type Backend struct {
-	region  string
-	cluster string
-	client  *pveclient.Client
-	cfg     RegionConfig
+	region          string
+	cluster         string
+	client          *pveclient.Client
+	cfg             RegionConfig
+	statusMu        sync.Mutex
+	lastStatusError *resource.RegionStatusError
 }
 
 // Set returns the three services sharing this backend.

@@ -47,13 +47,14 @@ func (b BearerTokens) Authenticate(_ context.Context, token string) (resource.Ca
 // the bearer Auth works and every request is denied. Auth maps the legacy
 // bearer console token to the account root until that token is retired.
 type Config struct {
-	Service  *cloud.Service
-	Auth     Authenticator
-	IAM      iam.Client
-	Registry *store.Registry
-	AdminKey *secret.Key
-	Audit    *audit.Logger
-	Logger   *slog.Logger
+	Service      *cloud.Service
+	Auth         Authenticator
+	IAM          iam.Client
+	Registry     *store.Registry
+	AdminKey     *secret.Key
+	Audit        *audit.Logger
+	Logger       *slog.Logger
+	RegionStatus func(context.Context, string) (resource.RegionStatus, error)
 	// Origins are browser origins allowed besides the console's own host,
 	// such as https://console.vws.example.
 	Origins []string
@@ -90,13 +91,14 @@ func New(cfg Config) http.Handler {
 	h := &handler{
 		svc: cfg.Service, auth: cfg.Auth, iam: cfg.IAM, log: log, mux: http.NewServeMux(),
 		origins: cfg.Origins, trusted: cfg.TrustedProxies, now: now,
-		logins:   newLimiter(lim.IPBurst, lim.IPRefill, lim.MaxKeys),
-		users:    newLimiter(lim.UserBurst, lim.UserRefill, lim.MaxKeys),
-		loginOff: cfg.LoginDisabled,
-		requests: cfg.Requests,
-		registry: cfg.Registry,
-		adminKey: cfg.AdminKey,
-		audit:    cfg.Audit,
+		logins:       newLimiter(lim.IPBurst, lim.IPRefill, lim.MaxKeys),
+		users:        newLimiter(lim.UserBurst, lim.UserRefill, lim.MaxKeys),
+		loginOff:     cfg.LoginDisabled,
+		requests:     cfg.Requests,
+		registry:     cfg.Registry,
+		adminKey:     cfg.AdminKey,
+		audit:        cfg.Audit,
+		regionStatus: cfg.RegionStatus,
 	}
 	h.routes(h.mux)
 	return h
@@ -123,6 +125,7 @@ func (h *handler) routes(mux *http.ServeMux) {
 	handle(routeSession, h.session)
 	handle("GET /api/v1/admin/regions", h.adminRegions)
 	handle("GET /api/v1/admin/regions/{name}", h.adminRegion)
+	handle("GET /api/v1/admin/regions/{name}/health", h.adminHealth)
 	handle("GET /api/v1/admin/aws-accounts", h.adminAccounts)
 	handle("GET /api/v1/admin/aws-accounts/{id}", h.adminAccount)
 	handle("POST /api/v1/admin/aws-accounts", h.adminWriteAccount)
@@ -167,22 +170,23 @@ func (h *handler) routes(mux *http.ServeMux) {
 }
 
 type handler struct {
-	adminKey *secret.Key
-	audit    *audit.Logger
-	registry *store.Registry
-	svc      *cloud.Service
-	auth     Authenticator
-	iam      iam.Client
-	loginOff bool
-	log      *slog.Logger
-	mux      *http.ServeMux
-	patterns []string
-	origins  []string
-	trusted  []netip.Prefix
-	now      func() time.Time
-	logins   *limiter
-	users    *limiter
-	requests *throttle.Limiter
+	adminKey     *secret.Key
+	audit        *audit.Logger
+	registry     *store.Registry
+	svc          *cloud.Service
+	auth         Authenticator
+	iam          iam.Client
+	loginOff     bool
+	log          *slog.Logger
+	mux          *http.ServeMux
+	patterns     []string
+	origins      []string
+	trusted      []netip.Prefix
+	now          func() time.Time
+	logins       *limiter
+	users        *limiter
+	requests     *throttle.Limiter
+	regionStatus func(context.Context, string) (resource.RegionStatus, error)
 }
 
 func (h *handler) mutation(action resource.Action) (string, string, http.HandlerFunc) {

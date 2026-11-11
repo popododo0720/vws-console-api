@@ -217,6 +217,10 @@ func run(ctx context.Context, args []string) (err error) {
 		return err
 	}
 	defer func() { err = errors.Join(err, closeRegistry()) }()
+	health, err := regionHealth(*globalConfig)
+	if err != nil {
+		return err
+	}
 	svc := cloud.New(cloud.Config{Backends: set, Audit: logger, Launches: throttle.NewLaunches(launchLimits)})
 	// The static key is the account root; with -iam=fake or -iam=grpc it
 	// sits in front of the IAM client through iam.WithRoot.
@@ -281,6 +285,7 @@ func run(ctx context.Context, args []string) (err error) {
 			Registry:       registry,
 			AdminKey:       adminKey,
 			Audit:          audit.New(auditOut),
+			RegionStatus:   health,
 			Auth:           console.BearerTokens{*consoleToken: caller},
 			IAM:            auth,
 			Logger:         logger,
