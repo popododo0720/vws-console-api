@@ -75,7 +75,6 @@ func TestUnsupportedIngressSourceIsRefused(t *testing.T) {
 		{"IpPermissions.2.Ipv6Ranges.1.CidrIpv6": {"::/0"}},
 		{"IpPermissions.2.Groups.1.GroupId": {id}},
 		{"IpPermissions.2.PrefixListIds.1.PrefixListId": {"pl-12345678"}},
-		{"IpPermissions.1.IpRanges.1.Description": {"ssh"}},
 	} {
 		form := url.Values{
 			"Action": {"AuthorizeSecurityGroupIngress"}, "Version": {Version}, "GroupId": {id},

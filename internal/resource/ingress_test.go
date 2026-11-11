@@ -1,6 +1,7 @@
 package resource
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -38,7 +39,6 @@ func TestIngressRulesRefusesWhatItCannotStore(t *testing.T) {
 		"ipv6Ranges":       func(p *IPPermission) { p.IPv6Ranges = []IPv6Range{{CidrIPv6: "::/0"}} },
 		"userIdGroupPairs": func(p *IPPermission) { p.UserIDGroupPairs = []UserIDGroupPair{{GroupID: "sg-01234567"}} },
 		"prefixListIds":    func(p *IPPermission) { p.PrefixListIDs = []PrefixListID{{PrefixListID: "pl-12345678"}} },
-		"description":      func(p *IPPermission) { p.IPRanges = []IPRange{{CidrIP: "10.0.0.0/16", Description: "ssh"}} },
 	}
 	for field, edit := range cases {
 		p := base
@@ -144,5 +144,45 @@ func TestICMPPermissionNeedsTypeAndCode(t *testing.T) {
 	}
 	if _, err := IngressRules([]IPPermission{{Protocol: "tcp", IPRanges: ranges}}); err != nil {
 		t.Errorf("tcp without ports: %v", err)
+	}
+}
+
+// #594: a range description is kept, checked against the EC2 limits, and
+// ignored when rules are matched.
+func TestIngressRuleDescription(t *testing.T) {
+	id, err := Parse[SecurityGroupID]("sg-01234567")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ssh := IngressRule{Protocol: "tcp", FromPort: 22, ToPort: 22, Cidr: "10.0.0.0/16"}
+	described := ssh
+	described.Description = "SSH from ops: a-z A-Z 0-9 ._-:/()#,@[]+=&;{}!$*"
+	got, err := AuthorizeSecurityGroupIngressRequest{ID: id, Rules: []IngressRule{described}}.Normalize()
+	if err != nil || len(got.Rules) != 1 || got.Rules[0] != described {
+		t.Fatalf("kept: %v %+v", err, got)
+	}
+	if !ssh.Matches(described) || !ContainsRule([]IngressRule{described}, ssh) {
+		t.Fatal("description must not change the match")
+	}
+	other := described
+	other.Description = "other"
+	req := AuthorizeSecurityGroupIngressRequest{ID: id, Rules: []IngressRule{described, other}}
+	if _, err := req.Normalize(); !IsDuplicatePermission(err) {
+		t.Fatalf("same rule, two descriptions: %v", err)
+	}
+	for name, d := range map[string]string{
+		"256 chars": strings.Repeat("a", 256), "angle": "<b>", "non-ascii": "caf\u00e9", "newline": "a\nb",
+	} {
+		bad := ssh
+		bad.Description = d
+		_, err := AuthorizeSecurityGroupIngressRequest{ID: id, Rules: []IngressRule{bad}}.Normalize()
+		if e := AsError(err); CodeOf(err) != CodeInvalidArgument || e.Field != "description" {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	ok := ssh
+	ok.Description = strings.Repeat("a", 255)
+	if _, err := (AuthorizeSecurityGroupIngressRequest{ID: id, Rules: []IngressRule{ok}}).Normalize(); err != nil {
+		t.Fatalf("255 chars: %v", err)
 	}
 }

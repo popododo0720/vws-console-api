@@ -199,16 +199,18 @@ type Set struct {
 }
 
 // WithoutRules returns have without every rule in drop, and false when any
-// rule in drop is not in have, so a revoke removes all of them or none.
+// rule in drop is not in have, so a revoke removes all of them or none. A
+// rule in drop selects as resource.IngressRule.MatchesRevoke does: a
+// description it omits matches any, one it names must match.
 func WithoutRules(have, drop []resource.IngressRule) ([]resource.IngressRule, bool) {
-	for _, rule := range drop {
-		if !slices.Contains(have, rule) {
+	for _, sel := range drop {
+		if !slices.ContainsFunc(have, func(r resource.IngressRule) bool { return r.MatchesRevoke(sel) }) {
 			return nil, false
 		}
 	}
 	kept := make([]resource.IngressRule, 0, len(have))
 	for _, rule := range have {
-		if !slices.Contains(drop, rule) {
+		if !slices.ContainsFunc(drop, rule.MatchesRevoke) {
 			kept = append(kept, rule)
 		}
 	}

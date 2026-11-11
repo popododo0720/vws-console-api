@@ -482,7 +482,8 @@ type permissionItem struct {
 }
 
 type cidrItem struct {
-	CidrIP string `xml:"cidrIp"`
+	CidrIP      string `xml:"cidrIp"`
+	Description string `xml:"description,omitempty"`
 }
 
 type deleteSubnetXML struct {
@@ -832,7 +833,7 @@ func groupXML(group resource.SecurityGroup) groupItem {
 	for _, rule := range group.Rules {
 		item.IPPermissions = append(item.IPPermissions, permissionItem{
 			Protocol: rule.Protocol, FromPort: rule.FromPort, ToPort: rule.ToPort,
-			IPRanges: []cidrItem{{CidrIP: rule.Cidr}},
+			IPRanges: []cidrItem{{CidrIP: rule.Cidr, Description: rule.Description}},
 		})
 	}
 	return item

@@ -303,6 +303,8 @@ func (s *groupSrv) UpdateSecurityGroup(ctx context.Context, req *networkv1.Updat
 			FromPort: int(rule.GetFromPort()),
 			ToPort:   int(rule.GetToPort()),
 			Cidr:     rule.GetCidr(),
+
+			Description: rule.GetDescription(),
 		})
 	}
 	group, err := s.w.updateGroup(id.String(), account, req.GetSecurityGroup().GetEtag(), decoded, ruleIDs,
@@ -430,6 +432,8 @@ func groupProto(group resource.SecurityGroup, projectID string) *networkv1.Secur
 			FromPort:  int32(rule.FromPort),
 			ToPort:    int32(rule.ToPort),
 			Target:    &networkv1.SecurityGroupRule_Cidr{Cidr: rule.Cidr},
+
+			Description: rule.Description,
 		})
 	}
 	return &networkv1.SecurityGroup{

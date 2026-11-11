@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // Vpc is a regional IPv4 network.
@@ -558,10 +559,51 @@ func (g SecurityGroup) Identity() string { return g.ID.String() }
 
 // IngressRule is one inbound permission.
 type IngressRule struct {
-	Protocol string `json:"ipProtocol"`
-	FromPort int    `json:"fromPort"`
-	ToPort   int    `json:"toPort"`
-	Cidr     string `json:"cidrIp"`
+	Protocol    string `json:"ipProtocol"`
+	FromPort    int    `json:"fromPort"`
+	ToPort      int    `json:"toPort"`
+	Cidr        string `json:"cidrIp"`
+	Description string `json:"description,omitempty"`
+}
+
+// Matches reports whether r and o are the same rule for duplicate detection.
+// EC2 ignores the description when it looks for a duplicate.
+func (r IngressRule) Matches(o IngressRule) bool {
+	r.Description, o.Description = "", ""
+	return r == o
+}
+
+// MatchesRevoke reports whether r satisfies the revoke selector. A missing
+// description is optional, but an explicitly supplied description must match.
+func (r IngressRule) MatchesRevoke(selector IngressRule) bool {
+	return r.Matches(selector) && (selector.Description == "" || r.Description == selector.Description)
+}
+
+// ContainsRule reports whether rules holds a rule matching rule.
+func ContainsRule(rules []IngressRule, rule IngressRule) bool {
+	return slices.ContainsFunc(rules, rule.Matches)
+}
+
+// maxRuleDescription is the EC2 limit on a rule description, in characters.
+const maxRuleDescription = 255
+
+// ruleDescriptionMessage is the EC2 message for a bad rule description.
+const ruleDescriptionMessage = "Invalid rule description. Valid descriptions are strings less than 256 characters " +
+	"from the following set:  a-zA-Z0-9. _-:/()#,@[]+=&;{}!$*"
+
+// checkRuleDescription applies the EC2 length and character limits.
+func checkRuleDescription(d string) error {
+	if utf8.RuneCountInString(d) > maxRuleDescription {
+		return Invalid("description", ruleDescriptionMessage)
+	}
+	for _, c := range d {
+		ok := c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' ||
+			strings.ContainsRune(". _-:/()#,@[]+=&;{}!$*", c)
+		if !ok {
+			return Invalid("description", ruleDescriptionMessage)
+		}
+	}
+	return nil
 }
 
 // CreateSecurityGroupRequest allocates a group in a VPC.
@@ -630,8 +672,8 @@ type PrefixListID struct {
 }
 
 // IngressRules flattens permissions into one rule per IPv4 range, in request
-// order. A source kind or a range description VWS cannot store is refused,
-// so no part of a permission is dropped.
+// order, keeping each range's description. A source kind VWS cannot store is
+// refused, so no part of a permission is dropped.
 func IngressRules(perms []IPPermission) ([]IngressRule, error) {
 	var rules []IngressRule
 	for _, p := range perms {
@@ -653,13 +695,9 @@ func IngressRules(perms []IPPermission) ([]IngressRule, error) {
 			return nil, err
 		}
 		for _, r := range p.IPRanges {
-			if r.Description != "" {
-				return nil, Unsupported("description", "Descriptions on security group rules are not supported.")
-			}
-			rules = append(
-				rules,
-				IngressRule{Protocol: p.Protocol, FromPort: from, ToPort: to, Cidr: r.CidrIP},
-			)
+			rules = append(rules, IngressRule{
+				Protocol: p.Protocol, FromPort: from, ToPort: to, Cidr: r.CidrIP, Description: r.Description,
+			})
 		}
 	}
 	return rules, nil
@@ -729,7 +767,7 @@ func (r AuthorizeSecurityGroupIngressRequest) Normalize() (AuthorizeSecurityGrou
 		if err != nil {
 			return AuthorizeSecurityGroupIngressRequest{}, err
 		}
-		if slices.Contains(rules, canon) {
+		if ContainsRule(rules, canon) {
 			return AuthorizeSecurityGroupIngressRequest{}, DuplicatePermission(r.ID.String())
 		}
 		rules = append(rules, canon)
@@ -788,6 +826,9 @@ func normalizeRule(rule IngressRule) (IngressRule, error) {
 		return IngressRule{}, err
 	}
 	rule.Cidr = cidr
+	if err := checkRuleDescription(rule.Description); err != nil {
+		return IngressRule{}, err
+	}
 	if protocol == "-1" {
 		rule.FromPort = 0
 		rule.ToPort = 0

@@ -723,7 +723,7 @@ func (n network) AuthorizeSecurityGroupIngress(ctx context.Context, m backend.Mu
 		return resource.Accepted[resource.SecurityGroup]{}, resource.NotFound(resource.KindSecurityGroup, req.ID.String())
 	}
 	for _, rule := range req.Rules {
-		if slices.Contains(group.Rules, rule) {
+		if resource.ContainsRule(group.Rules, rule) {
 			return resource.Accepted[resource.SecurityGroup]{}, resource.DuplicatePermission(req.ID.String())
 		}
 	}
