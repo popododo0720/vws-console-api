@@ -32,6 +32,13 @@ leader changes. This first part of #766 fences followers with 503; forwarding, p
 ## Registration
 
 Before registration, `/readyz` returns 503 with `unregistered`.
+When registration.json names a token file that is absent or unreadable, for
+example on a node that still has the unsuffixed `pve-token` layout, `/readyz`
+returns 503 and the daemon logs `region not ready` with reason
+`registration token unreadable`. There is no automatic
+migration: re-register the region with its token (a PUT that includes
+`token`), which writes `pve-token.<fp>` and the matching identity without a
+restart.
 `PUT /internal/v1/registration` requires the global client's mTLS certificate.
 Its JSON fields are `region`, `cluster_name`, `zones` (letter and node groups),
 `tokenId` (`user@realm!name`) and `token` (write-only).

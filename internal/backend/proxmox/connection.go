@@ -25,6 +25,11 @@ import (
 // Persisted identity adds fingerprint metadata to a request bounded to 64 KiB.
 const maxRegistrationIdentityBytes = 65 << 10
 
+// tokenUnreadable is the readiness reason when the token file the identity
+// names is absent or unreadable, e.g. a node still on the unsuffixed layout;
+// one registration PUT with the token repairs it.
+const tokenUnreadable = "registration token unreadable"
+
 var (
 	registrationRegion  = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
 	registrationCluster = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,62})$`)
@@ -223,13 +228,16 @@ func (c *Connection) Check(ctx context.Context) (*Backend, error) {
 	if err != nil {
 		// A writer may have committed and collected this reader's old token.
 		next, identity, readErr := c.registration()
-		if readErr != nil || next.Fingerprint == s.Fingerprint {
-			return nil, err
+		if readErr != nil {
+			return nil, readErr
+		}
+		if next.Fingerprint == s.Fingerprint {
+			return nil, errors.New(tokenUnreadable)
 		}
 		s, data = next, identity
 		token, err = c.Helper.ReadToken(ctx, s.Fingerprint)
 		if err != nil {
-			return nil, err
+			return nil, errors.New(tokenUnreadable)
 		}
 	}
 	s.Token = pveclient.Secret(token)
