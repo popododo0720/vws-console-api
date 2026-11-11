@@ -22,6 +22,12 @@ type Client struct {
 	http *http.Client
 }
 
+// JSON escapes a tag rune to at most six bytes. A page has at most 100
+// resources, each with 50 tags of 128/256 runes. Reserve 1 KiB per fixed
+// record, interface, volume and rule, plus 1 MiB for the envelope and cursor.
+const maxResponseBytes = 100*(resource.MaxTags*(6*(128+256)+8)+
+	1024*(1+resource.MaxNetworkInterfaces+resource.MaxLaunchVolumes+resource.MaxIngressRules)) + (1 << 20)
+
 // NewClient requires an HTTPS origin and a configuration with client identity.
 func NewClient(base string, config *tls.Config) (*Client, error) {
 	u, err := url.Parse(base)
@@ -82,7 +88,6 @@ func (c *Client) do(ctx context.Context, method, path string, data []byte, dst a
 		return fmt.Errorf("call region: %w", err)
 	}
 	defer func() { retErr = errors.Join(retErr, resp.Body.Close()) }()
-	const maxResponseBytes = 8 << 20
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
 	if err != nil {
 		return fmt.Errorf("read region response: %w", err)
