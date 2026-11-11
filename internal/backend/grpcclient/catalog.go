@@ -89,6 +89,10 @@ func (c computeClient) DescribeKeyPairs(ctx context.Context, s backend.Scope, q 
 
 func (c computeClient) CreateSnapshot(ctx context.Context, m backend.Mutation, req resource.CreateSnapshotRequest) (resource.Accepted[resource.Snapshot], error) {
 	projectID := project(m.Account)
+	labels, err := withInternalLabels(req.Tags, map[string]string{labelFingerprint: clip(m.Fingerprint, 63)})
+	if err != nil {
+		return resource.Accepted[resource.Snapshot]{}, err
+	}
 	vol, err := c.getTypedVolume(ctx, projectID, req.VolumeID.String(), resource.ActionCreateSnapshot.String(), false)
 	if err != nil {
 		return resource.Accepted[resource.Snapshot]{}, err
@@ -98,7 +102,7 @@ func (c computeClient) CreateSnapshot(ctx context.Context, m backend.Mutation, r
 		SnapshotId: derivedID("snap-", m.Key, "snap"),
 		RequestId:  requestUUID(m.Key, "snap"),
 		Snapshot: &storagev1.Snapshot{
-			Labels: map[string]string{labelFingerprint: clip(m.Fingerprint, 63)},
+			Labels: labels,
 			Spec: &storagev1.SnapshotSpec{
 				Volume:      volumeName(projectID, req.VolumeID.String()),
 				Description: req.Description,
@@ -127,6 +131,7 @@ func (c computeClient) CreateSnapshot(ctx context.Context, m backend.Mutation, r
 	snap := resource.Snapshot{
 		ID: id, OwnerID: owner, VolumeID: req.VolumeID, VolumeSize: vol.SizeGiB,
 		State: resource.SnapshotPending, Description: req.Description,
+		Tags: req.Tags,
 	}
 	op.Action = resource.ActionCreateSnapshot
 	op.Targets = []resource.Ref{id.Ref()}
@@ -736,9 +741,14 @@ func snapshotModel(in *storagev1.Snapshot) (resource.Snapshot, error) {
 	if in.GetStatus().GetObserved().GetState() == commonv1.ReconciliationState_RECONCILIATION_STATE_READY {
 		state = resource.SnapshotCompleted
 	}
+	tags, err := userTags(in.GetLabels())
+	if err != nil {
+		return resource.Snapshot{}, err
+	}
 	return resource.Snapshot{
 		ID: id, OwnerID: owner, VolumeID: vol, VolumeSize: in.GetStatus().GetSizeGib(),
 		State: state, Description: in.GetSpec().GetDescription(),
+		Tags: tags,
 	}, nil
 }
 

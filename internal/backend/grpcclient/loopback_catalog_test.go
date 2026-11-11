@@ -262,10 +262,15 @@ func (s *snapshotSrv) CreateSnapshot(ctx context.Context, req *storagev1.CreateS
 	if err != nil {
 		return nil, toStatus(err)
 	}
+	tags, err := userTags(req.GetSnapshot().GetLabels())
+	if err != nil {
+		return nil, toStatus(err)
+	}
 	acc, err := s.w.set.Compute.CreateSnapshot(ctx, backend.Mutation{
 		Scope: backend.Scope{Account: account}, Key: req.GetRequestId(), Fingerprint: fp,
 	}, resource.CreateSnapshotRequest{
 		VolumeID: volID, Description: req.GetSnapshot().GetSpec().GetDescription(),
+		Tags: tags,
 	})
 	if err != nil {
 		return nil, toStatus(err)
@@ -287,7 +292,11 @@ func (s *snapshotSrv) GetSnapshot(ctx context.Context, req *storagev1.GetSnapsho
 	if len(page.Items) == 0 {
 		return nil, toStatus(resource.NotFound(resource.KindSnapshot, id.String()))
 	}
-	return snapshotProto(page.Items[0], projectID), nil
+	snap, err := snapshotProto(page.Items[0], projectID)
+	if err != nil {
+		return nil, toStatus(err)
+	}
+	return snap, nil
 }
 
 func (s *snapshotSrv) ListSnapshots(ctx context.Context, req *storagev1.ListSnapshotsRequest) (*storagev1.ListSnapshotsResponse, error) {
@@ -303,7 +312,11 @@ func (s *snapshotSrv) ListSnapshots(ctx context.Context, req *storagev1.ListSnap
 	}
 	items := make([]*storagev1.Snapshot, 0, len(page.Items))
 	for _, snap := range page.Items {
-		items = append(items, snapshotProto(snap, projectID))
+		item, err := snapshotProto(snap, projectID)
+		if err != nil {
+			return nil, toStatus(err)
+		}
+		items = append(items, item)
 	}
 	return &storagev1.ListSnapshotsResponse{Snapshots: items, NextPageToken: page.NextToken}, nil
 }
@@ -447,13 +460,18 @@ func addressProto(addr resource.Address, projectID string) *networkv1.Address {
 	}
 }
 
-func snapshotProto(snap resource.Snapshot, projectID string) *storagev1.Snapshot {
+func snapshotProto(snap resource.Snapshot, projectID string) (*storagev1.Snapshot, error) {
+	labels, err := withInternalLabels(snap.Tags, nil)
+	if err != nil {
+		return nil, err
+	}
 	obs := commonv1.ReconciliationState_RECONCILIATION_STATE_PENDING
 	if snap.State == resource.SnapshotCompleted {
 		obs = commonv1.ReconciliationState_RECONCILIATION_STATE_READY
 	}
 	return &storagev1.Snapshot{
-		Name: snapshotName(projectID, snap.ID.String()),
+		Name:   snapshotName(projectID, snap.ID.String()),
+		Labels: labels,
 		Spec: &storagev1.SnapshotSpec{
 			Volume:      volumeName(projectID, snap.VolumeID.String()),
 			Description: snap.Description,
@@ -462,5 +480,5 @@ func snapshotProto(snap resource.Snapshot, projectID string) *storagev1.Snapshot
 			Observed: &commonv1.ObservedState{State: obs},
 			SizeGib:  snap.VolumeSize,
 		},
-	}
+	}, nil
 }

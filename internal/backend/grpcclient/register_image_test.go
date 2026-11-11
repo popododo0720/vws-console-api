@@ -93,9 +93,13 @@ func registerFixture(t *testing.T, state string) (resource.AccountID, resource.R
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := &registerSrv{snapshot: snapshotProto(resource.Snapshot{
+	snapshot, err := snapshotProto(resource.Snapshot{
 		ID: snap, OwnerID: account, VolumeID: vol, VolumeSize: 16, State: state,
-	}, project(account))}
+	}, project(account))
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := &registerSrv{snapshot: snapshot}
 	return account, resource.RegisterImageRequest{Name: "web", Description: "nightly", SnapshotID: snap}, srv
 }
 

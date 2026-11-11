@@ -95,6 +95,7 @@ func (c compute) CreateSnapshot(ctx context.Context, m backend.Mutation, req res
 	snap := resource.Snapshot{
 		ID: id, OwnerID: m.Account, VolumeID: req.VolumeID, VolumeSize: vol.SizeGiB,
 		State: resource.SnapshotPending, Description: req.Description,
+		Tags: copyTags(req.Tags),
 	}
 	op, err := c.w.newOp(m.Account, resource.ServiceCompute, resource.ActionCreateSnapshot, []resource.Ref{id.Ref()}, func(time.Time) {
 		if cur := c.w.snap[id]; cur != nil && cur.State == resource.SnapshotPending {
@@ -105,6 +106,7 @@ func (c compute) CreateSnapshot(ctx context.Context, m backend.Mutation, req res
 		return resource.Accepted[resource.Snapshot]{}, err
 	}
 	stored := snap
+	stored.Tags = copyTags(snap.Tags)
 	c.w.snap[id] = &stored
 	acc := resource.Accepted[resource.Snapshot]{Operation: op, Items: []resource.Snapshot{snap}}
 	c.w.finish(m.Key, m.Fingerprint, acc)
@@ -133,6 +135,7 @@ func (c compute) DeleteSnapshot(ctx context.Context, m backend.Mutation, req res
 		return resource.Accepted[resource.Snapshot]{}, err
 	}
 	item := *snap
+	item.Tags = copyTags(snap.Tags)
 	acc := resource.Accepted[resource.Snapshot]{Operation: op, Items: []resource.Snapshot{item}}
 	c.w.finish(m.Key, m.Fingerprint, acc)
 	return acc, nil
@@ -145,7 +148,14 @@ func (c compute) DescribeSnapshots(ctx context.Context, s backend.Scope, q resou
 	c.w.mu.Lock()
 	defer c.w.mu.Unlock()
 	c.w.settle(c.w.now())
-	return pageOwned(c.w.snap, s.Account, q.IDs, q.Page, resource.KindSnapshot)
+	out, err := pageOwned(c.w.snap, s.Account, q.IDs, q.Page, resource.KindSnapshot)
+	if err != nil {
+		return resource.Page[resource.Snapshot]{}, err
+	}
+	for i := range out.Items {
+		out.Items[i].Tags = copyTags(out.Items[i].Tags)
+	}
+	return out, nil
 }
 
 func (c compute) RegisterImage(
