@@ -2,7 +2,6 @@ package grpcclient
 
 import (
 	"context"
-	"crypto/rand"
 	"errors"
 	"fmt"
 	"sync"
@@ -17,7 +16,6 @@ import (
 
 	"github.com/popododo0720/vws-console-api/internal/backend"
 	"github.com/popododo0720/vws-console-api/internal/resource"
-	"github.com/popododo0720/vws-console-api/internal/sshkey"
 )
 
 func (w *keyWorld) DeleteKeyPair(
@@ -101,17 +99,14 @@ func TestConcurrentCreatesOfOneNameMakeOneKeyPair(t *testing.T) {
 // Their name must still block a create under a new token, and they must stay
 // listed, described by id and name, and deletable.
 func TestCreateRefusesTheNameOfAKeyPairWithATokenID(t *testing.T) {
+	public := mustPublicKey(t)
 	ctx := context.Background()
 	client, world := dialKeyWorld(t)
 	account := mustAccount(t)
-	pair, err := sshkey.Generate(resource.KeyTypeEd25519, rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
 	oldID := derivedID("key-", "old-mutation-key", "key")
 	oldName := keyPairName(project(account), oldID)
 	world.keys[oldName] = &computev1.KeyPair{
-		Name: oldName, Labels: nameLabels("legacy"), Spec: &computev1.KeyPairSpec{PublicKey: pair.Public},
+		Name: oldName, Labels: nameLabels("legacy"), Spec: &computev1.KeyPairSpec{PublicKey: public},
 	}
 
 	m := backend.Mutation{Scope: backend.Scope{Account: account}, Key: "new-token", Fingerprint: "new-fp"}

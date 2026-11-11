@@ -2,7 +2,6 @@ package grpcclient
 
 import (
 	"context"
-	"crypto/rand"
 	"testing"
 
 	computev1 "github.com/popododo0720/vws-proto/gen/go/vws/compute/v1"
@@ -10,7 +9,6 @@ import (
 	"github.com/popododo0720/vws-console-api/internal/backend"
 	"github.com/popododo0720/vws-console-api/internal/backend/backendtest"
 	"github.com/popododo0720/vws-console-api/internal/resource"
-	"github.com/popododo0720/vws-console-api/internal/sshkey"
 )
 
 // TestKeyImportContract runs the #279 ImportKeyPair table over the gRPC
@@ -37,13 +35,10 @@ func TestKeyTokenMixContract(t *testing.T) {
 // they carry no import nonce, so a retry under the token must still send
 // that request id and body, and compute replays it.
 func TestImportRetryOfAKeyPairWithoutANonceStillReplays(t *testing.T) {
+	public := mustPublicKey(t)
 	ctx := context.Background()
 	client, world := dialKeyWorld(t)
 	account := mustAccount(t)
-	pair, err := sshkey.Generate(resource.KeyTypeEd25519, rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
 	m := backend.Mutation{Scope: backend.Scope{Account: account}, Key: "old-import-token", Fingerprint: "old-import-fp"}
 	labels := nameLabels("laptop")
 	labels[labelFingerprint] = m.Fingerprint
@@ -51,11 +46,11 @@ func TestImportRetryOfAKeyPairWithoutANonceStillReplays(t *testing.T) {
 	// The request an import made before #279 sent.
 	if _, err := world.CreateKeyPair(ctx, &computev1.CreateKeyPairRequest{
 		Parent: regionParent(project(account)), KeyPairId: id, RequestId: requestUUID(m.Key, "key"),
-		KeyPair: &computev1.KeyPair{Labels: labels, Spec: &computev1.KeyPairSpec{PublicKey: pair.Public}},
+		KeyPair: &computev1.KeyPair{Labels: labels, Spec: &computev1.KeyPairSpec{PublicKey: public}},
 	}); err != nil {
 		t.Fatal(err)
 	}
-	got, err := client.CreateKeyPair(ctx, m, resource.CreateKeyPairRequest{Name: "laptop", PublicKey: pair.Public})
+	got, err := client.CreateKeyPair(ctx, m, resource.CreateKeyPairRequest{Name: "laptop", PublicKey: public})
 	if err != nil || len(got.Items) != 1 || got.Items[0].ID.String() != id {
 		t.Fatalf("retry of an import made before #279: want a replay, got %v %+v", err, got.Items)
 	}

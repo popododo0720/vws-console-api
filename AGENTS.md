@@ -38,6 +38,7 @@ change both files together.
 
 | Rule | Enforced by |
 | --- | --- |
+| Tests that generate random data or ids use a fixed seed (`rand.New(rand.NewPCG(seed, ...))` or equivalent; `cryptotest.SetGlobalRandom` for crypto keys), print the seed on failure when it can be overridden, and use `//vws:unseeded <reason>` for an explicit exception. | `scripts/check-test-rand.sh`; `scripts/check-test-rand_test.sh` |
 | AWS account writes require root and a global KEK, validate IAM/STS inputs, use version CAS, and audit once to stderr or -audit-log, separate from the app log; external ids stay sealed and off responses and logs. | `TestAccountSeal`, `TestKEKFile`, `TestAdminAccountValidation`, `TestAdminAccountLifecycleAndCanary`, `TestAdminAccountWritesRequireRootKeyAndCSRF`, `TestAdminAuditFileIsSeparate` |
 | A canceled status caller cannot replace the last PVE failure. | `TestStatusRemembersFailureAndRedactsCredentials` |
 | Regionset inventory reads route one region or fan out in parallel with 5 s per region and 8 s total; failed regions remain in safe partial metadata and pending page cursors. | `TestEveryInventoryListRoutesAndPreservesQueries`, `TestStalledServerReturnsOtherRegionsWithinEightSeconds`, `TestPaginationKeepsAllRegionCursorsAndRetriesFailures` |

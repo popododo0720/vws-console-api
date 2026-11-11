@@ -7,6 +7,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/cryptotest"
 	"time"
 
 	"google.golang.org/grpc/codes"
@@ -28,7 +29,7 @@ import (
 // once another key pair holds the name it is InvalidKeyPair.Duplicate.
 func TestImportRetryRacingADeleteImportsAgain(t *testing.T) {
 	ours := mustPublicKey(t)
-	theirs := mustPublicKey(t)
+	theirs := mustPublicKey(t, 2)
 	for _, tc := range []struct {
 		name string
 		// between picks the hook the delete lands in: after the retry's
@@ -176,15 +177,16 @@ func TestImportConflictsMapByCause(t *testing.T) {
 // that compute reports as IDEMPOTENCY_CONFLICT: another key under the token
 // of the live key pair names that key pair's request.
 func TestImportConflictOnALiveNameIsDuplicate(t *testing.T) {
+	ours, theirs := mustPublicKey(t), mustPublicKey(t, 2)
 	ctx := context.Background()
 	client, _ := dialKeyWorld(t)
 	m := backend.Mutation{Scope: backend.Scope{Account: mustAccount(t)}, Key: "live-token", Fingerprint: "fp-first"}
-	first := resource.CreateKeyPairRequest{Name: "held", PublicKey: mustPublicKey(t)}
+	first := resource.CreateKeyPairRequest{Name: "held", PublicKey: ours}
 	if _, err := client.CreateKeyPair(ctx, m, first); err != nil {
 		t.Fatal(err)
 	}
 	m.Fingerprint = "fp-second"
-	got, err := client.CreateKeyPair(ctx, m, resource.CreateKeyPairRequest{Name: "held", PublicKey: mustPublicKey(t)})
+	got, err := client.CreateKeyPair(ctx, m, resource.CreateKeyPairRequest{Name: "held", PublicKey: theirs})
 	requireDuplicate(t, "another key under the live key pair's token", got, err)
 }
 
@@ -206,13 +208,24 @@ func importBefore279(
 	}
 }
 
-func mustPublicKey(t *testing.T) string {
+func mustPublicKey(t *testing.T, seeds ...uint64) string {
 	t.Helper()
-	pair, err := sshkey.Generate(resource.KeyTypeEd25519, rand.Reader)
-	if err != nil {
-		t.Fatal(err)
+	seed := uint64(1)
+	if len(seeds) != 0 {
+		seed = seeds[0]
 	}
-	return pair.Public
+	var public string
+	if !t.Run("public-key", func(t *testing.T) {
+		cryptotest.SetGlobalRandom(t, seed)
+		pair, err := sshkey.Generate(resource.KeyTypeEd25519, rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		public = pair.Public
+	}) {
+		t.FailNow()
+	}
+	return public
 }
 
 func fingerprintOf(t *testing.T, pub string) string {
@@ -269,6 +282,7 @@ func gather(n int) func() {
 // (maxImportAttempts) with a retryable error, not a guess, and makes no key
 // pair.
 func TestImportThatKeepsLosingRacesIsRetryable(t *testing.T) {
+	ours, theirs := mustPublicKey(t), mustPublicKey(t, 2)
 	ctx := context.Background()
 	client, world := dialKeyWorld(t)
 	account := mustAccount(t)
@@ -276,7 +290,7 @@ func TestImportThatKeepsLosingRacesIsRetryable(t *testing.T) {
 	name := keyPairName(project(account), id)
 	held := &computev1.KeyPair{
 		Name: name, Labels: map[string]string{labelImport: "held-nonce"},
-		Spec: &computev1.KeyPairSpec{PublicKey: mustPublicKey(t)},
+		Spec: &computev1.KeyPairSpec{PublicKey: ours},
 	}
 	world.keys[name] = held
 	world.afterGet = func() {
@@ -297,7 +311,8 @@ func TestImportThatKeepsLosingRacesIsRetryable(t *testing.T) {
 		return vwsStatus(codes.AlreadyExists, "ALREADY_EXISTS", "key pair "+name+" already exists")
 	}
 	m := backend.Mutation{Scope: backend.Scope{Account: account}, Key: "flap-token", Fingerprint: "flap-fp"}
-	got, err := client.CreateKeyPair(ctx, m, resource.CreateKeyPairRequest{Name: "flapping", PublicKey: mustPublicKey(t)})
+	got, err := client.CreateKeyPair(ctx, m,
+		resource.CreateKeyPairRequest{Name: "flapping", PublicKey: theirs})
 	if resource.CodeOf(err) != resource.CodeUnavailable || len(got.Items) != 0 {
 		t.Fatalf("want a retryable Unavailable, got %v %+v", err, got.Items)
 	}

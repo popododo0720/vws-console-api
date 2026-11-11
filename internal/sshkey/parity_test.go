@@ -3,7 +3,6 @@ package sshkey
 import (
 	"crypto/ed25519"
 	"crypto/md5" //nolint:gosec // AWS fingerprints imported RSA keys with MD5
-	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha1" //nolint:gosec // AWS fingerprints created RSA keys with SHA-1
 	"crypto/sha256"
@@ -12,8 +11,10 @@ import (
 	"encoding/hex"
 	"encoding/pem"
 	"math/big"
+	"math/rand/v2"
 	"strings"
 	"testing"
+	"testing/cryptotest"
 
 	"github.com/popododo0720/vws-console-api/internal/resource"
 )
@@ -29,6 +30,7 @@ func colons(sum []byte) string {
 
 // AWS: created RSA = SHA-1 of the PKCS#8 DER private key, with colons.
 func TestCreatedRSAFingerprintIsSHA1OfPKCS8(t *testing.T) {
+	cryptotest.SetGlobalRandom(t, 1)
 	pair, err := Generate(resource.KeyTypeRSA, stream("fp-rsa"))
 	if err != nil {
 		t.Fatal(err)
@@ -50,6 +52,7 @@ func TestCreatedRSAFingerprintIsSHA1OfPKCS8(t *testing.T) {
 
 // AWS: ed25519 (created or imported) = base64 SHA-256 of the key blob, padded.
 func TestEd25519FingerprintIsBase64SHA256(t *testing.T) {
+	cryptotest.SetGlobalRandom(t, 1)
 	pair, err := Generate(resource.KeyTypeEd25519, stream("fp-ed"))
 	if err != nil {
 		t.Fatal(err)
@@ -72,10 +75,12 @@ func TestEd25519FingerprintIsBase64SHA256(t *testing.T) {
 // -race (#200).
 func rsaKey(t *testing.T, bits int) *rsa.PublicKey {
 	t.Helper()
-	n, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), uint(bits-1)))
-	if err != nil {
+	data := make([]byte, (bits+7)/8)
+	if _, err := rand.NewChaCha8([32]byte{1}).Read(data); err != nil {
 		t.Fatal(err)
 	}
+	n := new(big.Int).SetBytes(data)
+	n.Mod(n, new(big.Int).Lsh(big.NewInt(1), uint(bits-1)))
 	n.SetBit(n, bits-1, 1).SetBit(n, 0, 1)
 	return &rsa.PublicKey{N: n, E: 65537}
 }
@@ -139,13 +144,14 @@ func TestRSASizes(t *testing.T) {
 }
 
 func TestECDSAAndDSAAreRejected(t *testing.T) {
+	cryptotest.SetGlobalRandom(t, 1)
 	for _, alg := range []string{"ecdsa-sha2-nistp256", "ssh-dss"} {
 		line := alg + " " + base64.StdEncoding.EncodeToString([]byte(sshString(alg)+sshString("x")))
 		if _, err := ParsePublic(line); err == nil {
 			t.Fatalf("%s accepted", alg)
 		}
 	}
-	pub, _, _ := ed25519.GenerateKey(rand.Reader)
+	pub, _, _ := ed25519.GenerateKey(nil)
 	if _, err := ParsePublic(base64.StdEncoding.EncodeToString(mustPKIX(t, pub))); err == nil {
 		t.Fatal("DER ed25519 accepted; AWS takes DER for RSA only")
 	}
@@ -162,6 +168,7 @@ func mustPKIX(t *testing.T, pub any) []byte {
 
 // PPK v2, as EC2 returns for KeyFormat=ppk.
 func TestPPK(t *testing.T) {
+	cryptotest.SetGlobalRandom(t, 1)
 	for _, typ := range []resource.KeyType{resource.KeyTypeRSA, resource.KeyTypeEd25519} {
 		pair, err := Generate(typ, stream("ppk-"+string(typ)))
 		if err != nil {
