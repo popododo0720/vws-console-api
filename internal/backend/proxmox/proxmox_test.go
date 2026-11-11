@@ -128,7 +128,11 @@ func TestReadOnlyBackendEveryMethod(t *testing.T) {
 			}
 		}
 		for _, r := range resource.ReadActions() {
-			if doc.Read(r).State != resource.ActionEmpty {
+			want := resource.ActionEmpty
+			if r.CapabilityKey() == "ec2:DescribeVpcs" || r.CapabilityKey() == "ec2:DescribeSubnets" {
+				want = resource.ActionPartial
+			}
+			if doc.Read(r).State != want {
 				t.Fatal(r)
 			}
 		}

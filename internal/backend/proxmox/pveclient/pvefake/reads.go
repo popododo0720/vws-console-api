@@ -23,12 +23,37 @@ func (f *Fake) routes() {
 	f.handle("/cluster/status", f.clusterStatus)
 	f.handle("/cluster/resources", f.clusterResources)
 	f.handle("/nodes", f.nodes)
+	f.handle("/nodes/{node}/network", f.network)
 	f.handle("/nodes/{node}/qemu/{vmid}/config", f.config)
 	f.handle("/access/permissions", f.permissions)
 	f.mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		msg := fmt.Sprintf("Method '%s %s' not implemented", r.Method, r.URL.Path)
 		reply(w, nil, &failure{http.StatusNotImplemented, msg})
 	})
+}
+
+func (f *Fake) network(t *Token, r *http.Request) (any, *failure) {
+	node, fail := f.node(r)
+	if fail != nil {
+		return nil, fail
+	}
+	if fail := f.need(t, "/nodes/"+node, "Sys.Audit"); fail != nil {
+		return nil, fail
+	}
+	kind := r.URL.Query().Get("type")
+	if kind != "" && kind != "any_bridge" {
+		return nil, &failure{http.StatusBadRequest, "Parameter verification failed. type: unsupported type"}
+	}
+	rows := []map[string]any{}
+	for _, n := range f.s.Networks {
+		if n.Node != node || (kind == "any_bridge" && n.Type != "bridge" && n.Type != "OVSBridge") {
+			continue
+		}
+		row := map[string]any{"iface": n.Iface, "type": n.Type}
+		setIf(row, "cidr", n.CIDR)
+		rows = append(rows, row)
+	}
+	return rows, nil
 }
 
 func (f *Fake) clusterStatus(t *Token, _ *http.Request) (any, *failure) {

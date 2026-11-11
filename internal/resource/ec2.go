@@ -17,7 +17,7 @@ type Vpc struct {
 	OwnerID AccountID `json:"ownerId"`
 	Cidr    string    `json:"cidrBlock"`
 	State   string    `json:"state"`
-	// IsDefault is always false: VWS has no default VPC.
+	// IsDefault identifies the operator's default bridge on Proxmox.
 	IsDefault bool              `json:"isDefault"`
 	Tags      map[string]string `json:"tags,omitempty"`
 }

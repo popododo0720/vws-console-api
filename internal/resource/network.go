@@ -61,12 +61,13 @@ func (s *SubnetState) UnmarshalText(b []byte) error {
 
 // Subnet is a network segment.
 type Subnet struct {
-	ID      SubnetID    `json:"subnetId"`
-	OwnerID AccountID   `json:"ownerId"`
-	VpcID   VpcID       `json:"vpcId,omitzero"`
-	Cidr    string      `json:"cidrBlock"`
-	State   SubnetState `json:"state"`
-	Zone    string      `json:"availabilityZone"`
+	ID           SubnetID    `json:"subnetId"`
+	OwnerID      AccountID   `json:"ownerId"`
+	VpcID        VpcID       `json:"vpcId,omitzero"`
+	Cidr         string      `json:"cidrBlock"`
+	State        SubnetState `json:"state"`
+	Zone         string      `json:"availabilityZone"`
+	DefaultForAz bool        `json:"defaultForAz"`
 	// MapPublicIPOnLaunch is always false: VWS assigns public addresses only
 	// through AssociateAddress.
 	MapPublicIPOnLaunch bool              `json:"mapPublicIpOnLaunch"`

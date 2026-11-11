@@ -19,6 +19,25 @@ func (s stubCapabilities) RegionCapabilities(context.Context, string) (resource.
 	return s.doc, s.err
 }
 
+func TestDerivedReadRequiresExplicitEmptyCapability(t *testing.T) {
+	for _, state := range []resource.ActionState{
+		0, resource.ActionEmpty, resource.ActionSupported, resource.ActionPartial, resource.ActionUnsupported,
+	} {
+		svc := New(Config{Capabilities: stubCapabilities{doc: resource.RegionCapabilities{
+			Actions: map[string]resource.ActionCapability{"ec2:DescribeRouteTables": {State: state}},
+		}}})
+		empty, err := svc.ReadIsEmpty(t.Context(), "DescribeRouteTables")
+		if err != nil || empty != (state == resource.ActionEmpty) {
+			t.Fatalf("state=%s empty=%v error=%v", state, empty, err)
+		}
+	}
+	failure := errors.New("capabilities unavailable")
+	svc := New(Config{Capabilities: stubCapabilities{err: failure}})
+	if _, err := svc.ReadIsEmpty(t.Context(), "DescribeRouteTables"); !errors.Is(err, failure) {
+		t.Fatalf("capability failure was lost: %v", err)
+	}
+}
+
 // countingNetwork counts the address calls that reach the backend.
 type countingNetwork struct {
 	backend.Network

@@ -68,7 +68,7 @@ var calls = []call{
 	},
 	{
 		"network", func(ctx context.Context, c *Client) (any, error) { return c.Network(ctx, "pve1") },
-		"/api2/json/nodes/pve1/network", "", `[{"iface":"vmbr0","type":"bridge","active":1}]`,
+		"/api2/json/nodes/pve1/network", "type=any_bridge", `[{"iface":"vmbr0","type":"bridge","active":1}]`,
 		[]NetworkInterface{{Iface: "vmbr0", Type: "bridge", Active: 1}},
 	},
 	{
