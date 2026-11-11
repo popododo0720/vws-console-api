@@ -31,12 +31,18 @@ func RebootAndConsoleAcrossRestart(t *testing.T, newWorld Restart) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if len(subnet.Items) != 1 {
+		t.Fatalf("CreateSubnet returned %d items, want 1", len(subnet.Items))
+	}
 	run, err := before.Compute.RunInstances(ctx, mut("run"), resource.RunInstancesRequest{
 		ImageID: parse[resource.ImageID](t, "ami-0123456789abcdef0"), InstanceType: "vws.small",
 		SubnetID: subnet.Items[0].ID, Count: 1,
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if len(run.Items) != 1 {
+		t.Fatalf("RunInstances returned %d items, want 1", len(run.Items))
 	}
 	if _, err := before.Compute.GetOperation(ctx, scope, run.Operation.ID); err != nil {
 		t.Fatal(err)
