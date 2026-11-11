@@ -27,7 +27,11 @@ func (b *Backend) RegionCapabilities(ctx context.Context, region string) (resour
 	}
 	types, err := b.instanceTypes(ctx)
 	if err != nil {
-		return resource.RegionCapabilities{}, err
+		if ctx.Err() != nil {
+			return resource.RegionCapabilities{}, err
+		}
+		// Node capacity limits the catalog, not the action policy used by every kernel gate.
+		types = []resource.RegionInstanceType{}
 	}
 	doc := resource.RegionCapabilities{
 		Region: region, Kind: resource.RegionKindProxmox,

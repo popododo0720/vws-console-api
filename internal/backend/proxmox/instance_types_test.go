@@ -263,9 +263,68 @@ func TestInstanceTypeCapacityFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = b.RegionCapabilities(t.Context(), registration().Region.Name)
+	_, err = b.instanceTypes(t.Context())
 	pveErr, ok := errors.AsType[*pveclient.HTTPError](err)
 	if !ok || pveErr.Status != http.StatusForbidden || !strings.Contains(err.Error(), "list node capacity") {
 		t.Fatalf("PVE error = %v", err)
 	}
+}
+
+func TestCapacityOutageKeepsActionCapabilities(t *testing.T) {
+	c, _ := serve(t, scenario())
+	reg := registration()
+	reg.Region.Name = resource.RegionName
+	b, err := New(t.Context(), c, reg, RegionConfig{ReadOnly: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	healthy, err := b.RegionCapabilities(t.Context(), reg.Region.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"message":"node capacity unavailable"}`, http.StatusServiceUnavailable)
+	}))
+	defer srv.Close()
+	b.client, err = pveclient.New(pveclient.Config{
+		BaseURL: srv.URL, TokenID: "vws@pve!inventory", Secret: "fake-secret", HTTPClient: srv.Client(),
+		Backoff: time.Nanosecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, err := b.RegionCapabilities(t.Context(), reg.Region.Name)
+	if err != nil {
+		t.Fatalf("capacity outage failed the capability document: %v", err)
+	}
+	if doc.InstanceTypes == nil || len(doc.InstanceTypes) != 0 {
+		t.Fatalf("outage catalog = %+v; want an explicitly empty catalog", doc.InstanceTypes)
+	}
+	if !reflect.DeepEqual(doc.Actions, healthy.Actions) {
+		t.Fatalf("outage changed the action policy:\n got %+v\nwant %+v", doc.Actions, healthy.Actions)
+	}
+	account, err := resource.Parse[resource.AccountID]("123456789012")
+	if err != nil {
+		t.Fatal(err)
+	}
+	caller := resource.Caller{Account: account}
+	svc := cloud.New(cloud.Config{Backends: b.Set(), Capabilities: b})
+	page, err := svc.DescribeInstances(t.Context(), caller, resource.InstanceQuery{})
+	if err != nil || len(page.Items) != 0 {
+		t.Fatalf("unrelated inventory during outage: %+v, %v", page, err)
+	}
+	id, err := resource.Parse[resource.InstanceID]("i-0123456789abcdef0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, err := resource.Parse[resource.ClientToken]("capacity-outage")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = svc.StopInstances(t.Context(), caller, token, resource.StopInstancesRequest{IDs: []resource.InstanceID{id}})
+	resourceErr, _ := errors.AsType[*resource.Error](err)
+	if !resource.IsUnsupported(resourceErr) {
+		t.Fatalf("unrelated mutation during outage: %v; want UnsupportedOperation", err)
+	}
+	checkCatalogSurfaces(t, b, []resource.InstanceType{})
 }
