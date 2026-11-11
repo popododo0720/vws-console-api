@@ -159,6 +159,12 @@ linters:
           - errcheck
           - gochecknoglobals
           - wrapcheck
+      # vws-proto v0.23.0 deprecates these services for the Proxmox backend
+      # (vws-proto#255). The retired grpc backend keeps them until it is removed.
+      - path: internal/backend/grpcclient/
+        linters:
+          - staticcheck
+        text: "SA1019: github.com/popododo0720/vws-proto/gen/go/vws/(compute|network|storage)/v1"
     paths:
       - third_party
 

@@ -13,6 +13,7 @@ it. When you add or change a rule, change its row here and its line in
 | `internal/resource` imports only the standard library. | `TestArchitectureRules`; depguard `model-is-a-leaf` |
 | The kernel never sees HTTP, signatures, or a surface. | `TestArchitectureRules`; depguard `kernel-knows-no-wire` |
 | Protobuf and gRPC types stay inside `internal/backend/grpcclient`. | `TestArchitectureRules`; depguard `grpc-stays-in-grpcclient` |
+| vws-proto v0.23.0 deprecates `vws.compute.v1`, `vws.network.v1` and `vws.storage.v1` for the Proxmox backend (vws-proto#255); nothing is removed. Only the retired `grpc` backend in `internal/backend/grpcclient` uses them, and it is removed with them once the `regions` and `proxmox` backends replace it. A staticcheck SA1019 finding on these three packages is excluded only under `internal/backend/grpcclient`; anywhere else the import is a depguard failure first. | depguard `grpc-stays-in-grpcclient`; `.golangci.yml` SA1019 exclusion for `internal/backend/grpcclient` (#855) |
 | Kubernetes types (`k8s.io`, `sigs.k8s.io`) stay inside `internal/backend/launch/kubestore`. | `TestArchitectureRules`; depguard `kube-stays-in-kubestore` |
 | PVE API types (`internal/backend/proxmox/pveclient`) stay inside `internal/backend/proxmox`; the backend maps them to model types. | `TestArchitectureRules`; depguard `pve-stays-in-proxmox` |
 | etcd types (`go.etcd.io`) stay inside `internal/admin/store/etcdstore`. | `TestArchitectureRules`; depguard `etcd-stays-in-etcdstore` |
