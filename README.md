@@ -125,8 +125,11 @@ string to sign, signature and client address (`source_ip`), never a secret;
 and resource), the resource ARNs and the condition context, and only
 `DECISION_ALLOW` allows; an error denies. Console sign-in (`Login`,
 `ValidateSession`, `Logout`) goes to vws-iam too, with the client address the
-console resolved (see `-trusted-proxies`); the root user still signs in
-against `-root-password-file` locally. A bad password, unknown user or missing
+console resolved (see `-trusted-proxies`), including the account root.
+All grpc console sessions live in vws-iam, so another console-api instance
+or a restarted one accepts the same cookie, and logout revokes it everywhere.
+`-root-password-file` is ignored with a startup warning in grpc mode; configure
+the root console password in vws-iam. A bad password, unknown user or missing
 MFA code is the same `401` as in the other modes, `RESOURCE_EXHAUSTED` from
 vws-iam is `429`, and `UNAVAILABLE` or a transport failure is `503` with
 `Retry-After`. A sign-in vws-iam marks `password_reset_required` is refused
@@ -212,8 +215,9 @@ names nobody and there is nothing to sign in to; a bad bearer token is still
 
 With sign-in on: `POST /api/v1/auth/login` with
 `{"account","userName","password"}` (an IAM user's `CreateLoginProfile`
-password, or `root` with the password in `-root-password-file`, mounted from a
-Secret). It sets an HttpOnly, Secure, SameSite=Strict `__Host-vws_session` cookie
+password, or `root` with its vws-iam password in grpc mode; fake mode uses
+`-root-password-file`, mounted from a Secret). Fake sessions remain in memory
+and are lost on restart. It sets an HttpOnly, Secure, SameSite=Strict `__Host-vws_session` cookie
 (12 hours) and a `vws_csrf` cookie; every request other than GET/HEAD on a
 session must echo `vws_csrf` in `X-CSRF-Token`. Each console route is
 authorized as the matching IAM action (`ec2:DescribeVpcs`, `ec2:CreateVpc`,

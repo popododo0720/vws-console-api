@@ -166,6 +166,15 @@ func TestGRPCIAMNeedsAnEndpoint(t *testing.T) {
 	}
 }
 
+func TestGRPCIAMIgnoresLocalRootPasswordFile(t *testing.T) {
+	err := run(t.Context(), []string{
+		"-iam=grpc", "-root-password-file=" + filepath.Join(t.TempDir(), "absent"), "-ops-addr=",
+	})
+	if err == nil || !strings.Contains(err.Error(), "-iam-endpoint") {
+		t.Fatalf("grpc tried to read the local password file: %v", err)
+	}
+}
+
 // A bad -iam-tls-* setting stops the process at start instead of dialing
 // vws-iam in plaintext.
 func TestGRPCIAMRejectsBadTLSFlags(t *testing.T) {
@@ -193,7 +202,12 @@ func TestStaticModeWarnsSignInDisabled(t *testing.T) {
 		{"static", "", []string{"level=WARN", "console sign-in disabled", "-console-token"}, []string{"root-password-file"}},
 		{"static", "/run/secrets/pw", []string{"console sign-in disabled", "-root-password-file has no effect"}, nil},
 		{"fake", "", nil, []string{"console sign-in disabled"}},
-		{"grpc", "/run/secrets/pw", nil, []string{"console sign-in disabled", "no effect"}},
+		{"grpc", "", nil, []string{"console sign-in disabled", "no effect"}},
+		{
+			"grpc", "/run/secrets/pw",
+			[]string{"-root-password-file has no effect", "vws-iam owns console sign-in"},
+			[]string{"console sign-in disabled"},
+		},
 	} {
 		var buf bytes.Buffer
 		warnSignIn(t.Context(), slog.New(slog.NewTextHandler(&buf, nil)), tc.mode, tc.pwFile)

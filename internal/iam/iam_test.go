@@ -125,10 +125,25 @@ func TestFakePolicyEvaluation(t *testing.T) {
 }
 
 func TestWithRootKeepsStaticKeyAsAdmin(t *testing.T) {
+	for _, wrap := range []struct {
+		name string
+		new  func(*Static, Client) Client
+	}{
+		{"local sessions", WithRoot},
+		{"remote sessions", WithRootKey},
+	} {
+		t.Run(wrap.name, func(t *testing.T) {
+			testRootKeyAsAdmin(t, wrap.new)
+		})
+	}
+}
+
+func testRootKeyAsAdmin(t *testing.T, wrap func(*Static, Client) Client) {
+	t.Helper()
 	f := NewFake()
 	bob := Key{AccessKey: "AKIDBOB", Secret: "bobsecret", Principal: Principal{Account: account(t), ARN: "arn:vws:iam::123456789012:user/bob"}}
 	f.AddKey(bob)
-	c := WithRoot(NewStatic("AKIDEXAMPLE", "secret", account(t)), f)
+	c := wrap(NewStatic("AKIDEXAMPLE", "secret", account(t)), f)
 	root, err := verify(t, c, sigv4.Credential{AccessKey: "AKIDEXAMPLE", Secret: "secret"})
 	if err != nil || !root.Root {
 		t.Fatalf("root %+v %v", root, err)
