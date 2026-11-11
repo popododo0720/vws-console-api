@@ -38,6 +38,7 @@ change both files together.
 
 | Rule | Enforced by |
 | --- | --- |
+| AWS account writes require root and a global KEK, validate IAM/STS inputs, use version CAS, and audit once; external ids stay sealed and off responses and logs. | `TestAccountSeal`, `TestKEKFile`, `TestAdminAccountValidation`, `TestAdminAccountLifecycleAndCanary`, `TestAdminAccountWritesRequireRootKeyAndCSRF` |
 | Surfaces call `internal/cloud`; `internal/surface/regionapi` alone transports `internal/backend` after the global kernel has run. | depguard `surfaces-use-the-kernel`; `TestArchitectureRules` |
 | `internal/resource` imports only the standard library. | depguard `model-is-a-leaf` |
 | The kernel never sees HTTP, signatures or a surface. | depguard `kernel-knows-no-wire` |

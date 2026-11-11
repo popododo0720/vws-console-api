@@ -25,6 +25,7 @@ func (h *handler) adminPermissions(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, permissionsBody{Permissions: []string{
 		"vws:AdminListRegions", "vws:AdminListAwsAccounts",
+		"vws:AdminRegisterAwsAccount", "vws:AdminUpdateAwsAccount", "vws:AdminRemoveAwsAccount",
 	}})
 }
 
@@ -53,7 +54,11 @@ func (h *handler) adminAccounts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	items, skipped, err := h.registry.AWSAccounts().List(r.Context())
-	adminList(w, r, h.log, items, skipped, err)
+	views := make([]accountView, 0, len(items))
+	for _, item := range items {
+		views = append(views, viewAccount(item))
+	}
+	adminList(w, r, h.log, views, skipped, err)
 }
 
 func adminList[T any](
@@ -77,7 +82,7 @@ func adminList[T any](
 		switch v := any(item).(type) {
 		case store.Region:
 			versions = append(versions, v.Version)
-		case store.AWSAccount:
+		case accountView:
 			versions = append(versions, v.Version)
 		}
 	}
@@ -120,10 +125,14 @@ func (h *handler) adminAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("ETag", strconv.Quote(strconv.FormatInt(int64(v.Version), 10)))
-	writeJSON(w, http.StatusOK, v)
+	writeJSON(w, http.StatusOK, viewAccount(v))
 }
 
 func adminError(w http.ResponseWriter, r *http.Request, err error) {
+	if errors.Is(err, store.ErrExists) || errors.Is(err, store.ErrConflict) {
+		writeErr(w, r, &resource.Error{Code: resource.CodeConflict, Message: "registration already exists or changed"})
+		return
+	}
 	if errors.Is(err, store.ErrNotFound) {
 		writeErr(w, r, &resource.Error{Code: resource.CodeNotFound, Message: "registration not found"})
 		return
