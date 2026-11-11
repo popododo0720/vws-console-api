@@ -61,6 +61,7 @@ change both files together.
 | Proxmox ids are computed by `proxmox.IDs` from the cluster name and Proxmox data: a VM's `i-` with a uuid never takes its VMID, no two id forms hash the same input, and an empty, NUL or malformed input is an error, never an id. | `TestInstanceIDIgnoresVMID`, `TestFormulasArePinned`, `TestFormsNeverShareHashInput`, `TestBadInputsAreRefused` |
 | Every switch over a model enum handles every value. | `exhaustive` |
 | No package-level mutable state. | `gochecknoglobals` |
+| `vws-region-helper` exposes seven fixed verbs, confines targets, validates snippet names, encrypts tokens with the region KEK, and is called without a shell. | `TestCommandsAndConfinement`, `TestSnippetNames`, `TestTokenWriteEncrypted`, `TestNoShellAndTypedClient`, `TestClientUsesFixedArgvAndStdin`, `TestClientRejectsInvalidNamesBeforeExec` |
 | A long-running mutation takes a client token and returns `resource.Accepted` through `cloud.mutate`. | The compiler (kernel signatures) |
 | A mutation publishes resource, operation and idempotency record together. | `TestRepeatedEntropyDoesNotOverwrite` |
 | The idempotency key is account, action and client token. | `TestIdempotencyGolden` |
