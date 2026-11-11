@@ -2,6 +2,7 @@ package backendtest
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/popododo0720/vws-console-api/internal/iam"
@@ -66,6 +67,15 @@ func IAMRoles(t *testing.T, newAdmin IAMAdminHarness) {
 			} {
 				_, err := a.CreateRole(ctx, iamAccount(), in)
 				wantErr(t, "CreateRole "+in.Name+in.Path, err, resource.CodeInvalidArgument, "")
+			}
+		}},
+		{"bad role name on a write", func(ctx context.Context, t *testing.T, a iam.Directory) {
+			for _, name := range []string{"", "a/b", strings.Repeat("r", 65)} {
+				wantErr(t, "UpdateAssumeRolePolicy "+name,
+					a.UpdateAssumeRolePolicy(ctx, iamAccount(), name, otherTrust, Grant(ctx, t, opsARN)),
+					resource.CodeInvalidArgument, "")
+				wantErr(t, "DeleteRole "+name, a.DeleteRole(ctx, iamAccount(), name, Grant(ctx, t, opsARN)),
+					resource.CodeInvalidArgument, "")
 			}
 		}},
 		{"list filters by path prefix", func(ctx context.Context, t *testing.T, a iam.Directory) {

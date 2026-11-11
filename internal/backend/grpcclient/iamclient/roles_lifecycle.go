@@ -115,6 +115,9 @@ func (a STSAdmin) UpdateAssumeRolePolicy(
 	}
 	ctx, end := a.observe(ctx, "UpdateAssumeRolePolicy", true, account, "", "")
 	defer func() { end(err) }()
+	if err := iam.CheckRoleName(name); err != nil {
+		return err
+	}
 	if err := iam.ValidateTrustPolicy(document); err != nil {
 		return err
 	}
@@ -159,6 +162,9 @@ func (a STSAdmin) DeleteRole(
 	}
 	ctx, end := a.observe(ctx, "DeleteRole", true, account, "", "")
 	defer func() { end(err) }()
+	if err := iam.CheckRoleName(name); err != nil {
+		return err
+	}
 	ctx, cancel := context.WithTimeout(ctx, OperationTimeout)
 	defer cancel()
 	role, err := a.roleAt(ctx, account, name, want)

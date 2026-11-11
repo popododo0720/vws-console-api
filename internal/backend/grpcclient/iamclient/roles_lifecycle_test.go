@@ -2,6 +2,7 @@ package iamclient
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -110,6 +111,25 @@ func TestRoleListSkipsARoleWithNoARN(t *testing.T) {
 	rs, err := a.ListRoles(ctx, account314, "")
 	if err != nil || len(rs) != 1 || rs[0].Name != "ops" {
 		t.Fatalf("ListRoles: %+v %v, want only ops", rs, err)
+	}
+}
+
+func TestRoleWritesCheckTheNameBeforeSending(t *testing.T) {
+	ctx := t.Context()
+	a, d := seededRoles(ctx, t)
+	reads := len(d.sent("GetRole"))
+	want := backendtest.Grant(ctx, t, opsRoleARN)
+	for _, name := range []string{"", "a/b", strings.Repeat("r", 65)} {
+		if err := a.DeleteRole(ctx, account314, name, want); resource.CodeOf(err) != resource.CodeInvalidArgument {
+			t.Errorf("DeleteRole %q: %v", name, err)
+		}
+		err := a.UpdateAssumeRolePolicy(ctx, account314, name, lifecycleTrust2, want)
+		if resource.CodeOf(err) != resource.CodeInvalidArgument {
+			t.Errorf("UpdateAssumeRolePolicy %q: %v", name, err)
+		}
+	}
+	if n := len(d.sent("GetRole")) - reads; n != 0 {
+		t.Errorf("sent %d GetRole for invalid role names", n)
 	}
 }
 

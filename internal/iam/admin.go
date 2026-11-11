@@ -112,7 +112,7 @@ func ValidateMaxSessionDuration(seconds int) error {
 // normalized: the role name, the path ("" is "/"), the maximum session
 // duration (0 is 3600), the description and the trust policy document.
 func CheckRoleInput(in RoleInput) (RoleInput, error) {
-	if err := checkName(entityName, "roleName", in.Name); err != nil {
+	if err := CheckRoleName(in.Name); err != nil {
 		return RoleInput{}, err
 	}
 	path, err := normPath(in.Path)
@@ -133,6 +133,12 @@ func CheckRoleInput(in RoleInput) (RoleInput, error) {
 		return RoleInput{}, err
 	}
 	return in, nil
+}
+
+// CheckRoleName reports a role name outside the AWS length and charset
+// ([\w+=,.@-]{1,64}) as ValidationError.
+func CheckRoleName(name string) error {
+	return checkName(entityName, "roleName", name)
 }
 
 // ValidateTrustPolicy checks a role trust policy (AssumeRolePolicyDocument)
