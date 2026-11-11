@@ -20,6 +20,7 @@ import (
 
 	"github.com/popododo0720/vws-console-api/internal/backend"
 	"github.com/popododo0720/vws-console-api/internal/backend/fake"
+	"github.com/popododo0720/vws-console-api/internal/backend/regionclient"
 	"github.com/popododo0720/vws-console-api/internal/resource"
 )
 
@@ -124,14 +125,19 @@ func TestEveryReadRoundTrips(t *testing.T) {
 		t.Fatal(err)
 	}
 	c, _ := loopback(t, config(set))
+	remote, err := regionclient.New(c)
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, service := range []struct {
-		name  string
-		typ   reflect.Type
-		value any
+		name   string
+		typ    reflect.Type
+		value  any
+		remote any
 	}{
-		{"Compute", reflect.TypeFor[backend.Compute](), set.Compute},
-		{"Storage", reflect.TypeFor[backend.Storage](), set.Storage},
-		{"Network", reflect.TypeFor[backend.Network](), set.Network},
+		{"Compute", reflect.TypeFor[backend.Compute](), set.Compute, remote.Compute},
+		{"Storage", reflect.TypeFor[backend.Storage](), set.Storage, remote.Storage},
+		{"Network", reflect.TypeFor[backend.Network](), set.Network, remote.Network},
 	} {
 		for i := 0; i < service.typ.NumMethod(); i++ {
 			method := service.typ.Method(i)
@@ -180,7 +186,26 @@ func TestEveryReadRoundTrips(t *testing.T) {
 					want = ObjectResult{Object: out[0].Interface().(resource.Object), Body: data}
 					dst = &ObjectResult{}
 				}
-				err := c.Call(ctx, service.name, method.Name, scope, q.Interface(), dst)
+				wire := reflect.ValueOf(service.remote).MethodByName(method.Name).Call([]reflect.Value{
+					reflect.ValueOf(ctx), reflect.ValueOf(scope), q,
+				})
+				var err error
+				if !wire[len(wire)-1].IsNil() {
+					err = wire[len(wire)-1].Interface().(error)
+				}
+				if method.Name == "GetObject" && err == nil {
+					body := wire[1].Interface().(io.ReadCloser)
+					data, readErr := io.ReadAll(body)
+					if readErr != nil {
+						t.Fatal(readErr)
+					}
+					if err := body.Close(); err != nil {
+						t.Fatal(err)
+					}
+					dst = &ObjectResult{Object: wire[0].Interface().(resource.Object), Body: data}
+				} else {
+					reflect.ValueOf(dst).Elem().Set(wire[0])
+				}
 				if resource.CodeOf(err) != resource.CodeOf(directErr) {
 					t.Fatalf("wire %v, direct %v", err, directErr)
 				}
@@ -233,8 +258,11 @@ func TestErrorCodesRoundTrip(t *testing.T) {
 				}).WithCause(fmt.Errorf("private secret")),
 			}
 			c, _ := loopback(t, config(set))
-			var page resource.Page[resource.Instance]
-			err := c.Call(context.Background(), "Compute", "DescribeInstances", testScope(t), resource.InstanceQuery{}, &page)
+			remote, err := regionclient.New(c)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = remote.Compute.DescribeInstances(context.Background(), testScope(t), resource.InstanceQuery{})
 			if err == nil || resource.CodeOf(err) != code || resource.AsError(err).Message != "domain message" ||
 				strings.Contains(err.Error(), "private secret") {
 				t.Fatalf("error changed: %v", err)
