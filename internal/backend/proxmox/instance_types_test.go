@@ -271,7 +271,7 @@ func TestInstanceTypeCapacityFailure(t *testing.T) {
 }
 
 func TestCapacityOutageKeepsActionCapabilities(t *testing.T) {
-	c, _ := serve(t, scenario())
+	c, f := serve(t, scenario())
 	reg := registration()
 	reg.Region.Name = resource.RegionName
 	b, err := New(t.Context(), c, reg, RegionConfig{ReadOnly: true})
@@ -283,7 +283,11 @@ func TestCapacityOutageKeepsActionCapabilities(t *testing.T) {
 		t.Fatal(err)
 	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, `{"message":"node capacity unavailable"}`, http.StatusServiceUnavailable)
+		if r.URL.Path == "/api2/json/cluster/resources" && r.URL.Query().Get("type") == "node" {
+			http.Error(w, `{"message":"node capacity unavailable"}`, http.StatusServiceUnavailable)
+			return
+		}
+		f.ServeHTTP(w, r)
 	}))
 	defer srv.Close()
 	b.client, err = pveclient.New(pveclient.Config{

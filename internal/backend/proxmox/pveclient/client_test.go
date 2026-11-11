@@ -55,7 +55,7 @@ var calls = []call{
 		"vm config", func(ctx context.Context, c *Client) (any, error) {
 			return c.VMConfig(ctx, VM{Node: "pve1", VMID: 100})
 		}, "/api2/json/nodes/pve1/qemu/100/config", "", `{"digest":"d1","name":"i-1","cores":2,"lock":"clone"}`,
-		VMConfig{Digest: "d1", Name: "i-1", Lock: "clone"},
+		VMConfig{Digest: "d1", Name: "i-1", Lock: "clone", Cores: 2},
 	},
 	{"snapshots", func(ctx context.Context, c *Client) (any, error) {
 		return c.Snapshots(ctx, VM{Node: "pve1", VMID: 100})

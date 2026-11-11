@@ -35,6 +35,13 @@ func serve(t *testing.T, s pvefake.Scenario) (*pveclient.Client, *pvefake.Fake) 
 		t.Fatal(err)
 	}
 	srv := httptest.NewServer(f)
+	t.Cleanup(func() {
+		for _, request := range f.Requests() {
+			if !strings.HasPrefix(request, "GET ") {
+				t.Errorf("read-only package issued %s", request)
+			}
+		}
+	})
 	t.Cleanup(srv.Close)
 	c, err := pveclient.New(pveclient.Config{
 		BaseURL: srv.URL, TokenID: s.Tokens[0].ID,
@@ -131,6 +138,9 @@ func TestReadOnlyBackendEveryMethod(t *testing.T) {
 			want := resource.ActionEmpty
 			if r.CapabilityKey() == "ec2:DescribeVpcs" || r.CapabilityKey() == "ec2:DescribeSubnets" {
 				want = resource.ActionPartial
+			}
+			if r.CapabilityKey() == "ec2:DescribeInstances" {
+				want = resource.ActionSupported
 			}
 			if doc.Read(r).State != want {
 				t.Fatal(r)

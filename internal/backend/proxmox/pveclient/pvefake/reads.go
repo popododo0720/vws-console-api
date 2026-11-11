@@ -156,6 +156,11 @@ func (f *Fake) config(t *Token, r *http.Request) (any, *failure) {
 	cfg := map[string]any{}
 	for k, v := range vm.Config {
 		cfg[k] = v
+		if k == "cores" || k == "sockets" || k == "memory" {
+			if n, err := strconv.Atoi(v); err == nil {
+				cfg[k] = n
+			}
+		}
 	}
 	setIf(cfg, "name", vm.Name)
 	setIf(cfg, "tags", vm.Tags)

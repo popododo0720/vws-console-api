@@ -76,7 +76,9 @@ func New(ctx context.Context, client *pveclient.Client, reg Registration, cfg Re
 			return nil, fmt.Errorf("proxmox: snippets_storage: unknown storage %q", cfg.SnippetsStorage)
 		}
 	}
-	return &Backend{region: reg.Region.Name, cluster: reg.ClusterName, client: client, cfg: cfg}, nil
+	return &Backend{
+		region: reg.Region.Name, cluster: reg.ClusterName, client: client, cfg: cfg, zones: reg.Region.Zones,
+	}, nil
 }
 
 func forbiddenPrivilege(p string) bool {

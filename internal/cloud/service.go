@@ -17,6 +17,7 @@ type Config struct {
 	// Capabilities gates mutations and reads by the region's document. Nil
 	// declares every action supported, as the fake and gRPC backends serve.
 	Capabilities backend.Capabilities
+	Regions      backend.RegionCatalog
 }
 
 // Service is the single entry the surfaces use.
@@ -25,6 +26,7 @@ type Service struct {
 	audit    *slog.Logger
 	launches *throttle.Launches
 	caps     backend.Capabilities
+	regions  backend.RegionCatalog
 }
 
 // New builds a kernel. A nil logger discards audit lines.
@@ -35,9 +37,13 @@ func New(cfg Config) *Service {
 	if cfg.Capabilities == nil {
 		cfg.Capabilities = backend.AllSupported{Kind: resource.RegionKindProxmox}
 	}
+	if cfg.Regions == nil {
+		cfg.Regions = backend.DefaultRegions()
+	}
 	return &Service{
 		backends: cfg.Backends, audit: cfg.Audit, launches: cfg.Launches,
-		caps: cfg.Backends.Capabilities(cfg.Capabilities),
+		caps:    cfg.Backends.Capabilities(cfg.Capabilities),
+		regions: cfg.Regions,
 	}
 }
 
