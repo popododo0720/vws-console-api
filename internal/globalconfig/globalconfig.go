@@ -83,7 +83,7 @@ func Parse(data []byte) (Config, error) {
 	}
 	var root yaml.Node
 	if err := yaml.Unmarshal(data, &root); err != nil {
-		return Config{}, fmt.Errorf("%w: %w", ErrInvalid, err)
+		return Config{}, yamlError(err)
 	}
 	if err := refuseKeys(&root); err != nil {
 		return Config{}, err
@@ -95,7 +95,7 @@ func Parse(data []byte) (Config, error) {
 		if errors.Is(err, io.EOF) {
 			return Config{}, fmt.Errorf("%w: empty", ErrInvalid)
 		}
-		return Config{}, fmt.Errorf("%w: %w", ErrInvalid, err)
+		return Config{}, yamlError(err)
 	}
 	if err := dec.Decode(&yaml.Node{}); !errors.Is(err, io.EOF) {
 		return Config{}, fmt.Errorf("%w: more than one document", ErrInvalid)
@@ -104,6 +104,30 @@ func Parse(data []byte) (Config, error) {
 		return Config{}, err
 	}
 	return cfg, nil
+}
+
+// yamlError keeps only the line numbers of a YAML error. Its text quotes the
+// offending value, and a mistyped field may hold a secret.
+func yamlError(err error) error {
+	var lines []string
+	for rest := err.Error(); ; {
+		i := strings.Index(rest, "line ")
+		if i < 0 {
+			break
+		}
+		rest = rest[i+len("line "):]
+		n := 0
+		for n < len(rest) && rest[n] >= '0' && rest[n] <= '9' {
+			n++
+		}
+		if n > 0 {
+			lines = append(lines, "line "+rest[:n])
+		}
+	}
+	if len(lines) == 0 {
+		return fmt.Errorf("%w: malformed YAML", ErrInvalid)
+	}
+	return fmt.Errorf("%w: malformed YAML at %s", ErrInvalid, strings.Join(lines, ", "))
 }
 
 // refuseKeys names a registration or an inline secret before the strict

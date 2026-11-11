@@ -14,6 +14,7 @@ import (
 
 	"github.com/popododo0720/vws-lib/obs"
 
+	"github.com/popododo0720/vws-console-api/internal/admin/store"
 	"github.com/popododo0720/vws-console-api/internal/cloud"
 	"github.com/popododo0720/vws-console-api/internal/iam"
 	"github.com/popododo0720/vws-console-api/internal/resource"
@@ -44,10 +45,11 @@ func (b BearerTokens) Authenticate(_ context.Context, token string) (resource.Ca
 // the bearer Auth works and every request is denied. Auth maps the legacy
 // bearer console token to the account root until that token is retired.
 type Config struct {
-	Service *cloud.Service
-	Auth    Authenticator
-	IAM     iam.Client
-	Logger  *slog.Logger
+	Service  *cloud.Service
+	Auth     Authenticator
+	IAM      iam.Client
+	Registry *store.Registry
+	Logger   *slog.Logger
 	// Origins are browser origins allowed besides the console's own host,
 	// such as https://console.vws.example.
 	Origins []string
@@ -88,6 +90,7 @@ func New(cfg Config) http.Handler {
 		users:    newLimiter(lim.UserBurst, lim.UserRefill, lim.MaxKeys),
 		loginOff: cfg.LoginDisabled,
 		requests: cfg.Requests,
+		registry: cfg.Registry,
 	}
 	h.routes(h.mux)
 	return h
@@ -112,6 +115,11 @@ func (h *handler) routes(mux *http.ServeMux) {
 	handle(routeLogin, h.login)
 	handle(routeLogout, h.logout)
 	handle(routeSession, h.session)
+	handle("GET /api/v1/admin/regions", h.adminRegions)
+	handle("GET /api/v1/admin/regions/{name}", h.adminRegion)
+	handle("GET /api/v1/admin/aws-accounts", h.adminAccounts)
+	handle("GET /api/v1/admin/aws-accounts/{id}", h.adminAccount)
+	handle("GET /api/v1/admin/permissions", h.adminPermissions)
 	for _, action := range resource.Actions() {
 		method, pattern, fn := h.mutation(action)
 		handle(method+" "+pattern, fn)
@@ -149,6 +157,7 @@ func (h *handler) routes(mux *http.ServeMux) {
 }
 
 type handler struct {
+	registry *store.Registry
 	svc      *cloud.Service
 	auth     Authenticator
 	iam      iam.Client

@@ -31,6 +31,34 @@ func TestStopOnSIGTERM(t *testing.T) {
 	}
 }
 
+func TestRegistryConfiguration(t *testing.T) {
+	g, closeRegistry, err := openRegistry(t.Context(), "", "fake")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := closeRegistry(); err != nil {
+			t.Error(err)
+		}
+	})
+	if _, _, err := g.Regions().List(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := openRegistry(t.Context(), "", "grpc"); err == nil {
+		t.Fatal("production silently used memory")
+	}
+	if _, _, err := openRegistry(t.Context(), filepath.Join(t.TempDir(), "missing"), "fake"); err == nil {
+		t.Fatal("missing bootstrap file accepted")
+	}
+	path := filepath.Join(t.TempDir(), "global.yaml")
+	if err := os.WriteFile(path, []byte("unknown: true\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := openRegistry(t.Context(), path, "fake"); err == nil {
+		t.Fatal("invalid bootstrap accepted")
+	}
+}
+
 func TestGRPCRefusesDefaultCredentials(t *testing.T) {
 	clearCredentialEnv(t)
 	t.Setenv("VWS_ACCESS_KEY", "AKIDREAL")

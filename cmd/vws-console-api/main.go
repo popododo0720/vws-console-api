@@ -15,6 +15,8 @@ import (
 
 	"github.com/popododo0720/vws-lib/obs"
 
+	"github.com/popododo0720/vws-console-api/internal/admin/store"
+	"github.com/popododo0720/vws-console-api/internal/admin/store/etcdstore"
 	"github.com/popododo0720/vws-console-api/internal/backend"
 	"github.com/popododo0720/vws-console-api/internal/backend/fake"
 	"github.com/popododo0720/vws-console-api/internal/backend/grpcclient"
@@ -22,6 +24,7 @@ import (
 	"github.com/popododo0720/vws-console-api/internal/backend/launch"
 	"github.com/popododo0720/vws-console-api/internal/backend/launch/kubestore"
 	"github.com/popododo0720/vws-console-api/internal/cloud"
+	"github.com/popododo0720/vws-console-api/internal/globalconfig"
 	"github.com/popododo0720/vws-console-api/internal/iam"
 	"github.com/popododo0720/vws-console-api/internal/resource"
 	"github.com/popododo0720/vws-console-api/internal/server"
@@ -64,6 +67,8 @@ func run(ctx context.Context, args []string) (err error) {
 	fs := flag.NewFlagSet("vws-console-api", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	backendKind := fs.String("backend", "fake", "fake or grpc")
+	globalConfig := fs.String("global-config", "", "global.yaml bootstrap path for the admin registry; "+
+		"empty uses memory with -backend=fake")
 	consoleAddr := fs.String("console-addr", "127.0.0.1:8080", "console listen address")
 	ec2Addr := fs.String("ec2-addr", "127.0.0.1:8081", "query listen address")
 	s3Addr := fs.String("s3-addr", "127.0.0.1:8082", "object listen address")
@@ -204,6 +209,11 @@ func run(ctx context.Context, args []string) (err error) {
 		return fmt.Errorf("unknown -backend %q", *backendKind)
 	}
 
+	registry, closeRegistry, err := openRegistry(ctx, *globalConfig, *backendKind)
+	if err != nil {
+		return err
+	}
+	defer func() { err = errors.Join(err, closeRegistry()) }()
 	svc := cloud.New(cloud.Config{Backends: set, Audit: logger, Launches: throttle.NewLaunches(launchLimits)})
 	// The static key is the account root; with -iam=fake or -iam=grpc it
 	// sits in front of the IAM client through iam.WithRoot.
@@ -257,6 +267,7 @@ func run(ctx context.Context, args []string) (err error) {
 	return server.Serve(ctx, server.Options{Logger: logger, OpsAddr: *opsAddr, Surfaces: []server.Surface{
 		{Name: "console", Addr: *consoleAddr, Handler: console.New(console.Config{
 			Service:        svc,
+			Registry:       registry,
 			Auth:           console.BearerTokens{*consoleToken: caller},
 			IAM:            auth,
 			Logger:         logger,
@@ -274,6 +285,24 @@ func run(ctx context.Context, args []string) (err error) {
 			Admin: admin, Authorizer: auth, IAM: verifier(sigv4.ServiceIAM), STS: verifier(sigv4.ServiceSTS),
 		})},
 	}})
+}
+
+func openRegistry(ctx context.Context, path, backendKind string) (*store.Registry, func() error, error) {
+	if path == "" {
+		if backendKind != "fake" {
+			return nil, nil, errors.New("-global-config is required for the admin registry with -backend=grpc")
+		}
+		return store.New(store.NewMemory()), func() error { return nil }, nil
+	}
+	data, err := os.ReadFile(path) //nolint:gosec // operator-selected bootstrap file.
+	if err != nil {
+		return nil, nil, fmt.Errorf("read -global-config: %w", err)
+	}
+	cfg, err := globalconfig.Parse(data)
+	if err != nil {
+		return nil, nil, fmt.Errorf("parse -global-config: %w", err)
+	}
+	return etcdstore.Open(ctx, cfg.IAM)
 }
 
 // iamDialOptions turns the -iam-tls-* flags into Dial options. Without them

@@ -88,6 +88,11 @@ func routeAction(pattern string) (authorization, bool) {
 		}
 	}
 	z, ok := map[string]authorization{
+		"GET /api/v1/admin/regions":                      nil,
+		"GET /api/v1/admin/regions/{name}":               nil,
+		"GET /api/v1/admin/aws-accounts":                 nil,
+		"GET /api/v1/admin/aws-accounts/{id}":            nil,
+		"GET /api/v1/admin/permissions":                  nil,
 		"GET /api/v1/instances":                          ec2("DescribeInstances"),
 		"GET /api/v1/instances/{id}":                     ec2("DescribeInstances"),
 		"POST /api/v1/instances/stop":                    ec2("StopInstances"),
@@ -158,6 +163,22 @@ func (h *handler) gate(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeErr(w, r, err)
 		return
+	}
+	if strings.HasPrefix(pattern, "GET /api/v1/admin/") {
+		w.Header().Set("Cache-Control", "no-store")
+		if !c.Root {
+			if pattern == "GET /api/v1/admin/permissions" {
+				writeJSON(w, http.StatusForbidden, permissionsBody{Permissions: []string{}})
+			} else {
+				writeErr(w, r, resource.Denied("administrator required"))
+			}
+			return
+		}
+		if wait, err := h.requests.Take(c.Account, "vws:AdminRead"); err != nil {
+			retryAfter(w, wait)
+			writeErr(w, r, err)
+			return
+		}
 	}
 	if authz != nil {
 		action, arn := authz(r)
