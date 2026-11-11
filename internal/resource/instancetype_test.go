@@ -45,13 +45,13 @@ func TestInstanceTypeMapsToNearestVWSType(t *testing.T) {
 				best, bestD = v.name, d
 			}
 		}
-		got, ok := vwsInstanceType(name)
+		got, ok := ComputeInstanceType(name)
 		if !ok || got != best {
 			t.Errorf("%s: got %q, %v; want %q", name, got, ok, best)
 		}
 	}
 	for _, v := range vws {
-		if got, ok := vwsInstanceType(v.name); !ok || got != v.name {
+		if got, ok := ComputeInstanceType(v.name); !ok || got != v.name {
 			t.Errorf("%s: got %q, %v", v.name, got, ok)
 		}
 	}

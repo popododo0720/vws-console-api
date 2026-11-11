@@ -61,11 +61,17 @@ func (a AllSupported) RegionCapabilities(_ context.Context, region string) (reso
 	for _, r := range resource.ReadActions() {
 		actions[r.CapabilityKey()] = supported
 	}
+	types := []resource.RegionInstanceType{}
+	for _, typ := range resource.InstanceTypes() {
+		types = append(types, resource.RegionInstanceType{
+			InstanceType: typ.Name, VCPUs: typ.VCPUs, MemoryMiB: typ.MemoryMiB,
+		})
+	}
 	return resource.RegionCapabilities{
 		Region:        region,
 		Kind:          a.Kind,
 		Zones:         []resource.RegionZone{},
 		Actions:       actions,
-		InstanceTypes: []resource.RegionInstanceType{},
+		InstanceTypes: types,
 	}, nil
 }

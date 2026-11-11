@@ -32,7 +32,7 @@ type TemplateConfig struct {
 	Tag  string `yaml:"tag"`
 }
 
-// InstanceTypeConfig describes a local instance size.
+// InstanceTypeConfig selects a default type; nonzero sizes must match its definition.
 type InstanceTypeConfig struct {
 	Cores     int `yaml:"cores"`
 	MemoryMiB int `yaml:"memory_mib"`
