@@ -44,6 +44,26 @@ type Network struct {
 type Storage struct {
 	Node string `yaml:"node"`
 	Name string `yaml:"name"`
+
+	Content []StorageContent `yaml:"content"`
+}
+
+// StorageContent is one disk image in a scenario's storage.
+type StorageContent struct {
+	VolID   string `yaml:"volid" json:"volid"`
+	Content string `yaml:"content" json:"content"`
+	Format  string `yaml:"format" json:"format"`
+	Size    int64  `yaml:"size" json:"size"`
+	VMID    int    `yaml:"vmid" json:"vmid"`
+}
+
+// Snapshot is a saved VM state; the API also synthesizes the current entry.
+type Snapshot struct {
+	Name        string `yaml:"name" json:"name"`
+	Description string `yaml:"description" json:"description"`
+	Parent      string `yaml:"parent" json:"parent"`
+	SnapTime    int64  `yaml:"snaptime" json:"snaptime"`
+	VMState     int    `yaml:"vmstate" json:"vmstate"`
 }
 
 // Version is GET /version.
@@ -73,6 +93,8 @@ type VM struct {
 	MaxCPU   int               `yaml:"maxcpu"`
 	MaxMem   int64             `yaml:"maxmem"`
 	Config   map[string]string `yaml:"config"`
+
+	Snapshots []Snapshot `yaml:"snapshots"`
 }
 
 // Role is a named privilege set, as GET /access/roles lists it.
@@ -173,6 +195,10 @@ func (s Scenario) clone() Scenario {
 	s.Networks = slices.Clone(s.Networks)
 	for i := range s.VMs {
 		s.VMs[i].Config = maps.Clone(s.VMs[i].Config)
+		s.VMs[i].Snapshots = slices.Clone(s.VMs[i].Snapshots)
+	}
+	for i := range s.Storages {
+		s.Storages[i].Content = slices.Clone(s.Storages[i].Content)
 	}
 	for i := range s.Roles {
 		s.Roles[i].Privs = slices.Clone(s.Roles[i].Privs)

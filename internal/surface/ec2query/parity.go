@@ -717,6 +717,18 @@ func (h *handler) describeTags(w http.ResponseWriter, r *http.Request, c resourc
 			rows = appendTagDescriptions(rows, "volume", vol.ID.String(), vol.Tags)
 		}
 	}
+	if typeWanted(filters, "snapshot") {
+		snapshots, err := collectPages(r.Context(), c, func(page resource.PageRequest) resource.SnapshotQuery {
+			return resource.SnapshotQuery{Page: page}
+		}, h.svc.DescribeSnapshots)
+		if err != nil {
+			writeErr(w, r, err)
+			return
+		}
+		for _, snapshot := range snapshots {
+			rows = appendTagDescriptions(rows, "snapshot", snapshot.ID.String(), snapshot.Tags)
+		}
+	}
 	sort.Slice(rows, func(i, j int) bool { return rows[i].identity() < rows[j].identity() })
 	filtered := rows[:0]
 	for _, row := range rows {

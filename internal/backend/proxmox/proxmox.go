@@ -45,6 +45,7 @@ func (b *Backend) RegionCapabilities(ctx context.Context, region string) (resour
 		Region: region, Kind: resource.RegionKindProxmox,
 		Cluster: &resource.RegionCluster{Name: b.cluster}, Zones: zones,
 		Actions: map[string]resource.ActionCapability{}, InstanceTypes: types,
+		Features: resource.RegionFeatures{SnapshotScope: "vm"},
 	}
 	for _, a := range resource.Actions() {
 		doc.Actions[a.CapabilityKey()] = resource.ActionCapability{
@@ -54,7 +55,10 @@ func (b *Backend) RegionCapabilities(ctx context.Context, region string) (resour
 	for _, r := range resource.ReadActions() {
 		doc.Actions[r.CapabilityKey()] = resource.ActionCapability{State: resource.ActionEmpty}
 	}
-	for _, key := range []string{"ec2:DescribeInstances", "ec2:DescribeAvailabilityZones", "ec2:DescribeRegions"} {
+	for _, key := range []string{
+		"ec2:DescribeInstances", "ec2:DescribeAvailabilityZones", "ec2:DescribeRegions",
+		"ec2:DescribeVolumes", "ec2:DescribeSnapshots", "ec2:DescribeTags",
+	} {
 		doc.Actions[key] = resource.ActionCapability{State: resource.ActionSupported}
 	}
 	for _, key := range []string{"ec2:DescribeVpcs", "ec2:DescribeSubnets"} {
@@ -174,13 +178,6 @@ func (b *Backend) ModifyVolume(
 	return resource.Accepted[resource.Volume]{}, resource.Unsupported("ModifyVolume", "read-only")
 }
 
-// DescribeVolumes answers the phase-one empty inventory.
-func (b *Backend) DescribeVolumes(
-	ctx context.Context, s backend.Scope, q resource.VolumeQuery,
-) (resource.Page[resource.Volume], error) {
-	return resource.Page[resource.Volume]{}, nil
-}
-
 // DescribeImages answers the phase-one empty inventory.
 func (b *Backend) DescribeImages(
 	ctx context.Context, s backend.Scope, q resource.ImageQuery,
@@ -221,13 +218,6 @@ func (b *Backend) DeleteSnapshot(
 	ctx context.Context, m backend.Mutation, req resource.DeleteSnapshotRequest,
 ) (resource.Accepted[resource.Snapshot], error) {
 	return resource.Accepted[resource.Snapshot]{}, resource.Unsupported("DeleteSnapshot", "read-only")
-}
-
-// DescribeSnapshots answers the phase-one empty inventory.
-func (b *Backend) DescribeSnapshots(
-	ctx context.Context, s backend.Scope, q resource.SnapshotQuery,
-) (resource.Page[resource.Snapshot], error) {
-	return resource.Page[resource.Snapshot]{}, nil
 }
 
 // RegisterImage is unavailable in the phase-one backend.

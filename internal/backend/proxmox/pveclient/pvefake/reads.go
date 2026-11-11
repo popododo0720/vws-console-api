@@ -25,11 +25,38 @@ func (f *Fake) routes() {
 	f.handle("/nodes", f.nodes)
 	f.handle("/nodes/{node}/network", f.network)
 	f.handle("/nodes/{node}/qemu/{vmid}/config", f.config)
+	f.handle("/nodes/{node}/qemu/{vmid}/snapshot", f.snapshots)
+	f.handle("/nodes/{node}/storage/{storage}/content", f.storageContent)
 	f.handle("/access/permissions", f.permissions)
 	f.mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		msg := fmt.Sprintf("Method '%s %s' not implemented", r.Method, r.URL.Path)
 		reply(w, nil, &failure{http.StatusNotImplemented, msg})
 	})
+}
+
+func (f *Fake) snapshots(t *Token, r *http.Request) (any, *failure) {
+	vm, fail := f.guest(t, r)
+	if fail != nil {
+		return nil, fail
+	}
+	return append([]Snapshot{{Name: "current"}}, vm.Snapshots...), nil
+}
+
+func (f *Fake) storageContent(t *Token, r *http.Request) (any, *failure) {
+	node, fail := f.node(r)
+	if fail != nil {
+		return nil, fail
+	}
+	name := r.PathValue("storage")
+	if fail := f.need(t, "/storage/"+name, "Datastore.Audit"); fail != nil {
+		return nil, fail
+	}
+	for _, storage := range f.s.Storages {
+		if storage.Node == node && storage.Name == name {
+			return append([]StorageContent{}, storage.Content...), nil
+		}
+	}
+	return nil, &failure{http.StatusInternalServerError, fmt.Sprintf("storage '%s' does not exist", name)}
 }
 
 func (f *Fake) network(t *Token, r *http.Request) (any, *failure) {
