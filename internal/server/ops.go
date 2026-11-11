@@ -121,6 +121,10 @@ func opsHandler(m *Metrics, ready *atomic.Bool, check func(context.Context) erro
 		}
 		if check != nil {
 			if err := check(r.Context()); err != nil {
+				if err.Error() == "unregistered" {
+					writeText(w, http.StatusServiceUnavailable, "unregistered\n")
+					return
+				}
 				writeText(w, http.StatusServiceUnavailable, "not ready\n")
 				return
 			}

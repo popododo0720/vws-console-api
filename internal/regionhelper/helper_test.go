@@ -176,7 +176,7 @@ func TestFailuresDoNotLeakContents(t *testing.T) {
 		t.Fatalf("unsafe error: %v", err)
 	}
 	var stderr bytes.Buffer
-	if Main([]string{"secret-token"}, strings.NewReader("secret-body"), &stderr) == 0 ||
+	if Main([]string{"secret-token"}, strings.NewReader("secret-body"), &bytes.Buffer{}, &stderr) == 0 ||
 		strings.Contains(stderr.String(), "secret") {
 		t.Fatal("unsafe CLI error")
 	}
@@ -213,6 +213,22 @@ func TestCredentialConfigAndInputBoundary(t *testing.T) {
 }
 
 func TestMain(m *testing.M) {
+	if root := os.Getenv("VWS_HELPER_TEST_ROOT"); root != "" {
+		if fail, err := os.ReadFile(root + "/fail"); err == nil && string(fail) == os.Args[1] {
+			if os.Remove(root+"/fail") != nil {
+				os.Exit(2)
+			}
+			os.Exit(1)
+		}
+		h := helper{
+			public: root + "/public", private: root + "/private", locks: root + "/locks",
+			kek: root + "/region-kek", owner: uint32(os.Geteuid()),
+		}
+		if err := h.execute(os.Args[1:], os.Stdin, os.Stdout); err != nil {
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
 	if path := os.Getenv("VWS_HELPER_TEST_CAPTURE"); path != "" {
 		data, err := os.ReadFile("/dev/stdin")
 		if err != nil {
@@ -225,6 +241,33 @@ func TestMain(m *testing.M) {
 		os.Exit(0)
 	}
 	os.Exit(m.Run())
+}
+
+func TestTokenReadAndCredentialFallback(t *testing.T) {
+	h := fixture(t)
+	plain := []byte("canary-token-read")
+	if err := h.run([]string{"token-write"}, bytes.NewReader(plain)); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := h.execute([]string{"token-read"}, nil, &out); err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(out.Bytes(), plain) {
+		t.Fatal("token-read emitted plaintext")
+	}
+	got, err := Open(bytes.Repeat([]byte{42}, 32), out.Bytes())
+	if err != nil || !bytes.Equal(got, plain) {
+		t.Fatal("token-read did not return the encrypted envelope")
+	}
+	out.Reset()
+	if h.execute([]string{"token-read", h.private + "/pve-token"}, nil, &out) == nil || out.Len() != 0 {
+		t.Fatal("token-read accepted arguments")
+	}
+	if credentialPath("") != "/etc/vws/credentials/region-kek" ||
+		credentialPath("/run/credentials/vws-region.service") != "/run/credentials/vws-region.service/region-kek" {
+		t.Fatal("incorrect KEK fallback or systemd credential path")
+	}
 }
 
 func TestClientUsesFixedArgvAndStdin(t *testing.T) {

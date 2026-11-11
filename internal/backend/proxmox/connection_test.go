@@ -11,7 +11,7 @@ import (
 func snapshot(t *testing.T, dir string) string {
 	t.Helper()
 	path := filepath.Join(dir, "registration.json")
-	if err := os.WriteFile(path, []byte(`{"region":"pve-test-1","clusterName":"test",
+	if err := os.WriteFile(path, []byte(`{"region":"pve-test-1","cluster_name":"test",
 		"tokenId":"vws@pve!inventory","token":"fake-secret"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -40,8 +40,12 @@ func TestConnectionRequiresConfigRegistrationAndSelfCheck(t *testing.T) {
 		if err := os.Chmod(reg, mode); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := Open(config, reg, "https://unused", nil); err == nil {
-			t.Fatalf("accepted registration permissions %o", mode)
+		c, err := Open(config, reg, "https://unused", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := c.Check(t.Context()); err == nil {
+			t.Fatalf("accepted plaintext registration with permissions %o", mode)
 		}
 	}
 	if err := os.Chmod(reg, 0o600); err != nil {
@@ -50,7 +54,11 @@ func TestConnectionRequiresConfigRegistrationAndSelfCheck(t *testing.T) {
 	if err := os.WriteFile(reg, []byte(`{"token":"do-not-echo","extra":"do-not-echo"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Open(config, reg, "https://unused", nil); err == nil || strings.Contains(err.Error(), "do-not-echo") {
+	c, err := Open(config, reg, "https://unused", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Check(t.Context()); err == nil || strings.Contains(err.Error(), "do-not-echo") {
 		t.Fatalf("invalid snapshot: %v", err)
 	}
 }
@@ -64,7 +72,7 @@ func TestRegistrationIdentityIsBounded(t *testing.T) {
 	reg := filepath.Join(dir, "registration.json")
 	write := func(region, cluster, tokenID string) {
 		t.Helper()
-		body := `{"region":"` + region + `","clusterName":"` + cluster + `","tokenId":"` + tokenID +
+		body := `{"region":"` + region + `","cluster_name":"` + cluster + `","tokenId":"` + tokenID +
 			`","token":"do-not-echo"}`
 		if err := os.WriteFile(reg, []byte(body), 0o600); err != nil {
 			t.Fatal(err)
@@ -85,12 +93,20 @@ func TestRegistrationIdentityIsBounded(t *testing.T) {
 		{"pve-test-1", "test", "vws@pve!in=ventory"},
 	} {
 		write(c.region, c.cluster, c.tokenID)
-		if _, err := Open(config, reg, "https://unused", nil); err == nil || strings.Contains(err.Error(), "do-not-echo") {
+		data, err := os.ReadFile(reg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := decodeRegistration(data); err == nil || strings.Contains(err.Error(), "do-not-echo") {
 			t.Fatalf("accepted %+v: %v", c, err)
 		}
 	}
 	write("pve-test-1", "test", "vws@pve!inventory")
-	if _, err := Open(config, reg, "https://unused", nil); err != nil {
+	data, err := os.ReadFile(reg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := decodeRegistration(data); err != nil {
 		t.Fatalf("refused a valid registration: %v", err)
 	}
 }
@@ -110,7 +126,11 @@ func TestConnectionRejectsMutationTokenEvenWithoutReadOnlyConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.Check(t.Context()); err == nil || !strings.Contains(err.Error(), "VM.PowerMgmt") {
+	data, err := os.ReadFile(snapshot(t, dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Register(t.Context(), data); err == nil || !strings.Contains(err.Error(), "self-check") {
 		t.Fatalf("mutation-capable token accepted: %v", err)
 	}
 }

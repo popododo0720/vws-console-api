@@ -8,5 +8,5 @@ import (
 )
 
 func main() {
-	os.Exit(regionhelper.Main(os.Args[1:], os.Stdin, os.Stderr))
+	os.Exit(regionhelper.Main(os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
 }
