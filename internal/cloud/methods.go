@@ -176,13 +176,14 @@ func (s *Service) TagSubnets(ctx context.Context, c resource.Caller, token resou
 
 // DescribeVolumes lists volumes the caller owns.
 func (s *Service) DescribeVolumes(ctx context.Context, c resource.Caller, q resource.VolumeQuery) (resource.Page[resource.Volume], error) {
-	return readPage(ctx, c, q, s.backends.Compute.DescribeVolumes)
+	return readPage(ctx, c, q, served(s, resource.ReadDescribeVolumes, s.backends.Compute.DescribeVolumes))
 }
 
 // DescribeImages lists images the caller can launch. A public image may belong
 // to another account.
 func (s *Service) DescribeImages(ctx context.Context, c resource.Caller, q resource.ImageQuery) (resource.Page[resource.Image], error) {
-	return readPageGuarded(ctx, c, q, s.backends.Compute.DescribeImages, guardImage)
+	images := served(s, resource.ReadDescribeImages, s.backends.Compute.DescribeImages)
+	return readPageGuarded(ctx, c, q, images, guardImage)
 }
 
 // CreateKeyPair accepts a key pair and returns the operation. The private key
@@ -206,7 +207,7 @@ func (s *Service) DeleteKeyPair(ctx context.Context, c resource.Caller, token re
 
 // DescribeKeyPairs lists key pairs the caller owns.
 func (s *Service) DescribeKeyPairs(ctx context.Context, c resource.Caller, q resource.KeyPairQuery) (resource.Page[resource.KeyPair], error) {
-	return readPage(ctx, c, q, s.backends.Compute.DescribeKeyPairs)
+	return readPage(ctx, c, q, served(s, resource.ReadDescribeKeyPairs, s.backends.Compute.DescribeKeyPairs))
 }
 
 // CreateSnapshot accepts a snapshot and returns the operation.
@@ -241,12 +242,12 @@ func (s *Service) DeleteSnapshot(ctx context.Context, c resource.Caller, token r
 
 // DescribeSnapshots lists snapshots the caller owns.
 func (s *Service) DescribeSnapshots(ctx context.Context, c resource.Caller, q resource.SnapshotQuery) (resource.Page[resource.Snapshot], error) {
-	return readPage(ctx, c, q, s.backends.Compute.DescribeSnapshots)
+	return readPage(ctx, c, q, served(s, resource.ReadDescribeSnapshots, s.backends.Compute.DescribeSnapshots))
 }
 
 // DescribeInstances lists instances the caller owns.
 func (s *Service) DescribeInstances(ctx context.Context, c resource.Caller, q resource.InstanceQuery) (resource.Page[resource.Instance], error) {
-	page, err := readPage(ctx, c, q, s.backends.Compute.DescribeInstances)
+	page, err := readPage(ctx, c, q, served(s, resource.ReadDescribeInstances, s.backends.Compute.DescribeInstances))
 	if err != nil || len(page.Items) == 0 {
 		return page, err
 	}
@@ -329,7 +330,7 @@ func (s *Service) DeleteSubnet(ctx context.Context, c resource.Caller, token res
 
 // DescribeSubnets lists subnets the caller owns.
 func (s *Service) DescribeSubnets(ctx context.Context, c resource.Caller, q resource.SubnetQuery) (resource.Page[resource.Subnet], error) {
-	return readPage(ctx, c, q, s.backends.Network.DescribeSubnets)
+	return readPage(ctx, c, q, served(s, resource.ReadDescribeSubnets, s.backends.Network.DescribeSubnets))
 }
 
 // CreateVpc accepts a VPC and returns the operation.
@@ -352,7 +353,7 @@ func (s *Service) DeleteVpc(ctx context.Context, c resource.Caller, token resour
 
 // DescribeVpcs lists VPCs the caller owns.
 func (s *Service) DescribeVpcs(ctx context.Context, c resource.Caller, q resource.VpcQuery) (resource.Page[resource.Vpc], error) {
-	return readPage(ctx, c, q, s.backends.Network.DescribeVpcs)
+	return readPage(ctx, c, q, served(s, resource.ReadDescribeVpcs, s.backends.Network.DescribeVpcs))
 }
 
 // CreateSecurityGroup accepts a group and returns the operation.
@@ -375,7 +376,7 @@ func (s *Service) DeleteSecurityGroup(ctx context.Context, c resource.Caller, to
 
 // DescribeSecurityGroups lists security groups the caller owns.
 func (s *Service) DescribeSecurityGroups(ctx context.Context, c resource.Caller, q resource.SecurityGroupQuery) (resource.Page[resource.SecurityGroup], error) {
-	return readPage(ctx, c, q, s.backends.Network.DescribeSecurityGroups)
+	return readPage(ctx, c, q, served(s, resource.ReadDescribeSecurityGroups, s.backends.Network.DescribeSecurityGroups))
 }
 
 // AllocateAddress accepts an allocation and returns the operation.
@@ -416,7 +417,7 @@ func (s *Service) DisassociateAddress(ctx context.Context, c resource.Caller, to
 
 // DescribeAddresses lists addresses the caller owns.
 func (s *Service) DescribeAddresses(ctx context.Context, c resource.Caller, q resource.AddressQuery) (resource.Page[resource.Address], error) {
-	return readPage(ctx, c, q, s.backends.Network.DescribeAddresses)
+	return readPage(ctx, c, q, served(s, resource.ReadDescribeAddresses, s.backends.Network.DescribeAddresses))
 }
 
 // AuthorizeSecurityGroupIngress accepts one inbound rule and returns the operation.

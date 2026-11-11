@@ -64,6 +64,9 @@ func mutate[R resource.Request[R], T resource.Owned](
 	if err != nil {
 		return resource.Accepted[T]{}, resource.Internal(err)
 	}
+	if err := s.admit(ctx, req.Action()); err != nil {
+		return resource.Accepted[T]{}, err
+	}
 	acc, err := call(ctx, m, req)
 	if err != nil {
 		return resource.Accepted[T]{}, err
