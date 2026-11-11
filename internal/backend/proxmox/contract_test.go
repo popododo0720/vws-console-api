@@ -6,7 +6,6 @@ import (
 	"github.com/popododo0720/vws-console-api/internal/backend"
 	"github.com/popododo0720/vws-console-api/internal/backend/backendtest"
 	"github.com/popododo0720/vws-console-api/internal/backend/proxmox/pveclient/pvefake"
-	"github.com/popododo0720/vws-console-api/internal/resource"
 )
 
 func TestContract(t *testing.T) {
@@ -46,15 +45,5 @@ func TestContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	backendtest.Run(t, func() backend.Set { return reopen().Set() }, caps)
-	t.Run("IDStability", func(t *testing.T) {
-		backendtest.IDStability(t, func() backend.Set { return reopen().Set() }, caps, inventoryScope())
-	})
-	t.Run("ReadTenancy", func(t *testing.T) {
-		other, err := resource.Parse[resource.AccountID]("210987654321")
-		if err != nil {
-			t.Fatal(err)
-		}
-		backendtest.ReadTenancy(t, reopen().Set(), caps, inventoryScope(), backend.Scope{Account: other})
-	})
+	backendtest.Run(t, func() backend.Set { return reopen().Set() }, caps, backendtest.SeededInventory())
 }
