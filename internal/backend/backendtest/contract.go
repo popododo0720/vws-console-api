@@ -487,6 +487,10 @@ func contractObjects(ctx context.Context, t *testing.T, set backend.Set, account
 		t.Fatal(err)
 	}
 	if _, err := set.Storage.CreateBucket(ctx, backend.Scope{Account: account}, name); err != nil {
+		// Region capabilities describe EC2 only; S3 support is reported by storage.
+		if resource.IsUnsupported(resource.AsError(err)) {
+			t.Skipf("s3:CreateBucket: %v", err)
+		}
 		t.Fatal(err)
 	}
 	if _, err := set.Storage.CreateBucket(ctx, backend.Scope{Account: account}, name); !resource.OwnedByCaller(err) {
