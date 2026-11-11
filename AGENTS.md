@@ -22,6 +22,8 @@ project is someone else's cloud.
 | `internal/backend/launch` | The RunInstances launch record and the tracker that writes it on transitions. |
 | `internal/backend/launch/kubestore` | Launch records as ConfigMaps. The only package that sees Kubernetes types. |
 | `internal/backend/proxmox` | The Proxmox VE backend; `ids.go` computes EC2 ids from Proxmox data; `tags.go` is the reversible AWS tag to Proxmox tag codec and the `vws:tags` description block. |
+| `internal/admin/store` | Operator registrations (regions, AWS accounts) under `/vws/admin/`, CAS on a version; `storetest` is its contract. |
+| `internal/admin/store/etcdstore` | The registry on etcd. The only package that sees etcd types. |
 | `internal/sigv4` | Signature verification, plus `Sign` for tests. |
 | `internal/globalconfig` | `/etc/vws/global.yaml`: bootstrap settings only; regions and AWS accounts come from the admin API. |
 | `internal/surface/*` | `console` (JSON), `ec2query`, `s3rest` codecs; `interop` drives several surfaces against one world. |
@@ -42,6 +44,8 @@ change both files together.
 | Protobuf and gRPC types stay in `internal/backend/grpcclient`. | depguard `grpc-stays-in-grpcclient` |
 | Kubernetes types stay in `internal/backend/launch/kubestore`. | depguard `kube-stays-in-kubestore` |
 | PVE API types (`pveclient`) stay in `internal/backend/proxmox`. | depguard `pve-stays-in-proxmox` |
+| etcd types stay in `internal/admin/store/etcdstore`. | depguard `etcd-stays-in-etcdstore` |
+| An admin registration under `/vws/admin/` is written only by compare-and-swap on its version; etcd and memory behave the same (#752). | `storetest.Run` |
 | A RunInstances launch record, a ConfigMap under `-launch-namespace`, holds the client token key, the planned resources and each completed step; it is written only on a step, phase or collection transition, by compare-and-swap on `resourceVersion`, under 256 KiB, and only the latest attempt marks it failed. | `TestRunInstancesRecordsEachStep`, `TestPhaseTransitionsWriteOnce`, `TestPlanNamesACreateWhoseStepWasNotRecorded`, `TestStaleAttemptCannotFailARetry`, `TestNoOpRetryLeavesResourceVersion`, `TestLargestLaunchFitsTheObjectLimit` |
 | A failed RunInstances step undoes its attempt last step first, after the record says `undoing` and before the error returns; a retry is the next attempt with new ids, and a cut-short undo is finished by the next request. | `TestFailureAtEveryStepIsUndone`, `TestUndoDeletesInReverseOrder`, `TestCutShortUndoIsFinishedByTheRetry`, `TestUndoNeedsTheRecord`, `TestSuccessAfterAnUndoIsRefused` |
 | A RunInstances launch whose process died is resumed by a retry with the same token, or undone by the launch sweep once its record has been `running` or `undoing` with no write for 10 minutes, 20 at once, claimed only while still idle; the bound for a backlog is in `docs/rules.md`. | `TestCrashAfterEveryStepIsResumedOrSwept`, `TestOneSweepUndoesMoreLaunchesThanItRunsAtOnce`, `TestAbandonedIsAnIdleRunningOrUndoingLaunch`, `TestAbandonedLaunchIsUndoneOnce`, `TestAbandonedLaunchWrittenSinceIsLeftAlone`, `TestUnfinishedReadsEveryOpenRecordAcrossPages` |

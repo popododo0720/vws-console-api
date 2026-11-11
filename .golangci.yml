@@ -121,6 +121,13 @@ linters:
           deny:
             - pkg: github.com/popododo0720/vws-console-api/internal/backend/proxmox/pveclient
               desc: PVE API types stay inside internal/backend/proxmox
+        etcd-stays-in-etcdstore:
+          files:
+            - "$all"
+            - "!**/internal/admin/store/etcdstore/**"
+          deny:
+            - pkg: go.etcd.io
+              desc: only internal/admin/store/etcdstore speaks to etcd
     exhaustive:
       default-signifies-exhaustive: false
     tagliatelle:
