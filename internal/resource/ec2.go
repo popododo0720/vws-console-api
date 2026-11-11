@@ -488,9 +488,12 @@ type ModifyVolumeRequest struct {
 // Action returns ModifyVolume.
 func (ModifyVolumeRequest) Action() Action { return ActionModifyVolume }
 
-// Normalize checks the id, the type and that something is asked for. The
-// ranges depend on the volume's current type and size, so the backend checks
-// them with Volume.Modify once it has read the volume.
+// Normalize checks the id, the type and that something is asked for: EC2
+// answers a request with none of the parameters as InvalidParameterValue
+// "Invalid input: Must specify at least one of size, type, iops, throughput
+// or multi-attach." The ranges depend on the volume's current type and
+// size, so the backend checks them with Volume.Modify once it has read the
+// volume.
 func (r ModifyVolumeRequest) Normalize() (ModifyVolumeRequest, error) {
 	if r.ID.IsZero() {
 		return ModifyVolumeRequest{}, Invalid("volumeId", "required")
@@ -507,8 +510,8 @@ func (r ModifyVolumeRequest) Normalize() (ModifyVolumeRequest, error) {
 		return ModifyVolumeRequest{}, Invalid("volumeType", "unsupported")
 	}
 	if r.SizeGiB == 0 && r.Type == "" && r.Iops == 0 && r.Throughput == 0 {
-		return ModifyVolumeRequest{}, MissingParameter("size",
-			"The request must contain at least one of the parameters size, volumeType, iops or throughput.")
+		return ModifyVolumeRequest{}, Invalid("size",
+			"Invalid input: Must specify at least one of size, type, iops, throughput or multi-attach.")
 	}
 	return r, nil
 }

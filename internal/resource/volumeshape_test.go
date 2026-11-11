@@ -167,7 +167,12 @@ func TestModifyRefusesAnIllegalTarget(t *testing.T) {
 }
 
 // #324 AC1: ModifyVolume needs at least one change, a known type and no
-// negative value before any backend call.
+// negative value before any backend call. #491: a request with none of Size,
+// VolumeType, Iops and Throughput is InvalidParameterValue with the message
+// EC2 answers ("Invalid input: Must specify at least one of size, type, iops,
+// throughput or multi-attach.", observed in
+// https://github.com/cloud-custodian/cloud-custodian/issues/10015), not
+// MissingParameter.
 func TestModifyVolumeRequestNormalize(t *testing.T) {
 	id, err := Parse[VolumeID]("vol-0123456789abcdef0")
 	if err != nil {
@@ -178,7 +183,7 @@ func TestModifyVolumeRequestNormalize(t *testing.T) {
 		missing bool
 		field   string
 	}{
-		{ModifyVolumeRequest{ID: id}, true, "size"},
+		{ModifyVolumeRequest{ID: id}, false, "size"},
 		{ModifyVolumeRequest{ID: id, Type: "io3"}, false, "volumeType"},
 		{ModifyVolumeRequest{ID: id, Type: "GP3"}, false, "volumeType"},
 		{ModifyVolumeRequest{ID: id, Iops: -1}, false, "iops"},
@@ -191,7 +196,38 @@ func TestModifyVolumeRequestNormalize(t *testing.T) {
 			t.Errorf("%+v: %v, want %s (missing %t)", tc.req, err, tc.field, tc.missing)
 		}
 	}
+	_, err = (ModifyVolumeRequest{ID: id}).Normalize()
+	const nothing = "Invalid input: Must specify at least one of size, type, iops, throughput or multi-attach."
+	if e := AsError(err); e == nil || e.Message != nothing {
+		t.Errorf("nothing to modify: %v, want %q", err, nothing)
+	}
 	if _, err := (ModifyVolumeRequest{ID: id, Type: VolumeIO2}).Normalize(); err != nil {
 		t.Errorf("type alone: %v", err)
+	}
+}
+
+// #491: as EC2 ModifyVolume, Size is optional. Left out it keeps the stored
+// size; equal to it the request is accepted, as EC2 accepts a modification
+// that changes nothing; larger grows the volume; smaller is refused.
+// https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_ModifyVolume.html
+func TestModifySizeAbsentEqualLargerSmaller(t *testing.T) {
+	v := Volume{Type: VolumeGP3, SizeGiB: 100, Iops: 4000, Throughput: 250}
+	for _, tc := range []struct {
+		name string
+		req  ModifyVolumeRequest
+		want int64
+	}{
+		{"absent", ModifyVolumeRequest{Iops: 5000}, 100},
+		{"equal", ModifyVolumeRequest{SizeGiB: 100}, 100},
+		{"larger", ModifyVolumeRequest{SizeGiB: 200}, 200},
+	} {
+		got, err := v.Modify(tc.req)
+		if err != nil || got.SizeGiB != tc.want {
+			t.Errorf("size %s: got %d GiB, %v; want %d GiB", tc.name, got.SizeGiB, err, tc.want)
+		}
+	}
+	_, err := v.Modify(ModifyVolumeRequest{SizeGiB: 99})
+	if e := AsError(err); e == nil || e.Code != CodeInvalidArgument || e.Field != "size" {
+		t.Errorf("size smaller: %v, want InvalidArgument size", err)
 	}
 }

@@ -57,6 +57,38 @@ func TestModifyVolumeEnforcesPerTypeSize(t *testing.T) {
 	}
 }
 
+// #491: Size is optional, as in EC2 ModifyVolume (EC2 API Reference,
+// ModifyVolume): `aws ec2 modify-volume --volume-type gp3` keeps the size. A
+// request that names nothing to modify is InvalidParameterValue with EC2's
+// message, and a second identical retype is accepted, as EC2 accepts a
+// modification to the values the volume already has.
+// https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_ModifyVolume.html
+func TestModifyVolumeWithoutSizeKeepsTheSize(t *testing.T) {
+	h, cred, now := harness(t)
+	res := signed(t, h, cred, now, createVolumeForm(map[string]string{"VolumeType": "gp2", "Size": "10"}))
+	if res.Code != http.StatusOK {
+		t.Fatalf("create: %d %s", res.Code, res.Body)
+	}
+	id := between(res.Body.String(), "<volumeId>", "</volumeId>")
+
+	res = signed(t, h, cred, now, modifyForm(id, map[string]string{}))
+	const nothing = "Invalid input: Must specify at least one of size, type, iops, throughput or multi-attach."
+	if body := res.Body.String(); res.Code != http.StatusBadRequest ||
+		!strings.Contains(body, "<Code>InvalidParameterValue</Code>") ||
+		!strings.Contains(body, "<Message>"+nothing+"</Message>") {
+		t.Errorf("nothing to modify: want 400 InvalidParameterValue %q, got %d %s", nothing, res.Code, body)
+	}
+
+	for _, attempt := range []string{"first", "repeated"} {
+		res = signed(t, h, cred, now, modifyForm(id, map[string]string{"VolumeType": "gp3"}))
+		body := res.Body.String()
+		if res.Code != http.StatusOK || !strings.Contains(body, "<targetSize>10</targetSize>") ||
+			!strings.Contains(body, "<targetVolumeType>gp3</targetVolumeType>") {
+			t.Errorf("%s retype without Size: want 200 targetSize 10 gp3, got %d %s", attempt, res.Code, body)
+		}
+	}
+}
+
 func modifyForm(id string, params map[string]string) string {
 	form := url.Values{}
 	form.Set("Action", "ModifyVolume")
@@ -93,7 +125,7 @@ func TestModifyVolumeTakesTypeIopsAndThroughput(t *testing.T) {
 		{map[string]string{"Iops": "0"}, "InvalidParameterValue"},
 		{map[string]string{"Throughput": "x"}, "InvalidParameterValue"},
 		{map[string]string{"Size": "-1"}, "InvalidParameterValue"},
-		{map[string]string{}, "MissingParameter"},
+		{map[string]string{}, "InvalidParameterValue"},
 		{map[string]string{"MultiAttachEnabled": "true"}, ""},
 	} {
 		res := signed(t, h, cred, now, modifyForm(id, tc.params))
