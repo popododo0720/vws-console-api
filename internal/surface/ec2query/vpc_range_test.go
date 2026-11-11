@@ -8,6 +8,9 @@ import (
 	"testing"
 )
 
+const invalidVpcRangeMessage = "The CIDR block range is not valid. " +
+	"The block range must be between a /28 netmask and /16 netmask."
+
 func TestCreateVpcRefusesPrefixOutsideSixteenToTwentyEight(t *testing.T) {
 	h, cred, now := harness(t)
 	send := func(form url.Values) (int, string) {
@@ -46,6 +49,9 @@ func TestCreateVpcRefusesPrefixOutsideSixteenToTwentyEight(t *testing.T) {
 			}
 			if code != http.StatusBadRequest || xmlText(t, body, "Code") != "InvalidVpcRange" {
 				t.Fatalf("%s: status %d %s, want 400 InvalidVpcRange", c.cidr, code, body)
+			}
+			if got := xmlText(t, body, "Message"); got != invalidVpcRangeMessage {
+				t.Fatalf("%s: message %q, want %q", c.cidr, got, invalidVpcRangeMessage)
 			}
 		}
 		if c.ok {
