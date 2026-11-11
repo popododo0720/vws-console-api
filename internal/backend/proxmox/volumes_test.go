@@ -199,3 +199,38 @@ func TestStoragePaging250VMs(t *testing.T) {
 		})
 	}
 }
+
+func TestSnapshotsSkipVMWithUnreadableVolumes(t *testing.T) {
+	s := volumeScenario()
+	s.Roles = append(s.Roles, pvefake.Role{ID: "NoAccess"})
+	s.Tokens[0].ACL = append(s.Tokens[0].ACL, pvefake.ACE{Path: "/storage/denied", Role: "NoAccess"})
+	s.Storages = append(s.Storages, pvefake.Storage{Node: "pve1", Name: "denied"})
+	s.VMs = append(s.VMs, pvefake.VM{
+		VMID: 200, Node: "pve1", Pool: "123456789012",
+		Config: map[string]string{
+			"smbios1": "uuid=5f0c3e9a-8b5d-4b8e-9a51-000000000200",
+			"scsi0":   "denied:vm-200-disk-0,serial=3123456789abcdef0",
+		},
+		Snapshots: []pvefake.Snapshot{{Name: "unreadable"}},
+	})
+	b, _ := networkBackend(t, s, RegionConfig{})
+	page, err := b.DescribeSnapshots(t.Context(), inventoryScope(), resource.SnapshotQuery{})
+	if err != nil || len(page.Items) != 1 || page.Items[0].Tags["Name"] != "backup" {
+		t.Fatalf("one unreadable VM hid good snapshots: %+v error=%v", page, err)
+	}
+}
+
+func TestUndecodableVolumeTagSkipsOnlyItsDisk(t *testing.T) {
+	s := volumeScenario()
+	s.VMs[0].Tags += ";vws.vt.01234567.+name._zz"
+	b, _ := networkBackend(t, s, RegionConfig{})
+	page, err := b.DescribeVolumes(t.Context(), inventoryScope(), resource.VolumeQuery{})
+	if err != nil || len(page.Items) != 2 || page.Items[0].ID.String() != "vol-1123456789abcdef0" ||
+		page.Items[0].Tags["env"] != "dev" || page.Items[1].ID.String() != "vol-2123456789abcdef0" {
+		t.Fatalf("bad root tags must keep the data and holder disks: %+v error=%v", page, err)
+	}
+	snaps, err := b.DescribeSnapshots(t.Context(), inventoryScope(), resource.SnapshotQuery{})
+	if err != nil || len(snaps.Items) != 1 || snaps.Items[0].VolumeID != page.Items[0].ID {
+		t.Fatalf("bad root tags hid the VM's good disk snapshot: %+v error=%v", snaps, err)
+	}
+}

@@ -112,7 +112,14 @@ func (b *Backend) vmVolumes(
 		}
 		tags, err := ReadTags(encoded, "")
 		if err != nil {
-			return nil, err
+			err = fmt.Errorf("%w: volume tags: %w", ErrInput, err)
+		} else if len(tags.Other) != 0 {
+			err = fmt.Errorf("%w: undecodable volume tag", ErrInput)
+		}
+		if err != nil {
+			slog.WarnContext(ctx, "skipping volume with undecodable tags",
+				slog.Int("vmid", vm.VMID), slog.String("drive", key), slog.Any("error", err))
+			continue
 		}
 		vol.Tags = tags.User
 		if !holder {

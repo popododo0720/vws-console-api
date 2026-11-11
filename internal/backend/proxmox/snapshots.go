@@ -63,7 +63,12 @@ func (b *Backend) DescribeSnapshots(
 			if volumes == nil {
 				volumes, err = b.vmVolumes(ctx, s, ids, vm, cfg, content)
 				if err != nil {
-					return resource.Page[resource.Snapshot]{}, err
+					if ctx.Err() != nil {
+						return resource.Page[resource.Snapshot]{}, err
+					}
+					slog.WarnContext(ctx, "skipping VM with unreadable volumes",
+						slog.Int("vmid", vm.VMID), slog.Any("error", err))
+					break
 				}
 			}
 			if len(volumes) == 0 {
