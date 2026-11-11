@@ -27,6 +27,9 @@ func decode(w http.ResponseWriter, r *http.Request, dst any) error {
 		}
 		return resource.Invalid("body", "malformed json")
 	}
+	if !json.Valid(body) {
+		return resource.Invalid("body", "malformed json")
+	}
 	if err := checkAmbiguousKeys(body, reflect.TypeOf(dst)); err != nil {
 		return err
 	}

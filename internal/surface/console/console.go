@@ -14,7 +14,9 @@ import (
 
 	"github.com/popododo0720/vws-lib/obs"
 
+	"github.com/popododo0720/vws-console-api/internal/admin/secret"
 	"github.com/popododo0720/vws-console-api/internal/admin/store"
+	"github.com/popododo0720/vws-console-api/internal/audit"
 	"github.com/popododo0720/vws-console-api/internal/cloud"
 	"github.com/popododo0720/vws-console-api/internal/iam"
 	"github.com/popododo0720/vws-console-api/internal/resource"
@@ -49,6 +51,8 @@ type Config struct {
 	Auth     Authenticator
 	IAM      iam.Client
 	Registry *store.Registry
+	AdminKey *secret.Key
+	Audit    *audit.Logger
 	Logger   *slog.Logger
 	// Origins are browser origins allowed besides the console's own host,
 	// such as https://console.vws.example.
@@ -91,6 +95,8 @@ func New(cfg Config) http.Handler {
 		loginOff: cfg.LoginDisabled,
 		requests: cfg.Requests,
 		registry: cfg.Registry,
+		adminKey: cfg.AdminKey,
+		audit:    cfg.Audit,
 	}
 	h.routes(h.mux)
 	return h
@@ -119,6 +125,9 @@ func (h *handler) routes(mux *http.ServeMux) {
 	handle("GET /api/v1/admin/regions/{name}", h.adminRegion)
 	handle("GET /api/v1/admin/aws-accounts", h.adminAccounts)
 	handle("GET /api/v1/admin/aws-accounts/{id}", h.adminAccount)
+	handle("POST /api/v1/admin/aws-accounts", h.adminWriteAccount)
+	handle("PATCH /api/v1/admin/aws-accounts/{id}", h.adminWriteAccount)
+	handle("DELETE /api/v1/admin/aws-accounts/{id}", h.adminWriteAccount)
 	handle("GET /api/v1/admin/permissions", h.adminPermissions)
 	for _, action := range resource.Actions() {
 		method, pattern, fn := h.mutation(action)
@@ -158,6 +167,8 @@ func (h *handler) routes(mux *http.ServeMux) {
 }
 
 type handler struct {
+	adminKey *secret.Key
+	audit    *audit.Logger
 	registry *store.Registry
 	svc      *cloud.Service
 	auth     Authenticator

@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"log/slog"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +13,36 @@ import (
 	"github.com/popododo0720/vws-console-api/internal/iam"
 	"github.com/popododo0720/vws-console-api/internal/resource"
 )
+
+func TestAdminAuditFileIsSeparate(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "audit.log")
+	app := &syncBuffer{}
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(app, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	t.Cleanup(func() {
+		data, err := os.ReadFile(path)
+		if err != nil || strings.Count(string(data), `"action":"AdminRegisterAwsAccount"`) != 1 ||
+			app.String() == "" || strings.Contains(app.String(), "AdminRegisterAwsAccount") {
+			t.Errorf("audit stream separation failed: %v", err)
+		}
+	})
+	p := startFakeProcess(t, "-audit-log="+path)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost,
+		"http://"+p.console+"/api/v1/admin/aws-accounts", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer dev-token")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("write without KEK: %d", resp.StatusCode)
+	}
+}
 
 func TestStopOnSIGTERM(t *testing.T) {
 	for _, sig := range stopSignals() {
@@ -32,9 +63,12 @@ func TestStopOnSIGTERM(t *testing.T) {
 }
 
 func TestRegistryConfiguration(t *testing.T) {
-	g, closeRegistry, err := openRegistry(t.Context(), "", "fake")
+	g, key, closeRegistry, err := openRegistry(t.Context(), "", "fake")
 	if err != nil {
 		t.Fatal(err)
+	}
+	if key != nil {
+		t.Fatal("fake mode unexpectedly loaded a KEK")
 	}
 	t.Cleanup(func() {
 		if err := closeRegistry(); err != nil {
@@ -44,17 +78,17 @@ func TestRegistryConfiguration(t *testing.T) {
 	if _, _, err := g.Regions().List(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := openRegistry(t.Context(), "", "grpc"); err == nil {
+	if _, _, _, err := openRegistry(t.Context(), "", "grpc"); err == nil {
 		t.Fatal("production silently used memory")
 	}
-	if _, _, err := openRegistry(t.Context(), filepath.Join(t.TempDir(), "missing"), "fake"); err == nil {
+	if _, _, _, err := openRegistry(t.Context(), filepath.Join(t.TempDir(), "missing"), "fake"); err == nil {
 		t.Fatal("missing bootstrap file accepted")
 	}
 	path := filepath.Join(t.TempDir(), "global.yaml")
 	if err := os.WriteFile(path, []byte("unknown: true\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := openRegistry(t.Context(), path, "fake"); err == nil {
+	if _, _, _, err := openRegistry(t.Context(), path, "fake"); err == nil {
 		t.Fatal("invalid bootstrap accepted")
 	}
 }

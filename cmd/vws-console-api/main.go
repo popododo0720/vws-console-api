@@ -15,8 +15,10 @@ import (
 
 	"github.com/popododo0720/vws-lib/obs"
 
+	adminsecret "github.com/popododo0720/vws-console-api/internal/admin/secret"
 	"github.com/popododo0720/vws-console-api/internal/admin/store"
 	"github.com/popododo0720/vws-console-api/internal/admin/store/etcdstore"
+	"github.com/popododo0720/vws-console-api/internal/audit"
 	"github.com/popododo0720/vws-console-api/internal/backend"
 	"github.com/popododo0720/vws-console-api/internal/backend/fake"
 	"github.com/popododo0720/vws-console-api/internal/backend/grpcclient"
@@ -67,6 +69,7 @@ func run(ctx context.Context, args []string) (err error) {
 	fs := flag.NewFlagSet("vws-console-api", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	backendKind := fs.String("backend", "fake", "fake or grpc")
+	auditLog := fs.String("audit-log", "", "append-only audit stream path; empty uses stderr")
 	globalConfig := fs.String("global-config", "", "global.yaml bootstrap path for the admin registry; "+
 		"empty uses memory with -backend=fake")
 	consoleAddr := fs.String("console-addr", "127.0.0.1:8080", "console listen address")
@@ -209,7 +212,7 @@ func run(ctx context.Context, args []string) (err error) {
 		return fmt.Errorf("unknown -backend %q", *backendKind)
 	}
 
-	registry, closeRegistry, err := openRegistry(ctx, *globalConfig, *backendKind)
+	registry, adminKey, closeRegistry, err := openRegistry(ctx, *globalConfig, *backendKind)
 	if err != nil {
 		return err
 	}
@@ -264,10 +267,20 @@ func run(ctx context.Context, args []string) (err error) {
 	if sweep != nil {
 		go sweep(ctx)
 	}
+	auditOut := os.Stderr
+	if *auditLog != "" {
+		auditOut, err = os.OpenFile(*auditLog, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
+		if err != nil {
+			return fmt.Errorf("open -audit-log: %w", err)
+		}
+		defer func() { err = errors.Join(err, auditOut.Close()) }()
+	}
 	return server.Serve(ctx, server.Options{Logger: logger, OpsAddr: *opsAddr, Surfaces: []server.Surface{
 		{Name: "console", Addr: *consoleAddr, Handler: console.New(console.Config{
 			Service:        svc,
 			Registry:       registry,
+			AdminKey:       adminKey,
+			Audit:          audit.New(auditOut),
 			Auth:           console.BearerTokens{*consoleToken: caller},
 			IAM:            auth,
 			Logger:         logger,
@@ -287,22 +300,29 @@ func run(ctx context.Context, args []string) (err error) {
 	}})
 }
 
-func openRegistry(ctx context.Context, path, backendKind string) (*store.Registry, func() error, error) {
+func openRegistry(
+	ctx context.Context, path, backendKind string,
+) (*store.Registry, *adminsecret.Key, func() error, error) {
 	if path == "" {
 		if backendKind != "fake" {
-			return nil, nil, errors.New("-global-config is required for the admin registry with -backend=grpc")
+			return nil, nil, nil, errors.New("-global-config is required for the admin registry with -backend=grpc")
 		}
-		return store.New(store.NewMemory()), func() error { return nil }, nil
+		return store.New(store.NewMemory()), nil, func() error { return nil }, nil
 	}
 	data, err := os.ReadFile(path) //nolint:gosec // operator-selected bootstrap file.
 	if err != nil {
-		return nil, nil, fmt.Errorf("read -global-config: %w", err)
+		return nil, nil, nil, fmt.Errorf("read -global-config: %w", err)
 	}
 	cfg, err := globalconfig.Parse(data)
 	if err != nil {
-		return nil, nil, fmt.Errorf("parse -global-config: %w", err)
+		return nil, nil, nil, fmt.Errorf("parse -global-config: %w", err)
 	}
-	return etcdstore.Open(ctx, cfg.IAM)
+	key, err := adminsecret.LoadFile(cfg.Credentials.KEKFile)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("load admin KEK: %w", err)
+	}
+	registry, closeRegistry, err := etcdstore.Open(ctx, cfg.IAM)
+	return registry, key, closeRegistry, err
 }
 
 // iamDialOptions turns the -iam-tls-* flags into Dial options. Without them

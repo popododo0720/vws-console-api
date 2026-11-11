@@ -11,6 +11,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	"github.com/popododo0720/vws-console-api/internal/admin/secret"
 )
 
 // Prefix is where the registry lives in etcd.
@@ -65,11 +67,12 @@ type Zone struct {
 
 // AWSAccount is one registered AWS account and the regions it may use.
 type AWSAccount struct {
-	ID             string         `json:"awsAccountId"`
-	RoleARN        string         `json:"roleArn"`
-	ExternalID     SecretMetadata `json:"externalId"`
-	AllowedRegions []string       `json:"allowedRegions"`
-	Version        Version        `json:"-"`
+	ID               string         `json:"awsAccountId"`
+	RoleARN          string         `json:"roleArn"`
+	ExternalID       SecretMetadata `json:"externalId"`
+	SealedExternalID secret.Sealed  `json:"sealedExternalId"`
+	AllowedRegions   []string       `json:"allowedRegions"`
+	Version          Version        `json:"-"`
 }
 
 // SecretMetadata describes a configured secret without retaining its value.

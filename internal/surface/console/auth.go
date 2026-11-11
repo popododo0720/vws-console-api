@@ -92,6 +92,9 @@ func routeAction(pattern string) (authorization, bool) {
 		"GET /api/v1/admin/regions/{name}":               nil,
 		"GET /api/v1/admin/aws-accounts":                 nil,
 		"GET /api/v1/admin/aws-accounts/{id}":            nil,
+		"POST /api/v1/admin/aws-accounts":                nil,
+		"PATCH /api/v1/admin/aws-accounts/{id}":          nil,
+		"DELETE /api/v1/admin/aws-accounts/{id}":         nil,
 		"GET /api/v1/admin/permissions":                  nil,
 		"GET /api/v1/instances":                          ec2("DescribeInstances"),
 		"GET /api/v1/instances/{id}":                     ec2("DescribeInstances"),
@@ -155,6 +158,21 @@ func (h *handler) gate(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, r, resource.Denied("route has no IAM action"))
 		return
 	}
+	var c resource.Caller
+	if action := accountAction(pattern); action != "" {
+		out := &adminResponse{ResponseWriter: w, status: http.StatusOK}
+		id := strings.TrimPrefix(r.URL.Path, "/api/v1/admin/aws-accounts/")
+		if len(id) == 12 && strings.Trim(id, "0123456789") == "" {
+			out.id = id
+		}
+		w = out
+		start := h.now()
+		defer func() { h.auditAccount(out, r, c, action, start) }()
+	}
+	isAdmin := strings.HasPrefix(r.URL.Path, "/api/v1/admin/")
+	if isAdmin {
+		w.Header().Set("Cache-Control", "no-store")
+	}
 	if r.Header.Get("Authorization") == "" && r.Method != http.MethodGet && r.Method != http.MethodHead {
 		if _, err := r.Cookie(SessionCookie); err == nil && !h.browserWriteOK(w, r, pattern != routePutObject) {
 			return
@@ -165,8 +183,7 @@ func (h *handler) gate(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, r, err)
 		return
 	}
-	if strings.HasPrefix(pattern, "GET /api/v1/admin/") {
-		w.Header().Set("Cache-Control", "no-store")
+	if isAdmin {
 		if !c.Root {
 			if pattern == "GET /api/v1/admin/permissions" {
 				writeJSON(w, http.StatusForbidden, permissionsBody{Permissions: []string{}})
@@ -175,7 +192,11 @@ func (h *handler) gate(w http.ResponseWriter, r *http.Request) {
 			}
 			return
 		}
-		if wait, err := h.requests.Take(c.Account, "vws:AdminRead"); err != nil {
+		action := "vws:AdminRead"
+		if r.Method != http.MethodGet {
+			action = "vws:AdminWrite"
+		}
+		if wait, err := h.requests.Take(c.Account, action); err != nil {
 			retryAfter(w, wait)
 			writeErr(w, r, err)
 			return

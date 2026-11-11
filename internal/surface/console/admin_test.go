@@ -85,7 +85,7 @@ func TestAdminRoutesRequireRoot(t *testing.T) {
 						t.Fatal(err)
 					}
 					if body.Permissions == nil || (who.status == 403 && len(body.Permissions) != 0) ||
-						(who.status == 200 && len(body.Permissions) != 2) {
+						(who.status == 200 && len(body.Permissions) != 5) {
 						t.Fatalf("permissions: %s", rec.Body)
 					}
 				}
