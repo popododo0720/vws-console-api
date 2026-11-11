@@ -48,7 +48,7 @@ func (r CreateVpcRequest) Normalize() (CreateVpcRequest, error) {
 		return CreateVpcRequest{}, Invalid("cidrBlock", "must be an ipv4 network")
 	}
 	if bits := prefix.Bits(); bits < minVpcPrefix || bits > maxVpcPrefix {
-		return CreateVpcRequest{}, InvalidVpcRange(cidr)
+		return CreateVpcRequest{}, InvalidVpcRange()
 	}
 	r.Cidr = cidr
 	if err := validRequestTags(r.Tags); err != nil {

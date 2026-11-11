@@ -321,10 +321,11 @@ func IsAttachmentLimitExceeded(e *Error) bool { return e != nil && e.invalid == 
 // InvalidVpcRange reports a VPC CIDR block EC2 refuses, one with a prefix
 // outside /16 to /28. EC2 answers InvalidVpcRange.
 // https://docs.aws.amazon.com/AWSEC2/latest/APIReference/errors-overview.html
-func InvalidVpcRange(cidr string) *Error {
+func InvalidVpcRange() *Error {
 	return &Error{
 		Code: CodeInvalidArgument, Kind: KindVpc, Field: "cidrBlock",
-		Message: "The CIDR '" + cidr + "' is invalid.", invalid: invalidVpcRange,
+		Message: "The CIDR block range is not valid. The block range must be between a /28 netmask and /16 netmask.",
+		invalid: invalidVpcRange,
 	}
 }
 
