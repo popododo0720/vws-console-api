@@ -7,7 +7,9 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"time"
 
@@ -146,9 +148,36 @@ func writeJSON(w http.ResponseWriter, value any, err error) {
 	server.RecordFailure(w, json.NewEncoder(w).Encode(value))
 }
 
+// Server exposes only TLS startup and bounded shutdown.
+type Server struct{ http *http.Server }
+
+// Serve accepts only TLS connections, requiring a verified client certificate.
+func (s *Server) Serve(listener net.Listener) error {
+	if err := s.http.ServeTLS(listener, "", ""); err != nil {
+		return fmt.Errorf("serve region TLS: %w", err)
+	}
+	return nil
+}
+
+// ListenAndServe binds the configured address and serves only mutual TLS.
+func (s *Server) ListenAndServe() error {
+	if err := s.http.ListenAndServeTLS("", ""); err != nil {
+		return fmt.Errorf("listen region TLS: %w", err)
+	}
+	return nil
+}
+
+// Shutdown drains the listener within the caller's deadline.
+func (s *Server) Shutdown(ctx context.Context) error {
+	if err := s.http.Shutdown(ctx); err != nil {
+		return fmt.Errorf("shutdown region TLS: %w", err)
+	}
+	return nil
+}
+
 // NewServer requires certificates from ca and bounds every listener timeout.
-func NewServer(addr string, handler http.Handler, cert tls.Certificate, ca *x509.CertPool) *http.Server {
-	return &http.Server{
+func NewServer(addr string, handler http.Handler, cert tls.Certificate, ca *x509.CertPool) *Server {
+	return &Server{http: &http.Server{
 		Addr: addr, Handler: handler,
 		ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 60 * time.Second,
 		WriteTimeout: 60 * time.Second, IdleTimeout: 120 * time.Second,
@@ -156,5 +185,5 @@ func NewServer(addr string, handler http.Handler, cert tls.Certificate, ca *x509
 			MinVersion: tls.VersionTLS13, Certificates: []tls.Certificate{cert},
 			ClientAuth: tls.RequireAndVerifyClientCert, ClientCAs: ca,
 		},
-	}
+	}}
 }

@@ -86,7 +86,7 @@ func loopback(t *testing.T, cfg Config) (*Client, *httptest.Server) {
 	serverCert, clientCert, pool := certificates(t)
 	h := New(cfg)
 	srv := httptest.NewUnstartedServer(h)
-	srv.TLS = NewServer("", h, serverCert, pool).TLSConfig
+	srv.TLS = NewServer("", h, serverCert, pool).http.TLSConfig
 	srv.StartTLS()
 	t.Cleanup(srv.Close)
 	c, err := NewClient(srv.URL, &tls.Config{
@@ -302,10 +302,11 @@ func TestInputAndRouteBounds(t *testing.T) {
 		}
 	}
 	srv := NewServer(":0", h, tls.Certificate{}, x509.NewCertPool())
-	if srv.ReadHeaderTimeout <= 0 || srv.ReadTimeout <= 0 || srv.WriteTimeout <= 0 || srv.IdleTimeout <= 0 {
+	if srv.http.ReadHeaderTimeout <= 0 || srv.http.ReadTimeout <= 0 ||
+		srv.http.WriteTimeout <= 0 || srv.http.IdleTimeout <= 0 {
 		t.Fatal("unbounded listener")
 	}
-	if srv.TLSConfig.ClientAuth != tls.RequireAndVerifyClientCert {
+	if srv.http.TLSConfig.ClientAuth != tls.RequireAndVerifyClientCert {
 		t.Fatal("client certificate not verified")
 	}
 }
