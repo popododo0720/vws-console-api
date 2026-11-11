@@ -713,3 +713,74 @@ func TestNonCanonicalIndexIsRejected(t *testing.T) {
 		}
 	}
 }
+
+// #597: RevokeSecurityGroupIngress takes the IpPermissions list as authorize
+// does: several permissions and ranges, all or none, with the same refusals.
+func TestRevokeSecurityGroupIngressTakesIPPermissions(t *testing.T) {
+	h, cred, now := harness(t)
+	vpc := signed(t, h, cred, now, url.Values{
+		"Action": {"CreateVpc"}, "Version": {Version}, "CidrBlock": {"10.7.0.0/16"},
+	}.Encode())
+	group := signed(t, h, cred, now, url.Values{
+		"Action": {"CreateSecurityGroup"}, "Version": {Version},
+		"GroupName": {"web"}, "GroupDescription": {"web"}, "VpcId": {xmlText(t, vpc.Body.String(), "vpcId")},
+	}.Encode())
+	id := xmlText(t, group.Body.String(), "groupId")
+	perms := func(action string, extra map[string]string) url.Values {
+		f := url.Values{
+			"Action": {action}, "Version": {Version}, "GroupId": {id},
+			"IpPermissions.1.IpProtocol": {"tcp"}, "IpPermissions.1.FromPort": {"22"}, "IpPermissions.1.ToPort": {"22"},
+			"IpPermissions.1.IpRanges.1.CidrIp": {"10.0.0.0/16"}, "IpPermissions.1.IpRanges.2.CidrIp": {"10.1.0.0/16"},
+			"IpPermissions.2.IpProtocol": {"udp"}, "IpPermissions.2.FromPort": {"53"}, "IpPermissions.2.ToPort": {"53"},
+			"IpPermissions.2.IpRanges.1.CidrIp": {"10.2.0.0/16"},
+		}
+		for k, v := range extra {
+			f.Set(k, v)
+		}
+		return f
+	}
+	opened := signed(t, h, cred, now, perms("AuthorizeSecurityGroupIngress", nil).Encode())
+	if opened.Code != http.StatusOK {
+		t.Fatalf("authorize %d %s", opened.Code, opened.Body)
+	}
+	if keep := signed(t, h, cred, now, url.Values{
+		"Action": {"AuthorizeSecurityGroupIngress"}, "Version": {Version}, "GroupId": {id},
+		"IpProtocol": {"tcp"}, "FromPort": {"443"}, "ToPort": {"443"}, "CidrIp": {"10.3.0.0/16"},
+	}.Encode()); keep.Code != http.StatusOK {
+		t.Fatalf("authorize 443 %d %s", keep.Code, keep.Body)
+	}
+	describe := func() string {
+		t.Helper()
+		return signed(t, h, cred, now, url.Values{
+			"Action": {"DescribeSecurityGroups"}, "Version": {Version}, "GroupId.1": {id},
+		}.Encode()).Body.String()
+	}
+	for name, extra := range map[string]map[string]string{
+		"missing rule": {
+			"IpPermissions.3.IpProtocol":        "tcp",
+			"IpPermissions.3.FromPort":          "80",
+			"IpPermissions.3.ToPort":            "80",
+			"IpPermissions.3.IpRanges.1.CidrIp": "10.0.0.0/16",
+		},
+		"group source":     {"IpPermissions.2.Groups.1.GroupId": id},
+		"ipv6 source":      {"IpPermissions.2.Ipv6Ranges.1.CidrIpv6": "::/0"},
+		"bad protocol":     {"IpPermissions.2.IpProtocol": "sctp"},
+		"with legacy form": {"CidrIp": "10.0.0.0/16"},
+	} {
+		rec := signed(t, h, cred, now, perms("RevokeSecurityGroupIngress", extra).Encode())
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("%s: %d %s, want 400", name, rec.Code, rec.Body)
+		}
+		if body := describe(); strings.Count(body, "<cidrIp>") != 4 {
+			t.Fatalf("%s: a refused revoke removed a rule: %s", name, body)
+		}
+	}
+	revoked := signed(t, h, cred, now, perms("RevokeSecurityGroupIngress", nil).Encode())
+	if revoked.Code != http.StatusOK || !strings.Contains(revoked.Body.String(), "<return>true</return>") {
+		t.Fatalf("revoke %d %s", revoked.Code, revoked.Body)
+	}
+	body := describe()
+	if strings.Count(body, "<cidrIp>") != 1 || !strings.Contains(body, "<cidrIp>10.3.0.0/16</cidrIp>") {
+		t.Fatalf("after revoke, want only 10.3.0.0/16: %s", body)
+	}
+}

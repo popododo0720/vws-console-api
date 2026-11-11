@@ -418,11 +418,23 @@ func TestIngressProtocolIsCanonical(t *testing.T) {
 		t.Fatalf("sctp: %v", err)
 	}
 	revoked, err := (RevokeSecurityGroupIngressRequest{
-		ID:   id,
-		Rule: IngressRule{Protocol: "17", FromPort: 53, ToPort: 53, Cidr: "10.0.0.0/16"},
+		ID: id,
+		Rules: []IngressRule{
+			{Protocol: "17", FromPort: 53, ToPort: 53, Cidr: "10.0.0.0/16"},
+			{Protocol: "udp", FromPort: 53, ToPort: 53, Cidr: "10.0.0.0/16"},
+		},
 	}).Normalize()
-	if err != nil || revoked.Rule.Protocol != "udp" {
-		t.Fatalf("%v %+v", err, revoked.Rule)
+	if err != nil || len(revoked.Rules) != 1 || revoked.Rules[0].Protocol != "udp" {
+		t.Fatalf("a rule named twice is revoked once: %v %+v", err, revoked.Rules)
+	}
+	for name, req := range map[string]RevokeSecurityGroupIngressRequest{
+		"no rules":       {ID: id},
+		"sctp":           {ID: id, Rules: []IngressRule{{Protocol: "sctp", FromPort: 1, ToPort: 1, Cidr: "10.0.0.0/16"}}},
+		"past the quota": {ID: id, Rules: make([]IngressRule, MaxIngressRules+1)},
+	} {
+		if _, err := req.Normalize(); err == nil {
+			t.Errorf("revoke %s: accepted", name)
+		}
 	}
 }
 

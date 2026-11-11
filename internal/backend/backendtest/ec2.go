@@ -468,21 +468,24 @@ func exerciseEC2(
 	if _, err := set.Network.RevokeSecurityGroupIngress(ctx, backend.Mutation{
 		Scope: scope, Key: "k-revoke-443", Fingerprint: "fp-revoke-443",
 	}, resource.RevokeSecurityGroupIngressRequest{
-		ID: group.Items[0].ID, Rule: resource.IngressRule{Protocol: "tcp", FromPort: 443, ToPort: 443, Cidr: "10.1.0.0/16"},
+		ID:    group.Items[0].ID,
+		Rules: []resource.IngressRule{{Protocol: "tcp", FromPort: 443, ToPort: 443, Cidr: "10.1.0.0/16"}},
 	}); err != nil {
 		t.Fatalf("revoke 443: %v", err)
 	}
 	if _, err := set.Network.RevokeSecurityGroupIngress(ctx, backend.Mutation{
 		Scope: scope, Key: "k-revoke-8080", Fingerprint: "fp-revoke-8080",
 	}, resource.RevokeSecurityGroupIngressRequest{
-		ID: group.Items[0].ID, Rule: resource.IngressRule{Protocol: "tcp", FromPort: 8080, ToPort: 8080, Cidr: "10.0.0.0/16"},
+		ID:    group.Items[0].ID,
+		Rules: []resource.IngressRule{{Protocol: "tcp", FromPort: 8080, ToPort: 8080, Cidr: "10.0.0.0/16"}},
 	}); !resource.IsPermissionNotFound(err) {
 		t.Fatalf("a refused batch wrote a rule: %v", err)
 	}
 	revoked, err := set.Network.RevokeSecurityGroupIngress(ctx, backend.Mutation{
 		Scope: scope, Key: "k-revoke", Fingerprint: "fp-revoke",
 	}, resource.RevokeSecurityGroupIngressRequest{
-		ID: group.Items[0].ID, Rule: resource.IngressRule{Protocol: "udp", FromPort: 53, ToPort: 53, Cidr: "10.0.0.0/16"},
+		ID:    group.Items[0].ID,
+		Rules: []resource.IngressRule{{Protocol: "udp", FromPort: 53, ToPort: 53, Cidr: "10.0.0.0/16"}},
 	})
 	if err != nil || len(revoked.Items[0].Rules) != 1 ||
 		revoked.Operation.Action != resource.ActionRevokeSecurityGroupIngress ||
@@ -491,7 +494,8 @@ func exerciseEC2(
 	}
 	last := backend.Mutation{Scope: scope, Key: "k-revoke-last", Fingerprint: "fp-revoke-last"}
 	lastRule := resource.RevokeSecurityGroupIngressRequest{
-		ID: group.Items[0].ID, Rule: resource.IngressRule{Protocol: "tcp", FromPort: 22, ToPort: 22, Cidr: "10.0.0.0/16"},
+		ID:    group.Items[0].ID,
+		Rules: []resource.IngressRule{{Protocol: "tcp", FromPort: 22, ToPort: 22, Cidr: "10.0.0.0/16"}},
 	}
 	empty, err := set.Network.RevokeSecurityGroupIngress(ctx, last, lastRule)
 	if err != nil || len(empty.Items[0].Rules) != 0 ||
@@ -510,6 +514,43 @@ func exerciseEC2(
 		Scope: scope, Key: "k-revoke-missing", Fingerprint: "fp-revoke-missing",
 	}, lastRule); !resource.IsPermissionNotFound(err) {
 		t.Fatalf("missing rule: %v", err)
+	}
+	// #597: a revoke of several rules removes all of them or none.
+	pair := []resource.IngressRule{
+		{Protocol: "tcp", FromPort: 7001, ToPort: 7001, Cidr: "10.0.0.0/16"},
+		{Protocol: "tcp", FromPort: 7002, ToPort: 7002, Cidr: "10.0.0.0/16"},
+	}
+	openedPair, err := set.Network.AuthorizeSecurityGroupIngress(ctx, backend.Mutation{
+		Scope: scope, Key: "k-auth-pair", Fingerprint: "fp-auth-pair",
+	}, resource.AuthorizeSecurityGroupIngressRequest{
+		ID: group.Items[0].ID, Rules: append(slices.Clone(pair), ssh),
+	})
+	if err != nil {
+		t.Fatalf("authorize pair: %v", err)
+	}
+	keptIDs := openedPair.Items[0].RulesOf([]resource.IngressRule{ssh})
+	if _, err := set.Network.RevokeSecurityGroupIngress(ctx, backend.Mutation{
+		Scope: scope, Key: "k-revoke-pair-missing", Fingerprint: "fp-revoke-pair-missing",
+	}, resource.RevokeSecurityGroupIngressRequest{
+		ID: group.Items[0].ID,
+		Rules: append(slices.Clone(pair),
+			resource.IngressRule{Protocol: "tcp", FromPort: 7003, ToPort: 7003, Cidr: "10.0.0.0/16"}),
+	}); !resource.IsPermissionNotFound(err) {
+		t.Fatalf("revoke pair with a missing rule: %v", err)
+	}
+	both, err := set.Network.RevokeSecurityGroupIngress(ctx, backend.Mutation{
+		Scope: scope, Key: "k-revoke-pair", Fingerprint: "fp-revoke-pair",
+	}, resource.RevokeSecurityGroupIngressRequest{ID: group.Items[0].ID, Rules: pair})
+	if err != nil || !slices.Equal(both.Items[0].Rules, []resource.IngressRule{ssh}) ||
+		!slices.Equal(both.Items[0].RulesOf([]resource.IngressRule{ssh}), keptIDs) {
+		t.Fatalf("revoke pair, a refused revoke removed a rule or this one missed one: %v %+v", err, both.Items)
+	}
+	if _, err := set.Network.RevokeSecurityGroupIngress(ctx, backend.Mutation{
+		Scope: scope, Key: "k-revoke-kept", Fingerprint: "fp-revoke-kept",
+	}, resource.RevokeSecurityGroupIngressRequest{
+		ID: group.Items[0].ID, Rules: []resource.IngressRule{ssh},
+	}); err != nil {
+		t.Fatalf("revoke kept rule: %v", err)
 	}
 	// #219: ICMP type and code survive the backend, and a group holds at
 	// most resource.MaxIngressRules inbound rules.
@@ -551,7 +592,9 @@ func exerciseEC2(
 	}
 	if _, err := set.Network.RevokeSecurityGroupIngress(ctx, backend.Mutation{
 		Scope: scope, Key: "k-revoke-over", Fingerprint: "fp-revoke-over",
-	}, resource.RevokeSecurityGroupIngressRequest{ID: fullID, Rule: overRule}); !resource.IsPermissionNotFound(err) {
+	}, resource.RevokeSecurityGroupIngressRequest{
+		ID: fullID, Rules: []resource.IngressRule{overRule},
+	}); !resource.IsPermissionNotFound(err) {
 		t.Fatalf("a refused authorize past the limit wrote a rule: %v", err)
 	}
 	if _, err := set.Network.DeleteSecurityGroup(ctx, backend.Mutation{

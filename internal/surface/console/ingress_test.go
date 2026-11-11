@@ -107,6 +107,34 @@ func TestAuthorizeIngressTakesIPPermissions(t *testing.T) {
 	if old := do(http.MethodPost, path, single, "auth-old-1"); old.Code != http.StatusBadRequest {
 		t.Fatalf("single object %d %s", old.Code, old.Body)
 	}
+
+	// #597: revoke-ingress takes the same list, all or none, with the same
+	// refusals.
+	revoke := "/api/v1/security-groups/" + sg + "/revoke-ingress"
+	for field, source := range refused {
+		body := `{"ipPermissions":[{` + https + source + `}]}`
+		rec := do(http.MethodPost, revoke, body, "revoke-refused-"+field)
+		if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), `"field":"`+field+`"`) {
+			t.Fatalf("revoke %s: %d %s", field, rec.Code, rec.Body)
+		}
+	}
+	ssh := `{"ipProtocol":"tcp","fromPort":22,"toPort":22,"ipRanges":[{"cidrIp":"10.0.0.0/16"},{"cidrIp":"10.1.0.0/16"}]}`
+	missing := `{"ipPermissions":[` + ssh +
+		`,{"ipProtocol":"tcp","fromPort":80,"toPort":80,"ipRanges":[{"cidrIp":"10.0.0.0/16"}]}]}`
+	if rec := do(http.MethodPost, revoke, missing, "revoke-missing-1"); rec.Code != http.StatusNotFound ||
+		!strings.Contains(rec.Body.String(), "rule does not exist") {
+		t.Fatalf("revoke with a missing rule %d %s", rec.Code, rec.Body)
+	}
+	rec = do(http.MethodPost, revoke, `{"ipPermissions":[`+ssh+`]}`, "revoke-several-1")
+	if rec.Code != http.StatusAccepted || json.Unmarshal(rec.Body.Bytes(), &acc) != nil || len(acc.Items) != 1 {
+		t.Fatalf("revoke %d %s", rec.Code, rec.Body)
+	}
+	if got := acc.Items[0].Rules; len(got) != 1 || got[0] != want[2] {
+		t.Fatalf("after revoke %+v, want only %+v: a refused revoke removed a rule or this one missed one", got, want[2])
+	}
+	if old := do(http.MethodPost, revoke, single, "revoke-old-1"); old.Code != http.StatusBadRequest {
+		t.Fatalf("revoke single object %d %s", old.Code, old.Body)
+	}
 }
 
 // #219: a console ICMP permission takes the type in fromPort and the code in

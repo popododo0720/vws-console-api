@@ -904,7 +904,8 @@ func rejectUnknown(r *http.Request, action string) error {
 			continue
 		}
 		// An unknown key wins over the limit, whatever the map order.
-		if action == resource.ActionAuthorizeSecurityGroupIngress.String() && ruleIndexPastLimit(key) {
+		if (action == resource.ActionAuthorizeSecurityGroupIngress.String() ||
+			action == resource.ActionRevokeSecurityGroupIngress.String()) && ruleIndexPastLimit(key) {
 			pastLimit = true
 			continue
 		}
@@ -1051,11 +1052,9 @@ func allowAuthorize(key string) bool {
 	return ok && permissionLeaf(field)
 }
 
+// allowRevoke takes the same IpPermissions list as authorize.
 func allowRevoke(key string) bool {
-	if legacyRuleField(key) || key == "Action" || key == "Version" || key == "ClientToken" || key == "GroupId" {
-		return true
-	}
-	return permissionField(key)
+	return allowAuthorize(key)
 }
 
 func legacyRuleField(key string) bool {
@@ -1367,28 +1366,6 @@ func queryIndex(raw string) (int, bool) {
 		return 0, false
 	}
 	return n, true
-}
-
-func permissionField(key string) bool {
-	rest, ok := strings.CutPrefix(key, "IpPermissions.")
-	if !ok {
-		return false
-	}
-	n, field, ok := strings.Cut(rest, ".")
-	if !ok || n != "1" {
-		return false
-	}
-	switch field {
-	case "IpProtocol", "FromPort", "ToPort", "CidrIp":
-		return true
-	default:
-	}
-	rangeRest, ok := strings.CutPrefix(field, "IpRanges.")
-	if !ok {
-		return false
-	}
-	m, leaf, ok := strings.Cut(rangeRest, ".")
-	return ok && m == "1" && leaf == "CidrIp"
 }
 
 func tagField(key string) bool {

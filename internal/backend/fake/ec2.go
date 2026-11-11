@@ -770,21 +770,18 @@ func (n network) RevokeSecurityGroupIngress(
 	if !ok || group.OwnerID != m.Account {
 		return resource.Accepted[resource.SecurityGroup]{}, resource.NotFound(resource.KindSecurityGroup, req.ID.String())
 	}
-	index := -1
-	for i, rule := range group.Rules {
-		if rule == req.Rule {
-			index = i
-			break
-		}
-	}
-	if index < 0 {
+	rules, ok := backend.WithoutRules(group.Rules, req.Rules)
+	if !ok {
 		return resource.Accepted[resource.SecurityGroup]{}, resource.PermissionNotFound(req.ID.String())
 	}
 	previous, previousIDs := group.Rules, group.RuleIDs
-	group.Rules = slices.Delete(slices.Clone(previous), index, index+1)
-	if index < len(previousIDs) {
-		group.RuleIDs = slices.Delete(slices.Clone(previousIDs), index, index+1)
+	ids := make([]string, 0, len(rules))
+	for i, rule := range previous {
+		if !slices.Contains(req.Rules, rule) && i < len(previousIDs) {
+			ids = append(ids, previousIDs[i])
+		}
 	}
+	group.Rules, group.RuleIDs = rules, ids
 	op, err := n.w.newOp(m.Account, resource.ServiceNetwork, resource.ActionRevokeSecurityGroupIngress,
 		[]resource.Ref{group.ID.Ref()}, func(time.Time) {})
 	if err != nil {

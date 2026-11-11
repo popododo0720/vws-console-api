@@ -143,7 +143,7 @@ func mutationProbes(ctx context.Context, set backend.Set, m backend.Mutation) ma
 		},
 		resource.ActionRevokeSecurityGroupIngress: {
 			mutationProbe(ctx, m, set.Network.RevokeSecurityGroupIngress,
-				resource.RevokeSecurityGroupIngressRequest{ID: group, Rule: rule}),
+				resource.RevokeSecurityGroupIngressRequest{ID: group, Rules: []resource.IngressRule{rule}}),
 		},
 		resource.ActionAllocateAddress: {mutationProbe(ctx, m, set.Network.AllocateAddress,
 			resource.AllocateAddressRequest{Domain: "vpc"})},
