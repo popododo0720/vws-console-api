@@ -504,7 +504,7 @@ func TestKnownImagesIsNotEmpty(t *testing.T) {
 
 func TestEveryListedInstanceTypeLaunches(t *testing.T) {
 	for _, it := range InstanceTypes() {
-		if got, ok := vwsInstanceType(it.Name); !ok || got != it.Name {
+		if got, ok := ComputeInstanceType(it.Name); !ok || got != it.Name {
 			t.Fatalf("%s is listed but RunInstances maps it to %q, %v", it.Name, got, ok)
 		}
 	}

@@ -500,13 +500,18 @@ func (h *handler) describeInstanceTypes(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 	names := indexedStrings(r, "InstanceType")
-	if err := checkInstanceTypeNames(names); err != nil {
+	types, err := h.svc.InstanceTypes(r.Context(), c)
+	if err != nil {
+		writeErr(w, r, err)
+		return
+	}
+	if err := checkInstanceTypeNames(names, types); err != nil {
 		writeErr(w, r, err)
 		return
 	}
 	want := stringSetOf(names)
 	var rows []instanceTypeItem
-	for _, typ := range resource.InstanceTypes() {
+	for _, typ := range types {
 		row := instanceTypeOf(typ)
 		if _, ok := want[row.InstanceType]; len(want) > 0 && !ok {
 			continue
@@ -534,9 +539,9 @@ const instanceTypeNamesField = "InstanceType.N"
 // offer, all of them in one sentence in request order, the way EC2 does:
 // "The following supplied instance types do not exist: [m1.medium, m3.medium]".
 // https://github.com/4dn-dcic/tibanna/issues/382
-func checkInstanceTypeNames(names []string) error {
+func checkInstanceTypeNames(names []string, types []resource.InstanceType) error {
 	known := make(map[string]struct{})
-	for _, typ := range resource.InstanceTypes() {
+	for _, typ := range types {
 		known[typ.Name] = struct{}{}
 	}
 	if unknown := unknownNames(names, known); len(unknown) > 0 {

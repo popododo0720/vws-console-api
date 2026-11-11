@@ -654,12 +654,18 @@ func statusOf(c resource.Code) int {
 	}
 }
 
-// listInstanceTypes is the static machine catalog for the launch screen.
+// listInstanceTypes is the regional machine catalog for the launch screen.
 func (h *handler) listInstanceTypes(w http.ResponseWriter, r *http.Request) {
-	if _, ok := h.caller(w, r); !ok {
+	c, ok := h.caller(w, r)
+	if !ok {
 		return
 	}
-	writeJSON(w, http.StatusOK, resource.Page[resource.InstanceType]{Items: resource.InstanceTypes()})
+	types, err := h.svc.InstanceTypes(r.Context(), c)
+	if err != nil {
+		writeErr(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, resource.Page[resource.InstanceType]{Items: types})
 }
 
 func (h *handler) getVpc(w http.ResponseWriter, r *http.Request) {

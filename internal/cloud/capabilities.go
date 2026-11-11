@@ -18,6 +18,27 @@ func (s *Service) ReadIsEmpty(ctx context.Context, action string) (bool, error) 
 	return caps.Actions["ec2:"+action].State == resource.ActionEmpty, nil
 }
 
+// InstanceTypes returns the region's declared catalog, including an empty one.
+func (s *Service) InstanceTypes(ctx context.Context, c resource.Caller) ([]resource.InstanceType, error) {
+	if err := requireCaller(c); err != nil {
+		return nil, err
+	}
+	caps, err := s.caps.RegionCapabilities(ctx, resource.RegionName)
+	if err != nil {
+		return nil, fmt.Errorf("instance types: capabilities of %s: %w", resource.RegionName, err)
+	}
+	if caps.InstanceTypes == nil {
+		return resource.InstanceTypes(), nil
+	}
+	types := make([]resource.InstanceType, 0, len(caps.InstanceTypes))
+	for _, typ := range caps.InstanceTypes {
+		types = append(types, resource.InstanceType{
+			Name: typ.InstanceType, VCPUs: typ.VCPUs, MemoryMiB: typ.MemoryMiB,
+		})
+	}
+	return types, nil
+}
+
 // admit refuses a mutation the region does not serve, before the backend
 // sees it. Until Scope carries a region the kernel serves resource.RegionName.
 func (s *Service) admit(ctx context.Context, a resource.Action) error {

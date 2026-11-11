@@ -25,6 +25,9 @@ func New(ctx context.Context, client *pveclient.Client, reg Registration, cfg Re
 	if reg.Region.Name == "" {
 		return nil, errors.New("proxmox: registration region name is required")
 	}
+	if err := validateInstanceTypes(cfg); err != nil {
+		return nil, err
+	}
 	if _, err := NewIDs(reg.ClusterName); err != nil {
 		return nil, fmt.Errorf("proxmox: registration cluster_name: %w", err)
 	}

@@ -87,6 +87,7 @@ change both files together.
 | An ICMP permission is type in FromPort and code in ToPort, -1 or 0 to 255, stored as sent; one without both is `MissingParameter`. A group holds at most 60 inbound rules; past that is `RulesPerSecurityGroupLimitExceeded` and nothing is written. | `TestICMPTypeAndCodeAreChecked`, `TestICMPTypeAndCodeRoundTrip`, `TestRulesPerSecurityGroupLimitExceeded`, `exerciseEC2` |
 | CreateVpc takes a CIDR block with a prefix from /16 to /28; any other is 400 `InvalidVpcRange` and creates nothing. | `TestCreateVpcRefusesPrefixOutsideSixteenToTwentyEight` |
 | EC2 catalog actions are served on both surfaces. | `TestCatalogActionsAreImplemented` |
+| Instance type lists follow the region capability catalog; Proxmox exposes only default types allowed by configuration that fit one node after its host reserve. | `TestRegionalInstanceTypes`, `TestInstanceTypesFollowCapabilities`, `TestInstanceTypeConfigurationRefusesDefinitions` |
 | EC2 describe calls take boto3's parameter names. | `TestDescribeStandardParameters` |
 | EC2 instance, image, volume and address behavior. | `exerciseEC2`, `backendtest.AttachLifecycle` |
 | Over gRPC a compute copy `img-H` is the EC2 image `ami-H`; an EC2 `ami-H` that is not the catalog image reads `img-H`, then on `NotFound` a seeded `ami-H`; a listing shows one id once, the copy (#467). | `TestImageIDMapping`, `TestDescribeImagesReadsACopyAsAnAMI`, `TestDescribeImagesCopyWinsASeedOfTheSameDigits`, `TestRunInstancesRequiresImageInCallerRegion` |

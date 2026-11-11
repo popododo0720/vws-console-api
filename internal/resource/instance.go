@@ -407,7 +407,7 @@ func (r RunInstancesRequest) Normalize() (RunInstancesRequest, error) {
 	if r.ImageID.IsZero() {
 		return RunInstancesRequest{}, Invalid("imageId", "required")
 	}
-	typ, ok := vwsInstanceType(r.InstanceType)
+	typ, ok := ComputeInstanceType(r.InstanceType)
 	if !ok {
 		return RunInstancesRequest{}, Invalid("instanceType", "unsupported instance type")
 	}
@@ -621,7 +621,7 @@ type InstanceType struct {
 }
 
 // InstanceTypes is the vws-compute machine catalog, smallest first.
-// vws-compute has no RPC that lists it; keep it in step with vwsInstanceType.
+// vws-compute has no RPC that lists it; keep it in step with ComputeInstanceType.
 func InstanceTypes() []InstanceType {
 	return []InstanceType{
 		{Name: "vws.small", VCPUs: 1, MemoryMiB: 1024},
@@ -631,12 +631,12 @@ func InstanceTypes() []InstanceType {
 	}
 }
 
-// vwsInstanceType maps an EC2 instance type to the vws-compute machine type
+// ComputeInstanceType maps an EC2 instance type to the vws-compute machine type
 // nearest by vCPU and memory. vws-compute accepts only vws.small (1 vCPU,
 // 1 GiB), vws.medium (2, 4 GiB), vws.large (4, 8 GiB), and vws.xlarge
 // (8, 16 GiB). Nearest is the least |log2 vCPU ratio| + |log2 memory ratio|;
 // a tie takes the smaller type. A vws name maps to itself.
-func vwsInstanceType(s string) (string, bool) {
+func ComputeInstanceType(s string) (string, bool) {
 	switch s {
 	case "vws.small", "vws.medium", "vws.large", "vws.xlarge":
 		return s, true

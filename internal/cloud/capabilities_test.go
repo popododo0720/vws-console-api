@@ -3,6 +3,7 @@ package cloud
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 
 	"github.com/popododo0720/vws-console-api/internal/backend"
@@ -13,6 +14,45 @@ import (
 type stubCapabilities struct {
 	doc resource.RegionCapabilities
 	err error
+}
+
+func TestInstanceTypesFollowCapabilities(t *testing.T) {
+	declared := []resource.RegionInstanceType{{InstanceType: "vws.8xlarge", VCPUs: 64, MemoryMiB: 131072}}
+	for _, tc := range []struct {
+		name string
+		caps backend.Capabilities
+		want []resource.InstanceType
+	}{
+		{"legacy", backend.AllSupported{Kind: resource.RegionKindProxmox}, resource.InstanceTypes()},
+		{"undeclared", stubCapabilities{}, resource.InstanceTypes()},
+		{"empty", stubCapabilities{doc: resource.RegionCapabilities{
+			InstanceTypes: []resource.RegionInstanceType{},
+		}}, []resource.InstanceType{}},
+		{
+			"declared",
+			stubCapabilities{doc: resource.RegionCapabilities{InstanceTypes: declared}},
+			[]resource.InstanceType{{Name: "vws.8xlarge", VCPUs: 64, MemoryMiB: 131072}},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, _, caller := gatedService(t, tc.caps)
+			got, err := svc.InstanceTypes(t.Context(), caller)
+			if err != nil || !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("InstanceTypes = %+v, %v; want %+v", got, err, tc.want)
+			}
+		})
+	}
+}
+
+func TestInstanceTypesRefusesMissingCallerOrCapabilities(t *testing.T) {
+	failure := errors.New("region unavailable")
+	svc, _, caller := gatedService(t, stubCapabilities{err: failure})
+	if _, err := svc.InstanceTypes(t.Context(), caller); !errors.Is(err, failure) {
+		t.Fatalf("InstanceTypes error = %v", err)
+	}
+	if _, err := svc.InstanceTypes(t.Context(), resource.Caller{}); resource.CodeOf(err) != resource.CodeUnauthenticated {
+		t.Fatalf("missing caller error = %v", err)
+	}
 }
 
 func (s stubCapabilities) RegionCapabilities(context.Context, string) (resource.RegionCapabilities, error) {

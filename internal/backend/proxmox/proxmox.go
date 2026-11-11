@@ -20,15 +20,19 @@ type Backend struct {
 // Set returns the three services sharing this backend.
 func (b *Backend) Set() backend.Set { return backend.Set{Compute: b, Storage: b, Network: b} }
 
-// RegionCapabilities declares bridge inventory and disabled writes.
-func (b *Backend) RegionCapabilities(_ context.Context, region string) (resource.RegionCapabilities, error) {
+// RegionCapabilities declares the regional catalog, bridge inventory and disabled writes.
+func (b *Backend) RegionCapabilities(ctx context.Context, region string) (resource.RegionCapabilities, error) {
 	if region != b.region {
 		return resource.RegionCapabilities{}, resource.Invalid("region", "not served by this backend")
+	}
+	types, err := b.instanceTypes(ctx)
+	if err != nil {
+		return resource.RegionCapabilities{}, err
 	}
 	doc := resource.RegionCapabilities{
 		Region: region, Kind: resource.RegionKindProxmox,
 		Cluster: &resource.RegionCluster{Name: b.cluster}, Zones: []resource.RegionZone{},
-		Actions: map[string]resource.ActionCapability{}, InstanceTypes: []resource.RegionInstanceType{},
+		Actions: map[string]resource.ActionCapability{}, InstanceTypes: types,
 	}
 	for _, a := range resource.Actions() {
 		doc.Actions[a.CapabilityKey()] = resource.ActionCapability{
