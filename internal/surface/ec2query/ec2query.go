@@ -1613,6 +1613,9 @@ func ec2Refinement(e *resource.Error) (errs.AWSEntry, bool) {
 		if resource.IsInvalidTaggedID(e) {
 			return badRequest("InvalidID")
 		}
+		if resource.IsInvalidVpcRange(e) {
+			return badRequest("InvalidVpcRange")
+		}
 		if resource.IsAttachmentLimitExceeded(e) {
 			return badRequest("AttachmentLimitExceeded")
 		}
