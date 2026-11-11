@@ -10,13 +10,14 @@ import (
 	"github.com/popododo0720/vws-console-api/internal/backend/grpcclient/iamclient"
 	"github.com/popododo0720/vws-console-api/internal/globalconfig"
 	"github.com/popododo0720/vws-console-api/internal/resource"
+	"github.com/popododo0720/vws-console-api/internal/surface/console"
 	"github.com/popododo0720/vws-console-api/internal/surface/regionapi"
 )
 
 func regionHealth(path string) (func(context.Context, string) (resource.RegionStatus, error), error) {
 	if path == "" {
 		return func(context.Context, string) (resource.RegionStatus, error) {
-			return resource.RegionStatus{}, errors.New("region mTLS is not configured")
+			return resource.RegionStatus{}, &console.RegionMTLSConfigError{Err: errors.New("mTLS is not configured")}
 		}, nil
 	}
 	data, err := os.ReadFile(path)
@@ -33,11 +34,11 @@ func regionHealth(path string) (func(context.Context, string) (resource.RegionSt
 			CAFile: files.CAFile, CertFile: files.CertFile, KeyFile: files.KeyFile,
 		}).Config()
 		if err != nil {
-			return resource.RegionStatus{}, fmt.Errorf("region mTLS: %w", err)
+			return resource.RegionStatus{}, &console.RegionMTLSConfigError{Err: err}
 		}
 		cert, err := tls.LoadX509KeyPair(files.CertFile, files.KeyFile)
 		if err != nil {
-			return resource.RegionStatus{}, fmt.Errorf("region client certificate: %w", err)
+			return resource.RegionStatus{}, &console.RegionMTLSConfigError{Err: err}
 		}
 		config.Certificates = []tls.Certificate{cert}
 		client, err := regionapi.NewClient(endpoint, config)

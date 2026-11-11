@@ -64,8 +64,14 @@ default_project: default
 	if err := os.Remove(keyPath); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := health(t.Context(), srv.URL); err == nil {
-		t.Fatal("missing client key accepted")
+	if _, err := health(t.Context(), srv.URL); err == nil || err.Error() != "region mTLS configuration failed" {
+		t.Fatalf("missing client key was not safely refused: %v", err)
+	}
+	if err := os.WriteFile(keyPath, []byte("credential-canary"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := health(t.Context(), srv.URL); err == nil || err.Error() != "region mTLS configuration failed" {
+		t.Fatalf("invalid client key was not safely refused: %v", err)
 	}
 }
 

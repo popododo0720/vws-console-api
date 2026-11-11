@@ -158,7 +158,7 @@ func TestAdminHealthStalledRegionIsBounded(t *testing.T) {
 			t.Fatal(err)
 		}
 		if rec.Code != 200 || result.Status != "unreachable" || result.LastError == nil ||
-			!strings.Contains(result.LastError.Message, "context deadline exceeded") ||
+			!strings.Contains(result.LastError.Message, "deadline exceeded") ||
 			result.LastError.Time.IsZero() || time.Since(start) > 5*time.Second+200*time.Millisecond {
 			t.Fatalf("stalled health: %s after %s", rec.Body, time.Since(start))
 		}
@@ -218,6 +218,11 @@ func TestStatusRemembersFailureAndRedactsCredentials(t *testing.T) {
 	cancel()
 	if _, err := b.Status(ctx); err == nil {
 		t.Fatal("canceled caller returned success")
+	}
+	ctx, cancel = context.WithDeadline(t.Context(), time.Unix(0, 0))
+	defer cancel()
+	if _, err := b.Status(ctx); err == nil {
+		t.Fatal("expired caller returned success")
 	}
 	fail.Store(false)
 	next, err := b.Status(t.Context())

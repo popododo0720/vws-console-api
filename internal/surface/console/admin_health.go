@@ -2,14 +2,26 @@ package console
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
+	"log/slog"
 	"net"
 	"net/http"
+	"os"
 	"regexp"
+	"syscall"
 	"time"
 
 	"github.com/popododo0720/vws-console-api/internal/resource"
 )
+
+// RegionMTLSConfigError keeps credential-loading details off the health response.
+type RegionMTLSConfigError struct{ Err error }
+
+func (*RegionMTLSConfigError) Error() string { return "region mTLS configuration failed" }
+
+// Unwrap preserves the cause for safe server-side classification.
+func (e *RegionMTLSConfigError) Unwrap() error { return e.Err }
 
 func (h *handler) adminHealth(w http.ResponseWriter, r *http.Request) {
 	if !h.adminReady(w, r) {
@@ -35,15 +47,38 @@ func (h *handler) adminHealth(w http.ResponseWriter, r *http.Request) {
 	state := "ok"
 	if err != nil {
 		state = "unreachable"
-		message := "region status unavailable"
-		var dial *net.OpError
+		message := "region transport failed"
+		var config *RegionMTLSConfigError
+		var network *net.OpError
+		var errno syscall.Errno
+		var certificate *tls.CertificateVerificationError
+		var record tls.RecordHeaderError
 		switch {
+		case errors.As(err, &config):
+			message = config.Error()
+			reason := "invalid certificate or CA"
+			if errors.Is(err, os.ErrNotExist) {
+				reason = "credential file missing"
+			} else if errors.Is(err, os.ErrPermission) {
+				reason = "credential file permission denied"
+			}
+			h.log.WarnContext(r.Context(), "region mTLS configuration failed", slog.String("reason", reason))
 		case errors.Is(err, context.DeadlineExceeded):
-			message = context.DeadlineExceeded.Error()
+			message += ": deadline exceeded"
 		case errors.Is(err, context.Canceled):
-			message = context.Canceled.Error()
-		case errors.As(err, &dial) && dial.Op == "dial":
-			message = dial.Error()
+			message += ": request canceled"
+		case errors.As(err, &certificate), errors.As(err, &record):
+			message += ": TLS handshake failed"
+		case errors.As(err, &network):
+			switch network.Op {
+			case "dial", "read", "write":
+				message += ": " + network.Op
+				if errors.As(network.Err, &errno) {
+					message += ": " + errno.Error()
+				}
+			case "remote error":
+				message += ": TLS handshake failed"
+			}
 		}
 		status = resource.RegionStatus{
 			Nodes:     []resource.RegionNode{},
