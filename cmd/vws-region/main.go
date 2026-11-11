@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -101,6 +102,10 @@ func run(ctx context.Context, args []string) (err error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	var initialized atomic.Bool
+	probe := &readiness{check: func(ctx context.Context) error {
+		_, err := conn.Check(ctx)
+		return err
+	}, now: time.Now, ttl: readyTTL}
 	opsDone := make(chan error, 1)
 	go func() {
 		opsDone <- server.Serve(ctx, server.Options{
@@ -109,8 +114,7 @@ func run(ctx context.Context, args []string) (err error) {
 				if !initialized.Load() {
 					return errors.New("startup checks incomplete")
 				}
-				_, err := conn.Check(ctx)
-				return err
+				return probe.Ready(ctx)
 			},
 		})
 		cancel()
@@ -152,6 +156,36 @@ func run(ctx context.Context, args []string) (err error) {
 	if serveErr := <-done; !errors.Is(serveErr, http.ErrServerClosed) {
 		err = errors.Join(err, serveErr)
 	}
+	return err
+}
+
+// readyTTL bounds how often unauthenticated /readyz probes reach pveproxy.
+const readyTTL = 2 * time.Second
+
+// readiness reuses one PVE check for ttl; concurrent probes wait for the
+// check in flight instead of starting their own.
+type readiness struct {
+	check func(context.Context) error
+	now   func() time.Time
+	ttl   time.Duration
+
+	mu  sync.Mutex
+	at  time.Time
+	err error
+}
+
+func (r *readiness) Ready(ctx context.Context) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !r.at.IsZero() && r.now().Sub(r.at) < r.ttl {
+		return r.err
+	}
+	err := r.check(ctx)
+	if ctx.Err() != nil {
+		// A probe that gave up says nothing about PVE.
+		return err
+	}
+	r.at, r.err = r.now(), err
 	return err
 }
 
