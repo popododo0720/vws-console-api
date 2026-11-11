@@ -138,7 +138,7 @@ func (h *handler) adminWriteRegion(w http.ResponseWriter, r *http.Request) {
 	}
 	claimed := oldCluster != v.ClusterName
 	if claimed {
-		if err := h.registry.ClaimCluster(r.Context(), v.ClusterName, v.Name); err != nil {
+		if err := h.registry.ClaimCluster(r.Context(), v.ClusterName, v.Name, h.now()); err != nil {
 			if errors.Is(err, store.ErrExists) {
 				writeErr(w, r, resource.Invalid("clusterName", "already registered"))
 			} else {
