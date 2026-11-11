@@ -920,7 +920,7 @@ func tagSelectors(r *http.Request) ([]resource.TagSelector, error) {
 		}
 		out = append(out, sel)
 	}
-	return out, nil
+	return out, resource.ValidateTagSelectors(out)
 }
 
 // maxDeleteTagIndex bounds Tag.N on DeleteTags, as allowDeleteTags does.

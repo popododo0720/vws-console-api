@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -700,11 +701,11 @@ func validTags(tags map[string]string) error {
 		return Invalid("tags", "too many")
 	}
 	for k, v := range tags {
-		if n := utf8.RuneCountInString(k); n < 1 || n > 128 || !tagText(k) {
-			return Invalid("tags", "malformed key")
+		if err := validTagText(k, "key", 1, 128); err != nil {
+			return err
 		}
-		if utf8.RuneCountInString(v) > 256 || !tagText(v) {
-			return Invalid("tags", "malformed value")
+		if err := validTagText(v, "value", 0, 256); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -723,10 +724,24 @@ func validRequestTags(tags map[string]string) error {
 	return validTags(tags)
 }
 
-// tagText reports whether s is valid UTF-8 with no control characters.
-// As in EC2, lengths count characters and spaces are allowed.
-func tagText(s string) bool {
-	return utf8.ValidString(s) && !strings.ContainsFunc(s, unicode.IsControl)
+func validTagText(s, parameter string, minLength, maxLength int) error {
+	var reason string
+	switch n := utf8.RuneCountInString(s); {
+	case !utf8.ValidString(s):
+		reason = "must be valid UTF-8"
+		s = strconv.Quote(s)
+	case strings.ContainsFunc(s, unicode.IsControl):
+		reason = "must not contain control characters"
+		s = strconv.Quote(s)
+	case n < minLength:
+		reason = "must not be empty"
+	case n > maxLength:
+		reason = fmt.Sprintf("exceeds the maximum length of %d characters", maxLength)
+	default:
+		return nil
+	}
+	return Invalid("tags", fmt.Sprintf("Value (%s) for parameter %s is invalid. Tag %s %s",
+		s, parameter, parameter, reason))
 }
 
 // NextInstanceState is the state an instance reaches when action finishes.
