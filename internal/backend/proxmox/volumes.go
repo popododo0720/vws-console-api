@@ -78,7 +78,13 @@ func (b *Backend) vmVolumes(
 		if !cached {
 			rows, err = b.client.StorageContent(ctx, vm.Node, storage)
 			if err != nil {
-				return nil, fmt.Errorf("proxmox: read disk storage content: %w", err)
+				if ctx.Err() != nil {
+					return nil, fmt.Errorf("proxmox: read disk storage content: %w", err)
+				}
+				slog.WarnContext(ctx, "skipping unavailable storage content",
+					slog.String("node", vm.Node), slog.String("storage", storage), slog.Any("error", err))
+				content[cacheKey] = nil
+				continue
 			}
 			content[cacheKey] = rows
 		}

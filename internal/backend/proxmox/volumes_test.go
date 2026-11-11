@@ -1,12 +1,17 @@
 package proxmox
 
 import (
+	"context"
+	"errors"
 	"fmt"
+	"net/http"
 	"reflect"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 
+	"github.com/popododo0720/vws-console-api/internal/backend/proxmox/pveclient"
 	"github.com/popododo0720/vws-console-api/internal/backend/proxmox/pveclient/pvefake"
 	"github.com/popododo0720/vws-console-api/internal/resource"
 )
@@ -232,5 +237,90 @@ func TestUndecodableVolumeTagSkipsOnlyItsDisk(t *testing.T) {
 	snaps, err := b.DescribeSnapshots(t.Context(), inventoryScope(), resource.SnapshotQuery{})
 	if err != nil || len(snaps.Items) != 1 || snaps.Items[0].VolumeID != page.Items[0].ID {
 		t.Fatalf("bad root tags hid the VM's good disk snapshot: %+v error=%v", snaps, err)
+	}
+}
+
+func TestStorageFailuresKeepOtherDisks(t *testing.T) {
+	for _, status := range []int{http.StatusForbidden, 595} {
+		t.Run(fmt.Sprint(status), func(t *testing.T) {
+			s := volumeScenario()
+			s.Tokens[0].Secret = "test-secret"
+			s.VMs[0].Config["scsi0"] = "denied:vm-100-disk-0,serial=0123456789abcdef0"
+			s.VMs[0].Config["scsi2"] = "denied:vm-100-disk-2,serial=3123456789abcdef0"
+			s.VMs[1].Config["virtio0"] = "denied:vm-101-disk-0,serial=2123456789abcdef0"
+			s.VMs[1].Config["virtio1"] = "local:vm-101-disk-1,serial=4123456789abcdef0"
+			s.Storages = append(s.Storages, pvefake.Storage{Node: "pve1", Name: "denied"})
+			s.Storages[0].Content = append(s.Storages[0].Content, pvefake.StorageContent{
+				VolID: "local:vm-101-disk-1", Content: "images", Format: "raw", Size: 5 << 30, VMID: 101,
+			})
+			f, err := pvefake.New(s)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var calls atomic.Int32
+			c := startupClient(t, func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/api2/json/nodes/pve1/storage/denied/content" {
+					calls.Add(1)
+					w.WriteHeader(status)
+					return
+				}
+				f.ServeHTTP(w, r)
+			})
+			b, err := New(t.Context(), c, registration(), RegionConfig{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantCalls := int32(1)
+			if status >= 500 {
+				wantCalls += pveclient.MaxRetries
+			}
+			page, err := b.DescribeVolumes(t.Context(), inventoryScope(), resource.VolumeQuery{})
+			if err != nil || len(page.Items) != 2 || page.Items[0].ID.String() != "vol-1123456789abcdef0" ||
+				page.Items[1].ID.String() != "vol-4123456789abcdef0" || calls.Load() != wantCalls {
+				t.Fatalf("storage failure hid good disks or was not cached: %+v calls=%d error=%v", page, calls.Load(), err)
+			}
+			calls.Store(0)
+			snaps, err := b.DescribeSnapshots(t.Context(), inventoryScope(), resource.SnapshotQuery{})
+			if err != nil || len(snaps.Items) != 1 || snaps.Items[0].VolumeID != page.Items[0].ID ||
+				calls.Load() != wantCalls {
+				t.Fatalf("storage failure hid good snapshots or was not cached: %+v calls=%d error=%v",
+					snaps, calls.Load(), err)
+			}
+		})
+	}
+}
+
+func TestStorageReadCancellationPropagates(t *testing.T) {
+	for _, action := range []string{"volumes", "snapshots"} {
+		t.Run(action, func(t *testing.T) {
+			s := volumeScenario()
+			s.Tokens[0].Secret = "test-secret"
+			f, err := pvefake.New(s)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			c := startupClient(t, func(w http.ResponseWriter, r *http.Request) {
+				if strings.HasSuffix(r.URL.Path, "/storage/local/content") {
+					cancel()
+					<-r.Context().Done()
+					return
+				}
+				f.ServeHTTP(w, r)
+			})
+			b, err := New(t.Context(), c, registration(), RegionConfig{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if action == "volumes" {
+				_, err = b.DescribeVolumes(ctx, inventoryScope(), resource.VolumeQuery{})
+			} else {
+				_, err = b.DescribeSnapshots(ctx, inventoryScope(), resource.SnapshotQuery{})
+			}
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("storage cancellation was swallowed: %v", err)
+			}
+		})
 	}
 }
