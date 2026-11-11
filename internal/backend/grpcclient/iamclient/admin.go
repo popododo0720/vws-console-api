@@ -312,16 +312,6 @@ func (STSAdmin) DeleteRole(_ context.Context, _ resource.AccountID, _ string, wa
 	return unboundOrNotServed(want, "DeleteRole")
 }
 
-// CreatePolicy implements iam.Admin.
-func (STSAdmin) CreatePolicy(_ context.Context, _ resource.AccountID, name, path, _, _ string) (iam.ManagedPolicy, error) {
-	return iam.ManagedPolicy{}, notServed("CreatePolicy")
-}
-
-// GetPolicy implements iam.Admin.
-func (STSAdmin) GetPolicy(_ context.Context, _ resource.AccountID, _ string) (iam.ManagedPolicy, error) {
-	return iam.ManagedPolicy{}, notServed("GetPolicy")
-}
-
 // CreatePolicyVersion implements iam.Admin over
 // PolicyService.CreatePolicyVersion. The version id and default flag come
 // from the stored policy, as AWS assigns v<n> in order.
@@ -418,16 +408,6 @@ func (a STSAdmin) ListPolicyVersions(
 		})
 	}
 	return page, nil
-}
-
-// ListPolicies implements iam.Admin.
-func (STSAdmin) ListPolicies(_ context.Context, _ resource.AccountID, _ string) ([]iam.ManagedPolicy, error) {
-	return nil, notServed("ListPolicies")
-}
-
-// DeletePolicy implements iam.Admin.
-func (STSAdmin) DeletePolicy(_ context.Context, _ resource.AccountID, _ string) error {
-	return notServed("DeletePolicy")
 }
 
 // SetDefaultPolicyVersion implements iam.Admin over PolicyService.UpdatePolicy.

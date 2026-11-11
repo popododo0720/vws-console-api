@@ -82,6 +82,9 @@ type directory struct {
 	// onGetPolicy, when set, runs under d.mu in each GetPolicy, as another
 	// writer acting while a list reads the attached policies.
 	onGetPolicy func(d *directory)
+	// onDeletePolicy, when set, runs under d.mu in each DeletePolicy before
+	// the etag check, as another writer acting after the client's read.
+	onDeletePolicy func(d *directory)
 	// onListAccessKeys, when set, runs under d.mu in each ListAccessKeys, as
 	// another writer acting while a list reads the key pages.
 	onListAccessKeys func(d *directory)

@@ -12,8 +12,9 @@ import (
 )
 
 // IAMPolicyHarness returns a fresh Admin and a way to seed a managed policy
-// in it. vws-iam CreatePolicy is not served over gRPC yet, so the vws-iam
-// stand-in seeds its policies directly; the fake calls CreatePolicy.
+// in it. The vws-iam stand-in seeds its policies directly, so these rows do
+// not depend on CreatePolicy (IAMManagedPolicies covers it); the fake calls
+// CreatePolicy.
 type IAMPolicyHarness func(t *testing.T) (iam.Directory, PolicySeeder)
 
 // PolicySeeder creates the managed policy name at path in the contract

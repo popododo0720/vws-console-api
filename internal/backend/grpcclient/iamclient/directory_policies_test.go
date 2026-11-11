@@ -11,7 +11,6 @@ import (
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/types/known/timestamppb"
 
 	iamv1 "github.com/popododo0720/vws-proto/gen/go/vws/iam/v1"
 )
@@ -25,8 +24,9 @@ import (
 // size check.
 
 type dirPolicy struct {
-	id, path string
-	created  time.Time
+	id, path, description string
+	created               time.Time
+	version               int
 }
 
 // dirInlineNameRE is vws-iam's ValidName, which inline policy names share
@@ -75,11 +75,7 @@ func (d *directory) GetPolicy(_ context.Context, req *iamv1.GetPolicyRequest) (*
 	if p == nil || project != "123456789012" {
 		return nil, awsErr(codes.NotFound, "NOT_FOUND", "NoSuchEntity")
 	}
-	return &iamv1.Policy{
-		Name: req.GetName(), Etag: "1", Spec: &iamv1.PolicySpec{Path: p.path, DefaultVersion: "v1"},
-		Status:     &iamv1.PolicyStatus{Arn: "arn:vws:iam::" + project + ":policy" + p.path + id, UniqueId: "ANPA" + id},
-		CreateTime: timestamppb.New(p.created),
-	}, nil
+	return d.policyProto(project, p), nil
 }
 
 // racePolicies lets another writer win against a policy change of e: the

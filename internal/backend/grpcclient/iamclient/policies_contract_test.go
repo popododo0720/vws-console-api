@@ -15,3 +15,12 @@ func TestGRPCEntityPolicyContract(t *testing.T) {
 		return STSAdmin{Client: c}, func(_ *testing.T, name, path string) string { return d.seedPolicy(name, path) }
 	})
 }
+
+// #574: STSAdmin over vws-iam PolicyService answers the managed policy CRUD
+// contract as the fake does.
+func TestGRPCManagedPolicyContract(t *testing.T) {
+	backendtest.IAMManagedPolicies(t, func(t *testing.T) iam.Directory {
+		c, _ := dirHarness(t)
+		return STSAdmin{Client: c}
+	})
+}

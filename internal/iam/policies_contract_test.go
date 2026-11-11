@@ -29,3 +29,8 @@ func TestFakeEntityPolicyContract(t *testing.T) {
 		return f, seed
 	})
 }
+
+// #574: the fake answers the managed policy CRUD contract.
+func TestFakeManagedPolicyContract(t *testing.T) {
+	backendtest.IAMManagedPolicies(t, func(*testing.T) iam.Directory { return iam.NewFake() })
+}

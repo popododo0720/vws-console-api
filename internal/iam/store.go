@@ -1048,14 +1048,8 @@ func (f *Fake) DeleteRole(_ context.Context, a resource.AccountID, name string, 
 
 // CreatePolicy implements Admin.
 func (f *Fake) CreatePolicy(_ context.Context, a resource.AccountID, name, path, document, description string) (ManagedPolicy, error) {
-	if err := checkName(policyName, "policyName", name); err != nil {
-		return ManagedPolicy{}, err
-	}
-	path, err := normPath(path)
+	path, err := CheckManagedPolicy(name, path, document, description)
 	if err != nil {
-		return ManagedPolicy{}, err
-	}
-	if err := ValidatePolicyDescription(description); err != nil {
 		return ManagedPolicy{}, err
 	}
 	parsed, err := parsePolicy(document, false)
