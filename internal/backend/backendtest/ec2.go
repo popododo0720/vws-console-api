@@ -9,7 +9,10 @@ import (
 	"github.com/popododo0720/vws-console-api/internal/resource"
 )
 
-func exerciseEC2(ctx context.Context, t *testing.T, set backend.Set, account resource.AccountID, stopped resource.InstanceID) {
+func exerciseEC2(
+	ctx context.Context, t *testing.T, set backend.Set, account resource.AccountID,
+	stopped resource.InstanceID, caps resource.RegionCapabilities,
+) {
 	t.Helper()
 	scope := backend.Scope{Account: account}
 	vpcReq := resource.CreateVpcRequest{Cidr: "10.8.0.0/16"}
@@ -306,6 +309,16 @@ func exerciseEC2(ctx context.Context, t *testing.T, set backend.Set, account res
 		t.Fatalf("delete busy subnet: %v", err)
 	}
 	t.Run("AddressAssociation", func(t *testing.T) {
+		requireCapabilities(t, caps,
+			[]resource.Action{
+				resource.ActionAllocateAddress,
+				resource.ActionAssociateAddress,
+				resource.ActionDisassociateAddress,
+				resource.ActionReleaseAddress,
+			},
+			[]resource.ReadAction{
+				resource.ReadDescribeAddresses,
+			})
 		eip, err := set.Network.AllocateAddress(ctx,
 			backend.Mutation{Scope: scope, Key: "k-addr-assoc", Fingerprint: "fp-addr-assoc"},
 			resource.AllocateAddressRequest{Domain: "vpc"})
@@ -676,6 +689,15 @@ func exerciseEC2(ctx context.Context, t *testing.T, set backend.Set, account res
 	}
 
 	t.Run("AddressRelease", func(t *testing.T) {
+		requireCapabilities(t, caps,
+			[]resource.Action{
+				resource.ActionAllocateAddress,
+				resource.ActionAssociateAddress,
+				resource.ActionReleaseAddress,
+			},
+			[]resource.ReadAction{
+				resource.ReadDescribeAddresses,
+			})
 		addr, err := set.Network.AllocateAddress(ctx,
 			backend.Mutation{Scope: scope, Key: "k-addr", Fingerprint: "fp-addr"},
 			resource.AllocateAddressRequest{Domain: "vpc"})

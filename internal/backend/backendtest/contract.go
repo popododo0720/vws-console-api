@@ -18,8 +18,11 @@ import (
 type Harness func() backend.Set
 
 // Run checks idempotency, tenancy, and the instance lifecycle.
-func Run(t *testing.T, newSet Harness) {
+func Run(t *testing.T, newSet Harness, caps resource.RegionCapabilities) {
 	t.Helper()
+	if err := caps.Validate(); err != nil {
+		t.Fatal(err)
+	}
 	ctx := context.Background()
 	set := newSet()
 	account, err := resource.Parse[resource.AccountID]("123456789012")
@@ -36,24 +39,217 @@ func Run(t *testing.T, newSet Harness) {
 	}
 	var subnet resource.SubnetID
 	var stopped resource.InstanceID
-	t.Run("Subnet", func(t *testing.T) { subnet = contractSubnet(ctx, t, set, account) })
-	t.Run("NetworkTags", func(t *testing.T) { networkTags(t, set, account) })
-	t.Run("VolumeTags", func(t *testing.T) { volumeTags(t, set, account) })
-	t.Run("Lifecycle", func(t *testing.T) { stopped = contractLifecycle(ctx, t, set, account, other, img, subnet) })
+	t.Run("Subnet", func(t *testing.T) {
+		requireCapabilities(t, caps, []resource.Action{resource.ActionCreateSubnet}, []resource.ReadAction{})
+		subnet = contractSubnet(ctx, t, set, account)
+	})
+	t.Run("NetworkTags", func(t *testing.T) {
+		requireCapabilities(t, caps,
+			[]resource.Action{
+				resource.ActionCreateSubnet,
+				resource.ActionCreateVpc,
+				resource.ActionCreateTags,
+				resource.ActionDeleteTags,
+			},
+			[]resource.ReadAction{
+				resource.ReadDescribeSubnets,
+				resource.ReadDescribeVpcs,
+			})
+		networkTags(t, set, account)
+	})
+	t.Run("VolumeTags", func(t *testing.T) {
+		requireCapabilities(t, caps,
+			[]resource.Action{
+				resource.ActionCreateVolume,
+				resource.ActionCreateTags,
+			},
+			[]resource.ReadAction{
+				resource.ReadDescribeVolumes,
+			})
+		volumeTags(t, set, account)
+	})
+	t.Run("Lifecycle", func(t *testing.T) {
+		requireCapabilities(t, caps,
+			[]resource.Action{
+				resource.ActionCreateSubnet,
+				resource.ActionRunInstances,
+				resource.ActionStopInstances,
+			},
+			[]resource.ReadAction{
+				resource.ReadDescribeInstances,
+				resource.ReadDescribeSubnets,
+				resource.ReadDescribeVolumes,
+			})
+		stopped = contractLifecycle(ctx, t, set, account, other, img, subnet, caps)
+	})
 	t.Run("Objects", func(t *testing.T) { contractObjects(ctx, t, set, account, other) })
-	t.Run("EC2", func(t *testing.T) { exerciseEC2(ctx, t, set, account, stopped) })
-	t.Run("KeyLaunch", func(t *testing.T) { exerciseKeyLaunch(ctx, t, set, account, subnet, img) })
-	t.Run("KeyRetry", func(t *testing.T) { exerciseKeyRetry(ctx, t, set, account) })
-	t.Run("RootDevice", func(t *testing.T) { exerciseRootDevice(ctx, t, set, account, subnet, img) })
-	t.Run("RootVolumeType", func(t *testing.T) { exerciseRootVolumeType(ctx, t, set, account, subnet, img) })
-	t.Run("RootVolumeSize", func(t *testing.T) { exerciseRootVolumeSize(ctx, t, set, account, subnet, img) })
+	t.Run("EC2", func(t *testing.T) {
+		requireCapabilities(t, caps,
+			[]resource.Action{
+				resource.ActionAttachVolume,
+				resource.ActionAuthorizeSecurityGroupIngress,
+				resource.ActionCreateKeyPair,
+				resource.ActionCreateSecurityGroup,
+				resource.ActionCreateSnapshot,
+				resource.ActionCreateSubnet,
+				resource.ActionCreateVolume,
+				resource.ActionCreateVpc,
+				resource.ActionDeleteKeyPair,
+				resource.ActionDeleteSecurityGroup,
+				resource.ActionDeleteSnapshot,
+				resource.ActionDeleteSubnet,
+				resource.ActionDeleteVolume,
+				resource.ActionDeleteVpc,
+				resource.ActionDetachVolume,
+				resource.ActionModifyVolume,
+				resource.ActionRevokeSecurityGroupIngress,
+				resource.ActionRunInstances,
+				resource.ActionStartInstances,
+				resource.ActionStopInstances,
+				resource.ActionTerminateInstances,
+			},
+			[]resource.ReadAction{
+				resource.ReadDescribeImages,
+				resource.ReadDescribeInstances,
+				resource.ReadDescribeKeyPairs,
+				resource.ReadDescribeSecurityGroups,
+				resource.ReadDescribeSnapshots,
+				resource.ReadDescribeSubnets,
+				resource.ReadDescribeVolumes,
+				resource.ReadDescribeVpcs,
+			})
+		exerciseEC2(ctx, t, set, account, stopped, caps)
+	})
+	t.Run("KeyLaunch", func(t *testing.T) {
+		requireCapabilities(t, caps,
+			[]resource.Action{
+				resource.ActionCreateKeyPair,
+				resource.ActionCreateSubnet,
+				resource.ActionRunInstances,
+			},
+			[]resource.ReadAction{
+				resource.ReadDescribeInstances,
+				resource.ReadDescribeKeyPairs,
+			})
+		exerciseKeyLaunch(ctx, t, set, account, subnet, img)
+	})
+	t.Run("KeyRetry", func(t *testing.T) {
+		requireCapabilities(t, caps,
+			[]resource.Action{
+				resource.ActionCreateKeyPair,
+			},
+			[]resource.ReadAction{
+				resource.ReadDescribeKeyPairs,
+			})
+		exerciseKeyRetry(ctx, t, set, account)
+	})
+	t.Run("RootDevice", func(t *testing.T) {
+		requireCapabilities(t, caps,
+			[]resource.Action{
+				resource.ActionCreateSubnet,
+				resource.ActionRunInstances,
+			},
+			[]resource.ReadAction{
+				resource.ReadDescribeInstances,
+				resource.ReadDescribeVolumes,
+			})
+		exerciseRootDevice(ctx, t, set, account, subnet, img)
+	})
+	t.Run("RootVolumeType", func(t *testing.T) {
+		requireCapabilities(t, caps,
+			[]resource.Action{
+				resource.ActionCreateSubnet,
+				resource.ActionRunInstances,
+			},
+			[]resource.ReadAction{
+				resource.ReadDescribeInstances,
+				resource.ReadDescribeVolumes,
+			})
+		exerciseRootVolumeType(ctx, t, set, account, subnet, img)
+	})
+	t.Run("RootVolumeSize", func(t *testing.T) {
+		requireCapabilities(t, caps,
+			[]resource.Action{
+				resource.ActionCreateSubnet,
+				resource.ActionRunInstances,
+			},
+			[]resource.ReadAction{
+				resource.ReadDescribeInstances,
+				resource.ReadDescribeVolumes,
+			})
+		exerciseRootVolumeSize(ctx, t, set, account, subnet, img)
+	})
 	t.Run("RootDeleteOnTermination", func(t *testing.T) {
+		requireCapabilities(t, caps,
+			[]resource.Action{
+				resource.ActionCreateSubnet,
+				resource.ActionDeleteVolume,
+				resource.ActionRunInstances,
+				resource.ActionTerminateInstances,
+			},
+			[]resource.ReadAction{
+				resource.ReadDescribeInstances,
+				resource.ReadDescribeVolumes,
+			})
+
 		exerciseRootDeleteOnTermination(ctx, t, set, account, subnet, img)
 	})
-	t.Run("LaunchExtraVolumes", func(t *testing.T) { exerciseLaunchExtraVolumes(ctx, t, set, account, subnet, img) })
-	t.Run("TerminateRelease", func(t *testing.T) { exerciseTerminateRelease(ctx, t, set, account, subnet, img) })
-	t.Run("VolumeTypes", func(t *testing.T) { exerciseVolumeTypes(ctx, t, set, account) })
-	t.Run("RegisterImage", func(t *testing.T) { exerciseRegisterImage(ctx, t, set, account, other) })
+	t.Run("LaunchExtraVolumes", func(t *testing.T) {
+		requireCapabilities(t, caps,
+			[]resource.Action{
+				resource.ActionCreateSubnet,
+				resource.ActionDeleteVolume,
+				resource.ActionDetachVolume,
+				resource.ActionRunInstances,
+				resource.ActionTerminateInstances,
+			},
+			[]resource.ReadAction{
+				resource.ReadDescribeInstances,
+				resource.ReadDescribeVolumes,
+			})
+		exerciseLaunchExtraVolumes(ctx, t, set, account, subnet, img)
+	})
+	t.Run("TerminateRelease", func(t *testing.T) {
+		requireCapabilities(t, caps,
+			[]resource.Action{
+				resource.ActionAllocateAddress,
+				resource.ActionAssociateAddress,
+				resource.ActionCreateSubnet,
+				resource.ActionReleaseAddress,
+				resource.ActionRunInstances,
+				resource.ActionTerminateInstances,
+			},
+			[]resource.ReadAction{
+				resource.ReadDescribeAddresses,
+				resource.ReadDescribeInstances,
+				resource.ReadDescribeVolumes,
+			})
+		exerciseTerminateRelease(ctx, t, set, account, subnet, img)
+	})
+	t.Run("VolumeTypes", func(t *testing.T) {
+		requireCapabilities(t, caps,
+			[]resource.Action{
+				resource.ActionCreateVolume,
+				resource.ActionDeleteVolume,
+				resource.ActionModifyVolume,
+			},
+			[]resource.ReadAction{
+				resource.ReadDescribeVolumes,
+			})
+		exerciseVolumeTypes(ctx, t, set, account)
+	})
+	t.Run("RegisterImage", func(t *testing.T) {
+		requireCapabilities(t, caps,
+			[]resource.Action{
+				resource.ActionCreateSnapshot,
+				resource.ActionCreateVolume,
+				resource.ActionRegisterImage,
+			},
+			[]resource.ReadAction{
+				resource.ReadDescribeImages,
+			})
+		exerciseRegisterImage(ctx, t, set, account, other)
+	})
 }
 
 func contractSubnet(ctx context.Context, t *testing.T, set backend.Set, account resource.AccountID) resource.SubnetID {
@@ -76,7 +272,7 @@ func contractSubnet(ctx context.Context, t *testing.T, set backend.Set, account 
 
 func contractLifecycle(
 	ctx context.Context, t *testing.T, set backend.Set, account, other resource.AccountID,
-	img resource.ImageID, subnet resource.SubnetID,
+	img resource.ImageID, subnet resource.SubnetID, caps resource.RegionCapabilities,
 ) resource.InstanceID {
 	t.Helper()
 	exerciseImageRegion(ctx, t, set, account, subnet)
@@ -145,6 +341,14 @@ func contractLifecycle(
 		t.Fatalf("tags %v, want Name=web-1 env=dev", got)
 	}
 	t.Run("InstanceTags", func(t *testing.T) {
+		requireCapabilities(t, caps,
+			[]resource.Action{
+				resource.ActionCreateTags,
+				resource.ActionDeleteTags,
+			},
+			[]resource.ReadAction{
+				resource.ReadDescribeInstances,
+			})
 		tagged, err := set.Compute.CreateTags(ctx,
 			backend.Mutation{Scope: backend.Scope{Account: account}, Key: "k-tags", Fingerprint: "fp-tags"},
 			resource.CreateTagsRequest{
