@@ -613,6 +613,8 @@ func TestRegionDaemonReadsRestartAndReadiness(t *testing.T) {
 				})
 				if _, err := conn.Check(t.Context()); err == nil {
 					t.Fatal("torn pair accepted")
+				} else if mode == "missing" && err.Error() != tokenUnreadable {
+					t.Fatalf("missing token reason = %v, want %s", err, tokenUnreadable)
 				}
 				awaitStatus(t, ops+"/readyz", http.StatusServiceUnavailable)
 				awaitStatus(t, secondOps+"/readyz", http.StatusServiceUnavailable)
