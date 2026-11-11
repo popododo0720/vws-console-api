@@ -253,6 +253,16 @@ func TestStorageFailuresKeepOtherDisks(t *testing.T) {
 			s.Storages[0].Content = append(s.Storages[0].Content, pvefake.StorageContent{
 				VolID: "local:vm-101-disk-1", Content: "images", Format: "raw", Size: 5 << 30, VMID: 101,
 			})
+			s.Nodes = append(s.Nodes, pvefake.Node{Name: "pve2"})
+			s.Storages = append(s.Storages, pvefake.Storage{
+				Node: "pve2", Name: "denied", Content: []pvefake.StorageContent{{
+					VolID: "denied:vm-201-disk-0", Content: "images", Format: "raw", Size: 6 << 30, VMID: 201,
+				}},
+			})
+			s.VMs = append(s.VMs, pvefake.VM{
+				VMID: 201, Node: "pve2", Pool: "123456789012", Tags: "vws.holder",
+				Config: map[string]string{"scsi0": "denied:vm-201-disk-0,serial=5123456789abcdef0"},
+			})
 			f, err := pvefake.New(s)
 			if err != nil {
 				t.Fatal(err)
@@ -275,8 +285,9 @@ func TestStorageFailuresKeepOtherDisks(t *testing.T) {
 				wantCalls += pveclient.MaxRetries
 			}
 			page, err := b.DescribeVolumes(t.Context(), inventoryScope(), resource.VolumeQuery{})
-			if err != nil || len(page.Items) != 2 || page.Items[0].ID.String() != "vol-1123456789abcdef0" ||
-				page.Items[1].ID.String() != "vol-4123456789abcdef0" || calls.Load() != wantCalls {
+			if err != nil || len(page.Items) != 3 || page.Items[0].ID.String() != "vol-1123456789abcdef0" ||
+				page.Items[1].ID.String() != "vol-4123456789abcdef0" ||
+				page.Items[2].ID.String() != "vol-5123456789abcdef0" || calls.Load() != wantCalls {
 				t.Fatalf("storage failure hid good disks or was not cached: %+v calls=%d error=%v", page, calls.Load(), err)
 			}
 			calls.Store(0)
