@@ -2,6 +2,7 @@ package iam
 
 import (
 	"encoding/base32"
+	"errors"
 	"log/slog"
 	"net/url"
 	"regexp"
@@ -30,6 +31,35 @@ const MFADeviceExistsMsg = "MFADevice entity at the same path and name already e
 // MFADeviceExists is the EntityAlreadyExists of CreateVirtualMFADevice.
 func MFADeviceExists() error {
 	return &resource.Error{Code: resource.CodeAlreadyExists, Message: MFADeviceExistsMsg}
+}
+
+// mfaDeviceTagQuotaMsg is the AWS LimitExceeded message for more than MaxTags
+// tags on one virtual MFA device.
+const mfaDeviceTagQuotaMsg = "Cannot exceed quota for TagsPerMfaDevice: 50"
+
+// MFADeviceTagsExceeded is the LimitExceeded of a virtual MFA device that
+// would hold more than MaxTags tags.
+func MFADeviceTagsExceeded() error { return quota(mfaDeviceTagQuotaMsg) }
+
+// CheckMFADeviceTags validates the optional Tags of CreateVirtualMFADevice as
+// AWS answers that action: no tags is valid, more than MaxTags is
+// LimitExceeded and an invalid tag is InvalidInput.
+func CheckMFADeviceTags(tags []Tag) error {
+	if len(tags) > MaxTags {
+		return MFADeviceTagsExceeded()
+	}
+	return MFADeviceTagInput(ValidateTags(tags))
+}
+
+// MFADeviceTagInput turns a tag validation failure into the InvalidInput that
+// CreateVirtualMFADevice documents for a bad tag, keeping its message. Any
+// other error, nil included, is returned as it is.
+func MFADeviceTagInput(err error) error {
+	var e *resource.Error
+	if errors.As(err, &e) && e.Code == resource.CodeInvalidArgument {
+		return resource.Invalid("Tags", e.Message)
+	}
+	return err
 }
 
 // CheckVirtualMFADeviceName validates VirtualMFADeviceName as AWS does: 1 to

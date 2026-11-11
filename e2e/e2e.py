@@ -843,9 +843,16 @@ def identity():
         "EntityAlreadyExists", lambda: iam.create_virtual_mfa_device(VirtualMFADeviceName="e2e-phone")))
     step("IAM CreateVirtualMFADevice bad name is ValidationError", lambda: aws_error(
         "ValidationError", lambda: iam.create_virtual_mfa_device(VirtualMFADeviceName="e2e phone")))
-    step("IAM CreateVirtualMFADevice Tags is InvalidInput (vws-proto#129)", lambda: aws_error(
+    S["mfa_tagged"] = step("IAM CreateVirtualMFADevice with Tags", lambda: iam.create_virtual_mfa_device(
+        VirtualMFADeviceName="e2e-tagged", Tags=[{"Key": "team", "Value": "e2e"}])["VirtualMFADevice"])
+    step("IAM ListMFADeviceTags has the create's tags", lambda: check(
+        iam.list_mfa_device_tags(SerialNumber=S["mfa_tagged"]["SerialNumber"])["Tags"]
+        == [{"Key": "team", "Value": "e2e"}], "tags"))
+    step("IAM DeleteVirtualMFADevice tagged", lambda: iam.delete_virtual_mfa_device(
+        SerialNumber=S["mfa_tagged"]["SerialNumber"]))
+    step("IAM CreateVirtualMFADevice aws: tag key is InvalidInput", lambda: aws_error(
         "InvalidInput", lambda: iam.create_virtual_mfa_device(
-            VirtualMFADeviceName="e2e-tagged", Tags=[{"Key": "team", "Value": "e2e"}])))
+            VirtualMFADeviceName="e2e-tagged", Tags=[{"Key": "aws:team", "Value": "e2e"}])))
     step("IAM DeleteVirtualMFADevice created", lambda: iam.delete_virtual_mfa_device(
         SerialNumber=S["mfa"]["SerialNumber"]))
     step("IAM EnableMFADevice missing user is NoSuchEntity", lambda: aws_error(

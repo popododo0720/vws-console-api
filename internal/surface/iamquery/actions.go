@@ -1115,11 +1115,9 @@ func iamActions() map[string]spec {
 			},
 		},
 		// AWS CreateVirtualMFADevice is authorized on the serial number the
-		// new device gets. Tags are not accepted yet: vws-proto
-		// CreateVirtualMfaDeviceRequest carries none, so a Tags member is
-		// InvalidInput before anything is created (vws-proto#129).
+		// new device gets.
 		"CreateVirtualMFADevice": {
-			params: []string{"VirtualMFADeviceName", "Path"}, needsAdmin: true,
+			params: []string{"VirtualMFADeviceName", "Path"}, prefixes: []string{"Tags.member."}, needsAdmin: true,
 			resource: createVirtualMFADeviceARN, run: createVirtualMFADevice,
 		},
 		// AWS EnableMFADevice is authorized on the user the device is enabled

@@ -7,8 +7,10 @@ import (
 	"encoding/base64"
 	"encoding/xml"
 	"image/png"
+	"maps"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -97,8 +99,41 @@ func TestCreateVirtualMFADevice(t *testing.T) {
 		http.StatusOK, `<SerialNumber>arn:aws:iam::123456789012:mfa/`+long+`</SerialNumber>`)
 }
 
-// Each documented error maps to its AWS code and HTTP status, and a Tags
-// member is refused before anything is created.
+// withTags is form with Tags.member.N.Key and .Value set from kv pairs.
+func withTags(form url.Values, kv ...string) url.Values {
+	for i := 0; i+1 < len(kv); i += 2 {
+		n := strconv.Itoa(i/2 + 1)
+		form.Set("Tags.member."+n+".Key", kv[i])
+		form.Set("Tags.member."+n+".Value", kv[i+1])
+	}
+	return form
+}
+
+// CreateVirtualMFADevice stores the Tags.member.N of the request on the new
+// device, an empty value included. Sending the same request again is
+// EntityAlreadyExists and leaves those tags as they were.
+func TestCreateVirtualMFADeviceTags(t *testing.T) {
+	h, f, _, root := harness(t)
+	form := withTags(createMFAForm("tagged", "/"), "team", "eng", "Env", "")
+	has(t, call(t, h, root, sigv4.ServiceIAM, form), http.StatusOK,
+		`<SerialNumber>arn:aws:iam::123456789012:mfa/tagged</SerialNumber>`)
+	retry := withTags(createMFAForm("tagged", "/"), "team", "ops")
+	has(t, call(t, h, root, sigv4.ServiceIAM, retry), http.StatusConflict, `<Code>EntityAlreadyExists</Code>`)
+	page, err := f.ListMFADeviceTags(t.Context(), root.Account, "arn:vws:iam::123456789012:mfa/tagged", "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, tag := range page.Tags {
+		got[tag.Key] = tag.Value
+	}
+	if want := map[string]string{"team": "eng", "Env": ""}; !maps.Equal(got, want) {
+		t.Errorf("tags %v, want %v", got, want)
+	}
+}
+
+// Each documented error maps to its AWS code and HTTP status, and a refused
+// create, a bad Tags member included, creates nothing.
 func TestCreateVirtualMFADeviceErrors(t *testing.T) {
 	h, _, _, root := harness(t)
 	has(t, call(t, h, root, sigv4.ServiceIAM, createMFAForm("alice-phone", "/eng/")), http.StatusOK)
@@ -138,13 +173,40 @@ func TestCreateVirtualMFADeviceErrors(t *testing.T) {
 		"bad path": {
 			createMFAForm("x", "eng"), http.StatusBadRequest, []string{`<Code>InvalidInput</Code>`},
 		},
-		"tags": {
+		"bad tag key": {
+			withTags(createMFAForm("tagged", "/"), "bad#key", "v"), http.StatusBadRequest,
+			[]string{`<Code>InvalidInput</Code>`, `tags.1.member.key`},
+		},
+		"tag value too long": {
+			withTags(createMFAForm("tagged", "/"), "team", strings.Repeat("x", iam.MaxTagValueLen+1)),
+			http.StatusBadRequest,
+			[]string{`<Code>InvalidInput</Code>`, `tags.1.member.value`},
+		},
+		"aws: tag key": {
+			withTags(createMFAForm("tagged", "/"), "team", "eng", "AWS:owner", "v"), http.StatusBadRequest,
+			[]string{`<Code>InvalidInput</Code>`, `reserved prefix aws:`},
+		},
+		"tag without value": {
+			url.Values{
+				"Action": {"CreateVirtualMFADevice"}, "VirtualMFADeviceName": {"tagged"},
+				"Tags.member.1.Key": {"team"},
+			}, http.StatusBadRequest, []string{`<Code>InvalidInput</Code>`},
+		},
+		"tag member not a key or value": {
+			url.Values{
+				"Action": {"CreateVirtualMFADevice"}, "VirtualMFADeviceName": {"tagged"},
+				"Tags.member.1.Name": {"team"},
+			}, http.StatusBadRequest, []string{`<Code>InvalidInput</Code>`},
+		},
+		"51 tags": {
 			func() url.Values {
-				v := createMFAForm("tagged", "/")
-				v.Set("Tags.member.1.Key", "team")
-				v.Set("Tags.member.1.Value", "eng")
-				return v
-			}(), http.StatusBadRequest, []string{`<Code>InvalidInput</Code>`},
+				kv := make([]string, 0, 2*(iam.MaxTags+1))
+				for i := range iam.MaxTags + 1 {
+					kv = append(kv, "k"+strconv.Itoa(i), "v")
+				}
+				return withTags(createMFAForm("tagged", "/"), kv...)
+			}(), http.StatusConflict,
+			[]string{`<Code>LimitExceeded</Code>`, `TagsPerMfaDevice: 50`},
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -199,7 +261,7 @@ type stubCreateMFA struct {
 }
 
 func (s stubCreateMFA) CreateVirtualMFADevice(
-	context.Context, resource.AccountID, string, string,
+	context.Context, resource.AccountID, string, string, []iam.Tag,
 ) (iam.NewVirtualMFADevice, error) {
 	return s.dev, s.err
 }

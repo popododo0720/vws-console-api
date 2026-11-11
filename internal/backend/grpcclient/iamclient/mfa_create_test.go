@@ -34,7 +34,7 @@ func testURI(name, seed string) string {
 // returned.
 func TestCreateVirtualMFADeviceOverGRPC(t *testing.T) {
 	c, s := harness(t)
-	got, err := STSAdmin{Client: c}.CreateVirtualMFADevice(t.Context(), accountID(t), "alice-phone", "/eng/")
+	got, err := STSAdmin{Client: c}.CreateVirtualMFADevice(t.Context(), accountID(t), "alice-phone", "/eng/", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,11 +56,28 @@ func TestCreateVirtualMFADeviceOverGRPC(t *testing.T) {
 	if s.noDeadline != 0 {
 		t.Errorf("%d calls without a deadline", s.noDeadline)
 	}
-	if _, err := (STSAdmin{Client: c}).CreateVirtualMFADevice(t.Context(), accountID(t), "bob-phone", ""); err != nil {
+	if _, err := (STSAdmin{Client: c}).CreateVirtualMFADevice(
+		t.Context(), accountID(t), "bob-phone", "", nil,
+	); err != nil {
 		t.Fatal(err)
 	}
 	if p := s.createMfa[1].GetMfaDevice().GetSpec().GetPath(); p != "/" {
 		t.Errorf("default path %q, want /", p)
+	}
+}
+
+// The create's tags go to vws-iam in the same request, in order. The tags it
+// refuses are the shared contract, TestGRPCCreateMFADeviceTagContract.
+func TestCreateVirtualMFADeviceForwardsTags(t *testing.T) {
+	c, s := harness(t)
+	tags := []iam.Tag{{Key: "team", Value: "eng"}, {Key: "Env", Value: ""}}
+	if _, err := (STSAdmin{Client: c}).CreateVirtualMFADevice(t.Context(), accountID(t), "tagged", "/", tags); err != nil {
+		t.Fatal(err)
+	}
+	got := s.createMfa[0].GetTags()
+	if len(got) != 2 || got[0].GetKey() != "team" || got[0].GetValue() != "eng" ||
+		got[1].GetKey() != "Env" || got[1].GetValue() != "" {
+		t.Errorf("sent tags %v", got)
 	}
 }
 
@@ -69,7 +86,7 @@ func TestCreateVirtualMFADeviceOverGRPC(t *testing.T) {
 func TestCreateVirtualMFADeviceIsNotRetried(t *testing.T) {
 	c, s := harness(t)
 	s.createMfaErr = status.Error(codes.Unavailable, "response lost")
-	_, err := STSAdmin{Client: c}.CreateVirtualMFADevice(t.Context(), accountID(t), "alice-phone", "/")
+	_, err := STSAdmin{Client: c}.CreateVirtualMFADevice(t.Context(), accountID(t), "alice-phone", "/", nil)
 	if resource.CodeOf(err) != resource.CodeUnavailable {
 		t.Fatalf("got %v, want Unavailable", err)
 	}
@@ -88,7 +105,7 @@ func TestCreateVirtualMFADeviceValidatesFirst(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			c, s := harness(t)
-			_, err := STSAdmin{Client: c}.CreateVirtualMFADevice(t.Context(), accountID(t), tc.name, tc.path)
+			_, err := STSAdmin{Client: c}.CreateVirtualMFADevice(t.Context(), accountID(t), tc.name, tc.path, nil)
 			if resource.CodeOf(err) != resource.CodeInvalidArgument {
 				t.Fatalf("got %v, want InvalidArgument", err)
 			}
@@ -174,7 +191,7 @@ func TestCreateVirtualMFADeviceErrorsOverGRPC(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			c, s := harness(t)
 			tc.setup(t, s)
-			_, err := STSAdmin{Client: c}.CreateVirtualMFADevice(t.Context(), accountID(t), "alice-phone", "/")
+			_, err := STSAdmin{Client: c}.CreateVirtualMFADevice(t.Context(), accountID(t), "alice-phone", "/", nil)
 			tc.check(t, err)
 			if strings.Contains(err.Error(), testSeed) {
 				t.Errorf("error carries the seed: %v", err)
@@ -196,7 +213,7 @@ func TestCreateVirtualMFADeviceSeedIsNeverLoggedOrTraced(t *testing.T) {
 	c, s := harness(t)
 	c.SetLogger(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	a := STSAdmin{Client: c}
-	dev, err := a.CreateVirtualMFADevice(t.Context(), accountID(t), "alice-phone", "/eng/")
+	dev, err := a.CreateVirtualMFADevice(t.Context(), accountID(t), "alice-phone", "/eng/", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -208,7 +225,7 @@ func TestCreateVirtualMFADeviceSeedIsNeverLoggedOrTraced(t *testing.T) {
 		}},
 		Base32StringSeed: leaked, OtpauthUri: testURI("bob-phone", "MISMATCH"),
 	}
-	_, bad := a.CreateVirtualMFADevice(t.Context(), accountID(t), "bob-phone", "/")
+	_, bad := a.CreateVirtualMFADevice(t.Context(), accountID(t), "bob-phone", "/", nil)
 	if bad == nil {
 		t.Fatal("a malformed answer was accepted")
 	}
