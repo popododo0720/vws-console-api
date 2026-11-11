@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -44,7 +45,7 @@ func (h *handler) adminRegions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	items, skipped, err := h.registry.Regions().List(r.Context())
-	adminList(w, r, items, skipped, err)
+	adminList(w, r, h.log, items, skipped, err)
 }
 
 func (h *handler) adminAccounts(w http.ResponseWriter, r *http.Request) {
@@ -52,16 +53,18 @@ func (h *handler) adminAccounts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	items, skipped, err := h.registry.AWSAccounts().List(r.Context())
-	adminList(w, r, items, skipped, err)
+	adminList(w, r, h.log, items, skipped, err)
 }
 
-func adminList[T any](w http.ResponseWriter, r *http.Request, items []T, skipped []store.Undecodable, err error) {
-	if err != nil || len(skipped) != 0 {
-		if err == nil {
-			err = fmt.Errorf("admin registry contains %d undecodable records", len(skipped))
-		}
+func adminList[T any](
+	w http.ResponseWriter, r *http.Request, log *slog.Logger, items []T, skipped []store.Undecodable, err error,
+) {
+	if err != nil {
 		adminError(w, r, err)
 		return
+	}
+	if len(skipped) != 0 {
+		log.WarnContext(r.Context(), "admin registry skipped undecodable records", slog.Int("count", len(skipped)))
 	}
 	// Versions are excluded from stored JSON, so include them in the collection validator.
 	data, err := json.Marshal(items)

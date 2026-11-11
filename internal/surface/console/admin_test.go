@@ -1,7 +1,9 @@
 package console
 
 import (
+	"bytes"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -157,13 +159,48 @@ func TestAdminRejectsMalformedAndUnavailable(t *testing.T) {
 	if rec := e.do(t, "GET", "/api/v1/admin/regions", "", head); rec.Code != 503 {
 		t.Fatal("unavailable registry returned success")
 	}
-	b := store.NewMemory()
-	if _, err := b.Create(t.Context(), "regions/pve-bad-1", []byte(`not json`)); err != nil {
-		t.Fatal(err)
-	}
-	e.h.(*handler).registry = store.New(b)
-	if rec := e.do(t, "GET", "/api/v1/admin/regions", "", head); rec.Code != 503 {
-		t.Fatal("corrupt registry returned success")
+}
+
+func TestAdminListSkipsUndecodableRecords(t *testing.T) {
+	for _, tc := range []struct {
+		collection string
+		valid      string
+		bad        string
+		value      string
+	}{
+		{"regions", "pve-lab-1", "pve-bad-1", `{"name":"pve-lab-1"}`},
+		{"aws-accounts", "123456789012", "000000000000", `{"awsAccountId":"123456789012"}`},
+	} {
+		t.Run(tc.collection, func(t *testing.T) {
+			e, _ := adminFixture(t)
+			b := store.NewMemory()
+			for name, value := range map[string]string{tc.valid: tc.value, tc.bad: `not json`} {
+				if _, err := b.Create(t.Context(), tc.collection+"/"+name, []byte(value)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var logs bytes.Buffer
+			e.h.(*handler).registry = store.New(b)
+			e.h.(*handler).log = slog.New(slog.NewJSONHandler(&logs, nil))
+			rec := e.do(t, "GET", "/api/v1/admin/"+tc.collection, "", map[string]string{"Authorization": "Bearer tok"})
+			if rec.Code != http.StatusOK {
+				t.Fatalf("list with a corrupt record: %d %s", rec.Code, rec.Body)
+			}
+			var body struct {
+				Items []json.RawMessage `json:"items"`
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatal(err)
+			}
+			if len(body.Items) != 1 || !strings.Contains(string(body.Items[0]), tc.valid) ||
+				strings.Contains(rec.Body.String(), tc.bad) || rec.Header().Get("ETag") == "" {
+				t.Fatalf("list did not retain only the valid record: %s", rec.Body)
+			}
+			if !strings.Contains(logs.String(), `"count":1`) ||
+				strings.Contains(logs.String(), tc.valid) || strings.Contains(logs.String(), tc.bad) {
+				t.Fatalf("skipped records must be reported without identifiers: %s", logs.String())
+			}
+		})
 	}
 }
 
