@@ -1,0 +1,42 @@
+Offline binary QA, 2026-11-11
+Commands (run from issue-753 worktree):
+  go build -o .qa/vws-aws-proxy ./cmd/vws-aws-proxy
+  python3 .qa/probe.py
+The temporary probe starts two Python HTTP servers on 127.0.0.1, launches the
+built binary with CREDENTIALS_DIRECTORY=.qa and an account snapshot, and invokes
+curl --unix-socket .qa/proxy.sock with verified X-Vws forwarding metadata.
+The fake origin independently recomputes SigV4 with Python hashlib/hmac, checks
+the replacement session token, and checks that X-Vws-Account was removed.
+The fake STS checks its signature, ExternalId, 3600-second duration and session name.
+
+socket permissions: 0o700
+curl --unix-socket .qa/proxy.sock --data 'Action=RunInstances'
+<Response><Errors><Error><Code>UnauthorizedOperation</Code></Error></Errors></Response>
+HTTP 403 counts={"origin": 0, "sts": 0, "signed": 0}
+curl --unix-socket .qa/proxy.sock --data 'Action=DescribeInstances&Version=2016-11-15'
+<DescribeInstancesResponse/>
+HTTP 200 counts={"origin": 1, "sts": 1, "signed": 1}
+curl --unix-socket .qa/proxy.sock --data 'Action=DescribeInstances&Action=RunInstances'
+HTTP 403 counts={"origin": 1, "sts": 1, "signed": 1}
+curl --unix-socket .qa/proxy.sock --data 'Action=%zz'
+HTTP 403 counts={"origin": 1, "sts": 1, "signed": 1}
+Remove ExternalId file, then DescribeInstances:
+HTTP 403 counts={"origin": 1, "sts": 1, "signed": 1}
+Restart to clear cache; fake STS returns HTTP 200 with an empty credentials result:
+HTTP 502 counts={"origin": 1, "sts": 2, "signed": 1}
+example-key startup: exit=1; socket absent; credentials redacted
+PASS: fake STS and origin only; HMAC verified; graceful shutdown exit=0; no credential leak
+MANUAL_QA_EXIT=0
+
+Stale-cache probe: TestResignCacheAndExpiry advances the injected clock by
+55 minutes and requires a second STS call. It then clears in-memory state to
+model restart and requires a third STS call. Duplicate requests before expiry
+use one STS call. TestMissingExternalIDAndChangedRegistration proves cached
+credentials cannot bypass a changed region registration or missing ExternalId.
+
+Initial unchanged baseline: go test ./... -count=1 (PASS).
+One verification attempt put Go compiler artifacts under .qa/tmp, where the
+repository's recursive source checks inspected concurrently removed compiler
+files. Those scans passed after the compiler exited. Subsequent full verification
+sets GOTMPDIR=$PWD/.qa/.git (excluded by the existing scanners), with test fixture
+TMPDIR=$PWD/.qa/tmp; no repository tests or scanner rules were changed.
