@@ -143,7 +143,7 @@ func writeJSON(w http.ResponseWriter, value any, err error) {
 		w.WriteHeader(http.StatusBadRequest)
 		value = errorBody{Error: e}
 	}
-	server.RecordFailure(w, json.NewEncoder(w).Encode(value))
+	server.RecordFailure(w, json.NewEncoder(w).Encode(encodeResult(value)))
 }
 
 // Server exposes only TLS startup and bounded shutdown.

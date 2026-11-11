@@ -1,14 +1,12 @@
 package regionapi
 
 import (
-	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
-	"encoding/json"
 	"fmt"
 	"io"
 	"math/big"
@@ -189,16 +187,8 @@ func TestEveryReadRoundTrips(t *testing.T) {
 				if directErr != nil {
 					return
 				}
-				wantJSON, err := json.Marshal(want)
-				if err != nil {
-					t.Fatal(err)
-				}
-				gotJSON, err := json.Marshal(dst)
-				if err != nil {
-					t.Fatal(err)
-				}
-				if !bytes.Equal(gotJSON, wantJSON) {
-					t.Fatalf("got %s, want %s", gotJSON, wantJSON)
+				if got := reflect.ValueOf(dst).Elem().Interface(); !reflect.DeepEqual(got, want) {
+					t.Fatalf("got %#v, want %#v", got, want)
 				}
 			})
 		}

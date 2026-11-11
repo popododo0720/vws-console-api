@@ -105,7 +105,7 @@ func (c *Client) do(ctx context.Context, method, path string, data []byte, dst a
 		}
 		return envelope.Error
 	}
-	if err := json.Unmarshal(body, dst); err != nil {
+	if err := decodeResult(body, dst); err != nil {
 		return fmt.Errorf("decode region result: %w", err)
 	}
 	return nil
