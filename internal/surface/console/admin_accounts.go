@@ -1,12 +1,8 @@
 package console
 
 import (
-	"bytes"
-	"encoding/json"
 	"errors"
-	"io"
 	"net/http"
-	"reflect"
 	"regexp"
 	"strconv"
 	"strings"
@@ -81,9 +77,13 @@ func (h *handler) adminWriteAccount(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
-	var in accountInput
-	if err := decodeAccount(w, r, &in); err != nil {
+	var in *accountInput
+	if err := decode(w, r, &in); err != nil {
 		writeErr(w, r, err)
+		return
+	}
+	if in == nil {
+		writeErr(w, r, resource.Invalid("body", "expected one JSON object"))
 		return
 	}
 	if in.ID != nil {
@@ -106,7 +106,6 @@ func (h *handler) adminWriteAccount(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, r, err)
 		return
 	}
-	setAuditAccount(w, v.ID)
 	if in.ExternalID != nil {
 		sealed, err := h.adminKey.Seal([]byte(*in.ExternalID), v.ID)
 		if err != nil {
@@ -129,29 +128,6 @@ func (h *handler) adminWriteAccount(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("ETag", strconv.Quote(strconv.FormatInt(int64(v.Version), 10)))
 	writeJSON(w, status, viewAccount(v))
-}
-
-func decodeAccount(w http.ResponseWriter, r *http.Request, in *accountInput) error {
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
-	if err != nil {
-		var maxErr *http.MaxBytesError
-		if errors.As(err, &maxErr) {
-			return resource.TooLarge("body exceeds the limit")
-		}
-		return resource.Invalid("body", "malformed json")
-	}
-	if !json.Valid(body) || bytes.Equal(bytes.TrimSpace(body), []byte("null")) {
-		return resource.Invalid("body", "expected one JSON object")
-	}
-	if err := checkAmbiguousKeys(body, reflect.TypeOf(in)); err != nil {
-		return err
-	}
-	dec := json.NewDecoder(bytes.NewReader(body))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(in); err != nil {
-		return resource.Invalid("body", "malformed json")
-	}
-	return nil
 }
 
 func validateAccount(v store.AWSAccount, external *string, create bool) error {

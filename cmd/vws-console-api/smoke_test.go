@@ -116,7 +116,7 @@ func (p fakeProcess) args() []string {
 // Another process can take a free address after freeAddr closes it and before
 // the server binds it, so a bind failure is retried on fresh addresses
 // (issue #437). Any other error is real.
-func startFakeProcess(t *testing.T) fakeProcess {
+func startFakeProcess(t *testing.T, extra ...string) fakeProcess {
 	t.Helper()
 	for attempt := 1; attempt <= smokeAttempts; attempt++ {
 		p := fakeProcess{
@@ -129,7 +129,7 @@ func startFakeProcess(t *testing.T) fakeProcess {
 		ctx, cancel := context.WithCancel(context.Background())
 		errc := make(chan error, 1)
 		done := make(chan struct{})
-		args := p.args()
+		args := append(p.args(), extra...)
 		go func() {
 			errc <- run(ctx, args)
 			close(done)

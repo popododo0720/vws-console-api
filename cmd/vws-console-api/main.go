@@ -69,6 +69,7 @@ func run(ctx context.Context, args []string) (err error) {
 	fs := flag.NewFlagSet("vws-console-api", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	backendKind := fs.String("backend", "fake", "fake or grpc")
+	auditLog := fs.String("audit-log", "", "append-only audit stream path; empty uses stderr")
 	globalConfig := fs.String("global-config", "", "global.yaml bootstrap path for the admin registry; "+
 		"empty uses memory with -backend=fake")
 	consoleAddr := fs.String("console-addr", "127.0.0.1:8080", "console listen address")
@@ -266,12 +267,20 @@ func run(ctx context.Context, args []string) (err error) {
 	if sweep != nil {
 		go sweep(ctx)
 	}
+	auditOut := os.Stderr
+	if *auditLog != "" {
+		auditOut, err = os.OpenFile(*auditLog, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
+		if err != nil {
+			return fmt.Errorf("open -audit-log: %w", err)
+		}
+		defer func() { err = errors.Join(err, auditOut.Close()) }()
+	}
 	return server.Serve(ctx, server.Options{Logger: logger, OpsAddr: *opsAddr, Surfaces: []server.Surface{
 		{Name: "console", Addr: *consoleAddr, Handler: console.New(console.Config{
 			Service:        svc,
 			Registry:       registry,
 			AdminKey:       adminKey,
-			Audit:          audit.New(os.Stdout),
+			Audit:          audit.New(auditOut),
 			Auth:           console.BearerTokens{*consoleToken: caller},
 			IAM:            auth,
 			Logger:         logger,
