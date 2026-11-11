@@ -262,6 +262,38 @@ func TestPaginationKeepsAllRegionCursorsAndRetriesFailures(t *testing.T) {
 	}
 }
 
+func TestAllRegionEscapedCursorsRoundTrip(t *testing.T) {
+	regions := make([]backend.ProxmoxRegion, 33)
+	for i := range regions {
+		regions[i].Name = fmt.Sprintf("pve-%02d-1", i)
+	}
+	cursor := strings.Repeat("<", 4096)
+	resumed := make(chan string, len(regions))
+	set := newSet(t, backend.NewStaticRegions(regions, nil),
+		func(_ context.Context, _, _ string, s backend.Scope, q, dst any) error {
+			p := dst.(*resource.Page[resource.Instance])
+			p.Items = []resource.Instance{{}}
+			if token := q.(resource.InstanceQuery).Page.Token; token == "" {
+				p.NextToken = cursor
+			} else if token != cursor {
+				return errors.New("regional cursor changed")
+			} else {
+				resumed <- s.Region
+			}
+			return nil
+		})
+	scope := backend.Scope{Region: "all"}
+	p, err := set.Compute.DescribeInstances(t.Context(), scope, resource.InstanceQuery{})
+	if err != nil || len(p.Items) != 33 || len(p.Partial) != 0 || len(p.NextToken) != 1081967 {
+		t.Fatalf("first page: items=%d tokenBytes=%d err=%v", len(p.Items), len(p.NextToken), err)
+	}
+	p, err = set.Compute.DescribeInstances(t.Context(), scope,
+		resource.InstanceQuery{Page: resource.PageRequest{Token: p.NextToken}})
+	if err != nil || len(p.Items) != 33 || len(p.Partial) != 0 || p.NextToken != "" || len(resumed) != 33 {
+		t.Fatalf("resumed page: items=%d calls=%d err=%v", len(p.Items), len(resumed), err)
+	}
+}
+
 func TestInvalidTokensAndUnknownRegionsNeverReachTransport(t *testing.T) {
 	set := newSet(t, catalog(), func(context.Context, string, string, backend.Scope, any, any) error {
 		t.Fatal("invalid input reached transport")
