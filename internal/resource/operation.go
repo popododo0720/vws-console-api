@@ -295,8 +295,16 @@ type Accepted[T any] struct {
 
 // Page is the only list result.
 type Page[T any] struct {
-	Items     []T    `json:"items"`
-	NextToken string `json:"nextPageToken,omitempty"`
+	Items     []T       `json:"items"`
+	NextToken string    `json:"nextPageToken,omitempty"`
+	Partial   []Partial `json:"partial,omitempty"`
+}
+
+// Partial identifies a region whose inventory could not be read.
+// Error is a public classification, never an underlying transport error.
+type Partial struct {
+	Region string `json:"region"`
+	Error  string `json:"error"`
 }
 
 // MarshalJSON writes an empty page as "items":[] rather than null.
