@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/popododo0720/vws-console-api/internal/admin/secret"
+	"github.com/popododo0720/vws-console-api/internal/resource"
 )
 
 // Prefix is where the registry lives in etcd.
@@ -57,6 +58,8 @@ type Region struct {
 	RegionEndpoint string         `json:"regionEndpoint"`
 	Zones          []Zone         `json:"zones"`
 	Version        Version        `json:"-"`
+
+	LastError *resource.RegionStatusError `json:"lastError,omitempty"`
 }
 
 // Zone is a node group of a region.

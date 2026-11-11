@@ -293,6 +293,13 @@ func TestRegionDaemonReadsRestartAndReadiness(t *testing.T) {
 		t.Fatal(err)
 	}
 	conn.Helper.Path = helper
+	t.Run("omitted_token_requires_registration", func(t *testing.T) {
+		input := []byte(`{"region":"pve-test-1","cluster_name":"test","tokenId":"vws@pve!inventory"}`)
+		err := conn.Register(t.Context(), input)
+		if e := resource.AsError(err); e.Code != resource.CodeInvalidArgument || e.Field != "token" {
+			t.Fatalf("first registration without token: %v", err)
+		}
+	})
 	t.Run("invalid_tokens", func(t *testing.T) {
 		before := len(fake.Requests())
 		for _, token := range []string{"", "contains space", "newline\n", strings.Repeat("a", 513)} {
@@ -326,6 +333,45 @@ func TestRegionDaemonReadsRestartAndReadiness(t *testing.T) {
 		}
 	})
 	put(t, "test", tokenID, token, http.StatusOK)
+	put(t, "test", tokenID, token, http.StatusOK)
+	t.Run("omitted_token_reuses_without_write", func(t *testing.T) {
+		before, err := os.ReadFile(filepath.Join(dir, "private", "pve-token"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		writeFixture(t, filepath.Join(dir, "fail"), []byte("token-write"))
+		request(t, http.MethodPut, first+"/internal/v1/registration",
+			`{"region":"pve-test-1","cluster_name":"test","tokenId":"vws@pve!inventory"}`, http.StatusOK)
+		after, err := os.ReadFile(filepath.Join(dir, "private", "pve-token"))
+		if err != nil || !bytes.Equal(before, after) {
+			t.Fatal("omitted token rewrote encrypted token")
+		}
+		if err := os.Remove(filepath.Join(dir, "fail")); err != nil {
+			t.Fatal(err)
+		}
+	})
+	t.Run("omitted_token_rejects_mismatch", func(t *testing.T) {
+		before, err := os.ReadFile(reg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var stored registrationSnapshot
+		if err := json.Unmarshal(before, &stored); err != nil {
+			t.Fatal(err)
+		}
+		stored.Fingerprint = "mismatch"
+		data, err := json.Marshal(stored)
+		if err != nil {
+			t.Fatal(err)
+		}
+		writeFixture(t, reg, data)
+		input := []byte(`{"region":"pve-test-1","cluster_name":"test","tokenId":"vws@pve!inventory"}`)
+		err = conn.Register(t.Context(), input)
+		if e := resource.AsError(err); e.Code != resource.CodeInvalidArgument || e.Field != "token" {
+			t.Fatalf("fingerprint mismatch: %v", err)
+		}
+		writeFixture(t, reg, before)
+	})
 	put(t, "test", tokenID, token, http.StatusOK)
 	awaitStatus(t, ops+"/readyz", http.StatusOK)
 	awaitStatus(t, secondOps+"/readyz", http.StatusOK)

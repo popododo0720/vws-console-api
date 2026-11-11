@@ -38,6 +38,7 @@ change both files together.
 
 | Rule | Enforced by |
 | --- | --- |
+| Admin region writes use version CAS and cluster-name claims, push over mTLS, and audit once without tokens. Only the daemon stores the secret; an omitted token reuses its verified stored credential. | `TestAdminRegionLifecycleAndCanary`, `TestAdminRegionValidationAndRetry`, `TestAdminRegionWritesRequireRootKeyAndCSRF`, `TestClusterNameClaims`, `TestRegionDaemonReadsRestartAndReadiness` |
 | Tests that generate random data or ids use a fixed seed (`rand.New(rand.NewPCG(seed, ...))` or equivalent; `cryptotest.SetGlobalRandom` for crypto keys), print the seed on failure when it can be overridden, and use `//vws:unseeded <reason>` for an explicit exception. | `scripts/check-test-rand.sh`; `scripts/check-test-rand_test.sh` |
 | Proxmox disk IDs survive restart, holder disks are available, snapshots stay in the caller's pool, and storage inventory makes one VM-list call per page. | `TestVolumeIDsSurviveRestart`, `TestVolumeVolnameFallback`, `TestSnapshotsStayInPool`, `TestStoragePaging250VMs`, `TestDescribeTagsSharedFilters` |
 | AWS account writes require root and a global KEK, validate IAM/STS inputs, use version CAS, and audit once to stderr or -audit-log, separate from the app log; external ids stay sealed and off responses and logs. | `TestAccountSeal`, `TestKEKFile`, `TestAdminAccountValidation`, `TestAdminAccountLifecycleAndCanary`, `TestAdminAccountWritesRequireRootKeyAndCSRF`, `TestAdminAuditFileIsSeparate` |

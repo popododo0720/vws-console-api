@@ -130,6 +130,28 @@ func (c *Connection) Register(ctx context.Context, data json.RawMessage) error {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	reuse := s.Token == ""
+	if reuse {
+		data, err := os.ReadFile(c.path)
+		if errors.Is(err, os.ErrNotExist) {
+			return resource.Invalid("token", "required for first registration")
+		}
+		if err != nil || len(data) > maxRegistrationIdentityBytes {
+			return errors.New("registration unreadable")
+		}
+		stored, err := decodeRegistration(data)
+		if err != nil || stored.Token != "" {
+			return errors.New("invalid registration identity")
+		}
+		token, err := c.Helper.ReadToken(ctx)
+		if err != nil {
+			return err
+		}
+		s.Token = pveclient.Secret(token)
+		if stored.Fingerprint != tokenFingerprint(s.Token) {
+			return resource.Invalid("token", "stored registration token mismatch")
+		}
+	}
 	if _, err := c.check(ctx, s); err != nil {
 		return err
 	}
@@ -150,6 +172,9 @@ func (c *Connection) Register(ctx context.Context, data json.RawMessage) error {
 			slog.WarnContext(ctx, "registration unlock failed")
 		}
 	}()
+	if reuse {
+		return c.Helper.WriteRegistration(ctx, identity)
+	}
 	var previous []byte
 	if _, statErr := os.Stat(c.path); !errors.Is(statErr, os.ErrNotExist) {
 		if statErr != nil {

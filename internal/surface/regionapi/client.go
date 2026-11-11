@@ -51,6 +51,12 @@ func NewClient(base string, config *tls.Config) (*Client, error) {
 // Close releases pooled idle connections.
 func (c *Client) Close() { c.http.CloseIdleConnections() }
 
+// Register forwards a registration to the region without retaining its token.
+func (c *Client) Register(ctx context.Context, data json.RawMessage) error {
+	var result struct{}
+	return c.do(ctx, http.MethodPut, "/internal/v1/registration", data, &result)
+}
+
 // Status returns the region's live quorum and node availability.
 func (c *Client) Status(ctx context.Context) (resource.RegionStatus, error) {
 	var result resource.RegionStatus

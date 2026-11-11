@@ -85,7 +85,7 @@ func TestAdminRoutesRequireRoot(t *testing.T) {
 						t.Fatal(err)
 					}
 					if body.Permissions == nil || (who.status == 403 && len(body.Permissions) != 0) ||
-						(who.status == 200 && len(body.Permissions) != 5) {
+						(who.status == 200 && len(body.Permissions) != 8) {
 						t.Fatalf("permissions: %s", rec.Body)
 					}
 				}
@@ -154,8 +154,9 @@ func TestAdminRejectsMalformedAndUnavailable(t *testing.T) {
 			t.Errorf("%s: %d %s", path, rec.Code, rec.Body)
 		}
 	}
-	if rec := e.do(t, "POST", "/api/v1/admin/regions", "{}", head); rec.Code != 405 {
-		t.Fatalf("write route: %d", rec.Code)
+	if rec := e.do(t, "POST", "/api/v1/admin/regions", "{}", head); rec.Code != 503 ||
+		!strings.Contains(rec.Body.String(), "credentials.kek_file") {
+		t.Fatalf("write without KEK: %d %s", rec.Code, rec.Body)
 	}
 	e.h.(*handler).registry = nil
 	if rec := e.do(t, "GET", "/api/v1/admin/regions", "", head); rec.Code != 503 {

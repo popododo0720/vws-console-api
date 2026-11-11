@@ -27,6 +27,10 @@ func WithRegistration(register func(context.Context, json.RawMessage) error, nex
 				writeJSON(w, struct{}{}, nil)
 				return
 			}
+			if e := resource.AsError(err); e.Code == resource.CodeInvalidArgument && e.Field == "token" {
+				writeJSON(w, nil, resource.Invalid("token", "token required or stored token invalid"))
+				return
+			}
 			status, message := http.StatusBadRequest, "invalid registration"
 			var tooLarge *http.MaxBytesError
 			switch {
