@@ -10,6 +10,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/popododo0720/vws-console-api/internal/backend"
 	"github.com/popododo0720/vws-console-api/internal/backend/regionclient"
@@ -90,8 +92,11 @@ func cursors(scope string, token string, regions []backend.ProxmoxRegion) (map[s
 	if token == "" {
 		return pending, nil
 	}
+	if len(token) > 1<<20 {
+		return nil, resource.Invalid("pageToken", "regional cursor exceeds the limit")
+	}
 	raw, err := base64.RawURLEncoding.DecodeString(token)
-	if err != nil {
+	if err != nil || !utf8.Valid(raw) {
 		return nil, resource.Invalid("pageToken", "malformed regional cursor")
 	}
 	region, value, ok := strings.Cut(string(raw), ":")
@@ -99,6 +104,9 @@ func cursors(scope string, token string, regions []backend.ProxmoxRegion) (map[s
 		return nil, resource.Invalid("pageToken", "cursor belongs to another region")
 	}
 	if scope != "all" {
+		if !validCursor(value) {
+			return nil, resource.Invalid("pageToken", "malformed regional cursor")
+		}
 		pending[scope] = value
 		return pending, nil
 	}
@@ -106,12 +114,16 @@ func cursors(scope string, token string, regions []backend.ProxmoxRegion) (map[s
 	if err := json.Unmarshal([]byte(value), &resumed); err != nil || len(resumed) == 0 {
 		return nil, resource.Invalid("pageToken", "malformed regional cursors")
 	}
-	for name := range resumed {
-		if _, ok := pending[name]; !ok {
-			return nil, resource.Invalid("pageToken", "cursor region is no longer registered")
+	for name, cursor := range resumed {
+		if _, ok := pending[name]; !ok || !validCursor(cursor) {
+			return nil, resource.Invalid("pageToken", "cursor region or value is invalid")
 		}
 	}
 	return resumed, nil
+}
+
+func validCursor(token string) bool {
+	return len(token) <= 4096 && utf8.ValidString(token) && !strings.ContainsFunc(token, unicode.IsControl)
 }
 
 func nextToken(scope string, pending map[string]string) (string, error) {
@@ -212,12 +224,16 @@ func list[T any](ctx context.Context, r *router, s backend.Scope, page resource.
 			continue
 		}
 		if got.err != nil {
-			if s.Region != "all" {
-				return resource.Page[T]{}, got.err
-			}
 			message := "region unavailable"
 			if errors.Is(got.err, context.DeadlineExceeded) {
 				message = "region timed out"
+			}
+			if s.Region != "all" {
+				var public *resource.Error
+				if errors.As(got.err, &public) {
+					return resource.Page[T]{}, public
+				}
+				return resource.Page[T]{}, &resource.Error{Code: resource.CodeUnavailable, Message: message}
 			}
 			out.Partial = append(out.Partial, resource.Partial{Region: region.Name, Error: message})
 			continue

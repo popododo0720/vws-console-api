@@ -276,11 +276,37 @@ func TestInvalidTokensAndUnknownRegionsNeverReachTransport(t *testing.T) {
 		{"pve-a-1", base64.RawURLEncoding.EncodeToString([]byte("pve-b-1:token"))},
 		{"all", base64.RawURLEncoding.EncodeToString([]byte(`all:{"missing":"secret"}`))},
 		{"all", base64.RawURLEncoding.EncodeToString([]byte(`all:garbage`))},
+		{"pve-a-1", strings.Repeat("x", (1<<20)+1)},
+		{"pve-a-1", base64.RawURLEncoding.EncodeToString([]byte("pve-a-1:" + strings.Repeat("x", 4097)))},
+		{"pve-a-1", base64.RawURLEncoding.EncodeToString([]byte("pve-a-1:\xff"))},
+		{"pve-a-1", base64.RawURLEncoding.EncodeToString([]byte("pve-a-1:\n"))},
+		{"all", base64.RawURLEncoding.EncodeToString([]byte(`all:{"pve-a-1":"\u0000"}`))},
+		{"all", base64.RawURLEncoding.EncodeToString([]byte(`all:{"pve-a-1":"` + strings.Repeat("x", 4097) + `"}`))},
 	} {
 		_, err := set.Compute.DescribeInstances(t.Context(), backend.Scope{Region: c.region},
 			resource.InstanceQuery{Page: resource.PageRequest{Token: c.token}})
 		if resource.CodeOf(err) != resource.CodeInvalidArgument {
-			t.Fatalf("%+v: %v", c, err)
+			t.Fatalf("region=%s tokenBytes=%d: %v", c.region, len(c.token), err)
+		}
+	}
+}
+
+func TestConcreteRegionFailureIsPublic(t *testing.T) {
+	for _, failure := range []error{
+		errors.New("https://credential@internal/token"),
+		context.DeadlineExceeded,
+		resource.Invalid("filter", "unknown filter"),
+	} {
+		set := newSet(t, catalog(), func(context.Context, string, string, backend.Scope, any, any) error {
+			return failure
+		})
+		_, err := set.Compute.DescribeInstances(t.Context(), backend.Scope{Region: "pve-a-1"}, resource.InstanceQuery{})
+		var domain *resource.Error
+		if !errors.As(err, &domain) || strings.Contains(err.Error(), "credential") {
+			t.Fatalf("unsafe error = %v", err)
+		}
+		if resource.CodeOf(failure) == resource.CodeInvalidArgument && !errors.Is(err, failure) {
+			t.Fatalf("lost public validation error: %v", err)
 		}
 	}
 }
