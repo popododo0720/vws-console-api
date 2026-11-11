@@ -21,13 +21,17 @@ import (
 
 func (d *directory) roleProto(e *dirEntity) *iamv1.Role {
 	project, _, _ := split(e.name, "roles")
+	arn := entityARN(project, "role", e)
+	if e.noARN {
+		arn = ""
+	}
 	return &iamv1.Role{
 		Name: e.name, Etag: strconv.Itoa(e.version),
 		Spec: &iamv1.RoleSpec{
 			Path: dirPath(e.path), AssumeRolePolicy: e.trust, Description: e.desc,
 			MaxSessionDurationSeconds: e.maxSession, AttachedPolicies: policyNames(project, e.attached),
 		},
-		Status:     &iamv1.RoleStatus{Arn: entityARN(project, "role", e), UniqueId: e.id},
+		Status:     &iamv1.RoleStatus{Arn: arn, UniqueId: e.id},
 		CreateTime: timestamppb.New(e.created),
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 
@@ -64,7 +65,8 @@ func (a STSAdmin) CreateRole(
 }
 
 // ListRoles implements iam.Admin over every page of RoleService.ListRoles,
-// sorted by name and filtered by path prefix ("" is every path).
+// sorted by name and filtered by path prefix ("" is every path). A role with
+// no ARN is logged and skipped, so one bad record does not fail the listing.
 func (a STSAdmin) ListRoles(
 	ctx context.Context, account resource.AccountID, prefix string,
 ) (out []iam.Role, err error) {
@@ -84,7 +86,9 @@ func (a STSAdmin) ListRoles(
 		for _, r := range resp.GetRoles() {
 			got := roleFromProto(r, "")
 			if got.ARN == "" {
-				return nil, resource.Internal(errors.New("vws-iam ListRoles returned a role with no ARN"))
+				a.logger().LogAttrs(ctx, slog.LevelWarn, "vws-iam ListRoles returned a role with no ARN; skipped",
+					slog.String("role_name", got.Name))
+				continue
 			}
 			if strings.HasPrefix(got.Path, prefixOrRoot(prefix)) {
 				out = append(out, got)

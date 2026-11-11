@@ -109,6 +109,7 @@ type dirEntity struct {
 	members        []string // groups: user resource names
 	trust, desc    string   // roles
 	maxSession     int32    // roles
+	noARN          bool     // roles: served with an empty status.arn
 	attached       []string // policy ids
 	inline         map[string]string
 }

@@ -98,6 +98,21 @@ func TestRoleListReadsEveryPage(t *testing.T) {
 	}
 }
 
+func TestRoleListSkipsARoleWithNoARN(t *testing.T) {
+	ctx := t.Context()
+	a, d := seededRoles(ctx, t)
+	if _, err := a.CreateRole(ctx, account314, iam.RoleInput{Name: "web", TrustPolicy: lifecycleTrust}); err != nil {
+		t.Fatal(err)
+	}
+	d.mu.Lock()
+	d.roles[fold("projects/123456789012/roles/web")].noARN = true
+	d.mu.Unlock()
+	rs, err := a.ListRoles(ctx, account314, "")
+	if err != nil || len(rs) != 1 || rs[0].Name != "ops" {
+		t.Fatalf("ListRoles: %+v %v, want only ops", rs, err)
+	}
+}
+
 // AC2: a write that loses the etag race reads the role again and writes under
 // the new etag; one that keeps losing is ConcurrentModification and changes
 // nothing.
