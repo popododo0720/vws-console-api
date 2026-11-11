@@ -29,6 +29,9 @@ func New(ctx context.Context, client *pveclient.Client, reg Registration, cfg Re
 		return nil, fmt.Errorf("proxmox: registration cluster_name: %w", err)
 	}
 	permissions, err := client.AccessPermissions(ctx, "")
+	if err == nil && permissions == nil {
+		err = errors.New("missing or null permission inventory")
+	}
 	if err != nil {
 		return nil, fmt.Errorf("proxmox: check token permissions: %w", err)
 	}
