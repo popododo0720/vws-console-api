@@ -339,14 +339,15 @@ func TestRegionDaemonReadsRestartAndReadiness(t *testing.T) {
 	put(t, "test", tokenID, token, http.StatusOK)
 	put(t, "test", tokenID, token, http.StatusOK)
 	t.Run("omitted_token_reuses_without_write", func(t *testing.T) {
-		before, err := os.ReadFile(filepath.Join(dir, "private", "pve-token"))
+		path := filepath.Join(dir, "private", "pve-token."+tokenFingerprint(pveclient.Secret(token)))
+		before, err := os.ReadFile(path)
 		if err != nil {
 			t.Fatal(err)
 		}
 		writeFixture(t, filepath.Join(dir, "fail"), []byte("token-write"))
 		request(t, http.MethodPut, first+"/internal/v1/registration",
 			`{"region":"pve-test-1","cluster_name":"test","tokenId":"vws@pve!inventory"}`, http.StatusOK)
-		after, err := os.ReadFile(filepath.Join(dir, "private", "pve-token"))
+		after, err := os.ReadFile(path)
 		if err != nil || !bytes.Equal(before, after) {
 			t.Fatal("omitted token rewrote encrypted token")
 		}
@@ -355,26 +356,29 @@ func TestRegionDaemonReadsRestartAndReadiness(t *testing.T) {
 		}
 	})
 	t.Run("omitted_token_rejects_mismatch", func(t *testing.T) {
-		before, err := os.ReadFile(reg)
+		path := filepath.Join(dir, "private", "pve-token."+tokenFingerprint(pveclient.Secret(token)))
+		before, err := os.ReadFile(path)
 		if err != nil {
 			t.Fatal(err)
 		}
-		var stored registrationSnapshot
-		if err := json.Unmarshal(before, &stored); err != nil {
+		fp := tokenFingerprint(pveclient.Secret(next.Secret))
+		if err := conn.Helper.WriteToken(t.Context(), fp, []byte(next.Secret)); err != nil {
 			t.Fatal(err)
 		}
-		stored.Fingerprint = "mismatch"
-		data, err := json.Marshal(stored)
+		data, err := os.ReadFile(filepath.Join(dir, "private", "pve-token."+fp))
 		if err != nil {
 			t.Fatal(err)
 		}
-		writeFixture(t, reg, data)
+		writeFixture(t, path, data)
+		t.Cleanup(func() { writeFixture(t, path, before) })
 		input := []byte(`{"region":"pve-test-1","cluster_name":"test","tokenId":"vws@pve!inventory"}`)
 		err = conn.Register(t.Context(), input)
 		if e := resource.AsError(err); e.Code != resource.CodeInvalidArgument || e.Field != "token" {
 			t.Fatalf("fingerprint mismatch: %v", err)
 		}
-		writeFixture(t, reg, before)
+		if err := conn.Helper.DeleteToken(t.Context(), fp); err != nil {
+			t.Fatal(err)
+		}
 	})
 	put(t, "test", tokenID, token, http.StatusOK)
 	awaitStatus(t, ops+"/readyz", http.StatusOK)
@@ -412,7 +416,7 @@ func TestRegionDaemonReadsRestartAndReadiness(t *testing.T) {
 		verb, id, secret string
 		status           int
 	}{
-		{"registration-write", next.ID, next.Secret, http.StatusServiceUnavailable},
+		{"registration-write+token-write", next.ID, next.Secret, http.StatusServiceUnavailable},
 		{"unlock", tokenID, token, http.StatusOK},
 	} {
 		t.Run(failure.verb+"_failure", func(t *testing.T) {
@@ -434,8 +438,185 @@ func TestRegionDaemonReadsRestartAndReadiness(t *testing.T) {
 			if _, err := conn.Check(t.Context()); err != nil {
 				t.Fatalf("previous token and registration no longer work: %v", err)
 			}
+			if failure.status == http.StatusServiceUnavailable {
+				if err := os.Remove(filepath.Join(dir, "fail")); err != nil {
+					t.Fatal("compensation unexpectedly consumed the token-write fault:", err)
+				}
+				put(t, "test", failure.id, failure.secret, http.StatusOK)
+				put(t, "test", tokenID, token, http.StatusOK)
+				t.Log("pre-commit failure: old pair serves on both daemons; no compensation; retry PUT 200")
+			}
+			awaitStatus(t, ops+"/readyz", http.StatusOK)
+			awaitStatus(t, secondOps+"/readyz", http.StatusOK)
 		})
 	}
+	t.Run("registration_commit_then_exit_1", func(t *testing.T) {
+		writeFixture(t, filepath.Join(dir, "fail"), []byte("after:registration-write"))
+		put(t, "test", next.ID, next.Secret, http.StatusServiceUnavailable)
+		if _, err := conn.Check(t.Context()); err != nil {
+			t.Fatalf("committed pair no longer works: %v", err)
+		}
+		data, err := os.ReadFile(reg)
+		var stored registrationSnapshot
+		fp := tokenFingerprint(pveclient.Secret(next.Secret))
+		if err != nil || json.Unmarshal(data, &stored) != nil || stored.Fingerprint != fp {
+			t.Fatal("disk does not name the committed new token")
+		}
+		awaitStatus(t, ops+"/readyz", http.StatusOK)
+		awaitStatus(t, secondOps+"/readyz", http.StatusOK)
+		put(t, "test", next.ID, next.Secret, http.StatusOK)
+		t.Log("commit then exit 1: PUT 503, committed pair reloads, both daemons ready, retry PUT 200")
+	})
+	t.Run("rotation_and_failed_candidate", func(t *testing.T) {
+		for _, candidate := range []struct{ id, secret string }{{tokenID, token}, {next.ID, next.Secret}} {
+			old, err := os.ReadFile(reg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var previous registrationSnapshot
+			if err := json.Unmarshal(old, &previous); err != nil {
+				t.Fatal(err)
+			}
+			before := strings.Count(strings.Join(fake.Requests(), "\n"), "GET /api2/json/access/permissions")
+			put(t, "test", candidate.id, candidate.secret, http.StatusOK)
+			after := strings.Count(strings.Join(fake.Requests(), "\n"), "GET /api2/json/access/permissions")
+			if after <= before {
+				t.Fatal("rotation did not repeat the permission self-check")
+			}
+			if _, err := os.Stat(filepath.Join(dir, "private", "pve-token."+previous.Fingerprint)); !os.IsNotExist(err) {
+				t.Fatal("rotation left the previous token file")
+			}
+			awaitStatus(t, ops+"/readyz", http.StatusOK)
+			awaitStatus(t, secondOps+"/readyz", http.StatusOK)
+			if _, err := conn.Check(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			t.Logf("rotation PUT 200, both ready, previous token gone; permission checks %d -> %d", before, after)
+		}
+		before, err := os.ReadFile(reg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		put(t, "test", next.ID, "refused-candidate", http.StatusServiceUnavailable)
+		after, err := os.ReadFile(reg)
+		if err != nil || !bytes.Equal(before, after) {
+			t.Fatal("failed candidate changed identity")
+		}
+		refused := filepath.Join(dir, "private", "pve-token."+tokenFingerprint("refused-candidate"))
+		if _, err := os.Stat(refused); !os.IsNotExist(err) {
+			t.Fatal("failed candidate wrote a token")
+		}
+		if _, err := conn.Check(t.Context()); err != nil {
+			t.Fatal("failed candidate replaced serving pair:", err)
+		}
+		awaitStatus(t, ops+"/readyz", http.StatusOK)
+		awaitStatus(t, secondOps+"/readyz", http.StatusOK)
+	})
+	t.Run("token_cleanup_failure", func(t *testing.T) {
+		writeFixture(t, filepath.Join(dir, "fail"), []byte("token-delete"))
+		put(t, "test", tokenID, token, http.StatusOK)
+		fp := tokenFingerprint(pveclient.Secret(next.Secret))
+		if _, err := os.Stat(filepath.Join(dir, "private", "pve-token."+fp)); err != nil {
+			t.Fatal("cleanup fault did not retain the inactive token:", err)
+		}
+		if _, err := conn.Check(t.Context()); err != nil {
+			t.Fatal("cleanup failure broke the committed pair:", err)
+		}
+		if err := conn.Helper.DeleteToken(t.Context(), fp); err != nil {
+			t.Fatal(err)
+		}
+		put(t, "test", next.ID, next.Secret, http.StatusOK)
+	})
+	for _, operation := range []string{"lock", "token-read"} {
+		t.Run("rotation_during_"+operation, func(t *testing.T) {
+			data, err := os.ReadFile(reg)
+			var replacement registrationSnapshot
+			if err != nil || json.Unmarshal(data, &replacement) != nil {
+				t.Fatal("read current identity:", err)
+			}
+			id, secret := tokenID, token
+			if replacement.TokenID == tokenID {
+				id, secret = next.ID, next.Secret
+			}
+			replacement.TokenID, replacement.Fingerprint = id, tokenFingerprint(pveclient.Secret(secret))
+			if err := conn.Helper.WriteToken(t.Context(), replacement.Fingerprint, []byte(secret)); err != nil {
+				t.Fatal(err)
+			}
+			data, err = json.Marshal(replacement)
+			if err != nil {
+				t.Fatal(err)
+			}
+			writeFixture(t, filepath.Join(dir, "next-registration"), data)
+			t.Setenv("VWS_HELPER_TEST_ROTATE", operation)
+			if operation == "lock" {
+				err := conn.Register(t.Context(), []byte(`{"region":"pve-test-1","cluster_name":"test","tokenId":"vws@pve!next"}`))
+				if resource.CodeOf(err) != resource.CodeConflict {
+					t.Fatalf("stale reused token committed after rotation: %v", err)
+				}
+			}
+			if _, err := conn.Check(t.Context()); err != nil {
+				t.Fatalf("reader lost rotation between identity and token reads: %v", err)
+			}
+			t.Log("reader reloaded the new pair after old-token deletion")
+		})
+	}
+	put(t, "test", tokenID, token, http.StatusOK)
+	t.Run("torn_pair", func(t *testing.T) {
+		identity, err := os.ReadFile(reg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var torn registrationSnapshot
+		if err := json.Unmarshal(identity, &torn); err != nil {
+			t.Fatal(err)
+		}
+		torn.TokenID = next.ID
+		tornIdentity, err := json.Marshal(torn)
+		if err != nil {
+			t.Fatal(err)
+		}
+		path := filepath.Join(dir, "private", "pve-token."+tokenFingerprint(pveclient.Secret(token)))
+		original, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		fp := tokenFingerprint(pveclient.Secret(next.Secret))
+		if err := conn.Helper.WriteToken(t.Context(), fp, []byte(next.Secret)); err != nil {
+			t.Fatal(err)
+		}
+		wrong, err := os.ReadFile(filepath.Join(dir, "private", "pve-token."+fp))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, mode := range []string{"mismatched", "missing"} {
+			t.Run(mode, func(t *testing.T) {
+				if mode == "missing" {
+					if err := os.Remove(path); err != nil {
+						t.Fatal(err)
+					}
+				} else {
+					writeFixture(t, reg, tornIdentity)
+					writeFixture(t, path, wrong)
+				}
+				t.Cleanup(func() {
+					writeFixture(t, reg, identity)
+					writeFixture(t, path, original)
+				})
+				if _, err := conn.Check(t.Context()); err == nil {
+					t.Fatal("torn pair accepted")
+				}
+				awaitStatus(t, ops+"/readyz", http.StatusServiceUnavailable)
+				awaitStatus(t, secondOps+"/readyz", http.StatusServiceUnavailable)
+				request(t, http.MethodGet, first+"/internal/v1/version", "", http.StatusServiceUnavailable)
+				request(t, http.MethodGet, second+"/internal/v1/version", "", http.StatusServiceUnavailable)
+				writeFixture(t, path, original)
+				writeFixture(t, reg, identity)
+				awaitStatus(t, ops+"/readyz", http.StatusOK)
+				awaitStatus(t, secondOps+"/readyz", http.StatusOK)
+				t.Log("both daemons rejected the torn pair and recovered after repair")
+			})
+		}
+	})
 	unavailable.Store(true)
 	awaitStatus(t, ops+"/readyz", http.StatusServiceUnavailable)
 	unavailable.Store(false)

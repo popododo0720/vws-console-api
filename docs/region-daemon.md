@@ -41,17 +41,39 @@ environment. Snapshot decoder errors never echo submitted values.
 
 ## Privileged helper
 
-`cmd/vws-region-helper` provides `registration-write`, `token-write` and
-`lease-write`, taking contents on stdin (at most 1 MiB) and no path arguments.
-`token-read` takes no arguments and returns only the encrypted envelope.
-They atomically replace `/etc/pve/vws/registration.json`,
-`/etc/pve/priv/vws/pve-token` and `/etc/pve/vws/leader`.
+`cmd/vws-region-helper` provides `registration-write` and `lease-write`,
+taking contents on stdin (at most 1 MiB) and no arguments.
+`token-write <fp>`, `token-read <fp>` and `token-delete <fp>` require a full
+lowercase SHA-256 fingerprint matching `^[0-9a-f]{64}$`, checked by both
+helper and client before exec. Token files are
+`/etc/pve/priv/vws/pve-token.<fp>`. token-write refuses stdin whose hash
+differs and seals only that file; token-read returns only its encrypted
+envelope. token-delete refuses the fingerprint named by the current
+registration; an absent inactive file is already deleted.
+Identity and lease writes atomically replace `/etc/pve/vws/registration.json`
+and `/etc/pve/vws/leader`.
 Public identity and lease files use mode 0640 (pmxcfs owns them as root:www-data);
 token and snippet files use 0600. Token files contain a versioned AES-256-GCM envelope
 authenticated with the raw 32-byte `$CREDENTIALS_DIRECTORY/region-kek`.
 The credential must be a root-owned regular file with no group/other access.
 With no credential directory, the helper uses `/etc/vws/credentials/region-kek`.
 `regionhelper.Open` authenticates and decrypts this format.
+
+Registration runs the PVE self-check, acquires the registration lock, writes
+the candidate token, then commits by renaming registration.json. That rename
+is the only commit point. There are no compensation writes: a helper failure,
+including a nonzero exit after rename, leaves a matching old or new pair.
+A retry converges. After success, deletion of a different previous token is
+best effort; a secret-free warning does not change the successful result.
+An omitted token is read by the stored fingerprint, verified and self-checked;
+only the identity is written. Readers select the named file and verify its
+content hash. If an old token was deleted during rotation, the reader re-reads
+identity once and retries only when the fingerprint changed. Missing or
+mismatched pairs fail readiness and serving until repaired.
+`TestRegionDaemonReadsRestartAndReadiness` enforces pre-commit and after-rename
+failures, retry, rotation, failed candidates, reader races, torn pairs and
+recovery. `TestTokenFingerprintGrammar`, `TestTokenWriteEncrypted` and
+`TestTokenReadAndCredentialFallback` enforce the helper contract.
 
 `lock NAME` uses mkdir under `/etc/pve/priv/lock/vws-region/`; a duplicate
 lock fails. `unlock NAME` removes an empty directory; an absent lock succeeds.
