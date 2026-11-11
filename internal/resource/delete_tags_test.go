@@ -96,3 +96,34 @@ func TestDeleteTagsRequestNormalize(t *testing.T) {
 		t.Fatal("DeleteTags requests must name the DeleteTags action")
 	}
 }
+
+func TestUntagVolumesRequestNormalize(t *testing.T) {
+	id, err := Parse[VolumeID]("vol-0123456789abcdef0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, tc := range map[string]struct {
+		req  UntagVolumesRequest
+		want string
+	}{
+		"no ids":    {UntagVolumesRequest{}, "must list from 1 to 20 ids"},
+		"duplicate": {UntagVolumesRequest{IDs: []VolumeID{id, id}}, "duplicate"},
+		"empty key": {UntagVolumesRequest{IDs: []VolumeID{id}, Tags: []TagSelector{{Key: ""}}}, "Tag key must not be empty"},
+		"reserved":  {UntagVolumesRequest{IDs: []VolumeID{id}, Tags: []TagSelector{{Key: "aws:stack"}}}, "reserved"},
+		"all":       {UntagVolumesRequest{IDs: []VolumeID{id}}, ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := tc.req.Normalize()
+			if tc.want == "" {
+				if err != nil {
+					t.Fatal(err)
+				}
+			} else if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err %v, want %q", err, tc.want)
+			}
+			if tc.req.Action() != ActionDeleteTags {
+				t.Fatal("volume untag must name DeleteTags")
+			}
+		})
+	}
+}

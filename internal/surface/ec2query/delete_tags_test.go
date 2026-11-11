@@ -49,10 +49,14 @@ func TestDeleteTags(t *testing.T) {
 		"Action": {"RunInstances"}, "ImageId": {"ami-0123456789abcdef0"}, "InstanceType": {"vws.small"},
 		"SubnetId": {sub}, "MinCount": {"1"}, "MaxCount": {"1"}, "ClientToken": {"run-untag"},
 	}, tagSpec("instance"))), "instanceId")
+	vol := xmlText(t, send(with(url.Values{
+		"Action": {"CreateVolume"}, "Size": {"8"}, "AvailabilityZone": {"vws-1a"},
+	}, tagSpec("volume"))), "volumeId")
 	describe := map[string]url.Values{
 		vpc:  {"Action": {"DescribeVpcs"}, "VpcId.1": {vpc}},
 		sub:  {"Action": {"DescribeSubnets"}, "SubnetId.1": {sub}},
 		inst: {"Action": {"DescribeInstances"}, "InstanceId.1": {inst}},
+		vol:  {"Action": {"DescribeVolumes"}, "VolumeId.1": {vol}},
 	}
 	tagSet := func(id string) string {
 		t.Helper()
@@ -66,8 +70,9 @@ func TestDeleteTags(t *testing.T) {
 
 	got := send(url.Values{
 		"Action": {"DeleteTags"}, "ResourceId.1": {vpc}, "ResourceId.2": {sub}, "ResourceId.3": {inst},
-		"Tag.1.Key": {"Name"},
-		"Tag.2.Key": {"env"}, "Tag.2.Value": {"prod"},
+		"ResourceId.4": {vol},
+		"Tag.1.Key":    {"Name"},
+		"Tag.2.Key":    {"env"}, "Tag.2.Value": {"prod"},
 		"Tag.3.Key": {"blank"}, "Tag.3.Value": {""},
 		"Tag.4.Key": {"absent"},
 	})
@@ -75,9 +80,29 @@ func TestDeleteTags(t *testing.T) {
 		t.Fatalf("response %s", got)
 	}
 	want := "<tagSet><item><key>env</key><value>dev</value></item><item><key>team</key><value>sre</value></item></tagSet>"
-	for _, id := range []string{vpc, sub, inst} {
+	for _, id := range []string{vpc, sub, inst, vol} {
 		if got := tagSet(id); got != want {
 			t.Fatalf("%s tags after DeleteTags: %s", id, got)
+		}
+	}
+	for range 2 {
+		send(url.Values{
+			"Action": {"CreateTags"}, "ResourceId.1": {vpc}, "ResourceId.2": {sub},
+			"ResourceId.3": {inst}, "ResourceId.4": {vol}, "Tag.1.Key": {"cycle"}, "Tag.1.Value": {"again"},
+		})
+		for _, id := range []string{vpc, sub, inst, vol} {
+			if got := tagSet(id); !strings.Contains(got, "<key>cycle</key>") {
+				t.Fatalf("%s tags after re-tagging: %s", id, got)
+			}
+		}
+		send(url.Values{
+			"Action": {"DeleteTags"}, "ResourceId.1": {vpc}, "ResourceId.2": {sub},
+			"ResourceId.3": {inst}, "ResourceId.4": {vol}, "Tag.1.Key": {"cycle"},
+		})
+		for _, id := range []string{vpc, sub, inst, vol} {
+			if got := tagSet(id); got != want {
+				t.Fatalf("%s tags after deleting a re-added tag: %s", id, got)
+			}
 		}
 	}
 
@@ -98,6 +123,16 @@ func TestDeleteTags(t *testing.T) {
 	if got := tagSet(inst); strings.Contains(got, "<item>") {
 		t.Fatalf("instance tags after deleting all: %s", got)
 	}
+	send(url.Values{"Action": {"DeleteTags"}, "ResourceId.1": {vol}, "Tag.1.Key": {"env"}, "Tag.1.Value": {"dev"}})
+	if got := tagSet(vol); got != "<tagSet><item><key>team</key><value>sre</value></item></tagSet>" {
+		t.Fatalf("volume tags after a matching delete: %s", got)
+	}
+	for range 2 {
+		send(url.Values{"Action": {"DeleteTags"}, "ResourceId.1": {vol}})
+		if got := tagSet(vol); strings.Contains(got, "<item>") {
+			t.Fatalf("volume tags after deleting all: %s", got)
+		}
+	}
 
 	for name, tc := range map[string]struct {
 		form url.Values
@@ -106,6 +141,7 @@ func TestDeleteTags(t *testing.T) {
 		"missing vpc":       {url.Values{"ResourceId.1": {"vpc-0fffffffffffffff0"}}, "InvalidVpcID.NotFound"},
 		"missing subnet":    {url.Values{"ResourceId.1": {"subnet-0fffffffffffffff0"}}, "InvalidSubnetID.NotFound"},
 		"missing instance":  {url.Values{"ResourceId.1": {"i-0fffffffffffffff0"}}, "InvalidInstanceID.NotFound"},
+		"missing volume":    {url.Values{"ResourceId.1": {"vol-0fffffffffffffff0"}}, "InvalidVolume.NotFound"},
 		"no resource":       {url.Values{"Tag.1.Key": {"env"}}, "InvalidParameterValue"},
 		"unsupported kind":  {url.Values{"ResourceId.1": {"sg-0123456789abcdef0"}}, "InvalidParameterValue"},
 		"value without key": {url.Values{"ResourceId.1": {vpc}, "Tag.1.Value": {"dev"}}, "InvalidParameterValue"},

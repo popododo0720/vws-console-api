@@ -79,12 +79,17 @@ func (s *volumeSrv) UpdateVolume(ctx context.Context, req *storagev1.UpdateVolum
 		return nil, toStatus(err)
 	}
 	if paths := req.GetUpdateMask().GetPaths(); len(paths) == 1 && paths[0] == "labels" {
-		// A labels-only update is a tag change; the fake stores the tags.
 		tags, err := userTags(req.GetVolume().GetLabels())
 		if err != nil {
 			return nil, toStatus(err)
 		}
-		acc, err := s.w.set.Compute.TagVolumes(ctx, backend.Mutation{
+		acc, err := s.w.set.Compute.UntagVolumes(ctx, backend.Mutation{
+			Scope: backend.Scope{Account: account}, Key: req.GetRequestId() + "-clear", Fingerprint: fp,
+		}, resource.UntagVolumesRequest{IDs: []resource.VolumeID{id}})
+		if err != nil {
+			return nil, toStatus(err)
+		}
+		acc, err = s.w.set.Compute.TagVolumes(ctx, backend.Mutation{
 			Scope: backend.Scope{Account: account}, Key: req.GetRequestId(), Fingerprint: fp,
 		}, resource.TagVolumesRequest{IDs: []resource.VolumeID{id}, Tags: tags})
 		if err != nil {

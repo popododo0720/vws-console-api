@@ -142,6 +142,12 @@ func TestUndecodableVolumeTagsBlockOnlyTagReads(t *testing.T) {
 	if resource.CodeOf(err) != resource.CodeInternal {
 		t.Fatalf("DescribeVolumes by id: %v, want Internal", err)
 	}
+	_, err = client.UntagVolumes(context.Background(),
+		backend.Mutation{Scope: scope, Key: "k-untag-bad", Fingerprint: "fp-untag-bad"},
+		resource.UntagVolumesRequest{IDs: []resource.VolumeID{id}})
+	if resource.CodeOf(err) != resource.CodeInternal {
+		t.Fatalf("UntagVolumes on undecodable tags: %v, want Internal", err)
+	}
 	inst, err := resource.Parse[resource.InstanceID](instID)
 	if err != nil {
 		t.Fatal(err)

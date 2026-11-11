@@ -59,6 +59,10 @@ func (s capsStub) TagVolumes(context.Context, b.Mutation, r.TagVolumesRequest) (
 	return r.Accepted[r.Volume]{}, s.mutationErr
 }
 
+func (s capsStub) UntagVolumes(context.Context, b.Mutation, r.UntagVolumesRequest) (r.Accepted[r.Volume], error) {
+	return r.Accepted[r.Volume]{}, s.mutationErr
+}
+
 func (s capsStub) DeleteTags(context.Context, b.Mutation, r.DeleteTagsRequest) (r.Accepted[r.Instance], error) {
 	return r.Accepted[r.Instance]{}, s.mutationErr
 }
@@ -307,8 +311,8 @@ func TestCapabilityContract(t *testing.T) {
 			capsStub{err: r.Invalid("read", "bad"), mutationErr: good.mutationErr},
 			len(r.ReadActions()),
 		},
-		{"mutation succeeds", capsStub{}, 34},
-		{"wrong invalid argument", capsStub{mutationErr: r.Invalid("action", "bad")}, 34},
+		{"mutation succeeds", capsStub{}, 35},
+		{"wrong invalid argument", capsStub{mutationErr: r.Invalid("action", "bad")}, 35},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			recorder := &capabilityRecorder{}

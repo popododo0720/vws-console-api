@@ -18,14 +18,32 @@ import (
 func (c computeClient) TagVolumes(
 	ctx context.Context, m backend.Mutation, req resource.TagVolumesRequest,
 ) (resource.Accepted[resource.Volume], error) {
+	return c.editVolumeTags(ctx, m, req.IDs, resource.ActionCreateTags, mergeEdit(req.Tags))
+}
+
+// UntagVolumes deletes the selected tags with a labels-only UpdateVolume.
+// All volumes are read and validated before any write. Updates then run
+// sequentially: a later failure leaves earlier updates applied. With no
+// intervening tag changes, a retry with the same mutation key sends the same
+// per-volume request IDs, replaying accepted updates and retrying failed ones.
+// Tokenless EC2 DeleteTags calls get a fresh key and apply the removal again.
+func (c computeClient) UntagVolumes(
+	ctx context.Context, m backend.Mutation, req resource.UntagVolumesRequest,
+) (resource.Accepted[resource.Volume], error) {
+	return c.editVolumeTags(ctx, m, req.IDs, resource.ActionDeleteTags, removeEdit(req.Tags))
+}
+
+func (c computeClient) editVolumeTags(
+	ctx context.Context, m backend.Mutation, ids []resource.VolumeID, action resource.Action, edit tagEdit,
+) (resource.Accepted[resource.Volume], error) {
 	projectID := project(m.Account)
 	type pending struct {
 		name   string
 		labels map[string]string
 		model  resource.Volume
 	}
-	work := make([]pending, 0, len(req.IDs))
-	for _, id := range req.IDs {
+	work := make([]pending, 0, len(ids))
+	for _, id := range ids {
 		name := volumeName(projectID, id.String())
 		got, err := c.volumes.GetVolume(ctx, &storagev1.GetVolumeRequest{Name: name})
 		if err != nil {
@@ -38,7 +56,7 @@ func (c computeClient) TagVolumes(
 		if err != nil && !errors.As(err, &unknownType) {
 			return resource.Accepted[resource.Volume]{}, err
 		}
-		labels, tags, err := editedLabels(got.GetLabels(), mergeEdit(req.Tags))
+		labels, tags, err := editedLabels(got.GetLabels(), edit)
 		if err != nil {
 			return resource.Accepted[resource.Volume]{}, err
 		}
@@ -65,7 +83,7 @@ func (c computeClient) TagVolumes(
 		items = append(items, w.model)
 		targets = append(targets, w.model.ID.Ref())
 	}
-	op.Action = resource.ActionCreateTags
+	op.Action = action
 	op.Targets = targets
 	return resource.Accepted[resource.Volume]{Operation: op, Items: items}, nil
 }

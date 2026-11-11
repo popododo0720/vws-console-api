@@ -980,7 +980,7 @@ func tagSelectors(r *http.Request) ([]resource.TagSelector, error) {
 // maxDeleteTagIndex bounds Tag.N on DeleteTags, as allowDeleteTags does.
 const maxDeleteTagIndex = resource.MaxTags
 
-// deleteTags deletes tags from instances, VPCs and subnets, mixed as in
+// deleteTags deletes tags from instances, VPCs, subnets and volumes, mixed as in
 // createTags. Deleting a tag the resource does not have is not an error.
 func (h *handler) deleteTags(w http.ResponseWriter, r *http.Request, c resource.Caller) {
 	t, err := parseTagTargets(r)
@@ -993,14 +993,13 @@ func (h *handler) deleteTags(w http.ResponseWriter, r *http.Request, c resource.
 		writeErr(w, r, err)
 		return
 	}
-	if len(t.vols) > 0 {
-		writeErr(w, r, resource.Invalid("ResourceId", "only instances, VPCs and subnets can be untagged"))
-		return
-	}
 	instReq := resource.DeleteTagsRequest{IDs: t.insts, Tags: sel}
 	vpcReq := resource.UntagVpcsRequest{IDs: t.vpcs, Tags: sel}
 	subReq := resource.UntagSubnetsRequest{IDs: t.subs, Tags: sel}
-	if err := firstErr(checkPart(t.insts, instReq), checkPart(t.vpcs, vpcReq), checkPart(t.subs, subReq)); err != nil {
+	volReq := resource.UntagVolumesRequest{IDs: t.vols, Tags: sel}
+	if err := firstErr(
+		checkPart(t.insts, instReq), checkPart(t.vpcs, vpcReq), checkPart(t.subs, subReq), checkPart(t.vols, volReq),
+	); err != nil {
 		writeErr(w, r, err)
 		return
 	}
@@ -1023,6 +1022,12 @@ func (h *handler) deleteTags(w http.ResponseWriter, r *http.Request, c resource.
 	}
 	if len(t.subs) > 0 {
 		if _, err := h.svc.UntagSubnets(r.Context(), c, token, subReq); err != nil {
+			writeErr(w, r, err)
+			return
+		}
+	}
+	if len(t.vols) > 0 {
+		if _, err := h.svc.UntagVolumes(r.Context(), c, token, volReq); err != nil {
 			writeErr(w, r, err)
 			return
 		}

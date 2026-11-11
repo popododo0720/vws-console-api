@@ -111,6 +111,13 @@ type Compute interface {
 	CreateVolume(ctx context.Context, m Mutation, req resource.CreateVolumeRequest) (resource.Accepted[resource.Volume], error)
 	// TagVolumes merges tags into volumes; every volume must exist first.
 	TagVolumes(ctx context.Context, m Mutation, req resource.TagVolumesRequest) (resource.Accepted[resource.Volume], error)
+	// UntagVolumes deletes the selected tags from volumes. Every volume is
+	// read and checked before any write, so an unknown id changes nothing. A
+	// backend that writes volume by volume can fail after earlier writes; a
+	// retry with the same Mutation.Key replays those and finishes the rest.
+	UntagVolumes(
+		ctx context.Context, m Mutation, req resource.UntagVolumesRequest,
+	) (resource.Accepted[resource.Volume], error)
 	AttachVolume(ctx context.Context, m Mutation, req resource.AttachVolumeRequest) (resource.Accepted[resource.Volume], error)
 	DetachVolume(
 		ctx context.Context, m Mutation, req resource.DetachVolumeRequest,

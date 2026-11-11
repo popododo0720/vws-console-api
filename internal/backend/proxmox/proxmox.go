@@ -156,6 +156,13 @@ func (b *Backend) DeleteVolume(
 	return resource.Accepted[resource.Volume]{}, resource.Unsupported("DeleteVolume", "read-only")
 }
 
+// UntagVolumes is unavailable in the phase-one backend.
+func (b *Backend) UntagVolumes(
+	ctx context.Context, m backend.Mutation, req resource.UntagVolumesRequest,
+) (resource.Accepted[resource.Volume], error) {
+	return resource.Accepted[resource.Volume]{}, resource.Unsupported("DeleteTags", "read-only")
+}
+
 // ModifyVolume is unavailable in the phase-one backend.
 func (b *Backend) ModifyVolume(
 	ctx context.Context, m backend.Mutation, req resource.ModifyVolumeRequest,

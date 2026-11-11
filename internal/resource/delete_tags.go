@@ -140,3 +140,23 @@ func (r UntagSubnetsRequest) Normalize() (UntagSubnetsRequest, error) {
 	}
 	return r, nil
 }
+
+// UntagVolumesRequest deletes tags from volumes.
+type UntagVolumesRequest struct {
+	IDs  []VolumeID    `json:"volumeIds"`
+	Tags []TagSelector `json:"tags,omitempty"`
+}
+
+// Action returns DeleteTags.
+func (UntagVolumesRequest) Action() Action { return ActionDeleteTags }
+
+// Normalize checks the ids and the selectors.
+func (r UntagVolumesRequest) Normalize() (UntagVolumesRequest, error) {
+	if err := distinctIDs("volumeIds", r.IDs); err != nil {
+		return UntagVolumesRequest{}, err
+	}
+	if err := ValidateTagSelectors(r.Tags); err != nil {
+		return UntagVolumesRequest{}, err
+	}
+	return r, nil
+}

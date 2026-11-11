@@ -72,6 +72,7 @@ func Run(t *testing.T, newSet Harness, caps resource.RegionCapabilities) {
 			[]resource.Action{
 				resource.ActionCreateVolume,
 				resource.ActionCreateTags,
+				resource.ActionDeleteTags,
 			},
 			[]resource.ReadAction{
 				resource.ReadDescribeVolumes,
@@ -744,13 +745,13 @@ func missingVpc(t *testing.T) resource.VpcID {
 	return id
 }
 
-// volumeTags checks that volume tags survive create, describe and a CreateTags
-// merge, and that an unknown volume id changes no volume.
+// volumeTags checks tag merges and deletes, and that an unknown volume id
+// changes no volume.
 func volumeTags(t *testing.T, set backend.Set, account resource.AccountID) {
 	t.Helper()
 	ctx := context.Background()
 	scope := backend.Scope{Account: account}
-	odd := map[string]string{"Name": "data-1", "Cost Center": "42", "env": "dev"}
+	odd := map[string]string{"Name": "data-1", "Cost Center": "42", "env": "dev", "aws:stack": "system"}
 	vol, err := set.Compute.CreateVolume(ctx, backend.Mutation{Scope: scope, Key: "k-tvol", Fingerprint: "fp-tvol"},
 		resource.CreateVolumeRequest{SizeGiB: 8, Zone: resource.ZoneName, Type: resource.VolumeGP2, Tags: odd})
 	if err != nil {
@@ -772,7 +773,9 @@ func volumeTags(t *testing.T, set backend.Set, account resource.AccountID) {
 		t.Fatalf("volume tags %v", got)
 	}
 	add := map[string]string{"Name": "data-2", "Owner Team": "SRE"}
-	want := map[string]string{"Name": "data-2", "Cost Center": "42", "env": "dev", "Owner Team": "SRE"}
+	want := map[string]string{
+		"Name": "data-2", "Cost Center": "42", "env": "dev", "Owner Team": "SRE", "aws:stack": "system",
+	}
 	tv, err := set.Compute.TagVolumes(ctx, backend.Mutation{Scope: scope, Key: "k-tagvol", Fingerprint: "fp-tagvol"},
 		resource.TagVolumesRequest{IDs: []resource.VolumeID{volID}, Tags: add})
 	if err != nil || tv.Operation.Action != resource.ActionCreateTags ||
@@ -795,5 +798,41 @@ func volumeTags(t *testing.T, set backend.Set, account resource.AccountID) {
 	}
 	if got := volTags(); !maps.Equal(got, want) {
 		t.Fatalf("a refused CreateTags changed the volume: %v", got)
+	}
+	del := backend.Mutation{Scope: scope, Key: "k-untagvol", Fingerprint: "fp-untagvol"}
+	prod, exact := "prod", "42"
+	req := resource.UntagVolumesRequest{IDs: []resource.VolumeID{volID}, Tags: []resource.TagSelector{
+		{Key: "Name"}, {Key: "env", Value: &prod}, {Key: "Cost Center", Value: &exact}, {Key: "absent"},
+	}}
+	untagged, err := set.Compute.UntagVolumes(ctx, del, req)
+	kept := map[string]string{"env": "dev", "Owner Team": "SRE", "aws:stack": "system"}
+	if err != nil || untagged.Operation.Action != resource.ActionDeleteTags ||
+		len(untagged.Items) != 1 || !maps.Equal(untagged.Items[0].Tags, kept) {
+		t.Fatalf("UntagVolumes: %v %+v", err, untagged)
+	}
+	if got := volTags(); !maps.Equal(got, kept) {
+		t.Fatalf("volume tags after DeleteTags: %v", got)
+	}
+	repeated, err := set.Compute.UntagVolumes(ctx, del, req)
+	if err != nil || repeated.Operation.ID != untagged.Operation.ID {
+		t.Fatalf("repeated UntagVolumes: %v %+v", err, repeated)
+	}
+	_, err = set.Compute.UntagVolumes(ctx,
+		backend.Mutation{Scope: scope, Key: "k-untagvol-miss", Fingerprint: "fp-untagvol-miss"},
+		resource.UntagVolumesRequest{IDs: []resource.VolumeID{volID, missing}})
+	if !errors.As(err, &re) || re.Code != resource.CodeNotFound || re.Kind != resource.KindVolume {
+		t.Fatalf("UntagVolumes with a missing volume: %v", err)
+	}
+	if got := volTags(); !maps.Equal(got, kept) {
+		t.Fatalf("a refused DeleteTags changed the volume: %v", got)
+	}
+	_, err = set.Compute.UntagVolumes(ctx,
+		backend.Mutation{Scope: scope, Key: "k-untagvol-all", Fingerprint: "fp-untagvol-all"},
+		resource.UntagVolumesRequest{IDs: []resource.VolumeID{volID}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := volTags(); !maps.Equal(got, map[string]string{"aws:stack": "system"}) {
+		t.Fatalf("volume tags after deleting all: %v", got)
 	}
 }

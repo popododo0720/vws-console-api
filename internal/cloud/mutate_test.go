@@ -163,6 +163,12 @@ func (foreignCompute) TagVolumes(
 	return resource.Accepted[resource.Volume]{}, errors.New("unused")
 }
 
+func (foreignCompute) UntagVolumes(
+	context.Context, backend.Mutation, resource.UntagVolumesRequest,
+) (resource.Accepted[resource.Volume], error) {
+	return resource.Accepted[resource.Volume]{}, errors.New("unused")
+}
+
 func (foreignCompute) AttachVolume(context.Context, backend.Mutation, resource.AttachVolumeRequest) (resource.Accepted[resource.Volume], error) {
 	return resource.Accepted[resource.Volume]{}, errors.New("unused")
 }
