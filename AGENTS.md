@@ -98,7 +98,7 @@ change both files together.
 | A `DetachVolume` retry returns the first detach, within the label budget. Its four known limits wait on vws-proto#57, for the reasons in `docs/rules.md` (#317). | `backendtest.DetachReplay`, `backendtest.DetachWindow` |
 | A `DetachVolume` client token lives for `backend.ClientTokenWindow`, 24 hours, the vws-compute `request_id` window (`vws/common/v1/operation.proto`, "A request_id is remembered for 24 hours"). Over gRPC its replay records are pruned on that window (`backend.ClientTokenExpired`: past the window and `backend.ClientTokenGrace`); what a retry after it answers is in `docs/rules.md` (#305). | `backendtest.DetachWindow`, `TestPruneDetachRecords` |
 | A `DetachVolume` saved operation is bound to its request by a 64-bit token, `sha256(request id, fingerprint)[:8]` as 16 hex digits, and is not widened (#304). A collision only matters for two parameter sets sent with one client token, and the token is bound to the request id, which is derived from the account and the client token, so only that caller can make one. Because the caller picks both parameter sets, a wider token does not stop a deliberate collision: the 22 hex digits left beside a 40-digit operation id in a 63-byte label value still give 88 bits, about 2^44 hashes by the birthday bound. The worst outcome is that caller's own earlier detach coming back instead of `IdempotentParameterMismatch`, with no other account or volume affected. An accidental collision is about 2^-64 per pair within the 24-hour token window. Widening would add a second token format to read for no gain. | `TestDetachOpTokenRules` |
-| The detach recovery path matches `docs/formal/detach.tla` (pstack `create-formal-verification-skill` 0.15.30). | CI workflow `tla` (job `detach`) |
+| The detach recovery path matches `docs/formal/detach.tla`. | CI workflow `tla` (job `detach`) |
 | IAM authorize, then read or write, matches `docs/formal/iamauth.tla`. | CI workflow `tla-iam` (job `iam`) |
 | Volume types map one to one; an unknown type is refused. | `TestVolumeTypeRefusesUnknown` |
 | ModifyVolume refuses every explicit Size on a volume already above its type's EC2 maximum: EC2 takes a target at least the existing size and within the current type's limits, so the volume has no valid target, not even its current size (#436). | `TestModifyRefusesSizeAboveTypeMaximum`, `TestModifyVolumeAboveTypeMaximumNeverReachesStorage` |
@@ -131,13 +131,12 @@ change both files together.
 | No deployment manifests; `publish.yml` is the only release step. | CI job `hygiene` |
 | Never push to `main`. | `.githooks/pre-push` |
 | Each commit is one logical change that passes tests. | Judgment: `git rebase -x 'go test ./...' origin/main` |
-| Structural changes use pstack. | Judgment: the PR names the sketch and verdict |
 | The repo is English only. | CI job `english` |
 
 ## Working here
 
-- Work in poteto-mode style: short declarative sentences, a minimal diff,
-  proof from real artifacts. Use Grok dev bots only, never Cursor cloud
+- Write short declarative sentences, make a minimal diff, and prove with
+  real artifacts. Use Grok dev bots only, never Cursor cloud
   agents.
 - One issue is one branch from `main` and one PR. Commits are atomic and do
   not mix a refactor with a behavior change. Never force-push; never merge
@@ -157,9 +156,6 @@ change both files together.
 - Proxmox safety (`docs/proxmox-safety.md`): PVE tokens never go in bot
   secrets; CI tests use pvefake only; live checks run only on the nested
   test VM `pve-test-1`.
-- pstack, for a new package, shared type, surface or backend method:
-  **architect** (caller's usage, then types), **interrogate** (more than one
-  reviewer), **correct** (a copied mistake becomes a failing check).
 - A new long-running action follows the steps in `docs/rules.md`.
 - English only: `scripts/check-english.sh` (CI job `english`) checks files,
   the PR body and commits. Only `.github/english-allowlist` entries

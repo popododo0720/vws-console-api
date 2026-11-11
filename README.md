@@ -334,8 +334,7 @@ and `go mod tidy`. Never copy or `replace` the module.
 
 ## Layout
 
-See `AGENTS.md` for the rule table, the branch and commit rules, and when to
-use pstack (`architect`, `interrogate`, `correct`).
+See `AGENTS.md` for the rule table and the branch and commit rules.
 
 ```sh
 go test -race ./...
