@@ -293,26 +293,30 @@ func (s *Static) Logout(_ context.Context, token string) error {
 	return nil
 }
 
-// Login sends the root user name to root and everyone else to next.
+// Login uses next for all sessions when only the static root key is enabled.
 func (w withRoot) Login(ctx context.Context, req LoginRequest) (Session, error) {
-	if strings.EqualFold(req.UserName, RootUserName) {
+	if !w.remoteSessions && strings.EqualFold(req.UserName, RootUserName) {
 		return w.root.Login(ctx, req)
 	}
 	return w.next.Login(ctx, req)
 }
 
-// ValidateSession asks root first; tokens are random, so they never collide.
+// ValidateSession checks the static root table only when it owns sessions.
 func (w withRoot) ValidateSession(ctx context.Context, token string) (Session, error) {
-	if s, err := w.root.ValidateSession(ctx, token); err == nil {
-		return s, nil
+	if !w.remoteSessions {
+		if s, err := w.root.ValidateSession(ctx, token); err == nil {
+			return s, nil
+		}
 	}
 	return w.next.ValidateSession(ctx, token)
 }
 
 // Logout revokes token wherever it lives.
 func (w withRoot) Logout(ctx context.Context, token string) error {
-	if err := w.root.Logout(ctx, token); err != nil {
-		return err
+	if !w.remoteSessions {
+		if err := w.root.Logout(ctx, token); err != nil {
+			return err
+		}
 	}
 	return w.next.Logout(ctx, token)
 }

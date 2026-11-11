@@ -103,7 +103,9 @@ func run(ctx context.Context, args []string) (err error) {
 	iamAddr := fs.String("iam-addr", "127.0.0.1:8084", "IAM and STS Query listen address")
 	consoleOrigins := fs.String("console-origins", "", "comma-separated browser origins allowed to sign in and send cookie writes besides the console's own host, such as https://console.vws.example")
 	trustedProxies := fs.String("trusted-proxies", "", "comma-separated CIDRs of L7 proxies in front of the console whose X-Forwarded-For is trusted for the sign-in client address; empty uses the TCP peer")
-	rootPasswordFile := fs.String("root-password-file", "", "file holding the account root's console password (mount it from a Secret); empty disables root console sign-in; no effect with -iam static, where console sign-in is off")
+	rootPasswordFile := fs.String("root-password-file", "",
+		"file holding the account root's console password with -iam fake (mount it from a Secret); "+
+			"empty disables fake root sign-in; ignored with a warning in static and grpc modes")
 	limits := console.DefaultLoginLimits()
 	fs.IntVar(&limits.IPBurst, "login-ip-burst", limits.IPBurst,
 		"console sign-in attempts one client address may make at once (1 to 10000)")
@@ -232,11 +234,11 @@ func run(ctx context.Context, args []string) (err error) {
 	svc := cloud.New(cloud.Config{
 		Backends: set, Regions: regions, Audit: logger, Launches: throttle.NewLaunches(launchLimits),
 	})
-	// The static key is the account root; with -iam=fake or -iam=grpc it
-	// sits in front of the IAM client through iam.WithRoot.
+	// The static key remains the account root for SigV4. With -iam=grpc,
+	// vws-iam owns console passwords and sessions for every identity.
 	root := iam.NewStatic(*accessKey, *secret, account)
 	root.SetLogger(logger)
-	if *rootPasswordFile != "" {
+	if *rootPasswordFile != "" && *iamMode != "grpc" {
 		if err := setRootPassword(ctx, root, *rootPasswordFile); err != nil {
 			return err
 		}
@@ -264,7 +266,7 @@ func run(ctx context.Context, args []string) (err error) {
 		}
 		defer func() { err = errors.Join(err, remote.Close()) }()
 		remote.SetLogger(logger)
-		auth, admin = iam.WithRoot(root, remote), iamclient.STSAdmin{Client: remote}
+		auth, admin = iam.WithRootKey(root, remote), iamclient.STSAdmin{Client: remote}
 	default:
 		return fmt.Errorf("unknown -iam %q", *iamMode)
 	}
@@ -422,8 +424,12 @@ func requireExplicit(defaulted []credential) error {
 // -root-password-file, so the default install never takes a password.
 func signInEnabled(iamMode string) bool { return iamMode == "fake" || iamMode == "grpc" }
 
-// warnSignIn logs at start when console sign-in is off.
+// warnSignIn logs disabled sign-in and ignored local password settings.
 func warnSignIn(ctx context.Context, logger *slog.Logger, iamMode, rootPasswordFile string) {
+	if iamMode == "grpc" && rootPasswordFile != "" {
+		logger.WarnContext(ctx, "-root-password-file has no effect with -iam grpc: vws-iam owns console sign-in",
+			slog.String("iam", iamMode))
+	}
 	if signInEnabled(iamMode) {
 		return
 	}

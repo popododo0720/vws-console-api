@@ -226,6 +226,28 @@ func TestHashingIsBounded(t *testing.T) {
 	}
 }
 
+func TestWithRootKeyNeverUsesLocalSessions(t *testing.T) {
+	ctx := t.Context()
+	root := NewStatic("AKIDEXAMPLE", "secret", account(t))
+	must(t, root.SetPassword(ctx, "root password 9"))
+	req := LoginRequest{Account: account(t), UserName: RootUserName, Password: "root password 9"}
+	local, err := root.Login(ctx, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := WithRootKey(root, NewFake())
+	if _, err := c.Login(ctx, req); resource.CodeOf(err) != resource.CodeUnauthenticated {
+		t.Fatalf("local password accepted: %v", err)
+	}
+	if _, err := c.ValidateSession(ctx, local.Token); resource.CodeOf(err) != resource.CodeUnauthenticated {
+		t.Fatalf("local session accepted: %v", err)
+	}
+	must(t, c.Logout(ctx, local.Token))
+	if _, err := root.ValidateSession(ctx, local.Token); err != nil {
+		t.Fatalf("remote logout touched the local table: %v", err)
+	}
+}
+
 func TestRootLoginThroughWithRoot(t *testing.T) {
 	ctx := t.Context()
 	a := account(t)

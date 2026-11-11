@@ -51,9 +51,16 @@ func (s *Static) Authorize(_ context.Context, req Request) (Decision, error) {
 // principal to next.
 func WithRoot(root *Static, next Client) Client { return withRoot{root: root, next: next} }
 
+// WithRootKey keeps the static root key for SigV4 authentication and
+// authorization, while next owns every console session, including root's.
+func WithRootKey(root *Static, next Client) Client {
+	return withRoot{root: root, next: next, remoteSessions: true}
+}
+
 type withRoot struct {
-	root *Static
-	next Client
+	root           *Static
+	next           Client
+	remoteSessions bool
 }
 
 func (w withRoot) Authenticate(ctx context.Context, req sigv4.AuthRequest) (Principal, error) {
