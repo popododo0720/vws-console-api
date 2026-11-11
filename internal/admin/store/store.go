@@ -5,6 +5,8 @@ package store
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -44,14 +46,15 @@ type Backend interface {
 
 // Region is one registered Proxmox cluster.
 type Region struct {
-	Name           string  `json:"name"`
-	ClusterName    string  `json:"clusterName"`
-	PVEAPIURL      string  `json:"pveApiUrl"`
-	CAPEM          string  `json:"caPem,omitempty"`
-	TokenID        string  `json:"tokenId"`
-	RegionEndpoint string  `json:"regionEndpoint"`
-	Zones          []Zone  `json:"zones"`
-	Version        Version `json:"-"`
+	Name           string         `json:"name"`
+	ClusterName    string         `json:"clusterName"`
+	PVEAPIURL      string         `json:"pveApiUrl"`
+	CAPEM          string         `json:"caPem,omitempty"`
+	TokenID        string         `json:"tokenId"`
+	TokenSecret    SecretMetadata `json:"tokenSecret"`
+	RegionEndpoint string         `json:"regionEndpoint"`
+	Zones          []Zone         `json:"zones"`
+	Version        Version        `json:"-"`
 }
 
 // Zone is a node group of a region.
@@ -62,10 +65,26 @@ type Zone struct {
 
 // AWSAccount is one registered AWS account and the regions it may use.
 type AWSAccount struct {
-	ID             string   `json:"awsAccountId"`
-	RoleARN        string   `json:"roleArn"`
-	AllowedRegions []string `json:"allowedRegions"`
-	Version        Version  `json:"-"`
+	ID             string         `json:"awsAccountId"`
+	RoleARN        string         `json:"roleArn"`
+	ExternalID     SecretMetadata `json:"externalId"`
+	AllowedRegions []string       `json:"allowedRegions"`
+	Version        Version        `json:"-"`
+}
+
+// SecretMetadata describes a configured secret without retaining its value.
+type SecretMetadata struct {
+	Set         bool   `json:"set"`
+	Fingerprint string `json:"fingerprint"`
+}
+
+// DescribeSecret derives the public metadata of a write-only secret.
+func DescribeSecret(value string) SecretMetadata {
+	if value == "" {
+		return SecretMetadata{}
+	}
+	sum := sha256.Sum256([]byte(value))
+	return SecretMetadata{Set: true, Fingerprint: hex.EncodeToString(sum[:4])}
 }
 
 type record interface {
