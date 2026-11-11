@@ -50,7 +50,8 @@ func run(ctx context.Context, args []string) (err error) {
 	fs.SetOutput(io.Discard)
 	config := fs.String("config", "/etc/vws/region.yaml", "node-local configuration path")
 	kind := fs.String("backend", "proxmox", "proxmox")
-	registration := fs.String("registration-file", "/etc/pve/priv/vws/registration.json", "private registration snapshot")
+	registration := fs.String("registration-file", "/etc/pve/vws/registration.json", "public registration identity")
+	helperPath := fs.String("helper-path", "", "helper executable override; default uses sudo with the installed helper")
 	endpoint := fs.String("pve-endpoint", "https://127.0.0.1:8006", "local pveproxy HTTPS origin")
 	pveCA := fs.String("pve-ca-file", "/etc/pve/pve-root-ca.pem", "node CA bundle")
 	certFile := fs.String("tls-cert-file", "/etc/vws/region.crt", "region server certificate")
@@ -89,6 +90,7 @@ func run(ctx context.Context, args []string) (err error) {
 	if err != nil {
 		return err
 	}
+	conn.Helper.Path = *helperPath
 	cert, err := tls.LoadX509KeyPair(*certFile, *keyFile)
 	if err != nil {
 		return fmt.Errorf("region certificate: %w", err)
@@ -102,8 +104,23 @@ func run(ctx context.Context, args []string) (err error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	var initialized atomic.Bool
+	var state atomic.Pointer[http.Handler]
 	probe := &readiness{check: func(ctx context.Context) error {
-		_, err := conn.Check(ctx)
+		b, err := conn.Check(ctx)
+		if err != nil {
+			if ctx.Err() == nil {
+				state.Store(nil)
+			}
+			return err
+		}
+		identity := proxmox.Identity(b)
+		h, err := regionapi.New(regionapi.Config{
+			Backend: b.Set(), Capabilities: b, Region: identity.Region.Name, Status: b,
+			Version: regionapi.Version{ReleaseLine: "1.0", ClusterName: identity.ClusterName},
+		})
+		if err == nil {
+			state.Store(&h)
+		}
 		return err
 	}, now: time.Now, ttl: readyTTL}
 	opsDone := make(chan error, 1)
@@ -124,19 +141,14 @@ func run(ctx context.Context, args []string) (err error) {
 		cancel()
 		err = errors.Join(err, <-opsDone)
 	}()
-	b, err := conn.Check(ctx)
-	if err != nil {
-		return err
-	}
-	identity := conn.Identity()
-	h, err := regionapi.New(regionapi.Config{
-		Backend: b.Set(), Capabilities: b, Region: identity.Region.Name,
-		Status:  b,
-		Version: regionapi.Version{ReleaseLine: "1.0", ClusterName: identity.ClusterName},
-	})
-	if err != nil {
-		return err
-	}
+	h := regionapi.WithRegistration(conn.Register, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		current := state.Load()
+		if current == nil {
+			http.Error(w, "region not ready", http.StatusServiceUnavailable)
+			return
+		}
+		(*current).ServeHTTP(w, r)
+	}))
 	srv := regionapi.NewServer(*addr, h, cert, ca)
 	lc := net.ListenConfig{}
 	ln, err := lc.Listen(ctx, "tcp", *addr)
@@ -149,7 +161,24 @@ func run(ctx context.Context, args []string) (err error) {
 		cancel()
 	}()
 	initialized.Store(true)
+	reloadDone := make(chan struct{})
+	go func() {
+		defer close(reloadDone)
+		ticker := time.NewTicker(readyTTL)
+		defer ticker.Stop()
+		for {
+			if err := probe.Ready(ctx); err != nil && ctx.Err() == nil {
+				slog.Default().WarnContext(ctx, "region not ready", slog.String("reason", err.Error()))
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
+		}
+	}()
 	<-ctx.Done()
+	<-reloadDone
 	initialized.Store(false)
 	shutCtx, shutCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer shutCancel()

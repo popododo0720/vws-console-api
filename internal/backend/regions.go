@@ -29,8 +29,8 @@ type ProxmoxRegion struct {
 // Zone is a node group of a Proxmox region. Its name is the region name
 // followed by Letter.
 type Zone struct {
-	Letter string
-	Nodes  []string
+	Letter string   `json:"letter"`
+	Nodes  []string `json:"nodes"`
 }
 
 // AWSAccount is one registered AWS account and the regions it may use.

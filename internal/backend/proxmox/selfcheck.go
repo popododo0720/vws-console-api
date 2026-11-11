@@ -8,12 +8,20 @@ import (
 
 	"github.com/popododo0720/vws-console-api/internal/backend"
 	"github.com/popododo0720/vws-console-api/internal/backend/proxmox/pveclient"
+	"github.com/popododo0720/vws-console-api/internal/resource"
 )
 
 // Registration is identity supplied by the admin registration, separate from region.yaml.
 type Registration struct {
 	Region      backend.ProxmoxRegion
 	ClusterName string
+}
+
+// Identity returns the checked identity, without credentials.
+func Identity(b *Backend) Registration {
+	return Registration{
+		Region: backend.ProxmoxRegion{Name: b.region, Zones: b.zones}, ClusterName: b.cluster,
+	}
 }
 
 // New checks configuration against PVE before exposing a backend.
@@ -53,7 +61,7 @@ func New(ctx context.Context, client *pveclient.Client, reg Registration, cfg Re
 	}
 	for _, row := range status {
 		if row.Type == "cluster" && row.Name != reg.ClusterName {
-			return nil, fmt.Errorf("proxmox: cluster_name %q differs from registration %q", row.Name, reg.ClusterName)
+			return nil, &resource.Error{Code: resource.CodeConflict, Message: "cluster_name differs from registration"}
 		}
 	}
 	if len(cfg.Storages) != 0 || cfg.SnippetsStorage != "" {

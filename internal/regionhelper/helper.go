@@ -2,6 +2,7 @@
 package regionhelper
 
 import (
+	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
@@ -31,18 +32,45 @@ type helper struct {
 }
 
 // Main implements the fixed helper CLI. Contents are read only from stdin.
-func Main(args []string, stdin io.Reader, stderr io.Writer) int {
+func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	h := helper{
 		public: publicRoot, private: privateRoot, locks: lockRoot,
-		kek: filepath.Join(os.Getenv("CREDENTIALS_DIRECTORY"), "region-kek"),
+		kek: credentialPath(os.Getenv("CREDENTIALS_DIRECTORY")),
 	}
-	if err := h.run(args, stdin); err != nil {
+	if err := h.execute(args, stdin, stdout); err != nil {
 		if _, writeErr := fmt.Fprintln(stderr, "vws-region-helper: operation refused"); writeErr != nil {
 			return 1
 		}
 		return 1
 	}
 	return 0
+}
+
+func credentialPath(dir string) string {
+	if dir == "" {
+		return "/etc/vws/credentials/region-kek"
+	}
+	return filepath.Join(dir, "region-kek")
+}
+
+func (h helper) execute(args []string, stdin io.Reader, stdout io.Writer) error {
+	if len(args) != 0 && args[0] == "token-read" {
+		if len(args) != 1 {
+			return errors.New("unexpected arguments")
+		}
+		data, err := privateRead(filepath.Join(h.private, "pve-token"), true, h.owner)
+		if err != nil {
+			return err
+		}
+		if !bytes.HasPrefix(data, []byte(header)) {
+			return errors.New("invalid token envelope")
+		}
+		if _, err := stdout.Write(data); err != nil {
+			return fmt.Errorf("write token envelope: %w", err)
+		}
+		return nil
+	}
+	return h.run(args, stdin)
 }
 
 func validLockName(s string) bool {
