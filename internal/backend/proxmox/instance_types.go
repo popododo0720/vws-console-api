@@ -71,10 +71,7 @@ func (b *Backend) instanceTypes(ctx context.Context) ([]resource.RegionInstanceT
 	if err != nil {
 		return nil, fmt.Errorf("proxmox: instance types: list node capacity: %w", err)
 	}
-	reserve := b.cfg.Scheduler.HostReserveMiB
-	if reserve == 0 {
-		reserve = 2048
-	}
+	capacity := SchedulerConfig{HostReserveMiB: b.cfg.Scheduler.HostReserveMiB, MemOvercommit: 1, CPUOvercommit: 1}
 	types := []resource.RegionInstanceType{}
 	for _, typ := range InstanceTypes() {
 		if b.cfg.InstanceTypes != nil {
@@ -83,8 +80,7 @@ func (b *Backend) instanceTypes(ctx context.Context) ([]resource.RegionInstanceT
 			}
 		}
 		for _, node := range nodes {
-			if node.Type == "node" && float64(typ.VCPUs) <= node.MaxCPU &&
-				int64(typ.MemoryMiB) <= node.MaxMem/(1<<20)-int64(reserve) {
+			if nodeFits(node, float64(typ.MemoryMiB)*(1<<20), float64(typ.VCPUs), capacity) {
 				types = append(types, resource.RegionInstanceType{
 					InstanceType: typ.Name, VCPUs: typ.VCPUs, MemoryMiB: typ.MemoryMiB,
 				})
@@ -93,4 +89,14 @@ func (b *Backend) instanceTypes(ctx context.Context) ([]resource.RegionInstanceT
 		}
 	}
 	return types, nil
+}
+
+func nodeFits(node pveclient.ClusterResource, memory, cpus float64, cfg SchedulerConfig) bool {
+	reserve := cfg.HostReserveMiB
+	if reserve == 0 {
+		reserve = 2048
+	}
+	return node.Type == "node" &&
+		memory <= (float64(node.MaxMem)-float64(reserve)*(1<<20))*cfg.MemOvercommit &&
+		cpus <= node.MaxCPU*cfg.CPUOvercommit
 }
