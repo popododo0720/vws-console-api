@@ -162,6 +162,10 @@ func TestReadOnlyBackendEveryMethod(t *testing.T) {
 				out := method.Call(args)
 				last := out[len(out)-1]
 				switch {
+				case name == "PoolExists":
+					if last.IsNil() || out[0].Bool() || resource.CodeOf(last.Interface().(error)) != resource.CodeUnavailable {
+						t.Fatalf("%s with an empty pool: %v", name, out)
+					}
 				case strings.HasPrefix(name, "Describe"), strings.HasPrefix(name, "List"):
 					if !last.IsNil() || !out[0].IsZero() {
 						t.Fatalf("%s: %v", name, out)

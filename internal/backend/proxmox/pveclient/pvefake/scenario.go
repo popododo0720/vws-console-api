@@ -26,6 +26,7 @@ type Scenario struct {
 	Cluster  string    `yaml:"cluster"`
 	Nodes    []Node    `yaml:"nodes"`
 	VMs      []VM      `yaml:"vms"`
+	Pools    []string  `yaml:"pools"`
 	Roles    []Role    `yaml:"roles"`
 	Tokens   []Token   `yaml:"tokens"`
 	Storages []Storage `yaml:"storages"`
@@ -190,6 +191,7 @@ func (s Scenario) check() error {
 // with the caller.
 func (s Scenario) clone() Scenario {
 	s.Nodes, s.VMs = slices.Clone(s.Nodes), slices.Clone(s.VMs)
+	s.Pools = slices.Clone(s.Pools)
 	s.Roles, s.Tokens = slices.Clone(s.Roles), slices.Clone(s.Tokens)
 	s.Storages = slices.Clone(s.Storages)
 	s.Networks = slices.Clone(s.Networks)

@@ -125,10 +125,10 @@ func (e *HTTPError) Error() string {
 func (e *HTTPError) Locked() bool { return strings.Contains(e.Message, "VM is locked") }
 
 // retryable is a connection error, a 5xx or a pveproxy 596, never a 4xx or a
-// locked VM: the lock outlives any backoff and the caller maps it to an EC2 error.
+// locked VM or missing pool: neither changes through backoff.
 func retryable(err error) bool {
 	if he, ok := errors.AsType[*HTTPError](err); ok {
-		return he.Status >= 500 && !he.Locked()
+		return he.Status >= 500 && !he.Locked() && !he.poolNotFound()
 	}
 	return !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded)
 }

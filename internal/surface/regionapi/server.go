@@ -38,6 +38,9 @@ type Config struct {
 	Status       interface {
 		Status(context.Context) (resource.RegionStatus, error)
 	}
+	Pools interface {
+		PoolExists(context.Context, string) (bool, error)
+	}
 }
 
 // ObjectResult keeps the object metadata and bytes together on the JSON wire.
@@ -105,6 +108,26 @@ func New(cfg Config) (http.Handler, error) {
 		status, err := cfg.Status.Status(r.Context())
 		writeJSON(w, status, err)
 	})
+	mux.HandleFunc("GET /internal/v1/pools/{pool}", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		pool := r.PathValue("pool")
+		if err := checkPool(pool); err != nil {
+			writeJSON(w, nil, err)
+			return
+		}
+		if r.URL.RawQuery != "" {
+			writeJSON(w, nil, resource.Invalid("query", "query parameters are not supported"))
+			return
+		}
+		if cfg.Pools == nil {
+			writeJSON(w, nil, &resource.Error{Code: resource.CodeUnavailable, Message: "region pools unavailable"})
+			return
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+		defer cancel()
+		exists, err := cfg.Pools.PoolExists(ctx, pool)
+		writeJSON(w, poolResult{Exists: exists}, err)
+	})
 	mux.HandleFunc("GET /internal/v1/capabilities", func(w http.ResponseWriter, r *http.Request) {
 		caps, err := cfg.Backend.Capabilities(cfg.Capabilities).RegionCapabilities(r.Context(), cfg.Region)
 		writeJSON(w, caps, err)
@@ -151,7 +174,11 @@ func writeJSON(w http.ResponseWriter, value any, err error) {
 		if e.Code == resource.CodeInternal {
 			server.RecordFailure(w, err)
 		}
-		w.WriteHeader(http.StatusBadRequest)
+		status := http.StatusBadRequest
+		if e.Code == resource.CodeUnavailable {
+			status = http.StatusServiceUnavailable
+		}
+		w.WriteHeader(status)
 		value = errorBody{Error: e}
 	}
 	server.RecordFailure(w, json.NewEncoder(w).Encode(encodeResult(value)))
