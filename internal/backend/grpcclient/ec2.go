@@ -35,6 +35,15 @@ func (c computeClient) StartInstances(ctx context.Context, m backend.Mutation, r
 	return c.changeInstances(ctx, m, req.IDs, resource.ActionStartInstances, computev1.InstancePower_INSTANCE_POWER_RUNNING)
 }
 
+// RebootInstances is refused until console-api moves to a vws-proto release
+// with compute's RebootInstance; v0.12.0 has none.
+func (computeClient) RebootInstances(
+	context.Context, backend.Mutation, resource.RebootInstancesRequest,
+) (resource.Accepted[resource.InstanceStateChange], error) {
+	return resource.Accepted[resource.InstanceStateChange]{}, resource.Unsupported(
+		"Action", "RebootInstances is not available from this compute service")
+}
+
 func (c computeClient) TerminateInstances(ctx context.Context, m backend.Mutation, req resource.TerminateInstancesRequest) (resource.Accepted[resource.InstanceStateChange], error) {
 	projectID := project(m.Account)
 	prev := make([]resource.Instance, 0, len(req.IDs))

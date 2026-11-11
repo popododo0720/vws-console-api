@@ -71,6 +71,13 @@ func (b *Backend) StopInstances(
 	return resource.Accepted[resource.InstanceStateChange]{}, resource.Unsupported("StopInstances", "read-only")
 }
 
+// RebootInstances is unavailable in the phase-one backend.
+func (b *Backend) RebootInstances(
+	ctx context.Context, m backend.Mutation, req resource.RebootInstancesRequest,
+) (resource.Accepted[resource.InstanceStateChange], error) {
+	return resource.Accepted[resource.InstanceStateChange]{}, resource.Unsupported("RebootInstances", "read-only")
+}
+
 // StartInstances is unavailable in the phase-one backend.
 func (b *Backend) StartInstances(
 	ctx context.Context, m backend.Mutation, req resource.StartInstancesRequest,

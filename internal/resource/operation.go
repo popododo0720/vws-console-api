@@ -40,6 +40,7 @@ const (
 	ActionRevokeSecurityGroupIngress
 	ActionDeleteTags
 	ActionRegisterImage
+	ActionRebootInstances
 )
 
 // String returns the wire name. An unknown action returns "".
@@ -101,6 +102,8 @@ func (a Action) String() string {
 		return "DeleteTags"
 	case ActionRegisterImage:
 		return "RegisterImage"
+	case ActionRebootInstances:
+		return "RebootInstances"
 	case actionNone:
 		return ""
 	default:

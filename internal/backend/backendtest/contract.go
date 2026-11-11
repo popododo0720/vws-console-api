@@ -24,6 +24,15 @@ func Run(t *testing.T, newSet Harness, caps resource.RegionCapabilities) {
 		t.Fatal(err)
 	}
 	t.Run("Capabilities", func(t *testing.T) { capabilityContract(t, newSet(), caps) })
+	t.Run("Reboot", func(t *testing.T) {
+		requireCapabilities(t, caps,
+			[]resource.Action{
+				resource.ActionRebootInstances, resource.ActionCreateSubnet,
+				resource.ActionRunInstances, resource.ActionStopInstances,
+			},
+			[]resource.ReadAction{resource.ReadDescribeInstances})
+		Reboot(t, newSet)
+	})
 	ctx := context.Background()
 	set := newSet()
 	account, err := resource.Parse[resource.AccountID]("123456789012")

@@ -100,6 +100,9 @@ type Compute interface {
 	StopInstances(ctx context.Context, m Mutation, req resource.StopInstancesRequest) (resource.Accepted[resource.InstanceStateChange], error)
 	StartInstances(ctx context.Context, m Mutation, req resource.StartInstancesRequest) (resource.Accepted[resource.InstanceStateChange], error)
 	TerminateInstances(ctx context.Context, m Mutation, req resource.TerminateInstancesRequest) (resource.Accepted[resource.InstanceStateChange], error)
+	RebootInstances(
+		ctx context.Context, m Mutation, req resource.RebootInstancesRequest,
+	) (resource.Accepted[resource.InstanceStateChange], error)
 	DescribeInstances(ctx context.Context, s Scope, q resource.InstanceQuery) (resource.Page[resource.Instance], error)
 	CreateTags(ctx context.Context, m Mutation, req resource.CreateTagsRequest) (resource.Accepted[resource.Instance], error)
 	DeleteTags(
@@ -171,9 +174,18 @@ type Network interface {
 	DisassociateAddress(ctx context.Context, m Mutation, req resource.DisassociateAddressRequest) (resource.Accepted[resource.Address], error)
 }
 
-// Set is the three services one process talks to.
+// Console opens console sessions to instances.
+type Console interface {
+	OpenConsole(
+		ctx context.Context, s Scope, id resource.InstanceID, kind resource.ConsoleKind,
+	) (resource.ConsoleSession, error)
+}
+
+// Set is the services one process talks to. A nil Console means the set
+// offers no instance consoles.
 type Set struct {
 	Compute Compute
 	Storage Storage
 	Network Network
+	Console Console
 }

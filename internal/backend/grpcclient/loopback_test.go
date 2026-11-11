@@ -51,6 +51,9 @@ func TestContractOverGRPC(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	caps.Actions[resource.ActionRebootInstances.CapabilityKey()] = resource.ActionCapability{
+		State: resource.ActionUnsupported, Reason: "compute has no RebootInstance RPC", ReasonCode: "NoRebootRPC",
+	}
 	backendtest.Run(t, harness, caps)
 	// The #213 DetachVolume client-token table, in its own account.
 	t.Run("DetachReplay", func(t *testing.T) { backendtest.DetachReplay(t, harness) })

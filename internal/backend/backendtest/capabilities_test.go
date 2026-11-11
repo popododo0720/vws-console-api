@@ -19,6 +19,12 @@ type capsStub struct {
 	mutationErr error
 }
 
+func (s capsStub) RebootInstances(context.Context, b.Mutation,
+	r.RebootInstancesRequest,
+) (r.Accepted[r.InstanceStateChange], error) {
+	return r.Accepted[r.InstanceStateChange]{}, s.mutationErr
+}
+
 func (s capsStub) RunInstances(context.Context, b.Mutation, r.RunInstancesRequest) (r.Accepted[r.Instance], error) {
 	return r.Accepted[r.Instance]{}, s.mutationErr
 }
@@ -301,8 +307,8 @@ func TestCapabilityContract(t *testing.T) {
 			capsStub{err: r.Invalid("read", "bad"), mutationErr: good.mutationErr},
 			len(r.ReadActions()),
 		},
-		{"mutation succeeds", capsStub{}, 33},
-		{"wrong invalid argument", capsStub{mutationErr: r.Invalid("action", "bad")}, 33},
+		{"mutation succeeds", capsStub{}, 34},
+		{"wrong invalid argument", capsStub{mutationErr: r.Invalid("action", "bad")}, 34},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			recorder := &capabilityRecorder{}

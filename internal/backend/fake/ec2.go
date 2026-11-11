@@ -17,6 +17,12 @@ func (c compute) StartInstances(ctx context.Context, m backend.Mutation, req res
 	return c.changeInstances(ctx, m, resource.ActionStartInstances, req.IDs)
 }
 
+func (c compute) RebootInstances(
+	ctx context.Context, m backend.Mutation, req resource.RebootInstancesRequest,
+) (resource.Accepted[resource.InstanceStateChange], error) {
+	return c.changeInstances(ctx, m, resource.ActionRebootInstances, req.IDs)
+}
+
 func (c compute) TerminateInstances(ctx context.Context, m backend.Mutation, req resource.TerminateInstancesRequest) (resource.Accepted[resource.InstanceStateChange], error) {
 	return c.changeInstances(ctx, m, resource.ActionTerminateInstances, req.IDs)
 }

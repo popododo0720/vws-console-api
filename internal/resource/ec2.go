@@ -1016,6 +1016,22 @@ func (r StartInstancesRequest) Normalize() (StartInstancesRequest, error) {
 	return r, nil
 }
 
+// RebootInstancesRequest reboots running instances. Each stays running.
+type RebootInstancesRequest struct {
+	IDs []InstanceID `json:"instanceIds"`
+}
+
+// Action returns RebootInstances.
+func (RebootInstancesRequest) Action() Action { return ActionRebootInstances }
+
+// Normalize checks that at least one id is present.
+func (r RebootInstancesRequest) Normalize() (RebootInstancesRequest, error) {
+	if err := instanceIDs(r.IDs); err != nil {
+		return RebootInstancesRequest{}, err
+	}
+	return r, nil
+}
+
 // TerminateInstancesRequest terminates instances.
 type TerminateInstancesRequest struct {
 	IDs []InstanceID `json:"instanceIds"`

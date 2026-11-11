@@ -95,7 +95,7 @@ func New(cfg Config) (http.Handler, error) {
 		writeJSON(w, cfg.Version, nil)
 	})
 	mux.HandleFunc("GET /internal/v1/capabilities", func(w http.ResponseWriter, r *http.Request) {
-		caps, err := cfg.Capabilities.RegionCapabilities(r.Context(), cfg.Region)
+		caps, err := cfg.Backend.Capabilities(cfg.Capabilities).RegionCapabilities(r.Context(), cfg.Region)
 		writeJSON(w, caps, err)
 	})
 	return httpobs.Middleware("regionapi", nil)(mux), nil
