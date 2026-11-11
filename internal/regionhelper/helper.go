@@ -45,6 +45,16 @@ func Main(args []string, stdin io.Reader, stderr io.Writer) int {
 	return 0
 }
 
+func validLockName(s string) bool {
+	return regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$`).MatchString(s)
+}
+
+func validSnippetName(s string) bool {
+	return regexp.MustCompile(
+		`^vws-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-user\.yaml$`,
+	).MatchString(s)
+}
+
 func (h helper) run(args []string, stdin io.Reader) (err error) {
 	if len(args) == 0 {
 		return errors.New("missing operation")
@@ -58,14 +68,12 @@ func (h helper) run(args []string, stdin io.Reader) (err error) {
 	case "lease-write":
 		root, name, write = h.public, "lease.json", true
 	case "lock", "unlock":
-		if len(args) != 2 || !regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$`).MatchString(args[1]) {
+		if len(args) != 2 || !validLockName(args[1]) {
 			return errors.New("invalid lock name")
 		}
 		root, name = h.locks, args[1]
 	case "snippet-write", "snippet-delete":
-		if len(args) != 2 || !regexp.MustCompile(
-			`^vws-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-user\.yaml$`,
-		).MatchString(args[1]) {
+		if len(args) != 2 || !validSnippetName(args[1]) {
 			return errors.New("invalid snippet name")
 		}
 		root = h.snippets

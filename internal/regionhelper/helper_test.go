@@ -237,6 +237,7 @@ func TestClientUsesFixedArgvAndStdin(t *testing.T) {
 	t.Setenv("VWS_HELPER_TEST_CAPTURE", path)
 	ctx := context.Background()
 	const secret = "synthetic-secret"
+	const snippet = "vws-123e4567-e89b-12d3-a456-426614174000-user.yaml"
 	for _, tc := range []struct {
 		argv string
 		call func() error
@@ -246,8 +247,10 @@ func TestClientUsesFixedArgvAndStdin(t *testing.T) {
 		{"lease-write", func() error { return c.WriteLease(ctx, []byte(secret)) }},
 		{"lock|leader", func() error { return c.Lock(ctx, "leader") }},
 		{"unlock|leader", func() error { return c.Unlock(ctx, "leader") }},
-		{"snippet-write|name", func() error { return c.WriteSnippet(ctx, "name", []byte(secret)) }},
-		{"snippet-delete|name", func() error { return c.DeleteSnippet(ctx, "name") }},
+		{"snippet-write|" + snippet, func() error {
+			return c.WriteSnippet(ctx, snippet, []byte(secret))
+		}},
+		{"snippet-delete|" + snippet, func() error { return c.DeleteSnippet(ctx, snippet) }},
 	} {
 		if err := tc.call(); err != nil {
 			t.Fatal(err)
@@ -260,6 +263,39 @@ func TestClientUsesFixedArgvAndStdin(t *testing.T) {
 		if record[0] != tc.argv || (strings.Contains(tc.argv, "write") && record[1] != secret) {
 			t.Fatalf("unexpected subprocess input: %q", record)
 		}
+	}
+}
+
+func TestClientRejectsInvalidNamesBeforeExec(t *testing.T) {
+	binary, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := Client{Path: binary}
+	path := t.TempDir() + "/capture"
+	t.Setenv("VWS_HELPER_TEST_CAPTURE", path)
+	ctx := context.Background()
+	for name, call := range map[string]func() error{
+		"empty lock":     func() error { return c.Lock(ctx, "") },
+		"dash lock":      func() error { return c.Lock(ctx, "-x") },
+		"traversal":      func() error { return c.Unlock(ctx, "../a") },
+		"bad snippet":    func() error { return c.WriteSnippet(ctx, "x.yaml", []byte("data")) },
+		"empty snippet":  func() error { return c.DeleteSnippet(ctx, "") },
+		"empty unlock":   func() error { return c.Unlock(ctx, "") },
+		"traversal lock": func() error { return c.Lock(ctx, "a/b") },
+	} {
+		if err := call(); err == nil {
+			t.Fatalf("%s: expected error", name)
+		}
+		if _, err := os.Stat(path); err == nil {
+			t.Fatalf("%s: helper was executed", name)
+		}
+	}
+	if err := c.Lock(ctx, "leader"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatal("valid name did not execute helper")
 	}
 }
 
