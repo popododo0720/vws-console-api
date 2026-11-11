@@ -197,6 +197,10 @@ func TestRegionDaemonReadsRestartAndReadiness(t *testing.T) {
 	awaitStatus(t, ops+"/readyz", http.StatusOK)
 	awaitStatus(t, ops+"/healthz", http.StatusOK)
 	awaitStatus(t, ops+"/metrics", http.StatusOK)
+	health, err := first.Status(t.Context())
+	if err != nil || !health.Quorate || len(health.Nodes) != 1 || !health.Nodes[0].Online {
+		t.Fatalf("daemon health=%+v err=%v", health, err)
+	}
 	account, err := resource.Parse[resource.AccountID]("123456789012")
 	if err != nil {
 		t.Fatal(err)

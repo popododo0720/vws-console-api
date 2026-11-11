@@ -51,6 +51,13 @@ func NewClient(base string, config *tls.Config) (*Client, error) {
 // Close releases pooled idle connections.
 func (c *Client) Close() { c.http.CloseIdleConnections() }
 
+// Status returns the region's live quorum and node availability.
+func (c *Client) Status(ctx context.Context) (resource.RegionStatus, error) {
+	var result resource.RegionStatus
+	err := c.do(ctx, http.MethodGet, "/internal/v1/status", nil, &result)
+	return result, err
+}
+
 // Call executes one read and decodes its resource result into dst.
 func (c *Client) Call(ctx context.Context, iface, method string, scope backend.Scope, req, dst any) error {
 	data, err := json.Marshal(struct {

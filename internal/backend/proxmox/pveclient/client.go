@@ -69,6 +69,15 @@ type Client struct {
 	poll    time.Duration
 }
 
+// Redact removes this client's credentials from a diagnostic before publication.
+func (c *Client) Redact(message string) string {
+	auth := string(c.auth)
+	message = strings.ReplaceAll(message, auth, "[redacted]")
+	id, secret, _ := strings.Cut(strings.TrimPrefix(auth, "PVEAPIToken="), "=")
+	message = strings.ReplaceAll(message, secret, "[redacted]")
+	return strings.ReplaceAll(message, id, "[redacted]")
+}
+
 // New checks cfg and returns its client.
 func New(cfg Config) (*Client, error) {
 	base, err := url.Parse(cfg.BaseURL)

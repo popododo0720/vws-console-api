@@ -140,7 +140,7 @@ func TestReadOnlyBackendEveryMethod(t *testing.T) {
 			value := reflect.ValueOf(service)
 			for i := 0; i < value.NumMethod(); i++ {
 				name := value.Type().Method(i).Name
-				if name == "Set" || name == "RegionCapabilities" {
+				if name == "Set" || name == "RegionCapabilities" || name == "Status" {
 					continue
 				}
 				method := value.Method(i)
