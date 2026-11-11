@@ -14,6 +14,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"slices"
 	"time"
 
 	"github.com/popododo0720/vws-console-api/internal/resource"
@@ -198,17 +199,18 @@ type Set struct {
 }
 
 // WithoutRules returns have without every rule in drop, and false when any
-// rule in drop is not in have, so a revoke removes all of them or none. Rules
-// match as resource.IngressRule.Matches does, whatever their descriptions.
+// rule in drop is not in have, so a revoke removes all of them or none. A
+// rule in drop selects as resource.IngressRule.MatchesRevoke does: a
+// description it omits matches any, one it names must match.
 func WithoutRules(have, drop []resource.IngressRule) ([]resource.IngressRule, bool) {
-	for _, rule := range drop {
-		if !resource.ContainsRule(have, rule) {
+	for _, sel := range drop {
+		if !slices.ContainsFunc(have, func(r resource.IngressRule) bool { return r.MatchesRevoke(sel) }) {
 			return nil, false
 		}
 	}
 	kept := make([]resource.IngressRule, 0, len(have))
 	for _, rule := range have {
-		if !resource.ContainsRule(drop, rule) {
+		if !slices.ContainsFunc(drop, rule.MatchesRevoke) {
 			kept = append(kept, rule)
 		}
 	}

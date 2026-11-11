@@ -864,7 +864,7 @@ func exerciseEC2(
 }
 
 // ingressDescriptionContract checks #594: a rule description is stored and
-// described, and EC2 ignores it when it matches a duplicate or a revoke.
+// described; duplicate detection ignores it, but an explicit revoke must match.
 func ingressDescriptionContract(
 	ctx context.Context, t *testing.T, set backend.Set, scope backend.Scope, vpc resource.VpcID,
 ) {
@@ -899,11 +899,36 @@ func ingressDescriptionContract(
 	if !resource.IsDuplicatePermission(err) {
 		t.Fatalf("same rule, new description: %v", err)
 	}
+	_, err = set.Network.RevokeSecurityGroupIngress(ctx, backend.Mutation{
+		Scope: scope, Key: "k-revoke-desc-wrong", Fingerprint: "fp-revoke-desc-wrong",
+	}, resource.RevokeSecurityGroupIngressRequest{ID: id, Rules: []resource.IngressRule{renamed}})
+	if !resource.IsPermissionNotFound(err) {
+		t.Fatalf("wrong description must be InvalidPermission.NotFound: %v", err)
+	}
+	groups, err = set.Network.DescribeSecurityGroups(ctx, scope, resource.SecurityGroupQuery{
+		Names: []string{"described"}, Page: resource.PageRequest{Size: 50},
+	})
+	if err != nil || len(groups.Items) != 1 || !slices.Equal(groups.Items[0].Rules, []resource.IngressRule{ssh, plain}) {
+		t.Fatalf("wrong description changed rules: %v %+v", err, groups.Items)
+	}
 	revoked, err := set.Network.RevokeSecurityGroupIngress(ctx, backend.Mutation{
 		Scope: scope, Key: "k-revoke-desc", Fingerprint: "fp-revoke-desc",
-	}, resource.RevokeSecurityGroupIngressRequest{ID: id, Rules: []resource.IngressRule{renamed}})
+	}, resource.RevokeSecurityGroupIngressRequest{ID: id, Rules: []resource.IngressRule{ssh}})
 	if err != nil || !slices.Equal(revoked.Items[0].Rules, []resource.IngressRule{plain}) {
-		t.Fatalf("revoke ignoring the description: %v %+v", err, revoked.Items)
+		t.Fatalf("revoke exact description: %v %+v", err, revoked.Items)
+	}
+	if _, err := set.Network.AuthorizeSecurityGroupIngress(ctx, backend.Mutation{
+		Scope: scope, Key: "k-auth-desc-again", Fingerprint: "fp-auth-desc-again",
+	}, resource.AuthorizeSecurityGroupIngressRequest{ID: id, Rules: []resource.IngressRule{ssh}}); err != nil {
+		t.Fatalf("reauthorize described rule: %v", err)
+	}
+	omitted := ssh
+	omitted.Description = ""
+	revoked, err = set.Network.RevokeSecurityGroupIngress(ctx, backend.Mutation{
+		Scope: scope, Key: "k-revoke-desc-omitted", Fingerprint: "fp-revoke-desc-omitted",
+	}, resource.RevokeSecurityGroupIngressRequest{ID: id, Rules: []resource.IngressRule{omitted}})
+	if err != nil || !slices.Equal(revoked.Items[0].Rules, []resource.IngressRule{plain}) {
+		t.Fatalf("revoke omitted description: %v %+v", err, revoked.Items)
 	}
 	if _, err := set.Network.DeleteSecurityGroup(ctx, backend.Mutation{
 		Scope: scope, Key: "k-del-sg-desc", Fingerprint: "fp-del-sg-desc",

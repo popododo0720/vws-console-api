@@ -566,11 +566,17 @@ type IngressRule struct {
 	Description string `json:"description,omitempty"`
 }
 
-// Matches reports whether r and o are the same rule. EC2 ignores the
-// description when it looks for a duplicate or a rule to revoke.
+// Matches reports whether r and o are the same rule for duplicate detection.
+// EC2 ignores the description when it looks for a duplicate.
 func (r IngressRule) Matches(o IngressRule) bool {
 	r.Description, o.Description = "", ""
 	return r == o
+}
+
+// MatchesRevoke reports whether r satisfies the revoke selector. A missing
+// description is optional, but an explicitly supplied description must match.
+func (r IngressRule) MatchesRevoke(selector IngressRule) bool {
+	return r.Matches(selector) && (selector.Description == "" || r.Description == selector.Description)
 }
 
 // ContainsRule reports whether rules holds a rule matching rule.
