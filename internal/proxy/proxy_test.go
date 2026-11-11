@@ -25,6 +25,7 @@ type fixture struct {
 	status                int
 	registry              *store.Registry
 	dir                   string
+	stsHost               string
 }
 
 func setup(t *testing.T) *fixture {
@@ -85,9 +86,11 @@ func setup(t *testing.T) *fixture {
 		w.WriteHeader(f.status)
 		fmt.Fprint(w, "<DescribeInstancesResponse/>")
 	}))
+	f.stsHost = strings.TrimPrefix(sts.URL, "http://")
 	t.Cleanup(sts.Close)
 	t.Cleanup(origin.Close)
-	f.p, err = New(RegistryAccounts{Registry: f.registry, CredentialDirectory: f.dir}, source, sts.URL, origin.URL)
+	accounts := RegistryAccounts{Registry: f.registry, CredentialDirectory: f.dir}
+	f.p, err = New(accounts, source, sts.URL, "us-east-1", origin.URL)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,10 +103,14 @@ func setup(t *testing.T) *fixture {
 }
 
 func (f *fixture) request(raw string) *httptest.ResponseRecorder {
+	return f.requestAs(raw, "principal", "us-east-1")
+}
+
+func (f *fixture) requestAs(raw, principal, region string) *httptest.ResponseRecorder {
 	r := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/", strings.NewReader(raw))
 	for k, v := range map[string]string{
-		"X-Vws-Account": "123456789012", "X-Vws-Principal": "principal",
-		"X-Vws-Target-Region": "us-east-1", "X-Vws-Target-Service": "ec2", "X-Amz-Security-Token": "old-token",
+		"X-Vws-Account": "123456789012", "X-Vws-Principal": principal,
+		"X-Vws-Target-Region": region, "X-Vws-Target-Service": "ec2", "X-Amz-Security-Token": "old-token",
 	} {
 		r.Header.Set(k, v)
 	}
@@ -134,6 +141,96 @@ func TestResignCacheAndExpiry(t *testing.T) {
 	f.request("Action=DescribeInstances")
 	if f.stsCalls != 3 {
 		t.Fatal("restart did not acquire new credentials")
+	}
+}
+
+// TestAssumeRoleSignsForTheSTSRegion checks that STS is signed for its own
+// endpoint's region, not the EC2 region of the request.
+func TestAssumeRoleSignsForTheSTSRegion(t *testing.T) {
+	f := setup(t)
+	for _, region := range []string{"", "US-EAST-1", "us-east-1/x", "global"} {
+		if _, err := New(f.p.accounts, f.p.source, f.p.sts, region, f.p.origin); err == nil {
+			t.Errorf("STS region %q was accepted", region)
+		}
+	}
+	v, err := f.registry.AWSAccounts().Get(context.Background(), "123456789012")
+	if err != nil {
+		t.Fatal(err)
+	}
+	v.AllowedRegions = append(v.AllowedRegions, "ap-northeast-2")
+	if _, err := f.registry.AWSAccounts().Update(context.Background(), v); err != nil {
+		t.Fatal(err)
+	}
+	base := f.p.transport
+	var stsScope string
+	f.p.transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Host == f.stsHost {
+			stsScope = r.Header.Get("Authorization")
+			return base.RoundTrip(r)
+		}
+		return &http.Response{StatusCode: http.StatusOK, Body: http.NoBody, Header: http.Header{}, Request: r}, nil
+	})
+	if w := f.requestAs("Action=DescribeInstances", "principal", "ap-northeast-2"); w.Code != 200 {
+		t.Fatalf("got %d", w.Code)
+	}
+	if !strings.Contains(stsScope, "/us-east-1/sts/aws4_request") {
+		t.Fatalf("AssumeRole was signed for %q", stsScope)
+	}
+}
+
+// TestSlowAssumeRoleDelaysNoCachedRequest checks that the cache lock is not
+// held across the STS call.
+func TestSlowAssumeRoleDelaysNoCachedRequest(t *testing.T) {
+	f := setup(t)
+	if w := f.request("Action=DescribeInstances"); w.Code != 200 {
+		t.Fatalf("got %d", w.Code)
+	}
+	base := f.p.transport
+	started, release := make(chan struct{}), make(chan struct{})
+	f.p.transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Host == f.stsHost {
+			close(started)
+			<-release
+			return &http.Response{StatusCode: http.StatusBadRequest, Body: http.NoBody, Header: http.Header{}, Request: r}, nil
+		}
+		return base.RoundTrip(r)
+	})
+	slow := make(chan int)
+	go func() { slow <- f.requestAs("Action=DescribeInstances", "slow", "us-east-1").Code }()
+	<-started
+	cached := make(chan int)
+	go func() { cached <- f.request("Action=DescribeInstances").Code }()
+	select {
+	case code := <-cached:
+		if code != 200 {
+			t.Errorf("cached request got %d", code)
+		}
+	case <-time.After(5 * time.Second):
+		t.Error("a cached request waited for another principal's AssumeRole")
+	}
+	close(release)
+	<-slow
+}
+
+func TestAccountIDIsBoundedBeforeTheFilesystem(t *testing.T) {
+	f := setup(t)
+	accounts := RegistryAccounts{Registry: f.registry, CredentialDirectory: f.dir}
+	const long = "1234567890123"
+	if _, err := f.registry.AWSAccounts().Create(context.Background(), store.AWSAccount{
+		ID: long, RoleARN: "arn:aws:iam::" + long + ":role/inventory", AllowedRegions: []string{"us-east-1"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(f.dir, "aws-external-id-"+long), []byte("external-canary"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"", "12345678901", "1234567890123", "12345678901a", "../123456789", "12345678901\x00"} {
+		if _, err := accounts.Account(context.Background(), id); err == nil {
+			t.Errorf("account %q was accepted", id)
+		}
+	}
+	if _, err := accounts.Account(context.Background(), "123456789012"); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -221,7 +318,7 @@ func TestEndpointBoundary(t *testing.T) {
 	for _, endpoint := range []string{
 		"http://192.0.2.1", "https://user:secret@localhost", "https://localhost/?Action=RunInstances",
 	} {
-		if _, err := New(f.p.accounts, f.p.source, endpoint, f.p.origin); err == nil {
+		if _, err := New(f.p.accounts, f.p.source, endpoint, "us-east-1", f.p.origin); err == nil {
 			t.Fatal("unsafe endpoint accepted")
 		}
 	}

@@ -39,6 +39,7 @@ type Proxy struct {
 	accounts    Accounts
 	source      sigv4.Credential
 	sts, origin string
+	stsRegion   string
 	transport   http.RoundTripper
 	mu          sync.Mutex
 	cache       map[[32]byte]sigv4.Credential
@@ -46,9 +47,14 @@ type Proxy struct {
 }
 
 // New requires explicit endpoints; plaintext is allowed only for loopback fakes.
-func New(accounts Accounts, source sigv4.Credential, sts, origin string) (*Proxy, error) {
+// AssumeRole is signed for stsRegion, the region of the STS endpoint, never
+// the EC2 region of a request.
+func New(accounts Accounts, source sigv4.Credential, sts, stsRegion, origin string) (*Proxy, error) {
 	if accounts == nil || !validCredential(source) {
 		return nil, errors.New("proxy: invalid source credentials or accounts")
+	}
+	if !regexp.MustCompile(`^[a-z]{2}(-[a-z]+)+-[0-9]+$`).MatchString(stsRegion) {
+		return nil, errors.New("proxy: invalid STS region")
 	}
 	for _, raw := range []string{sts, strings.ReplaceAll(origin, "{region}", "us-east-1")} {
 		u, err := url.Parse(raw)
@@ -59,7 +65,7 @@ func New(accounts Accounts, source sigv4.Credential, sts, origin string) (*Proxy
 		}
 	}
 	return &Proxy{
-		accounts: accounts, source: source, sts: sts, origin: origin,
+		accounts: accounts, source: source, sts: sts, origin: origin, stsRegion: stsRegion,
 		transport: &http.Transport{
 			DialContext:         (&net.Dialer{Timeout: 3 * time.Second}).DialContext,
 			TLSHandshakeTimeout: 3 * time.Second, ResponseHeaderTimeout: 5 * time.Second,
@@ -115,7 +121,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		refuse(w, http.StatusForbidden, "UnauthorizedOperation")
 		return
 	}
-	cred, err := p.credentials(ctx, account, principal, region, a)
+	cred, err := p.credentials(ctx, account, principal, a)
 	if err != nil {
 		refuse(w, http.StatusBadGateway, "InternalError")
 		return
@@ -194,19 +200,20 @@ func (p *Proxy) send(
 	return nil, errors.New("proxy: upstream unavailable")
 }
 
-func (p *Proxy) credentials(
-	ctx context.Context, account, principal, region string, a Account,
-) (sigv4.Credential, error) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
+// credentials holds the cache lock only to read and store, never across the
+// STS call, so a slow AssumeRole delays no other request.
+func (p *Proxy) credentials(ctx context.Context, account, principal string, a Account) (sigv4.Credential, error) {
 	// Include the principal and binding so rotation cannot reuse another session's identity.
 	key := sha256.Sum256([]byte(account + "\x00" + a.RoleARN + "\x00" + a.ExternalID + "\x00" + principal))
+	p.mu.Lock()
 	for k, c := range p.cache {
 		if !p.now().Add(5 * time.Minute).Before(c.Expires) {
 			delete(p.cache, k)
 		}
 	}
-	if c, ok := p.cache[key]; ok {
+	c, ok := p.cache[key]
+	p.mu.Unlock()
+	if ok {
 		return c, nil
 	}
 	hash := sha256.Sum256([]byte(principal))
@@ -220,7 +227,7 @@ func (p *Proxy) credentials(
 		return sigv4.Credential{}, errors.New("proxy: STS request")
 	}
 	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	resp, err := p.send(r, p.source, sigv4.ServiceSTS, region)
+	resp, err := p.send(r, p.source, sigv4.ServiceSTS, p.stsRegion)
 	if err != nil {
 		return sigv4.Credential{}, err
 	}
@@ -238,16 +245,18 @@ func (p *Proxy) credentials(
 		xml.Unmarshal(data, &result) != nil {
 		return sigv4.Credential{}, fmt.Errorf("proxy: %w", report.Error(ctx, errors.New("STS response rejected")))
 	}
-	c := sigv4.Credential{
+	c = sigv4.Credential{
 		AccessKey: result.Credentials.AccessKeyID, Secret: result.Credentials.Secret,
 		SessionToken: result.Credentials.Token, Expires: result.Credentials.Expires,
 	}
 	if !validCredential(c) || c.SessionToken == "" || !p.now().Add(5*time.Minute).Before(c.Expires) {
 		return sigv4.Credential{}, errors.New("proxy: STS credentials rejected")
 	}
+	p.mu.Lock()
 	if len(p.cache) >= 1024 {
 		clear(p.cache)
 	}
 	p.cache[key] = c
+	p.mu.Unlock()
 	return c, nil
 }

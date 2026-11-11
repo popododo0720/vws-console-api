@@ -32,6 +32,8 @@ func run(ctx context.Context) (err error) {
 	socket := flag.String("socket", "/run/vws/aws-proxy.sock", "unix socket in a private directory")
 	accounts := flag.String("accounts", "", "JSON export of admin AWS account records")
 	sts := flag.String("sts-endpoint", "", "STS endpoint URL")
+	stsRegion := flag.String("sts-region", "us-east-1",
+		"signing region of the STS endpoint (us-east-1 for the global endpoint)")
 	origin := flag.String("ec2-endpoint", "", "EC2 URL, optionally containing {region}")
 	flag.Parse()
 	source, err := proxy.SourceCredential()
@@ -55,7 +57,7 @@ func run(ctx context.Context) (err error) {
 	p, err := proxy.New(proxy.RegistryAccounts{
 		Registry:            registry,
 		CredentialDirectory: os.Getenv("CREDENTIALS_DIRECTORY"),
-	}, source, *sts, *origin)
+	}, source, *sts, *stsRegion, *origin)
 	if err != nil {
 		return err
 	}

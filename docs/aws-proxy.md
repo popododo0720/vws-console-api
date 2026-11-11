@@ -8,7 +8,10 @@ The service is `ec2`; only unambiguous `Describe*` Query actions pass.
 Bodies are limited to 1 MiB. Requests have a 30-second deadline. Transient
 upstream failures get at most three attempts with 100/200 ms backoff.
 
-Flags: `-socket`, `-accounts`, `-sts-endpoint`, `-ec2-endpoint`.
+Flags: `-socket`, `-accounts`, `-sts-endpoint`, `-sts-region`, `-ec2-endpoint`.
+AssumeRole is signed for `-sts-region` (default `us-east-1`, the global STS
+endpoint's region), never for the EC2 region of the request; a regional STS
+endpoint needs its own region here.
 Endpoints must use HTTPS, except numeric loopback addresses for offline tests.
 The EC2 endpoint can contain `{region}`. Redirects are returned, never followed.
 

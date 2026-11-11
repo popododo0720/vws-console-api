@@ -21,11 +21,14 @@ type RegistryAccounts struct {
 
 // Account reads current metadata and its per-account external ID.
 func (a RegistryAccounts) Account(ctx context.Context, id string) (Account, error) {
+	if !accountID(id) {
+		return Account{}, errors.New("proxy: account unavailable")
+	}
 	v, err := a.Registry.AWSAccounts().Get(ctx, id)
 	if err != nil {
 		return Account{}, errors.New("proxy: account unavailable")
 	}
-	if filepath.Base(id) != id || a.CredentialDirectory == "" {
+	if a.CredentialDirectory == "" {
 		return Account{}, errors.New("proxy: external ID unavailable")
 	}
 	b, err := os.ReadFile(filepath.Join(a.CredentialDirectory, "aws-external-id-"+id))
@@ -33,6 +36,20 @@ func (a RegistryAccounts) Account(ctx context.Context, id string) (Account, erro
 		return Account{}, errors.New("proxy: external ID unavailable")
 	}
 	return Account{RoleARN: v.RoleARN, Regions: v.AllowedRegions, ExternalID: strings.TrimSpace(string(b))}, nil
+}
+
+// accountID reports a 12-digit AWS account ID. It becomes part of a
+// credential file name, so nothing else may reach the filesystem.
+func accountID(id string) bool {
+	if len(id) != 12 {
+		return false
+	}
+	for i := range len(id) {
+		if id[i] < '0' || id[i] > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // SourceCredential reads only systemd's credential directory, never AWS environment or shared files.
