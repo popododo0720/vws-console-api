@@ -166,6 +166,7 @@ func mutationProbes(ctx context.Context, set backend.Set, m backend.Mutation) ma
 				resource.TagSubnetsRequest{IDs: []resource.SubnetID{subnet}, Tags: tags}),
 		},
 		resource.ActionDeleteTags: {
+			mutationProbe(ctx, m, set.Compute.UntagVolumes, resource.UntagVolumesRequest{IDs: []resource.VolumeID{volume}}),
 			mutationProbe(ctx, m, set.Compute.DeleteTags, resource.DeleteTagsRequest{IDs: []resource.InstanceID{instance}}),
 			mutationProbe(ctx, m, set.Network.UntagVpcs, resource.UntagVpcsRequest{IDs: []resource.VpcID{vpc}}),
 			mutationProbe(ctx, m, set.Network.UntagSubnets, resource.UntagSubnetsRequest{IDs: []resource.SubnetID{subnet}}),

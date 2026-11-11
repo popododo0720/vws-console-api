@@ -112,6 +112,13 @@ func (c compute) TagVolumes(
 	return resource.Accepted[resource.Volume]{}, resource.Unsupported("TagVolumes", "region API does not serve mutations")
 }
 
+func (c compute) UntagVolumes(
+	ctx context.Context, _ backend.Mutation, _ resource.UntagVolumesRequest,
+) (resource.Accepted[resource.Volume], error) {
+	return resource.Accepted[resource.Volume]{},
+		resource.Unsupported("UntagVolumes", "region API does not serve mutations")
+}
+
 func (c compute) AttachVolume(
 	ctx context.Context, _ backend.Mutation, _ resource.AttachVolumeRequest,
 ) (resource.Accepted[resource.Volume], error) {

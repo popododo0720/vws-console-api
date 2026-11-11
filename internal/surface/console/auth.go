@@ -108,6 +108,7 @@ func routeAction(pattern string) (authorization, bool) {
 		"POST /api/v1/vpcs/{id}/tags/delete":             ec2("DeleteTags"),
 		"POST /api/v1/subnets/{id}/tags/delete":          ec2("DeleteTags"),
 		"POST /api/v1/volumes/{id}/tags":                 ec2("CreateTags"),
+		"POST /api/v1/volumes/{id}/tags/delete":          ec2("DeleteTags"),
 		"GET /api/v1/volumes":                            ec2("DescribeVolumes"),
 		"GET /api/v1/volumes/{id}":                       ec2("DescribeVolumes"),
 		"GET /api/v1/images":                             ec2("DescribeImages"),

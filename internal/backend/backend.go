@@ -111,6 +111,9 @@ type Compute interface {
 	CreateVolume(ctx context.Context, m Mutation, req resource.CreateVolumeRequest) (resource.Accepted[resource.Volume], error)
 	// TagVolumes merges tags into volumes; every volume must exist first.
 	TagVolumes(ctx context.Context, m Mutation, req resource.TagVolumesRequest) (resource.Accepted[resource.Volume], error)
+	UntagVolumes(
+		ctx context.Context, m Mutation, req resource.UntagVolumesRequest,
+	) (resource.Accepted[resource.Volume], error)
 	AttachVolume(ctx context.Context, m Mutation, req resource.AttachVolumeRequest) (resource.Accepted[resource.Volume], error)
 	DetachVolume(
 		ctx context.Context, m Mutation, req resource.DetachVolumeRequest,

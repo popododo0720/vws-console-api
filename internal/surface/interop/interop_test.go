@@ -698,6 +698,27 @@ func TestConsoleAndQueryTagTheSameVolume(t *testing.T) {
 		!strings.Contains(body, "<key>Cost Center</key><value>42</value>") {
 		t.Fatalf("DescribeVolumes after a console create: %d %s", described.Code, body)
 	}
+	deleted := call(t, ui, http.MethodPost, "/api/v1/volumes/"+vol+"/tags/delete",
+		`{"tags":[{"key":"Cost Center","value":"42"}]}`, write("vol-untag-1"))
+	if deleted.Code != http.StatusAccepted {
+		t.Fatalf("console delete %d %s", deleted.Code, deleted.Body)
+	}
+	described = signed(describe)
+	if body := described.Body.String(); described.Code != http.StatusOK ||
+		strings.Contains(body, "<key>Cost Center</key>") || !strings.Contains(body, "<key>Name</key>") {
+		t.Fatalf("DescribeVolumes after a console delete: %d %s", described.Code, body)
+	}
+	deleted = signed(url.Values{
+		"Action": {"DeleteTags"}, "Version": {ec2query.Version}, "ResourceId.1": {vol},
+	})
+	if deleted.Code != http.StatusOK {
+		t.Fatalf("query delete %d %s", deleted.Code, deleted.Body)
+	}
+	got = call(t, ui, http.MethodGet, "/api/v1/volumes/"+vol, "", auth)
+	view.Tags = nil
+	if got.Code != http.StatusOK || json.Unmarshal(got.Body.Bytes(), &view) != nil || len(view.Tags) != 0 {
+		t.Fatalf("console volume after an EC2 DeleteTags: %d %s", got.Code, got.Body)
+	}
 }
 
 func TestConsoleAndQueryCreateTaggedSnapshots(t *testing.T) {

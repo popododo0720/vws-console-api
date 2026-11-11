@@ -196,6 +196,17 @@ func (s *Service) TagVolumes(
 	return mutate(ctx, s, c, token, req, s.backends.Compute.TagVolumes)
 }
 
+// UntagVolumes accepts a tag delete for volumes and returns the operation.
+func (s *Service) UntagVolumes(
+	ctx context.Context, c resource.Caller, token resource.ClientToken, req resource.UntagVolumesRequest,
+) (resource.Accepted[resource.Volume], error) {
+	token, err := fillToken(token)
+	if err != nil {
+		return resource.Accepted[resource.Volume]{}, err
+	}
+	return mutate(ctx, s, c, token, req, s.backends.Compute.UntagVolumes)
+}
+
 // DescribeVolumes lists volumes the caller owns.
 func (s *Service) DescribeVolumes(ctx context.Context, c resource.Caller, q resource.VolumeQuery) (resource.Page[resource.Volume], error) {
 	return readPage(ctx, c, q, served(s, resource.ReadDescribeVolumes, s.backends.Compute.DescribeVolumes))

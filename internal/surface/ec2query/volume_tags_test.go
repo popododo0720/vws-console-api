@@ -108,10 +108,7 @@ func TestVolumeTags(t *testing.T) {
 	}
 }
 
-// TestDeleteTagsRefusesVolumesForNow checks that DeleteTags refuses a vol-
-// id, alone or beside a VPC, before writing anything, until DeleteTags on
-// volumes lands.
-func TestDeleteTagsRefusesVolumesForNow(t *testing.T) {
+func TestDeleteTagsChecksVolumeIDsBeforeAnyWrite(t *testing.T) {
 	h, cred, now := harness(t)
 	send := func(f url.Values) (int, string) {
 		t.Helper()
@@ -129,8 +126,8 @@ func TestDeleteTagsRefusesVolumesForNow(t *testing.T) {
 	vpc := xmlText(t, body, "vpcId")
 	send(url.Values{"Action": {"CreateTags"}, "ResourceId.1": {vpc}, "Tag.1.Key": {"env"}, "Tag.1.Value": {"dev"}})
 	for _, f := range []url.Values{
-		{"Action": {"DeleteTags"}, "ResourceId.1": {vol}, "Tag.1.Key": {"Name"}},
-		{"Action": {"DeleteTags"}, "ResourceId.1": {vpc}, "ResourceId.2": {vol}, "Tag.1.Key": {"env"}},
+		{"Action": {"DeleteTags"}, "ResourceId.1": {vol}, "ResourceId.2": {vol}, "Tag.1.Key": {"Name"}},
+		{"Action": {"DeleteTags"}, "ResourceId.1": {vpc}, "ResourceId.2": {vol}, "ResourceId.3": {vol}, "Tag.1.Key": {"env"}},
 	} {
 		if code, got := send(f); code != http.StatusBadRequest || !strings.Contains(got, "InvalidParameterValue") {
 			t.Fatalf("DeleteTags %v: %d %s", f, code, got)

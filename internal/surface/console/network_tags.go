@@ -237,3 +237,27 @@ func (h *handler) tagVolume(w http.ResponseWriter, r *http.Request) {
 	}
 	writeAccepted(w, acc)
 }
+
+func (h *handler) untagVolume(w http.ResponseWriter, r *http.Request) {
+	c, token, ok := h.begin(w, r)
+	if !ok {
+		return
+	}
+	id, err := resource.Parse[resource.VolumeID](r.PathValue("id"))
+	if err != nil {
+		writeErr(w, r, err)
+		return
+	}
+	var body untagBody
+	if err := decode(w, r, &body); err != nil {
+		writeErr(w, r, err)
+		return
+	}
+	req := resource.UntagVolumesRequest{IDs: []resource.VolumeID{id}, Tags: body.Tags}
+	acc, err := h.svc.UntagVolumes(r.Context(), c, token, req)
+	if err != nil {
+		writeErr(w, r, err)
+		return
+	}
+	writeAccepted(w, acc)
+}
