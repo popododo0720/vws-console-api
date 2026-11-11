@@ -22,6 +22,12 @@ const maxTagSelectors = MaxTags
 // them and a caller may not name them.
 const awsTagPrefix = "aws:"
 
+// reservedTagKey reports whether k starts with awsTagPrefix in any case, as
+// EC2 reserves it.
+func reservedTagKey(k string) bool {
+	return strings.HasPrefix(strings.ToLower(k), awsTagPrefix)
+}
+
 // ValidateTagSelectors checks DeleteTags selectors before any resource kind is handled.
 func ValidateTagSelectors(sel []TagSelector) error {
 	if len(sel) > maxTagSelectors {
@@ -31,8 +37,9 @@ func ValidateTagSelectors(sel []TagSelector) error {
 		if err := validTagText(s.Key, "key", 1, 128); err != nil {
 			return err
 		}
-		if strings.HasPrefix(s.Key, awsTagPrefix) {
-			return Invalid("tags", "tag keys starting with 'aws:' are reserved")
+		if reservedTagKey(s.Key) {
+			return Invalid("tags", "Value ( "+s.Key+" ) for parameter key is invalid. "+
+				"Tag keys starting with 'aws:' are reserved for internal use")
 		}
 		if s.Value != nil {
 			if err := validTagText(*s.Value, "value", 0, 256); err != nil {
@@ -53,7 +60,7 @@ func RemoveTags(base map[string]string, sel []TagSelector) map[string]string {
 	}
 	if len(sel) == 0 {
 		for k := range out {
-			if !strings.HasPrefix(k, awsTagPrefix) {
+			if !reservedTagKey(k) {
 				delete(out, k)
 			}
 		}

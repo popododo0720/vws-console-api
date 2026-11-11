@@ -717,7 +717,7 @@ func validTags(tags map[string]string) error {
 // https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/Using_Tags.html#tag-restrictions
 func validRequestTags(tags map[string]string) error {
 	for k := range tags {
-		if strings.HasPrefix(strings.ToLower(k), "aws:") {
+		if reservedTagKey(k) {
 			return Invalid("tags", "reserved")
 		}
 	}
