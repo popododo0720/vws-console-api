@@ -8,10 +8,12 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/popododo0720/vws-console-api/internal/admin/store"
 	"github.com/popododo0720/vws-console-api/internal/backend/backendtest"
 	"github.com/popododo0720/vws-console-api/internal/iam"
+	"github.com/popododo0720/vws-console-api/internal/throttle"
 )
 
 func adminFixture(t *testing.T) (loginEnv, *store.Registry) {
@@ -221,5 +223,29 @@ func TestAdminSecretMetadata(t *testing.T) {
 		if !metadata.Set || len(metadata.Fingerprint) != 8 {
 			t.Fatalf("bad metadata: %s", rec.Body)
 		}
+	}
+}
+
+func TestAdminRoutesAreRateLimited(t *testing.T) {
+	for _, path := range []string{
+		"regions", "regions/pve-lab-1", "aws-accounts", "aws-accounts/123456789012", "permissions",
+	} {
+		t.Run(path, func(t *testing.T) {
+			e, _ := adminFixture(t)
+			now := time.Date(2026, 11, 11, 0, 0, 0, 0, time.UTC)
+			limits := throttle.DefaultLimits()
+			limits.Describe.Burst = 1
+			limits.Mutate.Burst = 1
+			e.h.(*handler).requests = throttle.New(limits, func() time.Time { return now })
+			head := map[string]string{"Authorization": "Bearer tok"}
+			if rec := e.do(t, "GET", "/api/v1/admin/"+path, "", head); rec.Code != http.StatusOK {
+				t.Fatalf("first admin read: %d %s", rec.Code, rec.Body)
+			}
+			rec := e.do(t, "GET", "/api/v1/admin/"+path, "", head)
+			if rec.Code != http.StatusTooManyRequests || rec.Header().Get("Retry-After") != "1" ||
+				!strings.Contains(rec.Body.String(), `"code":"ResourceExhausted","message":"Request limit exceeded."`) {
+				t.Fatalf("admin read past the burst: %d %q %s", rec.Code, rec.Header().Get("Retry-After"), rec.Body)
+			}
+		})
 	}
 }

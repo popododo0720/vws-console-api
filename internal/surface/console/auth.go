@@ -174,6 +174,11 @@ func (h *handler) gate(w http.ResponseWriter, r *http.Request) {
 			}
 			return
 		}
+		if wait, err := h.requests.Take(c.Account, "vws:AdminRead"); err != nil {
+			retryAfter(w, wait)
+			writeErr(w, r, err)
+			return
+		}
 	}
 	if authz != nil {
 		action, arn := authz(r)
