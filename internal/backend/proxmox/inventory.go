@@ -29,22 +29,20 @@ func (b *Backend) ownsPool(s backend.Scope, pool string) bool {
 	return project == pool
 }
 
-func (b *Backend) vmPage(
-	ctx context.Context, s backend.Scope, page resource.PageRequest,
-) (resource.Page[inventoryVM], error) {
+func (b *Backend) visibleVMs(ctx context.Context, s backend.Scope) ([]inventoryVM, error) {
 	if b.cfg.DefaultProject != "" && s.Account.String() == b.cfg.DefaultProject {
 		// PVE hides pool names without Pool.Audit; that must not look unpooled.
 		permissions, err := b.client.AccessPermissions(ctx, "/pool")
 		if err != nil {
-			return resource.Page[inventoryVM]{}, fmt.Errorf("proxmox: check pool visibility: %w", err)
+			return nil, fmt.Errorf("proxmox: check pool visibility: %w", err)
 		}
 		if permissions["/pool"]["Pool.Audit"] != 1 {
-			return resource.Page[inventoryVM]{}, resource.Denied("proxmox: inventory requires Pool.Audit")
+			return nil, resource.Denied("proxmox: inventory requires Pool.Audit")
 		}
 	}
 	rows, err := b.client.ClusterResources(ctx, pveclient.ResourceVM)
 	if err != nil {
-		return resource.Page[inventoryVM]{}, fmt.Errorf("proxmox: list VM inventory: %w", err)
+		return nil, fmt.Errorf("proxmox: list VM inventory: %w", err)
 	}
 	var visible []inventoryVM
 	for _, vm := range rows {
@@ -55,7 +53,7 @@ func (b *Backend) vmPage(
 			visible = append(visible, inventoryVM{vm})
 		}
 	}
-	return networkPage(visible, page)
+	return visible, nil
 }
 
 func option(text, key string) string {
@@ -115,6 +113,16 @@ func (b *Backend) instance(
 	case vm.Status != "stopped":
 		return resource.Instance{}, fmt.Errorf("proxmox: unknown VM status %q", vm.Status)
 	}
+	// PVE omits config keys whose values are the qm.conf defaults.
+	if cfg.Cores == 0 {
+		cfg.Cores = 1
+	}
+	if cfg.Sockets == 0 {
+		cfg.Sockets = 1
+	}
+	if cfg.Memory == 0 {
+		cfg.Memory = 512
+	}
 	inst := resource.Instance{
 		ID: id, ImageID: image, State: state, Tags: tags.User,
 		InstanceType: NearestInstanceType(cfg.Cores*cfg.Sockets, cfg.Memory),
@@ -137,9 +145,21 @@ func (b *Backend) instance(
 func (b *Backend) DescribeInstances(
 	ctx context.Context, s backend.Scope, q resource.InstanceQuery,
 ) (resource.Page[resource.Instance], error) {
-	page, err := b.vmPage(ctx, s, q.Page)
+	pageRequest, err := q.Page.Normalize()
 	if err != nil {
 		return resource.Page[resource.Instance]{}, err
+	}
+	visible, err := b.visibleVMs(ctx, s)
+	if err != nil {
+		return resource.Page[resource.Instance]{}, err
+	}
+	filtered := len(q.IDs) != 0 || len(q.States) != 0
+	page := resource.Page[inventoryVM]{Items: visible}
+	if !filtered {
+		page, err = networkPage(visible, pageRequest)
+		if err != nil {
+			return resource.Page[resource.Instance]{}, err
+		}
 	}
 	ids, err := NewIDs(b.cluster)
 	if err != nil {
@@ -167,6 +187,9 @@ func (b *Backend) DescribeInstances(
 			inst.OwnerID = s.Account
 			out.Items = append(out.Items, inst)
 		}
+	}
+	if filtered {
+		return networkPage(out.Items, pageRequest)
 	}
 	return out, nil
 }

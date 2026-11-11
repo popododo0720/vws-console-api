@@ -230,6 +230,73 @@ func TestInventoryPagingAndFailures(t *testing.T) {
 	}
 }
 
+func TestInventoryFiltersBeforePaging(t *testing.T) {
+	s := inventoryScenario()
+	s.VMs = nil
+	ids, _ := NewIDs("test")
+	var matches []resource.InstanceID
+	for i := 100; i < 202; i++ {
+		uuid := fmt.Sprintf("5f0c3e9a-8b5d-4b8e-9a51-%012d", i)
+		cfg := map[string]string{"smbios1": "uuid=" + uuid}
+		if i >= 200 {
+			cfg["lock"] = "clone"
+			id, _, err := ids.Instance(VM{UUID: uuid})
+			if err != nil {
+				t.Fatal(err)
+			}
+			matches = append(matches, id)
+		}
+		s.VMs = append(s.VMs, pvefake.VM{
+			VMID: i, Node: "pve1", Pool: "123456789012", Status: "running", Config: cfg,
+		})
+	}
+	s.VMs = append(s.VMs, pvefake.VM{
+		VMID: 999, Node: "pve1", Pool: "999999999999", Status: "running",
+		Config: map[string]string{"smbios1": "uuid=5f0c3e9a-8b5d-4b8e-9a51-000000000999", "lock": "clone"},
+	})
+	for _, tc := range []struct {
+		name  string
+		query resource.InstanceQuery
+	}{
+		{"id", resource.InstanceQuery{IDs: matches}},
+		{"state", resource.InstanceQuery{States: []resource.InstanceState{resource.InstancePending}}},
+		{"id-and-state", resource.InstanceQuery{IDs: matches, States: []resource.InstanceState{resource.InstancePending}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b, f := networkBackend(t, s, RegionConfig{})
+			before := len(f.Requests())
+			q := tc.query
+			q.Page.Size = 1
+			first, err := b.DescribeInstances(t.Context(), inventoryScope(), q)
+			if err != nil || len(first.Items) != 1 || first.NextToken == "" ||
+				!slices.Contains(matches, first.Items[0].ID) {
+				t.Fatalf("later-page match missing: page=%+v error=%v", first, err)
+			}
+			q.Page.Token = first.NextToken
+			last, err := b.DescribeInstances(t.Context(), inventoryScope(), q)
+			if err != nil || len(last.Items) != 1 || last.NextToken != "" ||
+				!slices.Contains(matches, last.Items[0].ID) || last.Items[0].ID == first.Items[0].ID {
+				t.Fatalf("filtered continuation=%+v error=%v", last, err)
+			}
+			for _, request := range f.Requests()[before:] {
+				if strings.Contains(request, "/qemu/999/") {
+					t.Fatalf("foreign config read: %s", request)
+				}
+			}
+		})
+	}
+}
+
+func TestInventoryConfigDefaults(t *testing.T) {
+	s := inventoryScenario()
+	s.VMs[0].Config = map[string]string{"memory": "1024"}
+	b, _ := networkBackend(t, s, RegionConfig{})
+	page, err := b.DescribeInstances(t.Context(), inventoryScope(), resource.InstanceQuery{})
+	if err != nil || len(page.Items) != 1 || page.Items[0].InstanceType != "vws.small" {
+		t.Fatalf("PVE default cores/sockets: page=%+v error=%v", page, err)
+	}
+}
+
 func TestInventoryRegionsUseRegistry(t *testing.T) {
 	g := store.New(store.NewMemory())
 	b, f := networkBackend(t, inventoryScenario(), RegionConfig{})
