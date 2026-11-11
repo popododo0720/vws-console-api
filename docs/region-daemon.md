@@ -17,8 +17,9 @@ only global client identities. The corresponding flags are
 `-tls-cert-file`, `-tls-key-file`, and `-tls-ca-file`.
 
 `/healthz` reports process health. `/readyz` stays 503 during the initial
-self-check and repeats the Proxmox permission, cluster and storage checks
-on every probe. An unreachable PVE API or failed self-check returns 503.
+self-check, then repeats the Proxmox permission, cluster and storage checks
+at most once per 2 s; concurrent probes share the check in flight. An
+unreachable PVE API or failed self-check returns 503.
 Invalid configuration, registration or certificates fail startup.
 Interrupt and SIGTERM drain both listeners. `/metrics` uses the shared
 server exporter; regionapi uses the existing HTTP telemetry middleware.
@@ -32,12 +33,12 @@ snapshot** at `-registration-file` (default
 `/etc/pve/priv/vws/registration.json`) to exercise the daemon independently.
 It must be a regular file with no group or other permission bits and
 contain one JSON object with `region`, `clusterName`, `tokenId`, and `token`.
+`region` is 1-63 lowercase letters, digits or inner hyphens, `clusterName`
+1-63 of `[A-Za-z0-9._-]`, and `tokenId` `user@realm!name`.
 No credential value belongs in region.yaml, command arguments or the
 environment. Snapshot decoder errors never echo submitted values.
 
-This is a plaintext phase-one boundary, not encrypted credential storage.
-Do not use it as the production registration format. #757 must replace
-this boundary with the encrypted pmxcfs token reader/helper and the
-admin registration identity reader before deployment. Kubernetes Secrets
-do not participate in the region daemon. Tests use synthetic pvefake
-credentials and private temporary snapshots only.
+This plaintext snapshot is not the production format. #757 replaces it
+with the encrypted pmxcfs token reader and the admin registration
+identity reader before deployment. Tests use synthetic pvefake
+credentials only.
