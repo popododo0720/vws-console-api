@@ -305,47 +305,60 @@ func exerciseEC2(ctx context.Context, t *testing.T, set backend.Set, account res
 	}); resource.CodeOf(err) != resource.CodeConflict {
 		t.Fatalf("delete busy subnet: %v", err)
 	}
-	eip, err := set.Network.AllocateAddress(ctx, backend.Mutation{Scope: scope, Key: "k-addr-assoc", Fingerprint: "fp-addr-assoc"}, resource.AllocateAddressRequest{Domain: "vpc"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	assoc, err := set.Network.AssociateAddress(ctx, backend.Mutation{Scope: scope, Key: "k-assoc", Fingerprint: "fp-assoc"}, resource.AssociateAddressRequest{
-		ID: eip.Items[0].ID, InstanceID: stopped,
-	})
-	if err != nil || assoc.Items[0].InstanceID != stopped || assoc.Operation.Action != resource.ActionAssociateAddress {
-		t.Fatalf("associate: %v %+v", err, assoc)
-	}
-	associated, err := set.Network.DescribeAddresses(ctx, scope, resource.AddressQuery{
-		IDs: []resource.AddressID{eip.Items[0].ID}, Page: resource.PageRequest{Size: 50},
-	})
-	if err != nil || associated.Items[0].InstanceID != stopped {
-		t.Fatalf("describe associated: %v %+v", err, associated.Items)
-	}
-	dis, err := set.Network.DisassociateAddress(ctx, backend.Mutation{Scope: scope, Key: "k-disassoc", Fingerprint: "fp-disassoc"}, resource.DisassociateAddressRequest{
-		ID: eip.Items[0].ID,
-	})
-	if err != nil || !dis.Items[0].InstanceID.IsZero() || dis.Operation.Action != resource.ActionDisassociateAddress {
-		t.Fatalf("disassociate: %v %+v", err, dis)
-	}
-	idle, err := set.Network.DescribeAddresses(ctx, scope, resource.AddressQuery{
-		IDs: []resource.AddressID{eip.Items[0].ID}, Page: resource.PageRequest{Size: 50},
-	})
-	if err != nil || !idle.Items[0].InstanceID.IsZero() {
-		t.Fatalf("describe disassociated: %v %+v", err, idle.Items)
-	}
-	unknownAddr, err := resource.Parse[resource.AddressID]("eipalloc-00000000000000000")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for name, id := range map[string]resource.AddressID{"idle": eip.Items[0].ID, "unknown": unknownAddr} {
-		_, err := set.Network.DisassociateAddress(ctx, backend.Mutation{Scope: scope, Key: "k-disassoc-" + name, Fingerprint: "fp-disassoc-" + name}, resource.DisassociateAddressRequest{ID: id})
-		if e := resource.AsError(err); e == nil || e.Code != resource.CodeNotFound || e.Kind != resource.KindAddress || e.Field != "associationId" {
-			t.Fatalf("disassociate %s address: %v", name, err)
+	t.Run("AddressAssociation", func(t *testing.T) {
+		eip, err := set.Network.AllocateAddress(ctx,
+			backend.Mutation{Scope: scope, Key: "k-addr-assoc", Fingerprint: "fp-addr-assoc"},
+			resource.AllocateAddressRequest{Domain: "vpc"})
+		if err != nil {
+			t.Fatal(err)
 		}
-	}
-	if _, err := set.Network.ReleaseAddress(ctx, backend.Mutation{Scope: scope, Key: "k-rel-assoc", Fingerprint: "fp-rel-assoc"}, resource.ReleaseAddressRequest{ID: eip.Items[0].ID}); err != nil {
-		t.Fatal(err)
-	}
+		assoc, err := set.Network.AssociateAddress(ctx,
+			backend.Mutation{Scope: scope, Key: "k-assoc", Fingerprint: "fp-assoc"},
+			resource.AssociateAddressRequest{
+				ID: eip.Items[0].ID, InstanceID: stopped,
+			})
+		if err != nil || assoc.Items[0].InstanceID != stopped || assoc.Operation.Action != resource.ActionAssociateAddress {
+			t.Fatalf("associate: %v %+v", err, assoc)
+		}
+		associated, err := set.Network.DescribeAddresses(ctx, scope, resource.AddressQuery{
+			IDs: []resource.AddressID{eip.Items[0].ID}, Page: resource.PageRequest{Size: 50},
+		})
+		if err != nil || associated.Items[0].InstanceID != stopped {
+			t.Fatalf("describe associated: %v %+v", err, associated.Items)
+		}
+		dis, err := set.Network.DisassociateAddress(ctx,
+			backend.Mutation{Scope: scope, Key: "k-disassoc", Fingerprint: "fp-disassoc"},
+			resource.DisassociateAddressRequest{
+				ID: eip.Items[0].ID,
+			})
+		if err != nil || !dis.Items[0].InstanceID.IsZero() || dis.Operation.Action != resource.ActionDisassociateAddress {
+			t.Fatalf("disassociate: %v %+v", err, dis)
+		}
+		idle, err := set.Network.DescribeAddresses(ctx, scope, resource.AddressQuery{
+			IDs: []resource.AddressID{eip.Items[0].ID}, Page: resource.PageRequest{Size: 50},
+		})
+		if err != nil || !idle.Items[0].InstanceID.IsZero() {
+			t.Fatalf("describe disassociated: %v %+v", err, idle.Items)
+		}
+		unknownAddr, err := resource.Parse[resource.AddressID]("eipalloc-00000000000000000")
+		if err != nil {
+			t.Fatal(err)
+		}
+		for name, id := range map[string]resource.AddressID{"idle": eip.Items[0].ID, "unknown": unknownAddr} {
+			_, err := set.Network.DisassociateAddress(ctx,
+				backend.Mutation{Scope: scope, Key: "k-disassoc-" + name, Fingerprint: "fp-disassoc-" + name},
+				resource.DisassociateAddressRequest{ID: id})
+			if e := resource.AsError(err); e == nil || e.Code != resource.CodeNotFound ||
+				e.Kind != resource.KindAddress || e.Field != "associationId" {
+				t.Fatalf("disassociate %s address: %v", name, err)
+			}
+		}
+		if _, err := set.Network.ReleaseAddress(ctx,
+			backend.Mutation{Scope: scope, Key: "k-rel-assoc", Fingerprint: "fp-rel-assoc"},
+			resource.ReleaseAddressRequest{ID: eip.Items[0].ID}); err != nil {
+			t.Fatal(err)
+		}
+	})
 	terminated, err := set.Compute.TerminateInstances(ctx, backend.Mutation{Scope: scope, Key: "k-term", Fingerprint: "fp-term"}, resource.TerminateInstancesRequest{
 		IDs: []resource.InstanceID{stopped},
 	})
@@ -662,44 +675,50 @@ func exerciseEC2(ctx context.Context, t *testing.T, set backend.Set, account res
 		t.Fatalf("recreate subnet: %v %+v", err, recreated.Items)
 	}
 
-	addr, err := set.Network.AllocateAddress(ctx, backend.Mutation{Scope: scope, Key: "k-addr", Fingerprint: "fp-addr"}, resource.AllocateAddressRequest{Domain: "vpc"})
-	if err != nil || addr.Items[0].PublicIP == "" || addr.Items[0].Domain != "vpc" {
-		t.Fatalf("address: %v %+v", err, addr.Items)
-	}
-	addrOp, err := set.Network.GetOperation(ctx, scope, addr.Operation.ID)
-	if err != nil || addrOp.Action != resource.ActionAllocateAddress {
-		t.Fatalf("allocate operation: %v %s", err, addrOp.Action)
-	}
-	addrs, err := set.Network.DescribeAddresses(ctx, scope, resource.AddressQuery{
-		PublicIPs: []string{addr.Items[0].PublicIP}, Page: resource.PageRequest{Size: 50},
+	t.Run("AddressRelease", func(t *testing.T) {
+		addr, err := set.Network.AllocateAddress(ctx,
+			backend.Mutation{Scope: scope, Key: "k-addr", Fingerprint: "fp-addr"},
+			resource.AllocateAddressRequest{Domain: "vpc"})
+		if err != nil || addr.Items[0].PublicIP == "" || addr.Items[0].Domain != "vpc" {
+			t.Fatalf("address: %v %+v", err, addr.Items)
+		}
+		addrOp, err := set.Network.GetOperation(ctx, scope, addr.Operation.ID)
+		if err != nil || addrOp.Action != resource.ActionAllocateAddress {
+			t.Fatalf("allocate operation: %v %s", err, addrOp.Action)
+		}
+		addrs, err := set.Network.DescribeAddresses(ctx, scope, resource.AddressQuery{
+			PublicIPs: []string{addr.Items[0].PublicIP}, Page: resource.PageRequest{Size: 50},
+		})
+		if err != nil || len(addrs.Items) != 1 || addrs.Items[0].ID != addr.Items[0].ID {
+			t.Fatalf("describe addresses: %v %+v", err, addrs.Items)
+		}
+		if _, err := set.Network.AssociateAddress(ctx,
+			backend.Mutation{Scope: scope, Key: "k-assoc-gone", Fingerprint: "fp-assoc-gone"},
+			resource.AssociateAddressRequest{
+				ID: addr.Items[0].ID, InstanceID: stopped,
+			}); resource.AsError(err) == nil || resource.AsError(err).Kind != resource.KindInstance ||
+			resource.CodeOf(err) != resource.CodeNotFound {
+			t.Fatalf("associate terminated instance: %v", err)
+		}
+		rel := backend.Mutation{Scope: scope, Key: "k-rel-addr", Fingerprint: "fp-rel-addr"}
+		released, err := set.Network.ReleaseAddress(ctx, rel, resource.ReleaseAddressRequest{ID: addr.Items[0].ID})
+		if err != nil || released.Items[0].ID != addr.Items[0].ID {
+			t.Fatalf("release: %v %+v", err, released.Items)
+		}
+		releasedOp, err := set.Network.GetOperation(ctx, scope, released.Operation.ID)
+		if err != nil || releasedOp.Action != resource.ActionReleaseAddress {
+			t.Fatalf("release operation: %v %s", err, releasedOp.Action)
+		}
+		retriedRel, err := set.Network.ReleaseAddress(ctx, rel, resource.ReleaseAddressRequest{ID: addr.Items[0].ID})
+		if err != nil || retriedRel.Items[0].ID != addr.Items[0].ID || retriedRel.Operation.ID != released.Operation.ID {
+			t.Fatalf("release retry: %v %+v", err, retriedRel.Items)
+		}
+		if _, err := set.Network.DescribeAddresses(ctx, scope, resource.AddressQuery{
+			IDs: []resource.AddressID{addr.Items[0].ID}, Page: resource.PageRequest{Size: 50},
+		}); resource.CodeOf(err) != resource.CodeNotFound {
+			t.Fatalf("released address: %v", err)
+		}
 	})
-	if err != nil || len(addrs.Items) != 1 || addrs.Items[0].ID != addr.Items[0].ID {
-		t.Fatalf("describe addresses: %v %+v", err, addrs.Items)
-	}
-	if _, err := set.Network.AssociateAddress(ctx, backend.Mutation{Scope: scope, Key: "k-assoc-gone", Fingerprint: "fp-assoc-gone"}, resource.AssociateAddressRequest{
-		ID: addr.Items[0].ID, InstanceID: stopped,
-	}); resource.AsError(err) == nil || resource.AsError(err).Kind != resource.KindInstance || resource.CodeOf(err) != resource.CodeNotFound {
-		t.Fatalf("associate terminated instance: %v", err)
-	}
-	rel := backend.Mutation{Scope: scope, Key: "k-rel-addr", Fingerprint: "fp-rel-addr"}
-	released, err := set.Network.ReleaseAddress(ctx, rel, resource.ReleaseAddressRequest{ID: addr.Items[0].ID})
-	if err != nil || released.Items[0].ID != addr.Items[0].ID {
-		t.Fatalf("release: %v %+v", err, released.Items)
-	}
-	releasedOp, err := set.Network.GetOperation(ctx, scope, released.Operation.ID)
-	if err != nil || releasedOp.Action != resource.ActionReleaseAddress {
-		t.Fatalf("release operation: %v %s", err, releasedOp.Action)
-	}
-	retriedRel, err := set.Network.ReleaseAddress(ctx, rel, resource.ReleaseAddressRequest{ID: addr.Items[0].ID})
-	if err != nil || retriedRel.Items[0].ID != addr.Items[0].ID || retriedRel.Operation.ID != released.Operation.ID {
-		t.Fatalf("release retry: %v %+v", err, retriedRel.Items)
-	}
-	if _, err := set.Network.DescribeAddresses(ctx, scope, resource.AddressQuery{
-		IDs: []resource.AddressID{addr.Items[0].ID}, Page: resource.PageRequest{Size: 50},
-	}); resource.CodeOf(err) != resource.CodeNotFound {
-		t.Fatalf("released address: %v", err)
-	}
-
 	src, err := set.Compute.CreateVolume(ctx, mut("k-snap-src", "fp-snap-src"), volReq)
 	if err != nil {
 		t.Fatal(err)
