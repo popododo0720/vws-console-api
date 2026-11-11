@@ -221,6 +221,10 @@ func run(ctx context.Context, args []string) (err error) {
 	if err != nil {
 		return err
 	}
+	registration, err := regionRegistration(*globalConfig)
+	if err != nil {
+		return err
+	}
 	var regions backend.RegionCatalog = backend.DefaultRegions()
 	if *backendKind != "fake" {
 		regions = registry.Catalog()
@@ -299,6 +303,8 @@ func run(ctx context.Context, args []string) (err error) {
 			LoginDisabled:  !signInEnabled(*iamMode),
 			LoginLimits:    limits,
 			Requests:       requests,
+
+			RegionRegistration: registration,
 		})},
 		{Name: "ec2", Addr: *ec2Addr, Handler: ec2query.New(ec2query.Config{
 			Service: svc, Verifier: ec2, Authorizer: auth, Requests: requests,

@@ -89,6 +89,10 @@ func routeAction(pattern string) (authorization, bool) {
 	}
 	z, ok := map[string]authorization{
 		"GET /api/v1/admin/regions":                      nil,
+		"POST /api/v1/admin/regions":                     nil,
+		"PATCH /api/v1/admin/regions/{name}":             nil,
+		"DELETE /api/v1/admin/regions/{name}":            nil,
+		"GET /api/v1/regions":                            ec2("DescribeRegions"),
 		"GET /api/v1/admin/regions/{name}":               nil,
 		"GET /api/v1/admin/regions/{name}/health":        nil,
 		"GET /api/v1/admin/aws-accounts":                 nil,

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/tls"
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
@@ -13,7 +14,11 @@ import (
 )
 
 func TestRegionHealthUsesBootstrapMTLS(t *testing.T) {
-	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/internal/v1/registration" && r.Method == http.MethodPut {
+			w.Write([]byte(`{}`))
+			return
+		}
 		if r.URL.Path != "/internal/v1/status" {
 			t.Errorf("unexpected path %s", r.URL.Path)
 			w.WriteHeader(http.StatusNotFound)
@@ -21,6 +26,8 @@ func TestRegionHealthUsesBootstrapMTLS(t *testing.T) {
 		}
 		w.Write([]byte(`{"quorate":true,"leader":null,"nodes":[],"lastError":null}`))
 	}))
+	srv.TLS = &tls.Config{MinVersion: tls.VersionTLS13, ClientAuth: tls.RequireAnyClientCert}
+	srv.StartTLS()
 	defer srv.Close()
 	dir := t.TempDir()
 	certPath, keyPath := filepath.Join(dir, "cert.pem"), filepath.Join(dir, "key.pem")
@@ -56,6 +63,13 @@ default_project: default
 	got, err := health(t.Context(), srv.URL)
 	if err != nil || !got.Quorate || got.Nodes == nil {
 		t.Fatalf("bootstrap health: %+v %v", got, err)
+	}
+	register, err := regionRegistration(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := register(t.Context(), srv.URL, []byte(`{}`)); err != nil {
+		t.Fatalf("bootstrap registration: %v", err)
 	}
 	if _, err := health(t.Context(), "https://user:credential@127.0.0.1:1234"); err == nil ||
 		strings.Contains(err.Error(), "credential") || strings.Contains(err.Error(), "user:") {

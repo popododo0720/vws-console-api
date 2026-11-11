@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -15,9 +16,39 @@ import (
 )
 
 func regionHealth(path string) (func(context.Context, string) (resource.RegionStatus, error), error) {
+	connect, err := regionConnection(path)
+	if err != nil {
+		return nil, err
+	}
+	return func(ctx context.Context, endpoint string) (resource.RegionStatus, error) {
+		client, err := connect(endpoint)
+		if err != nil {
+			return resource.RegionStatus{}, err
+		}
+		defer client.Close()
+		return client.Status(ctx)
+	}, nil
+}
+
+func regionRegistration(path string) (func(context.Context, string, json.RawMessage) error, error) {
+	connect, err := regionConnection(path)
+	if err != nil {
+		return nil, err
+	}
+	return func(ctx context.Context, endpoint string, data json.RawMessage) error {
+		client, err := connect(endpoint)
+		if err != nil {
+			return err
+		}
+		defer client.Close()
+		return client.Register(ctx, data)
+	}, nil
+}
+
+func regionConnection(path string) (func(string) (*regionapi.Client, error), error) {
 	if path == "" {
-		return func(context.Context, string) (resource.RegionStatus, error) {
-			return resource.RegionStatus{}, &console.RegionMTLSConfigError{Err: errors.New("mTLS is not configured")}
+		return func(string) (*regionapi.Client, error) {
+			return nil, &console.RegionMTLSConfigError{Err: errors.New("mTLS is not configured")}
 		}, nil
 	}
 	data, err := os.ReadFile(path)
@@ -29,23 +60,18 @@ func regionHealth(path string) (func(context.Context, string) (resource.RegionSt
 		return nil, fmt.Errorf("parse region mTLS bootstrap: %w", err)
 	}
 	files := cfg.Credentials.MTLS
-	return func(ctx context.Context, endpoint string) (resource.RegionStatus, error) {
+	return func(endpoint string) (*regionapi.Client, error) {
 		config, err := (iamclient.TLSFiles{
 			CAFile: files.CAFile, CertFile: files.CertFile, KeyFile: files.KeyFile,
 		}).Config()
 		if err != nil {
-			return resource.RegionStatus{}, &console.RegionMTLSConfigError{Err: err}
+			return nil, &console.RegionMTLSConfigError{Err: err}
 		}
 		cert, err := tls.LoadX509KeyPair(files.CertFile, files.KeyFile)
 		if err != nil {
-			return resource.RegionStatus{}, &console.RegionMTLSConfigError{Err: err}
+			return nil, &console.RegionMTLSConfigError{Err: err}
 		}
 		config.Certificates = []tls.Certificate{cert}
-		client, err := regionapi.NewClient(endpoint, config)
-		if err != nil {
-			return resource.RegionStatus{}, err
-		}
-		defer client.Close()
-		return client.Status(ctx)
+		return regionapi.NewClient(endpoint, config)
 	}, nil
 }

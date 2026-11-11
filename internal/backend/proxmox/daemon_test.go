@@ -294,7 +294,8 @@ func TestRegionDaemonReadsRestartAndReadiness(t *testing.T) {
 	}
 	conn.Helper.Path = helper
 	t.Run("omitted_token_requires_registration", func(t *testing.T) {
-		err := conn.Register(t.Context(), []byte(`{"region":"pve-test-1","cluster_name":"test","tokenId":"vws@pve!inventory"}`))
+		input := []byte(`{"region":"pve-test-1","cluster_name":"test","tokenId":"vws@pve!inventory"}`)
+		err := conn.Register(t.Context(), input)
 		if e := resource.AsError(err); e.Code != resource.CodeInvalidArgument || e.Field != "token" {
 			t.Fatalf("first registration without token: %v", err)
 		}
@@ -364,7 +365,8 @@ func TestRegionDaemonReadsRestartAndReadiness(t *testing.T) {
 			t.Fatal(err)
 		}
 		writeFixture(t, reg, data)
-		err = conn.Register(t.Context(), []byte(`{"region":"pve-test-1","cluster_name":"test","tokenId":"vws@pve!inventory"}`))
+		input := []byte(`{"region":"pve-test-1","cluster_name":"test","tokenId":"vws@pve!inventory"}`)
+		err = conn.Register(t.Context(), input)
 		if e := resource.AsError(err); e.Code != resource.CodeInvalidArgument || e.Field != "token" {
 			t.Fatalf("fingerprint mismatch: %v", err)
 		}

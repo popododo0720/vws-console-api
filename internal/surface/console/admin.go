@@ -26,6 +26,7 @@ func (h *handler) adminPermissions(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, permissionsBody{Permissions: []string{
 		"vws:AdminListRegions", "vws:AdminListAwsAccounts",
 		"vws:AdminRegisterAwsAccount", "vws:AdminUpdateAwsAccount", "vws:AdminRemoveAwsAccount",
+		"vws:AdminRegisterRegion", "vws:AdminUpdateRegion", "vws:AdminRemoveRegion",
 	}})
 }
 

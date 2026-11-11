@@ -190,6 +190,12 @@ func accountAction(pattern string) string {
 		return "AdminUpdateAwsAccount"
 	case "DELETE /api/v1/admin/aws-accounts/{id}":
 		return "AdminRemoveAwsAccount"
+	case "POST /api/v1/admin/regions":
+		return "AdminRegisterRegion"
+	case "PATCH /api/v1/admin/regions/{name}":
+		return "AdminUpdateRegion"
+	case "DELETE /api/v1/admin/regions/{name}":
+		return "AdminRemoveRegion"
 	}
 	return ""
 }
