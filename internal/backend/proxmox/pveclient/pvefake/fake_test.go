@@ -303,3 +303,30 @@ func TestNewRefusesABadScenario(t *testing.T) {
 		t.Error("Parse took an unknown key")
 	}
 }
+
+func TestStorageAndSnapshotReads(t *testing.T) {
+	s := scenario(t)
+	s.VMs[0].Snapshots = []pvefake.Snapshot{{Name: "backup", Description: "saved", SnapTime: 1700000000}}
+	s.Storages = []pvefake.Storage{{Node: "pve1", Name: "local", Content: []pvefake.StorageContent{
+		{VolID: "local:vm-100-disk-0", Content: "images", Format: "qcow2", Size: 8 << 30, VMID: 100},
+	}}}
+	_, srv := start(t, s)
+	s.VMs[0].Snapshots[0].Name = "changed"
+	s.Storages[0].Content[0].Size = 1
+	c := client(t, srv, auditor, auditorKey)
+	snaps, err := c.Snapshots(t.Context(), pveclient.VM{Node: "pve1", VMID: 100})
+	if err != nil || len(snaps) != 2 || snaps[0].Name != "current" || snaps[1].Name != "backup" {
+		t.Fatalf("snapshots=%+v error=%v", snaps, err)
+	}
+	rows, err := c.StorageContent(t.Context(), "pve1", "local")
+	if err != nil || len(rows) != 1 || rows[0].Format != "qcow2" || rows[0].Size != 8<<30 {
+		t.Fatalf("storage=%+v error=%v", rows, err)
+	}
+	limited := client(t, srv, poolA, poolAKey)
+	if _, err := limited.StorageContent(t.Context(), "pve1", "local"); status(err) != 403 {
+		t.Fatalf("storage without Datastore.Audit: %v", err)
+	}
+	if _, err := limited.Snapshots(t.Context(), pveclient.VM{Node: "pve2", VMID: 101}); status(err) != 403 {
+		t.Fatalf("snapshot without VM.Audit: %v", err)
+	}
+}

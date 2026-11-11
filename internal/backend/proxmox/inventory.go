@@ -30,6 +30,13 @@ func (b *Backend) ownsPool(s backend.Scope, pool string) bool {
 }
 
 func (b *Backend) visibleVMs(ctx context.Context, s backend.Scope) ([]inventoryVM, error) {
+	rows, err := b.poolVMs(ctx, s)
+	return slices.DeleteFunc(rows, func(vm inventoryVM) bool {
+		return slices.Contains(strings.Split(vm.Tags, ";"), "vws.holder")
+	}), err
+}
+
+func (b *Backend) poolVMs(ctx context.Context, s backend.Scope) ([]inventoryVM, error) {
 	if b.cfg.DefaultProject != "" && s.Account.String() == b.cfg.DefaultProject {
 		// PVE hides pool names without Pool.Audit; that must not look unpooled.
 		permissions, err := b.client.AccessPermissions(ctx, "/pool")
@@ -46,7 +53,7 @@ func (b *Backend) visibleVMs(ctx context.Context, s backend.Scope) ([]inventoryV
 	}
 	var visible []inventoryVM
 	for _, vm := range rows {
-		if vm.Type != "qemu" || vm.Template == 1 || slices.Contains(strings.Split(vm.Tags, ";"), "vws.holder") {
+		if vm.Type != "qemu" || vm.Template == 1 {
 			continue
 		}
 		if b.ownsPool(s, vm.Pool) {

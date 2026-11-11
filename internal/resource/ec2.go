@@ -147,7 +147,9 @@ type Volume struct {
 	Iops       int64 `json:"iops,omitempty"`
 	Throughput int64 `json:"throughput,omitempty"`
 	// Tags are the user tags, without the aws: ones EC2 keeps for itself.
-	Tags map[string]string `json:"tags,omitempty"`
+	Tags     map[string]string `json:"tags,omitempty"`
+	Format   string            `json:"format,omitempty"`
+	IDSource string            `json:"idSource,omitempty"`
 }
 
 // UnmarshalJSON accepts the empty instanceId emitted for an unbound volume.

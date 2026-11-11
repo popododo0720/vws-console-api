@@ -139,7 +139,8 @@ func TestReadOnlyBackendEveryMethod(t *testing.T) {
 			if r.CapabilityKey() == "ec2:DescribeVpcs" || r.CapabilityKey() == "ec2:DescribeSubnets" {
 				want = resource.ActionPartial
 			}
-			if r.CapabilityKey() == "ec2:DescribeInstances" {
+			if r.CapabilityKey() == "ec2:DescribeInstances" || r.CapabilityKey() == "ec2:DescribeVolumes" ||
+				r.CapabilityKey() == "ec2:DescribeSnapshots" {
 				want = resource.ActionSupported
 			}
 			if doc.Read(r).State != want {

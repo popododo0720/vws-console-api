@@ -2,9 +2,11 @@ package pveclient
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"strconv"
+	"strings"
 )
 
 // Version is GET /version.
@@ -80,6 +82,40 @@ type VMConfig struct {
 	Memory      int    `json:"memory"`
 	Description string `json:"description"`
 	QMPStatus   string `json:"qmpstatus"`
+
+	Drives map[string]string `json:"-"`
+}
+
+// UnmarshalJSON retains indexed disk keys alongside the fixed config fields.
+func (v *VMConfig) UnmarshalJSON(data []byte) error {
+	type config VMConfig
+	var decoded config
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return fmt.Errorf("pveclient: VM config: %w", err)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return fmt.Errorf("pveclient: VM config fields: %w", err)
+	}
+	for key, value := range fields {
+		for _, bus := range []string{"scsi", "virtio", "sata", "ide"} {
+			suffix, ok := strings.CutPrefix(key, bus)
+			index, err := strconv.Atoi(suffix)
+			if !ok || err != nil || index < 0 || suffix != strconv.Itoa(index) {
+				continue
+			}
+			var drive string
+			if err := json.Unmarshal(value, &drive); err != nil {
+				return fmt.Errorf("pveclient: drive %s: %w", key, err)
+			}
+			if decoded.Drives == nil {
+				decoded.Drives = map[string]string{}
+			}
+			decoded.Drives[key] = drive
+		}
+	}
+	*v = VMConfig(decoded)
+	return nil
 }
 
 // Snapshot is one entry of GET /nodes/{node}/qemu/{vmid}/snapshot.
