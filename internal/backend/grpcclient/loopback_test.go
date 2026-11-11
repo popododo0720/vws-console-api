@@ -46,7 +46,12 @@ func TestContractOverGRPC(t *testing.T) {
 		Direct:  []fake.DirectNetwork{{ID: direct, Cidr: backendtest.DirectCidr}},
 	})
 	harness := dialLoopback(t, world, now)
-	backendtest.Run(t, harness)
+	provider := backend.AllSupported{Kind: resource.RegionKindAWS}
+	caps, err := provider.RegionCapabilities(context.Background(), resource.RegionName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	backendtest.Run(t, harness, caps)
 	// The #213 DetachVolume client-token table, in its own account.
 	t.Run("DetachReplay", func(t *testing.T) { backendtest.DetachReplay(t, harness) })
 	t.Run("DirectNetworks", func(t *testing.T) { backendtest.DirectNetworks(t, harness) })

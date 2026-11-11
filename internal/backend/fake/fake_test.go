@@ -14,9 +14,14 @@ import (
 
 func TestContract(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0).UTC()
+	provider := backend.AllSupported{Kind: resource.RegionKindAWS}
+	caps, err := provider.RegionCapabilities(context.Background(), resource.RegionName)
+	if err != nil {
+		t.Fatal(err)
+	}
 	backendtest.Run(t, func() backend.Set {
 		return New(Options{Now: func() time.Time { return now }, Entropy: &Sequence{}}).Set()
-	})
+	}, caps)
 }
 
 // TestDetachReplayContract runs the #213 DetachVolume client-token table on

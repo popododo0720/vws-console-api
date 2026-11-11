@@ -62,7 +62,7 @@ change both files together.
 | The idempotency key is account, action and client token. | `TestIdempotencyGolden` |
 | A backend result naming another account is internal. | `TestForeignAccountIsInternal` |
 | Listeners bound every timeout; SIGTERM stops; gRPC calls get a deadline. | `TestListenerBounds`, `TestCallGetsADeadline` |
-| Fakes and the gRPC client behave the same. | `backendtest.Run` |
+| Shared backend tests take the region capability document, check unsupported mutations and empty reads, and explicitly skip unavailable scenarios with the action and reason. | `backendtest.Run`; `TestCapabilityContract`; `TestCapabilitySkipsNameActionAndReason` |
 | Ops endpoints and `vws_` metrics. | `TestOpsEndpoints` |
 | Credentials come from env or files; grpc refuses defaults; values never logged. | `TestGRPCRefusesDefaultCredentials` |
 | Logs go through the vws-lib obs slog handler; errors go through `report.Error` and `report.Panic` only. A line in the app log or `cloud.Config.Audit` carries no account id; the one exception is `internal/audit`, whose `account` field is part of its fixed schema. | `TestRepositoryRules`; `TestAuditLogCarriesNoAccountID` |
