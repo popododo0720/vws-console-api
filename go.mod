@@ -6,6 +6,9 @@ toolchain go1.26.10
 
 require (
 	cloud.google.com/go/longrunning v1.3.0
+	github.com/aws/aws-sdk-go-v2 v1.48.0
+	github.com/aws/aws-sdk-go-v2/service/ec2 v1.345.0
+	github.com/aws/smithy-go v1.28.9
 	github.com/popododo0720/vws-lib v0.1.1
 	github.com/popododo0720/vws-proto v0.24.0
 	go.etcd.io/etcd/client/pkg/v3 v3.7.0
@@ -31,6 +34,10 @@ require (
 )
 
 require (
+	github.com/aws/aws-sdk-go-v2/internal/configsources v1.5.12 // indirect
+	github.com/aws/aws-sdk-go-v2/internal/endpoints/v2 v2.8.12 // indirect
+	github.com/aws/aws-sdk-go-v2/service/internal/accept-encoding v1.13.25 // indirect
+	github.com/aws/aws-sdk-go-v2/service/internal/presigned-url v1.14.12 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect

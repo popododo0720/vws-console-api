@@ -1,0 +1,23 @@
+<DescribeInstancesResponse xmlns="http://ec2.amazonaws.com/doc/2016-11-15/">
+  <requestId>recorded-inventory</requestId>
+  <reservationSet><item>
+    <reservationId>r-0123456789abcdef0</reservationId><ownerId>123456789012</ownerId>
+    <instancesSet>
+      <item>
+        <instanceId>i-0123456789abcdef0</instanceId><imageId>ami-0123456789abcdef0</imageId>
+        <instanceState><code>16</code><name>running</name></instanceState>
+        <instanceType>t3.micro</instanceType><keyName>inventory</keyName>
+        <subnetId>subnet-0123456789abcdef0</subnetId><vpcId>vpc-0123456789abcdef0</vpcId>
+        <privateIpAddress>10.0.0.7</privateIpAddress><ipAddress>192.0.2.7</ipAddress>
+        <placement><availabilityZone>us-east-1a</availabilityZone></placement>
+        <launchTime>2026-01-01T00:00:00Z</launchTime><rootDeviceName>/dev/xvda</rootDeviceName>
+        <blockDeviceMapping><item><deviceName>/dev/xvda</deviceName><ebs>
+          <volumeId>vol-0123456789abcdef0</volumeId><status>attached</status>
+          <deleteOnTermination>true</deleteOnTermination><attachTime>2026-01-01T00:00:00Z</attachTime>
+        </ebs></item></blockDeviceMapping>
+        <tagSet><item><key>Name</key><value>fixture</value></item></tagSet>
+      </item>
+    </instancesSet>
+  </item></reservationSet>
+  <nextToken>upstream-second</nextToken>
+</DescribeInstancesResponse>
