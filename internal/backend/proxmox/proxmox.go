@@ -97,6 +97,7 @@ func (b *Backend) RegionCapabilities(ctx context.Context, region string) (resour
 				Reason:     "instances and volumes only; volume tags require at most 128 encoded characters",
 			}
 		}
+		doc.Actions["ec2:CreateSnapshot"] = resource.ActionCapability{State: resource.ActionSupported}
 	}
 	return doc, nil
 }
@@ -155,13 +156,6 @@ func (b *Backend) DescribeKeyPairs(
 	ctx context.Context, s backend.Scope, q resource.KeyPairQuery,
 ) (resource.Page[resource.KeyPair], error) {
 	return resource.Page[resource.KeyPair]{}, nil
-}
-
-// CreateSnapshot is unavailable in the phase-one backend.
-func (b *Backend) CreateSnapshot(
-	ctx context.Context, m backend.Mutation, req resource.CreateSnapshotRequest,
-) (resource.Accepted[resource.Snapshot], error) {
-	return resource.Accepted[resource.Snapshot]{}, resource.Unsupported("CreateSnapshot", "read-only")
 }
 
 // DeleteSnapshot is unavailable in the phase-one backend.

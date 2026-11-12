@@ -231,6 +231,9 @@ func (b *Backend) GetOperation(
 		return resource.Operation{}, missing
 	}
 	if sync, ok := decoded.(syncOperation); ok {
+		if sync.action == resource.ActionCreateSnapshot && sync.kind == resource.KindSnapshot {
+			return b.snapshotCreateOperation(ctx, s, id, sync)
+		}
 		if sync.action == resource.ActionCreateTags || sync.action == resource.ActionDeleteTags {
 			return b.tagOperation(ctx, s, id)
 		}

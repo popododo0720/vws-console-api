@@ -178,6 +178,12 @@ func TestMutationMethodsRejectOtherPools(t *testing.T) {
 				resource.DeleteVolumeRequest{ID: id})
 			return resource.KindVolume, id.String(), err
 		},
+		"CreateSnapshot": func(t *testing.T, b *Backend) (resource.Kind, string, error) {
+			id, _ := resource.Parse[resource.VolumeID]("vol-0123456789abcdef0")
+			_, err := b.CreateSnapshot(t.Context(), backend.Mutation{Scope: inventoryScope()},
+				resource.CreateSnapshotRequest{VolumeID: id})
+			return resource.KindVolume, id.String(), err
+		},
 	}
 	functions := mutationFunctions(t)
 	implemented := map[string]bool{}

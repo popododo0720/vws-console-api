@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"strings"
 
 	"github.com/popododo0720/vws-console-api/internal/backend"
 	"github.com/popododo0720/vws-console-api/internal/backend/proxmox/pveclient"
@@ -76,6 +77,15 @@ func (b *Backend) DescribeSnapshots(
 			}
 			// A VM snapshot has one ID; without a requested volume, expose its first disk.
 			vol := volumes[0]
+			first, _, _ := strings.Cut(row.Description, "\n")
+			if _, local, ok := strings.Cut(first, " vws:vol="); ok && strings.HasPrefix(first, "vws:fp=") {
+				for _, candidate := range volumes {
+					if candidate.ID.String() == "vol-"+local {
+						vol = candidate
+						break
+					}
+				}
+			}
 			if len(q.IDs) == 0 || slices.Contains(q.IDs, id) {
 				out = append(out, resource.Snapshot{
 					ID: id, OwnerID: s.Account, VolumeID: vol.ID, VolumeSize: vol.SizeGiB,
