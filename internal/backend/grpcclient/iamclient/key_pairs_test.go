@@ -79,15 +79,15 @@ func (s *keyPairServer) ListKeyPairs(
 	if s.listErr != nil {
 		return nil, s.listErr
 	}
-	if s.bad {
-		return &iamv1.ListKeyPairsResponse{KeyPairs: []*iamv1.KeyPair{{
-			Name: "projects/999999999999/keyPairs/key-00000000000000001",
-		}}}, nil
-	}
 	out := &iamv1.ListKeyPairsResponse{}
+	if s.bad {
+		out.KeyPairs = append(out.KeyPairs, &iamv1.KeyPair{
+			Name: "projects/999999999999/keyPairs/key-00000000000000001",
+		})
+	}
 	if s.key != nil && (req.GetRegion() == "" || req.GetRegion() == s.key.GetSpec().GetRegion()) &&
 		(len(req.GetKeyNames()) == 0 || slices.Contains(req.GetKeyNames(), s.key.GetSpec().GetKeyName())) {
-		out.KeyPairs = []*iamv1.KeyPair{s.key}
+		out.KeyPairs = append(out.KeyPairs, s.key)
 	}
 	return out, nil
 }
@@ -288,6 +288,35 @@ func TestIAMKeyPairDeleteSelectionErrors(t *testing.T) {
 	}
 }
 
+func TestIAMKeyPairSkipsBadFilteredRecords(t *testing.T) {
+	s := new(keyPairServer)
+	client := New(keyPairConnection(t, s), Options{})
+	m := keyPairMutation(t)
+	pair, err := sshkey.Generate(resource.KeyTypeEd25519, strings.NewReader(strings.Repeat("a", 36)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := client.CreateKeyPair(t.Context(), m,
+		resource.CreateKeyPairRequest{Name: "login", PublicKey: pair.Public})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := created.Items[0].ID
+	s.mu.Lock()
+	s.bad = true
+	s.mu.Unlock()
+	for _, q := range []resource.KeyPairQuery{{IDs: []resource.KeyPairID{id}}, {Names: []string{"login"}}} {
+		page, err := client.DescribeKeyPairs(t.Context(), m.Scope, q)
+		if err != nil || len(page.Items) != 1 || page.Items[0].ID != id {
+			t.Fatalf("mixed filtered listing = %+v %v", page, err)
+		}
+	}
+	deleted, err := client.DeleteKeyPair(t.Context(), m, resource.DeleteKeyPairRequest{ID: id})
+	if err != nil || len(deleted.Items) != 1 || deleted.Items[0].ID != id {
+		t.Fatalf("delete with unrelated corrupt record = %+v %v", deleted, err)
+	}
+}
+
 func TestIAMKeyPairBoundaryAndMissing(t *testing.T) {
 	s := new(keyPairServer)
 	client := New(keyPairConnection(t, s), Options{})
@@ -315,8 +344,8 @@ func TestIAMKeyPairBoundaryAndMissing(t *testing.T) {
 	s.bad = true
 	s.mu.Unlock()
 	_, err = client.DescribeKeyPairs(t.Context(), m.Scope, resource.KeyPairQuery{Names: []string{"login"}})
-	if resource.CodeOf(err) != resource.CodeInternal {
-		t.Fatalf("foreign resource = %v", err)
+	if resource.CodeOf(err) != resource.CodeNotFound || resource.AsError(err).Kind != resource.KindKeyPair {
+		t.Fatalf("foreign resource must not satisfy the selector = %v", err)
 	}
 	page, err := client.DescribeKeyPairs(t.Context(), m.Scope, resource.KeyPairQuery{})
 	if err != nil || len(page.Items) != 0 {

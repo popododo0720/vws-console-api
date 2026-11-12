@@ -138,11 +138,8 @@ func (c *Client) listKeyPairs(
 		for _, raw := range resp.GetKeyPairs() {
 			key, err := keyPairModel(s, raw)
 			if err != nil {
-				if len(q.IDs) == 0 && len(q.Names) == 0 {
-					c.logger().WarnContext(ctx, "skipping invalid IAM key pair", slog.String("reason", "invalid record"))
-					continue
-				}
-				return nil, err
+				c.logger().WarnContext(ctx, "skipping invalid IAM key pair", slog.String("reason", "invalid record"))
+				continue
 			}
 			if len(q.IDs) == 0 || slices.Contains(q.IDs, key.ID) {
 				items = append(items, key)
