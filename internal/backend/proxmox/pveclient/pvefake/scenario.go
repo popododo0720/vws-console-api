@@ -1,5 +1,5 @@
-// Package pvefake is an in-memory Proxmox VE API for tests: the read paths
-// pveclient calls, answered in the api-viewer shapes, behind API tokens whose
+// Package pvefake is an in-memory Proxmox VE API for tests: inventory reads
+// and power tasks, answered in the api-viewer shapes, behind API tokens whose
 // ACLs are checked as PVE checks them (design.md 8.1). A Fake is an
 // http.Handler that tests serve with httptest.
 package pvefake

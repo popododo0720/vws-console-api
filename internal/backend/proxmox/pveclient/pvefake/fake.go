@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 // Fake answers the PVE API from one Scenario.
@@ -21,6 +22,11 @@ type Fake struct {
 	mux      *http.ServeMux
 	methods  []string
 	requests []string
+	clock    func() time.Time
+	delay    time.Duration
+	tasks    []*task
+	archive  []*task
+	failNext map[string][]string
 }
 
 // failure is a PVE error answer: the status and PVE's message.
@@ -32,11 +38,21 @@ type failure struct {
 // New checks s and returns a Fake with every node online and with quorum.
 // The Fake keeps its own copy: editing s afterwards does not change it.
 func New(s Scenario) (*Fake, error) {
+	return NewWithClock(s, time.Now)
+}
+
+// NewWithClock uses clock for task deadlines. Clock must be safe for concurrent
+// calls and must not move backwards; tasks settle on the next API request.
+func NewWithClock(s Scenario, clock func() time.Time) (*Fake, error) {
+	if clock == nil {
+		return nil, fmt.Errorf("pvefake: nil clock")
+	}
 	if err := s.check(); err != nil {
 		return nil, fmt.Errorf("pvefake: %w", err)
 	}
 	s = s.clone()
 	f := &Fake{s: s, roles: map[string][]string{}, quorate: true, online: map[string]bool{}, mux: http.NewServeMux()}
+	f.clock, f.failNext = clock, map[string][]string{}
 	for _, r := range s.Roles {
 		f.roles[r.ID] = r.Privs
 	}
@@ -102,9 +118,14 @@ func (f *Fake) RequestMethods() []string {
 }
 
 func (f *Fake) handle(pattern string, h func(*Token, *http.Request) (any, *failure)) {
-	f.mux.HandleFunc("GET /api2/json"+pattern, func(w http.ResponseWriter, r *http.Request) {
-		f.mu.RLock()
-		defer f.mu.RUnlock()
+	f.handleMethod(http.MethodGet, pattern, h)
+}
+
+func (f *Fake) handleMethod(method, pattern string, h func(*Token, *http.Request) (any, *failure)) {
+	f.mux.HandleFunc(method+" /api2/json"+pattern, func(w http.ResponseWriter, r *http.Request) {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		f.settle()
 		t := f.token(r.Header.Get("Authorization"))
 		if t == nil {
 			reply(w, nil, &failure{http.StatusUnauthorized, "authentication failure"})

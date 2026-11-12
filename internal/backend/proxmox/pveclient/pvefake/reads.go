@@ -29,6 +29,7 @@ func (f *Fake) routes() {
 	f.handle("/nodes/{node}/qemu/{vmid}/snapshot", f.snapshots)
 	f.handle("/nodes/{node}/storage/{storage}/content", f.storageContent)
 	f.handle("/access/permissions", f.permissions)
+	f.taskRoutes()
 	f.mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		msg := fmt.Sprintf("Method '%s %s' not implemented", r.Method, r.URL.Path)
 		reply(w, nil, &failure{http.StatusNotImplemented, msg})
