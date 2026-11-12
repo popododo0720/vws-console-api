@@ -268,7 +268,8 @@ func (p *Proxy) assumeRoleRequest(
 	if readErr != nil || closeErr != nil || len(data) > 65536 || resp.StatusCode != http.StatusOK ||
 		xml.Unmarshal(data, &result) != nil || diagnostic && !validAssumeResponse(data) {
 		cause := errors.New("STS response rejected")
-		if !diagnostic || resp.StatusCode < 400 || resp.StatusCode >= 500 || resp.StatusCode == http.StatusTooManyRequests {
+		if !diagnostic || readErr != nil || closeErr != nil || resp.StatusCode < 400 ||
+			resp.StatusCode >= 500 || resp.StatusCode == http.StatusTooManyRequests {
 			cause = report.Error(ctx, cause)
 		}
 		return sigv4.Credential{}, &stsError{

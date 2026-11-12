@@ -89,6 +89,7 @@ func TestAWSConnectionStepsAndCacheIsolation(t *testing.T) {
 			strings.Replace(identity, "123456789012", "12345678901x", 1), "unusable", 200, true, false,
 		},
 		{"identity_status", "external-canary", "GetCallerIdentity", identity, "session credentials", 403, true, false},
+		{"identity_server_error", "external-canary", "GetCallerIdentity", identity, "STS unavailable", 503, true, false},
 		{
 			"identity_oversized", "external-canary", "GetCallerIdentity",
 			identity + strings.Repeat(" ", 65537), "unusable", 200, true, false,
@@ -143,6 +144,9 @@ func TestAWSConnectionStepsAndCacheIsolation(t *testing.T) {
 			f.p.cache[[32]byte{1}] = sigv4.Credential{AccessKey: "sentinel"}
 			before, _ := f.registry.AWSAccounts().Get(t.Context(), "123456789012")
 			var logs bytes.Buffer
+			var reports atomic.Int32
+			report.Configure(report.Sink{CountError: func(context.Context, string) { reports.Add(1) }})
+			defer report.Configure(report.Sink{})
 			old := slog.Default()
 			slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
 			defer slog.SetDefault(old)
@@ -161,6 +165,15 @@ func TestAWSConnectionStepsAndCacheIsolation(t *testing.T) {
 				}
 			}
 			after, _ := f.registry.AWSAccounts().Get(t.Context(), "123456789012")
+			if tc.assumed {
+				wantReports := int32(0)
+				if tc.status >= 500 || tc.status == 200 && !tc.matched && tc.name != "mismatch" {
+					wantReports = 2
+				}
+				if reports.Load() != wantReports {
+					t.Fatalf("identity fault reports: got %d, want %d", reports.Load(), wantReports)
+				}
+			}
 			if !reflect.DeepEqual(before, after) || len(f.p.cache) != 1 || f.p.cache[[32]byte{1}].AccessKey != "sentinel" ||
 				f.originCalls != 0 || assumes.Load() < 2 || (identities.Load() != 0) != tc.assumed {
 				t.Fatal("test reused cache, wrote state, skipped fresh STS, or called origin")

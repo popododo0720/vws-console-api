@@ -13,6 +13,8 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/popododo0720/vws-lib/obs/report"
+
 	"github.com/popododo0720/vws-console-api/internal/resource"
 	"github.com/popododo0720/vws-console-api/internal/server"
 	"github.com/popododo0720/vws-console-api/internal/sigv4"
@@ -59,7 +61,11 @@ func (p *Proxy) serveTestConnection(w http.ResponseWriter, r *http.Request) {
 	steps := resource.AWSConnectionSteps(false, false)
 	if err == nil {
 		steps = resource.AWSConnectionSteps(true, false)
-		steps[1].Message = p.identityMessage(ctx, cred, in.AccountID)
+		message, fault := p.identityMessage(ctx, cred, in.AccountID)
+		steps[1].Message = message
+		if fault != nil {
+			server.RecordFailure(w, report.Error(ctx, fault))
+		}
 		if steps[1].Message == "AWS account identity matched" {
 			steps[1].Result = resource.ConnectionPass
 		}
@@ -76,16 +82,16 @@ func (p *Proxy) serveTestConnection(w http.ResponseWriter, r *http.Request) {
 	}{steps}))
 }
 
-func (p *Proxy) identityMessage(ctx context.Context, cred sigv4.Credential, account string) string {
+func (p *Proxy) identityMessage(ctx context.Context, cred sigv4.Credential, account string) (string, error) {
 	form := url.Values{"Action": {"GetCallerIdentity"}, "Version": {"2011-06-15"}}
 	r, err := http.NewRequestWithContext(ctx, http.MethodPost, p.sts, strings.NewReader(form.Encode()))
 	if err != nil {
-		return "STS unavailable"
+		return "STS unavailable", errors.New("STS identity request unavailable")
 	}
 	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	resp, err := p.send(r, cred, sigv4.ServiceSTS, p.stsRegion)
 	if err != nil {
-		return "STS unavailable"
+		return "STS unavailable", err
 	}
 	data, readErr := io.ReadAll(io.LimitReader(resp.Body, 65537))
 	closeErr := resp.Body.Close()
@@ -98,12 +104,17 @@ func (p *Proxy) identityMessage(ctx context.Context, cred sigv4.Credential, acco
 	if readErr != nil || closeErr != nil || len(data) > 65536 || resp.StatusCode != http.StatusOK ||
 		!decodeSTSDocument(data, &result) || len(result.Results) != 1 || len(result.Results[0].Accounts) != 1 ||
 		!accountID(result.Results[0].Accounts[0]) {
-		return stsMessage(resp.StatusCode, data, true)
+		message := stsMessage(resp.StatusCode, data, true)
+		if readErr != nil || closeErr != nil || resp.StatusCode < 400 ||
+			resp.StatusCode >= 500 || resp.StatusCode == http.StatusTooManyRequests {
+			return message, errors.New("STS identity response rejected")
+		}
+		return message, nil
 	}
 	if result.Results[0].Accounts[0] != account {
-		return "caller identity is in another account"
+		return "caller identity is in another account", nil
 	}
-	return "AWS account identity matched"
+	return "AWS account identity matched", nil
 }
 
 func validAssumeResponse(data []byte) bool {
