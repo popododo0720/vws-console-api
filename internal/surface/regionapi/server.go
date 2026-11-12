@@ -2,9 +2,11 @@
 package regionapi
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -21,6 +23,14 @@ import (
 )
 
 const maxRequestBytes = 1 << 20
+
+func requestLimit(iface, method string) int {
+	if iface == "Storage" && method == "PutObject" {
+		// JSON base64 must carry the existing 4 MiB object contract.
+		return maxRequestBytes + base64.StdEncoding.EncodedLen(resource.MaxObjectBytes)
+	}
+	return maxRequestBytes
+}
 
 // Gate admits a local mutation or names the peer holding the lease.
 type Gate interface {
@@ -59,7 +69,7 @@ type errorBody struct {
 	Error *resource.Error `json:"error"`
 }
 
-// New returns the region's read-only HTTP handler.
+// New returns the region's backend HTTP handler.
 func New(cfg Config) (http.Handler, error) {
 	if cfg.Backend.Compute == nil || cfg.Backend.Storage == nil || cfg.Backend.Network == nil {
 		return nil, fmt.Errorf("new region API: compute, storage and network backends are required")
@@ -72,6 +82,41 @@ func New(cfg Config) (http.Handler, error) {
 	}
 	mux := http.NewServeMux()
 	c, s, n := cfg.Backend.Compute, cfg.Backend.Storage, cfg.Backend.Network
+	register(mux, cfg.Gate, "Compute", "RunInstances", c.RunInstances)
+	register(mux, cfg.Gate, "Compute", "StopInstances", c.StopInstances)
+	register(mux, cfg.Gate, "Compute", "StartInstances", c.StartInstances)
+	register(mux, cfg.Gate, "Compute", "TerminateInstances", c.TerminateInstances)
+	register(mux, cfg.Gate, "Compute", "RebootInstances", c.RebootInstances)
+	register(mux, cfg.Gate, "Compute", "CreateTags", c.CreateTags)
+	register(mux, cfg.Gate, "Compute", "DeleteTags", c.DeleteTags)
+	register(mux, cfg.Gate, "Compute", "CreateVolume", c.CreateVolume)
+	register(mux, cfg.Gate, "Compute", "TagVolumes", c.TagVolumes)
+	register(mux, cfg.Gate, "Compute", "UntagVolumes", c.UntagVolumes)
+	register(mux, cfg.Gate, "Compute", "AttachVolume", c.AttachVolume)
+	register(mux, cfg.Gate, "Compute", "DetachVolume", c.DetachVolume)
+	register(mux, cfg.Gate, "Compute", "DeleteVolume", c.DeleteVolume)
+	register(mux, cfg.Gate, "Compute", "ModifyVolume", c.ModifyVolume)
+	register(mux, cfg.Gate, "Compute", "CreateKeyPair", c.CreateKeyPair)
+	register(mux, cfg.Gate, "Compute", "DeleteKeyPair", c.DeleteKeyPair)
+	register(mux, cfg.Gate, "Compute", "CreateSnapshot", c.CreateSnapshot)
+	register(mux, cfg.Gate, "Compute", "DeleteSnapshot", c.DeleteSnapshot)
+	register(mux, cfg.Gate, "Compute", "RegisterImage", c.RegisterImage)
+	register(mux, cfg.Gate, "Network", "CreateSubnet", n.CreateSubnet)
+	register(mux, cfg.Gate, "Network", "CreateVpc", n.CreateVpc)
+	register(mux, cfg.Gate, "Network", "DeleteVpc", n.DeleteVpc)
+	register(mux, cfg.Gate, "Network", "TagVpcs", n.TagVpcs)
+	register(mux, cfg.Gate, "Network", "TagSubnets", n.TagSubnets)
+	register(mux, cfg.Gate, "Network", "UntagVpcs", n.UntagVpcs)
+	register(mux, cfg.Gate, "Network", "UntagSubnets", n.UntagSubnets)
+	register(mux, cfg.Gate, "Network", "CreateSecurityGroup", n.CreateSecurityGroup)
+	register(mux, cfg.Gate, "Network", "DeleteSecurityGroup", n.DeleteSecurityGroup)
+	register(mux, cfg.Gate, "Network", "AuthorizeSecurityGroupIngress", n.AuthorizeSecurityGroupIngress)
+	register(mux, cfg.Gate, "Network", "RevokeSecurityGroupIngress", n.RevokeSecurityGroupIngress)
+	register(mux, cfg.Gate, "Network", "DeleteSubnet", n.DeleteSubnet)
+	register(mux, cfg.Gate, "Network", "AllocateAddress", n.AllocateAddress)
+	register(mux, cfg.Gate, "Network", "ReleaseAddress", n.ReleaseAddress)
+	register(mux, cfg.Gate, "Network", "AssociateAddress", n.AssociateAddress)
+	register(mux, cfg.Gate, "Network", "DisassociateAddress", n.DisassociateAddress)
 	register(mux, cfg.Gate, "Compute", "DescribeInstances", c.DescribeInstances)
 	register(mux, cfg.Gate, "Compute", "DescribeVolumes", c.DescribeVolumes)
 	register(mux, cfg.Gate, "Compute", "DescribeImages", c.DescribeImages)
@@ -86,6 +131,29 @@ func New(cfg Config) (http.Handler, error) {
 	register(mux, cfg.Gate, "Storage", "GetBucket", s.GetBucket)
 	register(mux, cfg.Gate, "Storage", "ListBuckets", s.ListBuckets)
 	register(mux, cfg.Gate, "Storage", "ListObjects", s.ListObjects)
+	register(mux, cfg.Gate, "Storage", "CreateBucket", s.CreateBucket, true)
+	register(mux, cfg.Gate, "Storage", "DeleteBucket", func(ctx context.Context, scope backend.Scope,
+		name resource.BucketName,
+	) (struct{}, error) {
+		return struct{}{}, s.DeleteBucket(ctx, scope, name)
+	}, true)
+	register(mux, cfg.Gate, "Storage", "DeleteObject", func(ctx context.Context, scope backend.Scope, req struct {
+		Bucket resource.BucketName `json:"bucket"`
+		Key    resource.ObjectKey  `json:"key"`
+	},
+	) (struct{}, error) {
+		return struct{}{}, s.DeleteObject(ctx, scope, req.Bucket, req.Key)
+	}, true)
+	register(mux, cfg.Gate, "Storage", "PutObject", func(ctx context.Context, scope backend.Scope, req struct {
+		Request resource.PutObjectRequest `json:"request"`
+		Body    []byte                    `json:"body"`
+	},
+	) (resource.Object, error) {
+		if len(req.Body) > resource.MaxObjectBytes {
+			return resource.Object{}, resource.TooLarge("object exceeds 4 MiB")
+		}
+		return s.PutObject(ctx, scope, req.Request, bytes.NewReader(req.Body))
+	}, true)
 	register(mux, cfg.Gate, "Storage", "GetObject", func(ctx context.Context, scope backend.Scope,
 		req resource.GetObjectRequest,
 	) (ObjectResult, error) {
@@ -142,14 +210,15 @@ func New(cfg Config) (http.Handler, error) {
 }
 
 func register[S backend.Scope | backend.Mutation, Q, R any](mux *http.ServeMux, gate Gate, iface, method string,
-	call func(context.Context, S, Q) (R, error),
+	call func(context.Context, S, Q) (R, error), writes ...bool,
 ) {
 	mux.HandleFunc("POST /internal/v1/"+iface+"/"+method, func(w http.ResponseWriter, r *http.Request) {
 		var input struct {
-			Scope *S `json:"scope"`
-			Req   *Q `json:"req"`
+			Scope    *S `json:"scope"`
+			Mutation *S `json:"mutation"`
+			Req      *Q `json:"req"`
 		}
-		dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRequestBytes))
+		dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, int64(requestLimit(iface, method))))
 		dec.DisallowUnknownFields()
 		err := dec.Decode(&input)
 		if err == nil {
@@ -159,21 +228,25 @@ func register[S backend.Scope | backend.Mutation, Q, R any](mux *http.ServeMux, 
 			}
 		}
 		var scope backend.Scope
-		mutation := false
-		if input.Scope != nil {
-			switch value := any(*input.Scope).(type) {
+		mutation := len(writes) > 0 && writes[0]
+		param := input.Scope
+		if _, ok := any(*new(S)).(backend.Mutation); ok {
+			param = input.Mutation
+		}
+		if param != nil && (input.Scope == nil || input.Mutation == nil) {
+			switch value := any(*param).(type) {
 			case backend.Scope:
 				scope = value
 			case backend.Mutation:
 				scope, mutation = value.Scope, true
 			}
 		}
-		if err != nil || input.Scope == nil || input.Req == nil || scope.Account.IsZero() {
+		if err != nil || param == nil || input.Req == nil || scope.Account.IsZero() {
 			var tooLarge *http.MaxBytesError
 			if errors.As(err, &tooLarge) {
 				err = resource.TooLarge("body exceeds the limit")
 			} else {
-				err = resource.Invalid("body", "scope and req must be valid JSON")
+				err = resource.Invalid("body", "scope or mutation and req must be valid JSON")
 			}
 			writeJSON(w, nil, err)
 			return
@@ -185,7 +258,7 @@ func register[S backend.Scope | backend.Mutation, Q, R any](mux *http.ServeMux, 
 				return
 			}
 		}
-		result, err := call(r.Context(), *input.Scope, *input.Req)
+		result, err := call(r.Context(), *param, *input.Req)
 		writeJSON(w, result, err)
 	})
 }

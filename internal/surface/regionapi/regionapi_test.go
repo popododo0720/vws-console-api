@@ -339,7 +339,7 @@ func TestInputAndRouteBounds(t *testing.T) {
 		}
 	}
 	for _, path := range []string{
-		"Compute/RunInstances", "Storage/CreateBucket", "Network/DeleteSubnet", "Compute/Unknown",
+		"Compute/Unknown",
 	} {
 		w := httptest.NewRecorder()
 		h.ServeHTTP(w, httptest.NewRequestWithContext(context.Background(),

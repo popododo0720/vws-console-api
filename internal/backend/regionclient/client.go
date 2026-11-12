@@ -1,4 +1,4 @@
-// Package regionclient adapts the region API read transport to backend.Set.
+// Package regionclient adapts the region API transport to backend.Set.
 package regionclient
 
 import (
@@ -12,12 +12,12 @@ import (
 	"github.com/popododo0720/vws-console-api/internal/resource"
 )
 
-// Transport is the read protocol implemented by regionapi.Client.
+// Transport is the protocol implemented by regionapi.Client.
 type Transport interface {
-	Call(context.Context, string, string, backend.Scope, any, any) error
+	Call(context.Context, string, string, any, any, any) error
 }
 
-// New returns a read-only backend. The caller owns the transport's lifetime.
+// New returns a regional backend. The caller owns the transport's lifetime.
 func New(transport Transport) (backend.Set, error) {
 	if transport == nil {
 		return backend.Set{}, resource.Invalid("transport", "region transport is required")
@@ -32,9 +32,19 @@ type storage struct{ transport Transport }
 type network struct{ transport Transport }
 
 func call[T any](
-	ctx context.Context, transport Transport, service, method string, scope backend.Scope, req any,
+	ctx context.Context, transport Transport, service, method string, scope any, req any,
 ) (T, error) {
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	timeout := 5 * time.Second
+	if _, ok := scope.(backend.Mutation); ok {
+		timeout = 60 * time.Second
+	}
+	if service == "Storage" {
+		switch method {
+		case "CreateBucket", "DeleteBucket", "PutObject", "DeleteObject":
+			timeout = 60 * time.Second
+		}
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	var result T
 	if err := transport.Call(ctx, service, method, scope, req, &result); err != nil {
@@ -45,38 +55,33 @@ func call[T any](
 }
 
 func (c compute) RunInstances(
-	ctx context.Context, _ backend.Mutation, _ resource.RunInstancesRequest,
+	ctx context.Context, m backend.Mutation, req resource.RunInstancesRequest,
 ) (resource.Accepted[resource.Instance], error) {
-	return resource.Accepted[resource.Instance]{},
-		resource.Unsupported("RunInstances", "region API does not serve mutations")
+	return call[resource.Accepted[resource.Instance]](ctx, c.transport, "Compute", "RunInstances", m, req)
 }
 
 func (c compute) StopInstances(
-	ctx context.Context, _ backend.Mutation, _ resource.StopInstancesRequest,
+	ctx context.Context, m backend.Mutation, req resource.StopInstancesRequest,
 ) (resource.Accepted[resource.InstanceStateChange], error) {
-	return resource.Accepted[resource.InstanceStateChange]{},
-		resource.Unsupported("StopInstances", "region API does not serve mutations")
+	return call[resource.Accepted[resource.InstanceStateChange]](ctx, c.transport, "Compute", "StopInstances", m, req)
 }
 
 func (c compute) StartInstances(
-	ctx context.Context, _ backend.Mutation, _ resource.StartInstancesRequest,
+	ctx context.Context, m backend.Mutation, req resource.StartInstancesRequest,
 ) (resource.Accepted[resource.InstanceStateChange], error) {
-	return resource.Accepted[resource.InstanceStateChange]{},
-		resource.Unsupported("StartInstances", "region API does not serve mutations")
+	return call[resource.Accepted[resource.InstanceStateChange]](ctx, c.transport, "Compute", "StartInstances", m, req)
 }
 
 func (c compute) TerminateInstances(
-	ctx context.Context, _ backend.Mutation, _ resource.TerminateInstancesRequest,
+	ctx context.Context, m backend.Mutation, req resource.TerminateInstancesRequest,
 ) (resource.Accepted[resource.InstanceStateChange], error) {
-	return resource.Accepted[resource.InstanceStateChange]{},
-		resource.Unsupported("TerminateInstances", "region API does not serve mutations")
+	return call[resource.Accepted[resource.InstanceStateChange]](ctx, c.transport, "Compute", "TerminateInstances", m, req)
 }
 
 func (c compute) RebootInstances(
-	ctx context.Context, _ backend.Mutation, _ resource.RebootInstancesRequest,
+	ctx context.Context, m backend.Mutation, req resource.RebootInstancesRequest,
 ) (resource.Accepted[resource.InstanceStateChange], error) {
-	return resource.Accepted[resource.InstanceStateChange]{},
-		resource.Unsupported("RebootInstances", "region API does not serve mutations")
+	return call[resource.Accepted[resource.InstanceStateChange]](ctx, c.transport, "Compute", "RebootInstances", m, req)
 }
 
 func (c compute) DescribeInstances(
@@ -86,65 +91,57 @@ func (c compute) DescribeInstances(
 }
 
 func (c compute) CreateTags(
-	ctx context.Context, _ backend.Mutation, _ resource.CreateTagsRequest,
+	ctx context.Context, m backend.Mutation, req resource.CreateTagsRequest,
 ) (resource.Accepted[resource.Instance], error) {
-	return resource.Accepted[resource.Instance]{},
-		resource.Unsupported("CreateTags", "region API does not serve mutations")
+	return call[resource.Accepted[resource.Instance]](ctx, c.transport, "Compute", "CreateTags", m, req)
 }
 
 func (c compute) DeleteTags(
-	ctx context.Context, _ backend.Mutation, _ resource.DeleteTagsRequest,
+	ctx context.Context, m backend.Mutation, req resource.DeleteTagsRequest,
 ) (resource.Accepted[resource.Instance], error) {
-	return resource.Accepted[resource.Instance]{},
-		resource.Unsupported("DeleteTags", "region API does not serve mutations")
+	return call[resource.Accepted[resource.Instance]](ctx, c.transport, "Compute", "DeleteTags", m, req)
 }
 
 func (c compute) CreateVolume(
-	ctx context.Context, _ backend.Mutation, _ resource.CreateVolumeRequest,
+	ctx context.Context, m backend.Mutation, req resource.CreateVolumeRequest,
 ) (resource.Accepted[resource.Volume], error) {
-	return resource.Accepted[resource.Volume]{},
-		resource.Unsupported("CreateVolume", "region API does not serve mutations")
+	return call[resource.Accepted[resource.Volume]](ctx, c.transport, "Compute", "CreateVolume", m, req)
 }
 
 func (c compute) TagVolumes(
-	ctx context.Context, _ backend.Mutation, _ resource.TagVolumesRequest,
+	ctx context.Context, m backend.Mutation, req resource.TagVolumesRequest,
 ) (resource.Accepted[resource.Volume], error) {
-	return resource.Accepted[resource.Volume]{}, resource.Unsupported("TagVolumes", "region API does not serve mutations")
+	return call[resource.Accepted[resource.Volume]](ctx, c.transport, "Compute", "TagVolumes", m, req)
 }
 
 func (c compute) UntagVolumes(
-	ctx context.Context, _ backend.Mutation, _ resource.UntagVolumesRequest,
+	ctx context.Context, m backend.Mutation, req resource.UntagVolumesRequest,
 ) (resource.Accepted[resource.Volume], error) {
-	return resource.Accepted[resource.Volume]{},
-		resource.Unsupported("UntagVolumes", "region API does not serve mutations")
+	return call[resource.Accepted[resource.Volume]](ctx, c.transport, "Compute", "UntagVolumes", m, req)
 }
 
 func (c compute) AttachVolume(
-	ctx context.Context, _ backend.Mutation, _ resource.AttachVolumeRequest,
+	ctx context.Context, m backend.Mutation, req resource.AttachVolumeRequest,
 ) (resource.Accepted[resource.Volume], error) {
-	return resource.Accepted[resource.Volume]{},
-		resource.Unsupported("AttachVolume", "region API does not serve mutations")
+	return call[resource.Accepted[resource.Volume]](ctx, c.transport, "Compute", "AttachVolume", m, req)
 }
 
 func (c compute) DetachVolume(
-	ctx context.Context, _ backend.Mutation, _ resource.DetachVolumeRequest,
+	ctx context.Context, m backend.Mutation, req resource.DetachVolumeRequest,
 ) (resource.Accepted[resource.VolumeAttachment], error) {
-	return resource.Accepted[resource.VolumeAttachment]{},
-		resource.Unsupported("DetachVolume", "region API does not serve mutations")
+	return call[resource.Accepted[resource.VolumeAttachment]](ctx, c.transport, "Compute", "DetachVolume", m, req)
 }
 
 func (c compute) DeleteVolume(
-	ctx context.Context, _ backend.Mutation, _ resource.DeleteVolumeRequest,
+	ctx context.Context, m backend.Mutation, req resource.DeleteVolumeRequest,
 ) (resource.Accepted[resource.Volume], error) {
-	return resource.Accepted[resource.Volume]{},
-		resource.Unsupported("DeleteVolume", "region API does not serve mutations")
+	return call[resource.Accepted[resource.Volume]](ctx, c.transport, "Compute", "DeleteVolume", m, req)
 }
 
 func (c compute) ModifyVolume(
-	ctx context.Context, _ backend.Mutation, _ resource.ModifyVolumeRequest,
+	ctx context.Context, m backend.Mutation, req resource.ModifyVolumeRequest,
 ) (resource.Accepted[resource.Volume], error) {
-	return resource.Accepted[resource.Volume]{},
-		resource.Unsupported("ModifyVolume", "region API does not serve mutations")
+	return call[resource.Accepted[resource.Volume]](ctx, c.transport, "Compute", "ModifyVolume", m, req)
 }
 
 func (c compute) DescribeVolumes(
@@ -160,17 +157,15 @@ func (c compute) DescribeImages(
 }
 
 func (c compute) CreateKeyPair(
-	ctx context.Context, _ backend.Mutation, _ resource.CreateKeyPairRequest,
+	ctx context.Context, m backend.Mutation, req resource.CreateKeyPairRequest,
 ) (resource.Accepted[resource.KeyPair], error) {
-	return resource.Accepted[resource.KeyPair]{},
-		resource.Unsupported("CreateKeyPair", "region API does not serve mutations")
+	return call[resource.Accepted[resource.KeyPair]](ctx, c.transport, "Compute", "CreateKeyPair", m, req)
 }
 
 func (c compute) DeleteKeyPair(
-	ctx context.Context, _ backend.Mutation, _ resource.DeleteKeyPairRequest,
+	ctx context.Context, m backend.Mutation, req resource.DeleteKeyPairRequest,
 ) (resource.Accepted[resource.KeyPair], error) {
-	return resource.Accepted[resource.KeyPair]{},
-		resource.Unsupported("DeleteKeyPair", "region API does not serve mutations")
+	return call[resource.Accepted[resource.KeyPair]](ctx, c.transport, "Compute", "DeleteKeyPair", m, req)
 }
 
 func (c compute) DescribeKeyPairs(
@@ -180,17 +175,15 @@ func (c compute) DescribeKeyPairs(
 }
 
 func (c compute) CreateSnapshot(
-	ctx context.Context, _ backend.Mutation, _ resource.CreateSnapshotRequest,
+	ctx context.Context, m backend.Mutation, req resource.CreateSnapshotRequest,
 ) (resource.Accepted[resource.Snapshot], error) {
-	return resource.Accepted[resource.Snapshot]{},
-		resource.Unsupported("CreateSnapshot", "region API does not serve mutations")
+	return call[resource.Accepted[resource.Snapshot]](ctx, c.transport, "Compute", "CreateSnapshot", m, req)
 }
 
 func (c compute) DeleteSnapshot(
-	ctx context.Context, _ backend.Mutation, _ resource.DeleteSnapshotRequest,
+	ctx context.Context, m backend.Mutation, req resource.DeleteSnapshotRequest,
 ) (resource.Accepted[resource.Snapshot], error) {
-	return resource.Accepted[resource.Snapshot]{},
-		resource.Unsupported("DeleteSnapshot", "region API does not serve mutations")
+	return call[resource.Accepted[resource.Snapshot]](ctx, c.transport, "Compute", "DeleteSnapshot", m, req)
 }
 
 func (c compute) DescribeSnapshots(
@@ -200,10 +193,9 @@ func (c compute) DescribeSnapshots(
 }
 
 func (c compute) RegisterImage(
-	ctx context.Context, _ backend.Mutation, _ resource.RegisterImageRequest,
+	ctx context.Context, m backend.Mutation, req resource.RegisterImageRequest,
 ) (resource.Accepted[resource.Image], error) {
-	return resource.Accepted[resource.Image]{},
-		resource.Unsupported("RegisterImage", "region API does not serve mutations")
+	return call[resource.Accepted[resource.Image]](ctx, c.transport, "Compute", "RegisterImage", m, req)
 }
 
 func (c compute) GetOperation(
@@ -212,8 +204,8 @@ func (c compute) GetOperation(
 	return call[resource.Operation](ctx, c.transport, "Compute", "GetOperation", s, id)
 }
 
-func (c storage) CreateBucket(ctx context.Context, _ backend.Scope, _ resource.BucketName) (resource.Bucket, error) {
-	return resource.Bucket{}, resource.Unsupported("CreateBucket", "region API does not serve mutations")
+func (c storage) CreateBucket(ctx context.Context, s backend.Scope, name resource.BucketName) (resource.Bucket, error) {
+	return call[resource.Bucket](ctx, c.transport, "Storage", "CreateBucket", s, name)
 }
 
 func (c storage) GetBucket(ctx context.Context, s backend.Scope, name resource.BucketName) (resource.Bucket, error) {
@@ -226,14 +218,25 @@ func (c storage) ListBuckets(
 	return call[resource.Page[resource.Bucket]](ctx, c.transport, "Storage", "ListBuckets", s, q)
 }
 
-func (c storage) DeleteBucket(ctx context.Context, _ backend.Scope, _ resource.BucketName) error {
-	return resource.Unsupported("DeleteBucket", "region API does not serve mutations")
+func (c storage) DeleteBucket(ctx context.Context, s backend.Scope, name resource.BucketName) error {
+	_, err := call[struct{}](ctx, c.transport, "Storage", "DeleteBucket", s, name)
+	return err
 }
 
 func (c storage) PutObject(
-	ctx context.Context, _ backend.Scope, _ resource.PutObjectRequest, _ io.Reader,
+	ctx context.Context, s backend.Scope, req resource.PutObjectRequest, body io.Reader,
 ) (resource.Object, error) {
-	return resource.Object{}, resource.Unsupported("PutObject", "region API does not serve mutations")
+	data, err := io.ReadAll(io.LimitReader(body, resource.MaxObjectBytes+1))
+	if err != nil {
+		return resource.Object{}, fmt.Errorf("read region object: %w", err)
+	}
+	if len(data) > resource.MaxObjectBytes {
+		return resource.Object{}, resource.TooLarge("object exceeds 4 MiB")
+	}
+	return call[resource.Object](ctx, c.transport, "Storage", "PutObject", s, struct {
+		Request resource.PutObjectRequest `json:"request"`
+		Body    []byte                    `json:"body"`
+	}{req, data})
 }
 
 func (c storage) GetObject(
@@ -249,8 +252,14 @@ func (c storage) GetObject(
 	return result.Object, io.NopCloser(bytes.NewReader(result.Body)), nil
 }
 
-func (c storage) DeleteObject(ctx context.Context, _ backend.Scope, _ resource.BucketName, _ resource.ObjectKey) error {
-	return resource.Unsupported("DeleteObject", "region API does not serve mutations")
+func (c storage) DeleteObject(
+	ctx context.Context, s backend.Scope, bucket resource.BucketName, key resource.ObjectKey,
+) error {
+	_, err := call[struct{}](ctx, c.transport, "Storage", "DeleteObject", s, struct {
+		Bucket resource.BucketName `json:"bucket"`
+		Key    resource.ObjectKey  `json:"key"`
+	}{bucket, key})
+	return err
 }
 
 func (c storage) ListObjects(
@@ -260,10 +269,9 @@ func (c storage) ListObjects(
 }
 
 func (c network) CreateSubnet(
-	ctx context.Context, _ backend.Mutation, _ resource.CreateSubnetRequest,
+	ctx context.Context, m backend.Mutation, req resource.CreateSubnetRequest,
 ) (resource.Accepted[resource.Subnet], error) {
-	return resource.Accepted[resource.Subnet]{},
-		resource.Unsupported("CreateSubnet", "region API does not serve mutations")
+	return call[resource.Accepted[resource.Subnet]](ctx, c.transport, "Network", "CreateSubnet", m, req)
 }
 
 func (c network) DescribeSubnets(
@@ -273,15 +281,15 @@ func (c network) DescribeSubnets(
 }
 
 func (c network) CreateVpc(
-	ctx context.Context, _ backend.Mutation, _ resource.CreateVpcRequest,
+	ctx context.Context, m backend.Mutation, req resource.CreateVpcRequest,
 ) (resource.Accepted[resource.Vpc], error) {
-	return resource.Accepted[resource.Vpc]{}, resource.Unsupported("CreateVpc", "region API does not serve mutations")
+	return call[resource.Accepted[resource.Vpc]](ctx, c.transport, "Network", "CreateVpc", m, req)
 }
 
 func (c network) DeleteVpc(
-	ctx context.Context, _ backend.Mutation, _ resource.DeleteVpcRequest,
+	ctx context.Context, m backend.Mutation, req resource.DeleteVpcRequest,
 ) (resource.Accepted[resource.Vpc], error) {
-	return resource.Accepted[resource.Vpc]{}, resource.Unsupported("DeleteVpc", "region API does not serve mutations")
+	return call[resource.Accepted[resource.Vpc]](ctx, c.transport, "Network", "DeleteVpc", m, req)
 }
 
 func (c network) DescribeVpcs(
@@ -291,42 +299,39 @@ func (c network) DescribeVpcs(
 }
 
 func (c network) TagVpcs(
-	ctx context.Context, _ backend.Mutation, _ resource.TagVpcsRequest,
+	ctx context.Context, m backend.Mutation, req resource.TagVpcsRequest,
 ) (resource.Accepted[resource.Vpc], error) {
-	return resource.Accepted[resource.Vpc]{}, resource.Unsupported("TagVpcs", "region API does not serve mutations")
+	return call[resource.Accepted[resource.Vpc]](ctx, c.transport, "Network", "TagVpcs", m, req)
 }
 
 func (c network) TagSubnets(
-	ctx context.Context, _ backend.Mutation, _ resource.TagSubnetsRequest,
+	ctx context.Context, m backend.Mutation, req resource.TagSubnetsRequest,
 ) (resource.Accepted[resource.Subnet], error) {
-	return resource.Accepted[resource.Subnet]{}, resource.Unsupported("TagSubnets", "region API does not serve mutations")
+	return call[resource.Accepted[resource.Subnet]](ctx, c.transport, "Network", "TagSubnets", m, req)
 }
 
 func (c network) UntagVpcs(
-	ctx context.Context, _ backend.Mutation, _ resource.UntagVpcsRequest,
+	ctx context.Context, m backend.Mutation, req resource.UntagVpcsRequest,
 ) (resource.Accepted[resource.Vpc], error) {
-	return resource.Accepted[resource.Vpc]{}, resource.Unsupported("UntagVpcs", "region API does not serve mutations")
+	return call[resource.Accepted[resource.Vpc]](ctx, c.transport, "Network", "UntagVpcs", m, req)
 }
 
 func (c network) UntagSubnets(
-	ctx context.Context, _ backend.Mutation, _ resource.UntagSubnetsRequest,
+	ctx context.Context, m backend.Mutation, req resource.UntagSubnetsRequest,
 ) (resource.Accepted[resource.Subnet], error) {
-	return resource.Accepted[resource.Subnet]{},
-		resource.Unsupported("UntagSubnets", "region API does not serve mutations")
+	return call[resource.Accepted[resource.Subnet]](ctx, c.transport, "Network", "UntagSubnets", m, req)
 }
 
 func (c network) CreateSecurityGroup(
-	ctx context.Context, _ backend.Mutation, _ resource.CreateSecurityGroupRequest,
+	ctx context.Context, m backend.Mutation, req resource.CreateSecurityGroupRequest,
 ) (resource.Accepted[resource.SecurityGroup], error) {
-	return resource.Accepted[resource.SecurityGroup]{},
-		resource.Unsupported("CreateSecurityGroup", "region API does not serve mutations")
+	return call[resource.Accepted[resource.SecurityGroup]](ctx, c.transport, "Network", "CreateSecurityGroup", m, req)
 }
 
 func (c network) DeleteSecurityGroup(
-	ctx context.Context, _ backend.Mutation, _ resource.DeleteSecurityGroupRequest,
+	ctx context.Context, m backend.Mutation, req resource.DeleteSecurityGroupRequest,
 ) (resource.Accepted[resource.SecurityGroup], error) {
-	return resource.Accepted[resource.SecurityGroup]{},
-		resource.Unsupported("DeleteSecurityGroup", "region API does not serve mutations")
+	return call[resource.Accepted[resource.SecurityGroup]](ctx, c.transport, "Network", "DeleteSecurityGroup", m, req)
 }
 
 func (c network) DescribeSecurityGroups(
@@ -336,38 +341,35 @@ func (c network) DescribeSecurityGroups(
 }
 
 func (c network) AuthorizeSecurityGroupIngress(
-	ctx context.Context, _ backend.Mutation, _ resource.AuthorizeSecurityGroupIngressRequest,
+	ctx context.Context, m backend.Mutation, req resource.AuthorizeSecurityGroupIngressRequest,
 ) (resource.Accepted[resource.SecurityGroup], error) {
-	return resource.Accepted[resource.SecurityGroup]{},
-		resource.Unsupported("AuthorizeSecurityGroupIngress", "region API does not serve mutations")
+	return call[resource.Accepted[resource.SecurityGroup]](
+		ctx, c.transport, "Network", "AuthorizeSecurityGroupIngress", m, req)
 }
 
 func (c network) RevokeSecurityGroupIngress(
-	ctx context.Context, _ backend.Mutation, _ resource.RevokeSecurityGroupIngressRequest,
+	ctx context.Context, m backend.Mutation, req resource.RevokeSecurityGroupIngressRequest,
 ) (resource.Accepted[resource.SecurityGroup], error) {
-	return resource.Accepted[resource.SecurityGroup]{},
-		resource.Unsupported("RevokeSecurityGroupIngress", "region API does not serve mutations")
+	return call[resource.Accepted[resource.SecurityGroup]](
+		ctx, c.transport, "Network", "RevokeSecurityGroupIngress", m, req)
 }
 
 func (c network) DeleteSubnet(
-	ctx context.Context, _ backend.Mutation, _ resource.DeleteSubnetRequest,
+	ctx context.Context, m backend.Mutation, req resource.DeleteSubnetRequest,
 ) (resource.Accepted[resource.Subnet], error) {
-	return resource.Accepted[resource.Subnet]{},
-		resource.Unsupported("DeleteSubnet", "region API does not serve mutations")
+	return call[resource.Accepted[resource.Subnet]](ctx, c.transport, "Network", "DeleteSubnet", m, req)
 }
 
 func (c network) AllocateAddress(
-	ctx context.Context, _ backend.Mutation, _ resource.AllocateAddressRequest,
+	ctx context.Context, m backend.Mutation, req resource.AllocateAddressRequest,
 ) (resource.Accepted[resource.Address], error) {
-	return resource.Accepted[resource.Address]{},
-		resource.Unsupported("AllocateAddress", "region API does not serve mutations")
+	return call[resource.Accepted[resource.Address]](ctx, c.transport, "Network", "AllocateAddress", m, req)
 }
 
 func (c network) ReleaseAddress(
-	ctx context.Context, _ backend.Mutation, _ resource.ReleaseAddressRequest,
+	ctx context.Context, m backend.Mutation, req resource.ReleaseAddressRequest,
 ) (resource.Accepted[resource.Address], error) {
-	return resource.Accepted[resource.Address]{},
-		resource.Unsupported("ReleaseAddress", "region API does not serve mutations")
+	return call[resource.Accepted[resource.Address]](ctx, c.transport, "Network", "ReleaseAddress", m, req)
 }
 
 func (c network) DescribeAddresses(
@@ -377,17 +379,15 @@ func (c network) DescribeAddresses(
 }
 
 func (c network) AssociateAddress(
-	ctx context.Context, _ backend.Mutation, _ resource.AssociateAddressRequest,
+	ctx context.Context, m backend.Mutation, req resource.AssociateAddressRequest,
 ) (resource.Accepted[resource.Address], error) {
-	return resource.Accepted[resource.Address]{},
-		resource.Unsupported("AssociateAddress", "region API does not serve mutations")
+	return call[resource.Accepted[resource.Address]](ctx, c.transport, "Network", "AssociateAddress", m, req)
 }
 
 func (c network) DisassociateAddress(
-	ctx context.Context, _ backend.Mutation, _ resource.DisassociateAddressRequest,
+	ctx context.Context, m backend.Mutation, req resource.DisassociateAddressRequest,
 ) (resource.Accepted[resource.Address], error) {
-	return resource.Accepted[resource.Address]{},
-		resource.Unsupported("DisassociateAddress", "region API does not serve mutations")
+	return call[resource.Accepted[resource.Address]](ctx, c.transport, "Network", "DisassociateAddress", m, req)
 }
 
 func (c network) GetOperation(

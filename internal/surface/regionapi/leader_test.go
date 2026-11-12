@@ -48,8 +48,12 @@ func TestMutationRegistrationDerivesLeaderGate(t *testing.T) {
 				return struct{}{}, nil
 			})
 			for _, method := range []string{"Mutation", "Read"} {
+				field := "scope"
+				if method == "Mutation" {
+					field = "mutation"
+				}
 				req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/internal/v1/Compute/"+method,
-					strings.NewReader(`{"scope":{"Account":"123456789012"},"req":{}}`))
+					strings.NewReader(`{"`+field+`":{"account":"123456789012"},"req":{}}`))
 				rec := httptest.NewRecorder()
 				mux.ServeHTTP(rec, req)
 				want := test.status

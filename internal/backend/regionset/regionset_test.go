@@ -20,8 +20,8 @@ import (
 
 type transportFunc func(context.Context, string, string, backend.Scope, any, any) error
 
-func (f transportFunc) Call(ctx context.Context, service, method string, s backend.Scope, q, dst any) error {
-	return f(ctx, service, method, s, q, dst)
+func (f transportFunc) Call(ctx context.Context, service, method string, s, q, dst any) error {
+	return f(ctx, service, method, s.(backend.Scope), q, dst)
 }
 
 func catalog() *backend.StaticRegions {
