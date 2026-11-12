@@ -168,6 +168,16 @@ func TestMutationMethodsRejectOtherPools(t *testing.T) {
 				resource.UntagVolumesRequest{IDs: []resource.VolumeID{vid}})
 			return resource.KindVolume, vid.String(), err
 		},
+		"CreateVolume": func(t *testing.T, b *Backend) (resource.Kind, string, error) {
+			_, err := b.CreateVolume(t.Context(), backend.Mutation{Scope: inventoryScope()}, resource.CreateVolumeRequest{})
+			return resource.KindVolume, "", err
+		},
+		"DeleteVolume": func(t *testing.T, b *Backend) (resource.Kind, string, error) {
+			id, _ := resource.Parse[resource.VolumeID]("vol-0123456789abcdef0")
+			_, err := b.DeleteVolume(t.Context(), backend.Mutation{Scope: inventoryScope()},
+				resource.DeleteVolumeRequest{ID: id})
+			return resource.KindVolume, id.String(), err
+		},
 	}
 	functions := mutationFunctions(t)
 	implemented := map[string]bool{}
@@ -187,6 +197,12 @@ func TestMutationMethodsRejectOtherPools(t *testing.T) {
 			s.VMs[0].Pool = "999999999999"
 			b, _ := networkBackend(t, s, RegionConfig{})
 			kind, id, err := run(t, b)
+			if name == "CreateVolume" {
+				if resource.CodeOf(err) != resource.CodePermissionDenied {
+					t.Fatalf("create without caller pool: %v", err)
+				}
+				return
+			}
 			assertMutationNotFound(t, err, kind, id)
 		})
 	}

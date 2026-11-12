@@ -18,6 +18,7 @@ type Backend struct {
 	cfg             RegionConfig
 	zones           []backend.Zone
 	statusMu        sync.Mutex
+	volumeMu        sync.Mutex
 	lastStatusError *resource.RegionStatusError
 }
 
@@ -74,6 +75,11 @@ func (b *Backend) RegionCapabilities(ctx context.Context, region string) (resour
 	}
 	if !b.cfg.ReadOnly {
 		doc.Actions["vws:OpenConsole"] = resource.ActionCapability{State: resource.ActionSupported}
+		doc.Actions["ec2:CreateVolume"] = resource.ActionCapability{
+			State: resource.ActionPartial, ReasonCode: "NoSnapshotSource",
+			Reason: "blank volumes only; volume tags must encode within 128 bytes",
+		}
+		doc.Actions["ec2:DeleteVolume"] = resource.ActionCapability{State: resource.ActionSupported}
 		for _, key := range []string{
 			"ec2:StartInstances", "ec2:StopInstances", "ec2:RebootInstances", "ec2:TerminateInstances",
 		} {
@@ -102,13 +108,6 @@ func (b *Backend) RunInstances(
 	return resource.Accepted[resource.Instance]{}, resource.Unsupported("RunInstances", "read-only")
 }
 
-// CreateVolume is unavailable in the phase-one backend.
-func (b *Backend) CreateVolume(
-	ctx context.Context, m backend.Mutation, req resource.CreateVolumeRequest,
-) (resource.Accepted[resource.Volume], error) {
-	return resource.Accepted[resource.Volume]{}, resource.Unsupported("CreateVolume", "read-only")
-}
-
 // AttachVolume is unavailable in the phase-one backend.
 func (b *Backend) AttachVolume(
 	ctx context.Context, m backend.Mutation, req resource.AttachVolumeRequest,
@@ -121,13 +120,6 @@ func (b *Backend) DetachVolume(
 	ctx context.Context, m backend.Mutation, req resource.DetachVolumeRequest,
 ) (resource.Accepted[resource.VolumeAttachment], error) {
 	return resource.Accepted[resource.VolumeAttachment]{}, resource.Unsupported("DetachVolume", "read-only")
-}
-
-// DeleteVolume is unavailable in the phase-one backend.
-func (b *Backend) DeleteVolume(
-	ctx context.Context, m backend.Mutation, req resource.DeleteVolumeRequest,
-) (resource.Accepted[resource.Volume], error) {
-	return resource.Accepted[resource.Volume]{}, resource.Unsupported("DeleteVolume", "read-only")
 }
 
 // ModifyVolume is unavailable in the phase-one backend.
