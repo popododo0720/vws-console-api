@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"cloud.google.com/go/longrunning/autogen/longrunningpb"
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
@@ -26,13 +27,14 @@ import (
 
 type keyPairServer struct {
 	iamv1.UnimplementedKeyPairServiceServer
-	mu      sync.Mutex
-	key     *iamv1.KeyPair
-	imports []*iamv1.ImportKeyPairRequest
-	deletes []*iamv1.DeleteKeyPairRequest
-	lists   []*iamv1.ListKeyPairsRequest
-	lost    bool
-	bad     bool
+	mu         sync.Mutex
+	key        *iamv1.KeyPair
+	imports    []*iamv1.ImportKeyPairRequest
+	deletes    []*iamv1.DeleteKeyPairRequest
+	lists      []*iamv1.ListKeyPairsRequest
+	lost       bool
+	bad        bool
+	deleteLost int
 }
 
 func (s *keyPairServer) ImportKeyPair(
@@ -47,6 +49,14 @@ func (s *keyPairServer) ImportKeyPair(
 		return nil, status.Error(codes.AlreadyExists, "duplicate")
 	}
 	s.imports = append(s.imports, req)
+	if req.GetPublicKey() != s.imports[0].GetPublicKey() {
+		st, err := status.New(codes.Aborted, "request changed").WithDetails(
+			&errdetails.ErrorInfo{Metadata: map[string]string{"aws_code": "IdempotentParameterMismatch"}})
+		if err != nil {
+			return nil, err
+		}
+		return nil, st.Err()
+	}
 	s.key = &iamv1.KeyPair{
 		Name: req.GetParent() + "/keyPairs/key-00000000000000001", Labels: req.GetLabels(),
 		Spec: &iamv1.KeyPairSpec{KeyName: req.GetKeyName(), Region: req.GetRegion(), PublicKey: req.GetPublicKey()},
@@ -85,6 +95,10 @@ func (s *keyPairServer) DeleteKeyPair(
 	defer s.mu.Unlock()
 	s.deletes = append(s.deletes, req)
 	s.key = nil
+	if s.deleteLost > 0 {
+		s.deleteLost--
+		return nil, status.Error(codes.Unavailable, "delete response lost after commit")
+	}
 	return &longrunningpb.Operation{Done: true}, nil
 }
 
@@ -158,8 +172,9 @@ func TestIAMKeyPairCreateDescribeDelete(t *testing.T) {
 	for _, format := range []resource.KeyFormat{resource.KeyFormatPEM, resource.KeyFormatPPK} {
 		t.Run(string(format), func(t *testing.T) {
 			cryptotest.SetGlobalRandom(t, 779)
-			s := new(keyPairServer)
-			client := New(keyPairConnection(t, s), Options{})
+			s := &keyPairServer{lost: true}
+			conn := keyPairConnection(t, s)
+			client := New(conn, Options{Backoff: time.Millisecond})
 			m := keyPairMutation(t)
 			req := resource.CreateKeyPairRequest{Name: "login", Type: resource.KeyTypeRSA, Format: format}
 			created, err := client.CreateKeyPair(t.Context(), m, req)
@@ -179,12 +194,27 @@ func TestIAMKeyPairCreateDescribeDelete(t *testing.T) {
 				page.Items[0].Material != "" {
 				t.Fatalf("describe = %+v %v", page, err)
 			}
-			if _, err := client.CreateKeyPair(t.Context(), m, req); resource.CodeOf(err) != resource.CodeAlreadyExists {
+			again, err := New(conn, Options{}).CreateKeyPair(t.Context(), m, req)
+			if resource.CodeOf(err) != resource.CodeAlreadyExists || len(again.Items) != 0 {
 				t.Fatalf("duplicate create = %v", err)
+			}
+			if s.imports[0].GetRequestId() != keyPairRequestID(m, "CreateKeyPair\x00"+req.Name) {
+				t.Fatal("create request ID must depend only on mutation scope, name and token")
+			}
+			for _, sent := range s.imports {
+				if sent.GetRequestId() != s.imports[0].GetRequestId() {
+					t.Fatal("create retry changed request ID")
+				}
 			}
 			deleted, err := client.DeleteKeyPair(t.Context(), m, resource.DeleteKeyPairRequest{Name: "login"})
 			if err != nil || deleted.Items[0].ID != key.ID || deleted.Operation.Action != resource.ActionDeleteKeyPair {
 				t.Fatalf("delete = %+v %v", deleted, err)
+			}
+			for _, selector := range []resource.DeleteKeyPairRequest{{Name: "login"}, {ID: key.ID}} {
+				again, err := New(conn, Options{}).DeleteKeyPair(t.Context(), m, selector)
+				if err != nil || again.Operation.State != resource.OperationSucceeded || len(again.Items) != 0 {
+					t.Fatalf("delete after client restart = %+v %v", again, err)
+				}
 			}
 			s.mu.Lock()
 			defer s.mu.Unlock()
@@ -193,6 +223,34 @@ func TestIAMKeyPairCreateDescribeDelete(t *testing.T) {
 				t.Fatal("delete name/request ID or list region changed")
 			}
 		})
+	}
+}
+
+func TestIAMKeyPairDeleteLostResponse(t *testing.T) {
+	s := &keyPairServer{deleteLost: MaxAttempts}
+	conn := keyPairConnection(t, s)
+	client := New(conn, Options{Backoff: time.Millisecond})
+	m := keyPairMutation(t)
+	pair, err := sshkey.Generate(resource.KeyTypeEd25519, strings.NewReader(strings.Repeat("a", 36)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.CreateKeyPair(t.Context(), m,
+		resource.CreateKeyPairRequest{Name: "login", PublicKey: pair.Public}); err != nil {
+		t.Fatal(err)
+	}
+	req := resource.DeleteKeyPairRequest{Name: "login"}
+	if _, err := client.DeleteKeyPair(t.Context(), m, req); resource.CodeOf(err) != resource.CodeUnavailable {
+		t.Fatalf("lost delete response = %v", err)
+	}
+	got, err := New(conn, Options{}).DeleteKeyPair(t.Context(), m, req)
+	if err != nil || got.Operation.State != resource.OperationSucceeded || len(got.Operation.Targets) != 0 {
+		t.Fatalf("retry after committed delete = %+v %v", got, err)
+	}
+	for _, sent := range s.deletes {
+		if sent.GetRequestId() != s.deletes[0].GetRequestId() {
+			t.Fatal("delete retry changed request ID")
+		}
 	}
 }
 

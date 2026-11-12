@@ -33,6 +33,33 @@ func TestIdempotencyGolden(t *testing.T) {
 	}
 }
 
+func TestAbsentKeyDeleteAcceptsOnlyCompletedNoop(t *testing.T) {
+	account := caller(t).Account
+	var id resource.OperationID
+	if err := id.UnmarshalText([]byte("op-compute-0123456789abcdef")); err != nil {
+		t.Fatal(err)
+	}
+	acc := resource.Accepted[resource.KeyPair]{Operation: resource.Operation{
+		ID: id, OwnerID: account, Action: resource.ActionDeleteKeyPair, State: resource.OperationSucceeded,
+	}}
+	if err := guardAccepted(account, acc, resource.ActionDeleteKeyPair); err != nil {
+		t.Fatalf("absent key delete = %v", err)
+	}
+	if err := guardAccepted(account, acc, resource.ActionCreateKeyPair); resource.CodeOf(err) != resource.CodeInternal {
+		t.Fatalf("delete result for a create request = %v", err)
+	}
+	for _, action := range []resource.Action{resource.ActionCreateKeyPair, resource.ActionDeleteVolume} {
+		acc.Operation.Action = action
+		if err := guardAccepted(account, acc, action); resource.CodeOf(err) != resource.CodeInternal {
+			t.Fatalf("empty %s result = %v", action, err)
+		}
+	}
+	acc.Operation.Action, acc.Operation.State = resource.ActionDeleteKeyPair, resource.OperationRunning
+	if err := guardAccepted(account, acc, resource.ActionDeleteKeyPair); resource.CodeOf(err) != resource.CodeInternal {
+		t.Fatalf("running empty delete = %v", err)
+	}
+}
+
 func TestEmptyTagChangesFingerprint(t *testing.T) {
 	c, token, req := fixedRequest(t)
 	bare, err := req.Normalize()

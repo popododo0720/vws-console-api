@@ -84,8 +84,10 @@ its own process and the only one that reads the source AWS credentials.
 With `-backend=regions -iam=grpc`, key pair create, import, delete and
 describe actions use vws-iam in the caller's region, with no regionapi call.
 The global layer generates private keys locally and imports only public
-material, preserving EC2 PEM/PPK formats and fingerprints. A missing launch
-key returns `InvalidKeyPair.NotFound` before contacting a region. Inline
+material, preserving EC2 PEM/PPK formats and fingerprints.
+Generated creates use stable request IDs and return `InvalidKeyPair.Duplicate`
+on retry after commit. Deleting an absent key succeeds without a target.
+A missing launch key returns `InvalidKeyPair.NotFound` before contacting a region. Inline
 public keys and Proxmox cloud-init `sshkeys` still await #771 and the rest
 of #779. Without gRPC IAM, key mutations and keyed launches are unsupported;
 key pair inventory keeps the regional read path.

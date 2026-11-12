@@ -176,14 +176,17 @@ func (c *Client) CreateKeyPair(
 		if req.Type == resource.KeyTypeRSA {
 			labels["vws-key-sha1"] = strings.ReplaceAll(pair.AWSFingerprint, ":", "")
 		}
-		// A new create cannot replay an import and return a different private key.
-		requestID = keyPairRequestID(m, pair.Public)
+		requestID = keyPairRequestID(m, "CreateKeyPair\x00"+req.Name)
 	}
 	op, err := retry(ctx, c.backoff, c.keyPairs.ImportKeyPair, &iamv1.ImportKeyPairRequest{
 		Parent: projectName(m.Account), Region: m.Region, KeyName: req.Name,
 		PublicKey: pair.Public, Labels: labels, RequestId: requestID,
 	})
 	if err := keyPairOperationError(op, err, req.Name); err != nil {
+		// EC2 generated creates return Duplicate, never replayed private material.
+		if req.PublicKey == "" && resource.CodeOf(err) == resource.CodeIdempotencyMismatch {
+			return resource.Accepted[resource.KeyPair]{}, resource.AlreadyExists(resource.KindKeyPair, req.Name)
+		}
 		return resource.Accepted[resource.KeyPair]{}, err
 	}
 	raw := new(iamv1.KeyPair)
@@ -219,12 +222,16 @@ func (c *Client) DeleteKeyPair(
 		return resource.Accepted[resource.KeyPair]{}, err
 	}
 	page, err := c.DescribeKeyPairs(ctx, m.Scope, q)
+	if resource.CodeOf(err) == resource.CodeNotFound {
+		return acceptedKeyPair(m, resource.ActionDeleteKeyPair)
+	}
 	if err != nil {
 		return resource.Accepted[resource.KeyPair]{}, err
 	}
 	key := page.Items[0]
 	op, err := retry(ctx, c.backoff, c.keyPairs.DeleteKeyPair, &iamv1.DeleteKeyPairRequest{
-		Name: projectName(m.Account) + "/keyPairs/" + key.ID.String(), RequestId: keyPairRequestID(m, "DeleteKeyPair"),
+		Name:      projectName(m.Account) + "/keyPairs/" + key.ID.String(),
+		RequestId: keyPairRequestID(m, "DeleteKeyPair"), AllowMissing: true,
 	})
 	if err := keyPairOperationError(op, err, key.Name); err != nil {
 		return resource.Accepted[resource.KeyPair]{}, err
@@ -233,18 +240,21 @@ func (c *Client) DeleteKeyPair(
 }
 
 func acceptedKeyPair(
-	m backend.Mutation, action resource.Action, key resource.KeyPair,
+	m backend.Mutation, action resource.Action, keys ...resource.KeyPair,
 ) (resource.Accepted[resource.KeyPair], error) {
 	sum := sha256.Sum256([]byte(keyPairRequestID(m, action.String())))
 	id, err := resource.NewOperationID(resource.ServiceCompute, fmt.Sprintf("%x", sum[:20]))
 	if err != nil {
 		return resource.Accepted[resource.KeyPair]{}, resource.Internal(err)
 	}
-	return resource.Accepted[resource.KeyPair]{
+	out := resource.Accepted[resource.KeyPair]{
 		Operation: resource.Operation{
 			ID: id, OwnerID: m.Account, Action: action, State: resource.OperationSucceeded,
-			Targets: []resource.Ref{key.ID.Ref()},
 		},
-		Items: []resource.KeyPair{key},
-	}, nil
+		Items: keys,
+	}
+	for _, key := range keys {
+		out.Operation.Targets = append(out.Operation.Targets, key.ID.Ref())
+	}
+	return out, nil
 }
