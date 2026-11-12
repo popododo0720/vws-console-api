@@ -3,6 +3,7 @@ package proxmox
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"math/big"
 	"net/http"
@@ -198,7 +199,18 @@ func (b *Backend) DeleteVolume(
 	}
 	if err := b.client.VolumeWrite(ctx, http.MethodPut, volumeVMPath(vm)+"/unlink",
 		url.Values{"idlist": {key}, "force": {"1"}}, nil); err != nil {
-		return resource.Accepted[resource.Volume]{}, fmt.Errorf("proxmox: delete volume: %w", err)
+		current, restoreErr := b.client.VMConfig(ctx, vm)
+		if restoreErr == nil && current.Drives[key] == cfg.Drives[key] {
+			restored := strings.Split(current.Tags, ";")
+			for _, tag := range strings.Split(cfg.Tags, ";") {
+				if strings.HasPrefix(tag, prefix) {
+					restored = append(restored, tag)
+				}
+			}
+			restoreErr = b.client.VolumeWrite(ctx, http.MethodPut, volumeVMPath(vm)+"/config",
+				url.Values{"tags": {strings.Join(restored, ";")}, "digest": {current.Digest}}, nil)
+		}
+		return resource.Accepted[resource.Volume]{}, errors.Join(fmt.Errorf("proxmox: delete volume: %w", err), restoreErr)
 	}
 	vol.State = resource.VolumeDeleting
 	return volumeAccepted(m.Scope, m.Key, resource.ActionDeleteVolume, vol)

@@ -93,10 +93,7 @@ func (b *Backend) volumeDrive(
 		vm := pveclient.VM{Node: row.Node, VMID: row.VMID}
 		cfg, err := b.client.VMConfig(ctx, vm)
 		if err != nil {
-			if ctx.Err() != nil {
-				return vm, cfg, "", err
-			}
-			continue
+			return vm, cfg, "", err
 		}
 		if cfg.Template != 0 || !slices.Contains(strings.Split(cfg.Tags, ";"), "vws.holder") {
 			continue

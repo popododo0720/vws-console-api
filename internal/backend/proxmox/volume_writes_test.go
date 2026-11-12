@@ -150,14 +150,16 @@ func TestVolumeHolderCreateRetryRestartDelete(t *testing.T) {
 }
 
 func TestVolumeCreateRecoversAllocationAfterConfigFailure(t *testing.T) {
-	var fail atomic.Bool
+	var fail, unlinkFail, unreadable atomic.Bool
 	fail.Store(true)
 	b, _ := volumeWorld(t, func(w http.ResponseWriter, r *http.Request) bool {
-		if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/qemu/100/config") {
+		if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/config") &&
+			(strings.HasSuffix(r.URL.Path, "/qemu/100/config") || unreadable.Load()) {
 			w.WriteHeader(http.StatusForbidden)
 			return true
 		}
-		if r.Method == http.MethodPut && strings.HasSuffix(r.URL.Path, "/config") && fail.Swap(false) {
+		if r.Method == http.MethodPut && ((strings.HasSuffix(r.URL.Path, "/config") && fail.Swap(false)) ||
+			(strings.HasSuffix(r.URL.Path, "/unlink") && unlinkFail.Swap(false))) {
 			w.WriteHeader(http.StatusInternalServerError)
 			if err := json.NewEncoder(w).Encode(map[string]string{"message": "injected config outage"}); err != nil {
 				t.Error(err)
@@ -182,15 +184,23 @@ func TestVolumeCreateRecoversAllocationAfterConfigFailure(t *testing.T) {
 	if err != nil || len(rows) != 1 {
 		t.Fatalf("allocation duplicated after restart: %+v %v", rows, err)
 	}
-	fail.Store(true)
-	del := resource.DeleteVolumeRequest{ID: got.Items[0].ID}
-	if _, err := fresh.DeleteVolume(t.Context(), volumeMutation(), del); err == nil {
-		t.Fatal("delete ignored failed tag cleanup")
+	unreadable.Store(true)
+	_, _, _, err = fresh.volumeDrive(t.Context(), inventoryScope(), got.Items[0].ID)
+	if err == nil || resource.CodeOf(err) == resource.CodeNotFound {
+		t.Fatalf("unreadable holder became NotFound: %v", err)
 	}
-	page, err := fresh.DescribeVolumes(t.Context(), inventoryScope(),
-		resource.VolumeQuery{IDs: []resource.VolumeID{del.ID}})
-	if err != nil || page.Items[0].Tags["Name"] != "recovery" {
-		t.Fatalf("failed cleanup removed the disk or tags: %+v %v", page, err)
+	unreadable.Store(false)
+	del := resource.DeleteVolumeRequest{ID: got.Items[0].ID}
+	for _, failure := range []*atomic.Bool{&unlinkFail, &fail} {
+		failure.Store(true)
+		if _, err := fresh.DeleteVolume(t.Context(), volumeMutation(), del); err == nil {
+			t.Fatal("delete ignored injected failure")
+		}
+		page, err := fresh.DescribeVolumes(t.Context(), inventoryScope(),
+			resource.VolumeQuery{IDs: []resource.VolumeID{del.ID}})
+		if err != nil || page.Items[0].Tags["Name"] != "recovery" {
+			t.Fatalf("failed delete removed the disk or tags: %+v %v", page, err)
+		}
 	}
 	if _, err := fresh.DeleteVolume(t.Context(), volumeMutation(), del); err != nil {
 		t.Fatal(err)
