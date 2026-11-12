@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"slices"
@@ -173,12 +174,16 @@ func (b *Backend) DetachVolume(
 	}
 	key := sha256.Sum256([]byte(m.Key))
 	key16 := fmt.Sprintf("%x", key[:8])
-	rows, err := b.poolVMs(ctx, m.Scope)
-	if err != nil {
-		return zero, err
-	}
+	now := time.Now()
 	if !m.MintedToken {
+		rows, err := b.poolVMs(ctx, m.Scope)
+		if err != nil {
+			return zero, err
+		}
 		for _, row := range rows {
+			if !strings.Contains(";"+row.Tags, ";vws.d."+key16+".") {
+				continue
+			}
 			vm := pveclient.VM{Node: row.Node, VMID: row.VMID}
 			cfg, err := b.client.VMConfig(ctx, vm)
 			if err != nil {
@@ -186,10 +191,12 @@ func (b *Backend) DetachVolume(
 			}
 			records, _, err := detachRecords(cfg.Description)
 			if err != nil {
-				return zero, err
+				slog.WarnContext(ctx, "skipping VM with undecodable detach replay records",
+					slog.Int("vmid", row.VMID), slog.Any("error", err))
+				continue
 			}
 			for i, rec := range records {
-				if rec.Key != key16 || backend.ClientTokenExpired(time.Unix(rec.At, 0), time.Now()) && !rec.Pending {
+				if rec.Key != key16 || detachRecordExpired(rec, now) {
 					continue
 				}
 				if rec.Fingerprint != m.Fingerprint || rec.Item.VolumeID != req.VolumeID ||
@@ -233,7 +240,7 @@ func (b *Backend) DetachVolume(
 		return zero, err
 	}
 	records = slices.DeleteFunc(records, func(rec detachRecord) bool {
-		return !rec.Pending && backend.ClientTokenExpired(time.Unix(rec.At, 0), time.Now())
+		return detachRecordExpired(rec, now)
 	})
 	for _, rec := range records {
 		if rec.Pending && rec.Item.VolumeID == vol.ID {
@@ -248,7 +255,7 @@ func (b *Backend) DetachVolume(
 		return zero, err
 	}
 	rec := detachRecord{
-		Key: key16, Fingerprint: m.Fingerprint, At: time.Now().Unix(), Pending: true,
+		Key: key16, Fingerprint: m.Fingerprint, At: now.Unix(), Pending: true,
 		Operation: opID, Item: resource.VolumeAttachment{
 			VolumeID: vol.ID, OwnerID: m.Account, InstanceID: vol.InstanceID, Device: vol.Device,
 			Status: resource.AttachmentDetaching, AttachTime: vol.AttachTime,
@@ -268,6 +275,10 @@ func (b *Backend) DetachVolume(
 		return zero, err
 	}
 	return detachAccepted(m.Scope, rec), nil
+}
+
+func detachRecordExpired(rec detachRecord, now time.Time) bool {
+	return backend.ClientTokenExpired(time.Unix(rec.At, 0), now)
 }
 
 func detachAccepted(scope backend.Scope, rec detachRecord) resource.Accepted[resource.VolumeAttachment] {
@@ -360,8 +371,9 @@ func (b *Backend) moveVolume(
 	if err != nil {
 		return err
 	}
+	now := time.Now()
 	for _, rec := range records {
-		if rec.Pending && rec.Item.VolumeID == id {
+		if rec.Pending && rec.Item.VolumeID == id && !detachRecordExpired(rec, now) {
 			return resource.Conflict(resource.KindVolume, id.String(), "an earlier detach must finish first")
 		}
 	}
@@ -377,7 +389,9 @@ func (b *Backend) moveVolume(
 		if option(src.Drives[key], "serial") != serial {
 			return resource.NotFound(resource.KindVolume, id.String())
 		}
-		tags := strings.Split(dst.Tags, ";")
+		tags := slices.DeleteFunc(strings.Split(dst.Tags, ";"), func(tag string) bool {
+			return strings.HasPrefix(tag, prefix)
+		})
 		for _, tag := range strings.Split(src.Tags, ";") {
 			if strings.HasPrefix(tag, prefix) && !slices.Contains(tags, tag) {
 				tags = append(tags, tag)

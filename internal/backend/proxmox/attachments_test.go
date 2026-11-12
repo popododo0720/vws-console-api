@@ -122,54 +122,60 @@ func TestAttachDetachSerialTagsAndRestartReplay(t *testing.T) {
 }
 
 func TestDetachReplayBudgetWindowAndMinted(t *testing.T) {
-	b, _ := volumeWorld(t, nil)
-	inst := attachmentInstance(t, b)
-	for i := range backend.MaxDetachReplays + 1 {
-		vol := attachmentVolume(t, b, fmt.Sprintf("budget-%d", i))
-		if _, err := b.AttachVolume(t.Context(), attachmentMutation(fmt.Sprintf("attach-%d", i)),
-			resource.AttachVolumeRequest{VolumeID: vol, InstanceID: inst, Device: "/dev/sdf"}); err != nil {
-			t.Fatal(err)
-		}
-		m := attachmentMutation(fmt.Sprintf("detach-%d", i))
-		_, err := b.DetachVolume(t.Context(), m, resource.DetachVolumeRequest{VolumeID: vol})
-		if i < backend.MaxDetachReplays {
-			if err != nil {
-				t.Fatal(err)
+	for _, pending := range []bool{false, true} {
+		t.Run(fmt.Sprintf("pending=%t", pending), func(t *testing.T) {
+			b, _ := volumeWorld(t, nil)
+			inst := attachmentInstance(t, b)
+			for i := range backend.MaxDetachReplays + 1 {
+				vol := attachmentVolume(t, b, fmt.Sprintf("budget-%d", i))
+				if _, err := b.AttachVolume(t.Context(), attachmentMutation(fmt.Sprintf("attach-%d", i)),
+					resource.AttachVolumeRequest{VolumeID: vol, InstanceID: inst, Device: "/dev/sdf"}); err != nil {
+					t.Fatal(err)
+				}
+				m := attachmentMutation(fmt.Sprintf("detach-%d", i))
+				_, err := b.DetachVolume(t.Context(), m, resource.DetachVolumeRequest{VolumeID: vol})
+				if i < backend.MaxDetachReplays {
+					if err != nil {
+						t.Fatal(err)
+					}
+					continue
+				}
+				if resource.CodeOf(err) != resource.CodeResourceExhausted {
+					t.Fatalf("fifth detach: %v", err)
+				}
+				m.MintedToken = true
+				if _, err := b.DetachVolume(t.Context(), m, resource.DetachVolumeRequest{VolumeID: vol}); err != nil {
+					t.Fatal(err)
+				}
+				vm := pveclient.VM{Node: "pve1", VMID: 100}
+				cfg, err := b.client.VMConfig(t.Context(), vm)
+				if err != nil {
+					t.Fatal(err)
+				}
+				records, _, err := detachRecords(cfg.Description)
+				if err != nil || len(records) != backend.MaxDetachReplays ||
+					strings.Count(cfg.Tags, "vws.d.") != backend.MaxDetachReplays {
+					t.Fatalf("minted token changed budget: %+v %v", records, err)
+				}
+				for j := range records {
+					records[j].At = time.Now().Add(-backend.ClientTokenWindow - 2*backend.ClientTokenGrace).Unix()
+					records[j].Pending = pending
+				}
+				records[0].Item.VolumeID = vol
+				if err := b.saveDetaches(t.Context(), vm, cfg, records); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := b.AttachVolume(t.Context(), attachmentMutation("window-attach"),
+					resource.AttachVolumeRequest{VolumeID: vol, InstanceID: inst, Device: "/dev/sdf"}); err != nil {
+					t.Fatal(err)
+				}
+				m.MintedToken = false
+				fresh := reopenedAttachments(t, b)
+				if _, err := fresh.DetachVolume(t.Context(), m, resource.DetachVolumeRequest{VolumeID: vol}); err != nil {
+					t.Fatalf("expired records held the budget: %v", err)
+				}
 			}
-			continue
-		}
-		if resource.CodeOf(err) != resource.CodeResourceExhausted {
-			t.Fatalf("fifth detach: %v", err)
-		}
-		m.MintedToken = true
-		if _, err := b.DetachVolume(t.Context(), m, resource.DetachVolumeRequest{VolumeID: vol}); err != nil {
-			t.Fatal(err)
-		}
-		vm := pveclient.VM{Node: "pve1", VMID: 100}
-		cfg, err := b.client.VMConfig(t.Context(), vm)
-		if err != nil {
-			t.Fatal(err)
-		}
-		records, _, err := detachRecords(cfg.Description)
-		if err != nil || len(records) != backend.MaxDetachReplays ||
-			strings.Count(cfg.Tags, "vws.d.") != backend.MaxDetachReplays {
-			t.Fatalf("minted token changed budget: %+v %v", records, err)
-		}
-		for j := range records {
-			records[j].At = time.Now().Add(-backend.ClientTokenWindow - 2*backend.ClientTokenGrace).Unix()
-		}
-		if err := b.saveDetaches(t.Context(), vm, cfg, records); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := b.AttachVolume(t.Context(), attachmentMutation("window-attach"),
-			resource.AttachVolumeRequest{VolumeID: vol, InstanceID: inst, Device: "/dev/sdf"}); err != nil {
-			t.Fatal(err)
-		}
-		m.MintedToken = false
-		fresh := reopenedAttachments(t, b)
-		if _, err := fresh.DetachVolume(t.Context(), m, resource.DetachVolumeRequest{VolumeID: vol}); err != nil {
-			t.Fatalf("expired records held the budget: %v", err)
-		}
+		})
 	}
 }
 
@@ -218,6 +224,66 @@ func TestAttachDetachRecoverAfterMoveBeforeTagCleanup(t *testing.T) {
 	fresh := reopenedAttachments(t, b)
 	if _, err := fresh.DetachVolume(t.Context(), m, resource.DetachVolumeRequest{VolumeID: vol}); err != nil {
 		t.Fatal(err)
+	}
+	t.Run("minted detach discards stale destination tags", func(t *testing.T) {
+		if _, err := b.AttachVolume(t.Context(), attachmentMutation("minted-attach"), req); err != nil {
+			t.Fatal(err)
+		}
+		m.MintedToken = true
+		armed.Store(true)
+		if _, err := b.DetachVolume(t.Context(), m, resource.DetachVolumeRequest{VolumeID: vol}); err == nil {
+			t.Fatal("lost minted detach cleanup error")
+		}
+		if _, err := b.UntagVolumes(t.Context(), m, resource.UntagVolumesRequest{
+			IDs: []resource.VolumeID{vol}, Tags: []resource.TagSelector{{Key: "Name"}},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		acc, err := reopenedAttachments(t, b).AttachVolume(t.Context(), attachmentMutation("fresh-tags"), req)
+		if err != nil || len(acc.Items[0].Tags) != 0 {
+			t.Fatalf("stale destination tags returned: %+v %v", acc, err)
+		}
+	})
+}
+
+func TestDetachSkipsCorruptUnrelatedReplay(t *testing.T) {
+	b, f := volumeWorld(t, nil)
+	inst := attachmentInstance(t, b)
+	vol := attachmentVolume(t, b, "corrupt-replay")
+	req := resource.AttachVolumeRequest{VolumeID: vol, InstanceID: inst, Device: "/dev/sdf"}
+	if _, err := b.AttachVolume(t.Context(), attachmentMutation("attach"), req); err != nil {
+		t.Fatal(err)
+	}
+	m := attachmentMutation("corrupt")
+	key := sha256.Sum256([]byte(m.Key))
+	if err := b.client.VolumeWrite(t.Context(), http.MethodPost, "/nodes/pve1/qemu", url.Values{
+		"vmid": {"200"}, "pool": {"tenant_pool"}, "description": {"vws:detach invalid"},
+		"tags": {fmt.Sprintf("vws.d.%x.bad.1", key[:8])},
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.DetachVolume(t.Context(), m, resource.DetachVolumeRequest{VolumeID: vol}); err != nil {
+		t.Fatalf("unrelated corrupt replay blocked detach: %v", err)
+	}
+	if _, err := b.AttachVolume(t.Context(), attachmentMutation("reattach"), req); err != nil {
+		t.Fatal(err)
+	}
+	vm := pveclient.VM{Node: "pve1", VMID: 100}
+	cfg, err := b.client.VMConfig(t.Context(), vm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := b.client.WriteConfigTags(t.Context(), vm, cfg.Digest, cfg.Tags, "vws:detach invalid"); err != nil {
+		t.Fatal(err)
+	}
+	before := len(f.Requests())
+	if _, err := b.DetachVolume(t.Context(), m, resource.DetachVolumeRequest{VolumeID: vol}); err == nil {
+		t.Fatal("target's corrupt replay allowed detach")
+	}
+	for _, call := range f.Requests()[before:] {
+		if !strings.HasPrefix(call, "GET ") {
+			t.Fatalf("corrupt target replay wrote %s", call)
+		}
 	}
 }
 
