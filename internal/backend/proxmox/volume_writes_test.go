@@ -20,14 +20,15 @@ import (
 func volumeWorld(t *testing.T, intercept func(http.ResponseWriter, *http.Request) bool) (*Backend, *pvefake.Fake) {
 	t.Helper()
 	s := inventoryScenario()
-	s.Pools = []string{"123456789012"}
+	s.VMs[0].Pool = "tenant_pool"
+	s.Pools = []string{"tenant_pool"}
 	s.Roles = append(s.Roles, pvefake.Role{
 		ID:    "Volumes",
 		Privs: []string{"Pool.Audit", "VM.Audit", "VM.Allocate", "VM.Config.Disk", "VM.Config.Options", "VM.PowerMgmt"},
 	},
 		pvefake.Role{ID: "Allocate", Privs: []string{"Datastore.Audit", "Datastore.AllocateSpace"}})
 	s.Tokens[0].ACL = append(s.Tokens[0].ACL,
-		pvefake.ACE{Path: "/pool/123456789012", Role: "Volumes"},
+		pvefake.ACE{Path: "/pool/tenant_pool", Role: "Volumes"},
 		pvefake.ACE{Path: "/storage/local", Role: "Allocate"})
 	f, err := pvefake.New(s)
 	if err != nil {
@@ -51,8 +52,10 @@ func volumeWorld(t *testing.T, intercept func(http.ResponseWriter, *http.Request
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, err := New(t.Context(), client, registration(),
-		RegionConfig{Storages: map[string]string{"gp2": "local"}})
+	b, err := New(t.Context(), client, registration(), RegionConfig{
+		Pools:    map[string]string{"123456789012": "tenant_pool"},
+		Storages: map[string]string{"gp2": "local"},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,7 +74,7 @@ func TestVolumeHolderCreateRetryRestartDelete(t *testing.T) {
 				t.Error(err)
 			}
 			if r.Form.Get("start") != "0" || r.Form.Get("description") != holderDescription ||
-				r.Form.Get("tags") != "vws.holder" {
+				r.Form.Get("tags") != "vws.holder" || r.Form.Get("name") != "vws-holder" {
 				t.Errorf("unsafe holder creation: %v", r.Form)
 			}
 			creates.Add(1)

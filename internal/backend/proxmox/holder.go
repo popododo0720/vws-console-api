@@ -61,7 +61,7 @@ func (b *Backend) volumeHolder(ctx context.Context, scope backend.Scope, pool, z
 		vm := pveclient.VM{Node: node.Node, VMID: id}
 		var upid string
 		err = b.client.VolumeWrite(ctx, http.MethodPost, "/nodes/"+node.Node+"/qemu", url.Values{
-			"vmid": {strconv.Itoa(id)}, "pool": {pool}, "name": {"vws-holder-" + pool},
+			"vmid": {strconv.Itoa(id)}, "pool": {pool}, "name": {"vws-holder"},
 			"tags": {"vws.holder"}, "description": {holderDescription}, "start": {"0"},
 		}, &upid)
 		if err != nil {
