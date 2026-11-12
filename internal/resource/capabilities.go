@@ -56,6 +56,8 @@ type RegionFeatures struct {
 	LinkedClones  bool   `json:"linkedClones"`
 	SnapshotScope string `json:"snapshotScope"`
 	PrivateIPMode string `json:"privateIpMode"`
+	// LiveTests is region.yaml live_tests; the live runner refuses a region without it.
+	LiveTests bool `json:"liveTests"`
 }
 
 // ActionCapability is how a region serves one action. Partial and

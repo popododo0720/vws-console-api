@@ -118,6 +118,33 @@ func TestStartupChecks(t *testing.T) {
 	})
 }
 
+func TestCapabilitiesLiveTestsFromRegionYAML(t *testing.T) {
+	for _, tc := range []struct {
+		name, yaml string
+		want       bool
+	}{
+		{"true", "read_only: true\nlive_tests: true\n", true},
+		{"false", "read_only: true\nlive_tests: false\n", false},
+		{"absent", "read_only: true\n", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, err := ParseRegion([]byte(tc.yaml))
+			if err != nil {
+				t.Fatal(err)
+			}
+			c, _ := serve(t, scenario())
+			b, err := New(t.Context(), c, registration(), cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			doc, err := b.RegionCapabilities(t.Context(), registration().Region.Name)
+			if err != nil || doc.Features.LiveTests != tc.want {
+				t.Fatalf("features=%+v err=%v; want liveTests=%v", doc.Features, err, tc.want)
+			}
+		})
+	}
+}
+
 func TestReadOnlyBackendEveryMethod(t *testing.T) {
 	c, f := serve(t, scenario())
 	for range 2 {

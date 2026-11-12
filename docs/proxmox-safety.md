@@ -60,7 +60,10 @@ observed in the audit log and never undone.
   starts only when the region's cluster name is on the allow list
   (`pve-test`), the cluster has one node, the pool `vws-live` exists and the
   region configuration says `live_tests: true`. Production regions never set
-  `live_tests`.
+  `live_tests`. The runner reaches the region only through the console API,
+  so it reads the flag from `features.liveTests` of
+  `GET /api/v1/regions/{region}/capabilities`; an AWS region and a region
+  without the key report `false`.
 - Before it makes a VM the runner checks that `vws-live` holds fewer than two
   VMs, tags each VM `vws.live.<runid>`, and deletes it on success, failure
   and panic alike. Live VMs are 1 GiB `vws.small` instances.

@@ -45,7 +45,7 @@ func (b *Backend) RegionCapabilities(ctx context.Context, region string) (resour
 		Region: region, Kind: resource.RegionKindProxmox,
 		Cluster: &resource.RegionCluster{Name: b.cluster}, Zones: zones,
 		Actions: map[string]resource.ActionCapability{}, InstanceTypes: types,
-		Features: resource.RegionFeatures{SnapshotScope: "vm"},
+		Features: resource.RegionFeatures{SnapshotScope: "vm", LiveTests: b.cfg.LiveTests},
 	}
 	for _, a := range resource.Actions() {
 		doc.Actions[a.CapabilityKey()] = resource.ActionCapability{
