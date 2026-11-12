@@ -21,6 +21,8 @@ import (
 // Resolver supplies a registered region's transport. The caller owns its lifetime.
 type Resolver func(context.Context, backend.ProxmoxRegion) (regionclient.Transport, error)
 
+const maxCursorBytes = 4096
+
 // New reads the catalog on each request. Mutations remain unsupported until the
 // region transport supports them. AWS raw proxy routing is separate.
 func New(catalog backend.RegionCatalog, resolve Resolver) (backend.Set, error) {
@@ -92,7 +94,15 @@ func cursors(scope string, token string, regions []backend.ProxmoxRegion) (map[s
 	if token == "" {
 		return pending, nil
 	}
-	if len(token) > 1<<20 {
+	maxRaw := len(scope) + 1 + maxCursorBytes
+	if scope == "all" {
+		maxRaw = len(scope) + 3
+		for name := range pending {
+			// JSON can expand each key or cursor byte to a six-byte escape.
+			maxRaw += 6*(len(name)+maxCursorBytes) + 6
+		}
+	}
+	if len(token) > base64.RawURLEncoding.EncodedLen(maxRaw) {
 		return nil, resource.Invalid("pageToken", "regional cursor exceeds the limit")
 	}
 	raw, err := base64.RawURLEncoding.DecodeString(token)
@@ -123,12 +133,17 @@ func cursors(scope string, token string, regions []backend.ProxmoxRegion) (map[s
 }
 
 func validCursor(token string) bool {
-	return len(token) <= 4096 && utf8.ValidString(token) && !strings.ContainsFunc(token, unicode.IsControl)
+	return len(token) <= maxCursorBytes && utf8.ValidString(token) && !strings.ContainsFunc(token, unicode.IsControl)
 }
 
 func nextToken(scope string, pending map[string]string) (string, error) {
 	if len(pending) == 0 {
 		return "", nil
+	}
+	for _, cursor := range pending {
+		if !validCursor(cursor) {
+			return "", resource.Internal(errors.New("region returned a malformed cursor"))
+		}
 	}
 	value := pending[scope]
 	if scope == "all" {
