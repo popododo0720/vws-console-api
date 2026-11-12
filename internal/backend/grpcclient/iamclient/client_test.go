@@ -875,6 +875,15 @@ func TestPrincipalTypes(t *testing.T) {
 		{iam.Principal{ARN: "arn:vws:iam::123456789012:root", Root: true}, iamv1.PrincipalType_PRINCIPAL_TYPE_ROOT},
 		{iam.Principal{ARN: "arn:vws:iam::123456789012:user/bob"}, iamv1.PrincipalType_PRINCIPAL_TYPE_USER},
 		{iam.Principal{ARN: "arn:vws:sts::123456789012:assumed-role/ops/s1"}, iamv1.PrincipalType_PRINCIPAL_TYPE_ASSUMED_ROLE},
+		{
+			iam.Principal{ARN: "arn:vws:sts::123456789012:federated-user/bob"},
+			iamv1.PrincipalType_PRINCIPAL_TYPE_FEDERATED_USER,
+		},
+		{iam.Principal{ARN: "arn:vws:iam::123456789012:user/federated-user/bob"}, iamv1.PrincipalType_PRINCIPAL_TYPE_USER},
+		{
+			iam.Principal{ARN: "arn:vws:sts::123456789012:assumed-role/federated-user/s1"},
+			iamv1.PrincipalType_PRINCIPAL_TYPE_ASSUMED_ROLE,
+		},
 	} {
 		if got := principalProto(tc.p).GetType(); got != tc.want {
 			t.Errorf("%s: %v", tc.p.ARN, got)
