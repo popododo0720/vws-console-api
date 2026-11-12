@@ -131,7 +131,7 @@ func TestAdminBootstrapRejectsInvalidFlags(t *testing.T) {
 }
 
 func TestAdminMemoryRegistryForEveryBackend(t *testing.T) {
-	for _, kind := range []string{"fake", "proxmox", "grpc", "regions"} {
+	for _, kind := range []string{"fake", "proxmox", "regions"} {
 		t.Run(kind, func(t *testing.T) {
 			g, key, closeRegistry, err := (adminBootstrap{store: "memory"}).open(t.Context(), "", kind)
 			if err != nil {

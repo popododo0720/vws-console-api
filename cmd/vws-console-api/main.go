@@ -77,7 +77,7 @@ func run(ctx context.Context, args []string) (err error) {
 	auditLog := fs.String("audit-log", "", "append-only audit stream path; empty uses stderr")
 	awsProxySocket := fs.String("aws-proxy-socket", "/run/vws/aws-proxy.sock", "AWS inventory and test proxy socket")
 	globalConfig := fs.String("global-config", "", "global.yaml bootstrap path for the admin registry; "+
-		"required for regions and grpc unless -admin-store memory; empty uses memory with fake and proxmox")
+		"required for regions unless -admin-store memory; empty uses memory with fake and proxmox")
 	var bootstrap adminBootstrap
 	bootstrap.flags(fs)
 	consoleAddr := fs.String("console-addr", "127.0.0.1:8080", "console listen address")
