@@ -36,6 +36,9 @@ func serve(t *testing.T, s pvefake.Scenario) (*pveclient.Client, *pvefake.Fake) 
 	}
 	srv := httptest.NewServer(f)
 	t.Cleanup(func() {
+		if violations := f.PoolWriteViolations(); len(violations) != 0 {
+			t.Errorf("forbidden pool writes: %v", violations)
+		}
 		for _, request := range f.Requests() {
 			if !strings.HasPrefix(request, "GET ") {
 				t.Errorf("read-only package issued %s", request)

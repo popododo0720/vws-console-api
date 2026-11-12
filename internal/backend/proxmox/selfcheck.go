@@ -54,6 +54,14 @@ func New(ctx context.Context, client *pveclient.Client, reg Registration, cfg Re
 				}
 			}
 		}
+	} else {
+		for path, privileges := range permissions {
+			for privilege := range privileges {
+				if forbiddenMutationPrivilege(path, privilege) {
+					return nil, fmt.Errorf("proxmox: mutation token holds %s on %s", privilege, path)
+				}
+			}
+		}
 	}
 	status, err := client.ClusterStatus(ctx)
 	if err != nil {
@@ -89,6 +97,20 @@ func New(ctx context.Context, client *pveclient.Client, reg Registration, cfg Re
 
 func forbiddenPrivilege(p string) bool {
 	return !strings.HasSuffix(p, ".Audit")
+}
+
+func forbiddenMutationPrivilege(path, privilege string) bool {
+	if (path == "/" || path == "/vms") &&
+		strings.HasPrefix(privilege, "VM.") && !strings.HasSuffix(privilege, ".Audit") {
+		return true
+	}
+	switch privilege {
+	case "Permissions.Modify", "Pool.Allocate", "Sys.Modify", "Datastore.Allocate",
+		"VM.Migrate", "VM.Snapshot.Rollback", "VM.GuestAgent.Unrestricted":
+		return true
+	default:
+		return false
+	}
 }
 
 // Standalone PVE has no cluster row and keeps the registered identity.

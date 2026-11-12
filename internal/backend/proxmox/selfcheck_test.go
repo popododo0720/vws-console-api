@@ -11,7 +11,62 @@ import (
 	"time"
 
 	"github.com/popododo0720/vws-console-api/internal/backend/proxmox/pveclient"
+	"github.com/popododo0720/vws-console-api/internal/backend/proxmox/pveclient/pvefake"
 )
+
+func TestStartupMutationTokenScope(t *testing.T) {
+	for _, tc := range []struct {
+		path, privilege string
+	}{
+		{"/", "VM.PowerMgmt"},
+		{"/vms", "VM.Config.Future"},
+		{"/pool/managed", "Permissions.Modify"},
+		{"/pool/managed", "Pool.Allocate"},
+		{"/nodes/pve1", "Sys.Modify"},
+		{"/storage/local", "Datastore.Allocate"},
+		{"/pool/managed", "VM.Migrate"},
+		{"/vms/100", "VM.Snapshot.Rollback"},
+		{"/pool/managed", "VM.GuestAgent.Unrestricted"},
+	} {
+		for _, propagate := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s%s/propagate=%v", tc.path, tc.privilege, propagate), func(t *testing.T) {
+				s := scenario()
+				s.Roles = append(s.Roles, pvefake.Role{ID: "Danger", Privs: []string{tc.privilege}})
+				s.Tokens[0].ACL = append(s.Tokens[0].ACL,
+					pvefake.ACE{Path: tc.path, Role: "Danger", Propagate: &propagate})
+				c, _ := serve(t, s)
+				b, err := New(t.Context(), c, registration(), RegionConfig{})
+				if err == nil || b != nil || !strings.Contains(err.Error(), tc.privilege) ||
+					!strings.Contains(err.Error(), tc.path) {
+					t.Fatalf("backend=%v error=%v", b, err)
+				}
+			})
+		}
+	}
+	t.Run("scoped operator", func(t *testing.T) {
+		s := scenario()
+		s.Roles = append(s.Roles, pvefake.Role{ID: "VWSRegionOperator", Privs: []string{
+			"VM.Audit", "VM.Allocate", "VM.Clone", "VM.PowerMgmt", "VM.Config.CPU", "VM.Config.Memory",
+			"VM.Config.Disk", "VM.Config.Network", "VM.Config.Cloudinit", "VM.Config.Options",
+			"VM.Config.HWType", "VM.Snapshot", "VM.Console", "VM.GuestAgent.Audit", "Pool.Audit",
+		}}, pvefake.Role{ID: "VWSTemplateReader", Privs: []string{"VM.Audit", "VM.Clone"}},
+			pvefake.Role{ID: "VWSStorageUser", Privs: []string{"Datastore.Audit", "Datastore.AllocateSpace"}},
+			pvefake.Role{ID: "VWSNetUser", Privs: []string{"SDN.Use", "SDN.Audit"}})
+		s.Tokens[0].ACL = append(s.Tokens[0].ACL,
+			pvefake.ACE{Path: "/pool/managed", Role: "VWSRegionOperator"},
+			pvefake.ACE{Path: "/pool/vws-images", Role: "VWSTemplateReader"},
+			pvefake.ACE{Path: "/vms/100", Role: "VWSTemplateReader"},
+			pvefake.ACE{Path: "/storage/local", Role: "VWSStorageUser"},
+			pvefake.ACE{Path: "/sdn/zones/localnetwork/vmbr0", Role: "VWSNetUser"})
+		c, _ := serve(t, s)
+		for range 2 {
+			b, err := New(t.Context(), c, registration(), RegionConfig{})
+			if err != nil || b == nil {
+				t.Fatalf("scoped operator backend=%v error=%v", b, err)
+			}
+		}
+	})
+}
 
 func startupClient(t *testing.T, handler http.HandlerFunc) *pveclient.Client {
 	t.Helper()
