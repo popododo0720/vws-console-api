@@ -143,8 +143,22 @@ def wait_state(iid, want, timeout=WAIT_TIMEOUT):
         time.sleep(2)
 
 
+def run_instances(**params):
+    """RunInstances, retried on RequestLimitExceeded with backoff as the AWS SDKs do
+    (https://docs.aws.amazon.com/ec2/latest/devguide/ec2-api-throttling.html). Its bucket
+    holds 5 launches refilled at 2/s, fewer than the steps send back to back, and the ec2
+    client makes one attempt. A throttled call creates nothing, so the retry is one launch."""
+    for attempt in range(5):
+        try:
+            return ec2.run_instances(**params)
+        except ec2.exceptions.ClientError as exc:
+            if exc.response["Error"]["Code"] != "RequestLimitExceeded" or attempt == 4:
+                raise
+            time.sleep(0.5 * 2 ** attempt)
+
+
 def run_instance(token):
-    return ec2.run_instances(
+    return run_instances(
         ImageId="ami-0123456789abcdef0", InstanceType="t3.micro", MinCount=1, MaxCount=1,
         SubnetId=S["subnet"], ClientToken=token,
         TagSpecifications=[{"ResourceType": "instance", "Tags": [{"Key": "Name", "Value": "e2e-web"}]}],
@@ -406,7 +420,7 @@ def key_launch():
     user_data = "#cloud-config\nruncmd:\n  - echo vws > /tmp/vws-user-data\n"
 
     def launch():
-        return ec2.run_instances(
+        return run_instances(
             ImageId="ami-0123456789abcdef0", InstanceType="t3.micro", MinCount=1, MaxCount=1,
             SubnetId=S["subnet"], ClientToken="tok-key", KeyName="e2e-import", UserData=user_data,
         )["Instances"][0]
@@ -418,14 +432,14 @@ def key_launch():
             ec2.describe_instances(InstanceIds=[iid])["Reservations"][0]["Instances"][0].get("KeyName") == "e2e-import", "keyName"), "vm")
         step("DescribeInstanceAttribute userData", lambda: check(base64.b64decode(
             ec2.describe_instance_attribute(InstanceId=iid, Attribute="userData")["UserData"]["Value"]).decode() == user_data, "userData"), "vm")
-        step("RunInstances unknown KeyName is InvalidKeyPair.NotFound", lambda: ec2_error("InvalidKeyPair.NotFound", lambda: ec2.run_instances(
+        step("RunInstances unknown KeyName is InvalidKeyPair.NotFound", lambda: ec2_error("InvalidKeyPair.NotFound", lambda: run_instances(
             ImageId="ami-0123456789abcdef0", InstanceType="t3.micro", MinCount=1, MaxCount=1,
             SubnetId=S["subnet"], ClientToken="tok-nokey", KeyName="e2e-missing")), "vm")
         step("TerminateInstances keyed instance", lambda: ec2.terminate_instances(InstanceIds=[iid]), "vm")
 
     def root_gp3():
         """#323: the root mapping's VolumeType, and the gp3 defaults, read back from DescribeVolumes."""
-        inst = ec2.run_instances(
+        inst = run_instances(
             ImageId="ami-0123456789abcdef0", InstanceType="t3.micro", MinCount=1, MaxCount=1,
             SubnetId=S["subnet"], ClientToken="tok-root-gp3",
             BlockDeviceMappings=[{"DeviceName": "/dev/xvda", "Ebs": {"VolumeType": "gp3"}}],
@@ -442,9 +456,7 @@ def key_launch():
     def extra_volume():
         """#423 AC2 and AC3: a kept non-root mapping is a new volume at its device, available after terminate.
         Kept, so it launches on a compute before vws-compute#173 too."""
-        # The RunInstances bucket takes 5 launches per 2 s, and the steps above spend it.
-        time.sleep(2)
-        inst = ec2.run_instances(
+        inst = run_instances(
             ImageId="ami-0123456789abcdef0", InstanceType="t3.micro", MinCount=1, MaxCount=1,
             SubnetId=S["subnet"], ClientToken="tok-extra-volume",
             BlockDeviceMappings=[{"DeviceName": "/dev/sdf", "Ebs": {
@@ -481,7 +493,7 @@ def key_launch():
 def refused_launch():
     """#197: a refused launch leaves no volume, and DescribeVolumes stays up."""
     before = {v["VolumeId"] for v in ec2.describe_volumes()["Volumes"]}
-    ec2_error("InvalidAMIID.NotFound", lambda: ec2.run_instances(
+    ec2_error("InvalidAMIID.NotFound", lambda: run_instances(
         ImageId="ami-fedcba9876543210", InstanceType="t3.micro", MinCount=1, MaxCount=1,
         SubnetId=S["subnet"], ClientToken="tok-other-region"))
     after = {v["VolumeId"] for v in ec2.describe_volumes()["Volumes"]}
@@ -593,7 +605,7 @@ def console_get(path):
 
 def tagged():
     """Any valid AWS tag round-trips exactly, including through a stop that rewrites labels."""
-    iid = step("RunInstances with tags labels cannot hold", lambda: ec2.run_instances(
+    iid = step("RunInstances with tags labels cannot hold", lambda: run_instances(
         ImageId="ami-0123456789abcdef0", InstanceType="t3.micro", MinCount=1, MaxCount=1,
         SubnetId=S["subnet"], ClientToken="tok-tags",
         TagSpecifications=[{"ResourceType": "instance", "Tags": [
@@ -1522,18 +1534,9 @@ def direct():
     vm = "direct" if "vm" in CAPS else "vm"
 
     def launch(token, nics):
-        # RunInstances is throttled per account (5, refilled at 2/s), and these
-        # launches follow others closely. RequestLimitExceeded is retryable, and
-        # the same ClientToken keeps a retry one launch.
-        for attempt in range(5):
-            try:
-                return ec2.run_instances(
-                    ImageId="ami-0123456789abcdef0", InstanceType="t3.micro", MinCount=1, MaxCount=1,
-                    ClientToken=token, NetworkInterfaces=nics)["Instances"][0]["InstanceId"]
-            except ec2.exceptions.ClientError as exc:
-                if exc.response["Error"]["Code"] != "RequestLimitExceeded" or attempt == 4:
-                    raise
-                time.sleep(1)
+        return run_instances(
+            ImageId="ami-0123456789abcdef0", InstanceType="t3.micro", MinCount=1, MaxCount=1,
+            ClientToken=token, NetworkInterfaces=nics)["Instances"][0]["InstanceId"]
 
     def mixed():
         nics = [{"DeviceIndex": 1, "SubnetId": DIRECT_SUBNET}, {"DeviceIndex": 0, "SubnetId": S["subnet"]}]
