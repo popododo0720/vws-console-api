@@ -17,6 +17,12 @@ type RegionCatalog interface {
 	AWSAccounts(ctx context.Context) ([]AWSAccount, error)
 }
 
+// ProjectPools resolves the current pool binding, defaulting to the project id
+// when that region has no mapping.
+type ProjectPools interface {
+	ProjectPool(context.Context, resource.AccountID, string) (string, error)
+}
+
 // ProxmoxRegion is one registered Proxmox cluster.
 type ProxmoxRegion struct {
 	Name string

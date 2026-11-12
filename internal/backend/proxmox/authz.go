@@ -98,10 +98,7 @@ func (b *Backend) snapshotForMutation(
 }
 
 func (b *Backend) poolForMutation(ctx context.Context, s backend.Scope) (string, error) {
-	pool, mapped := b.cfg.Pools[s.Account.String()]
-	if !mapped {
-		pool = s.Account.String()
-	}
+	pool := b.scopePool(s)
 	exists, err := b.PoolExists(ctx, pool)
 	if err != nil {
 		return "", err
@@ -110,4 +107,28 @@ func (b *Backend) poolForMutation(ctx context.Context, s backend.Scope) (string,
 		return "", resource.Denied("proxmox: mutation requires an existing managed pool")
 	}
 	return pool, nil
+}
+
+func (b *Backend) scopePool(s backend.Scope) string {
+	if s.Pool != "" {
+		return s.Pool
+	}
+	if pool, mapped := b.cfg.Pools[s.Account.String()]; mapped {
+		return pool
+	}
+	return s.Account.String()
+}
+
+// ScopeCheck confines transported bindings to the pools managed by region.yaml.
+func ScopeCheck(b *Backend) func(backend.Scope) error {
+	return func(s backend.Scope) error {
+		if s.Pool != "" {
+			for _, pool := range b.cfg.Pools {
+				if s.Pool == pool {
+					return nil
+				}
+			}
+		}
+		return resource.Denied("proxmox: scope requires a managed pool")
+	}
 }

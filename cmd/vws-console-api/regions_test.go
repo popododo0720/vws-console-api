@@ -34,6 +34,30 @@ import (
 	"github.com/popododo0720/vws-console-api/internal/surface/regionapi"
 )
 
+func TestInventoryCatalogForwardsProjectPools(t *testing.T) {
+	account, err := resource.Parse[resource.AccountID]("123456789012")
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := store.New(store.NewMemory())
+	catalog := inventoryCatalog{RegionCatalog: registry.Catalog()}
+	mapping := store.Project{Project: account.String()}
+	for _, pool := range []string{"team-a", "team-b"} {
+		mapping.Pools = []store.ProjectPool{{Region: "pve-test-1", Pool: pool}}
+		mapping, err = registry.Projects().Put(t.Context(), mapping)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, err := catalog.ProjectPool(t.Context(), account, "pve-test-1"); err != nil || got != pool {
+			t.Fatalf("inventory catalog lost current binding: %q %v", got, err)
+		}
+	}
+	fallback := inventoryCatalog{RegionCatalog: backend.DefaultRegions()}
+	if pool, err := fallback.ProjectPool(t.Context(), account, "pve-test-1"); err != nil || pool != account.String() {
+		t.Fatalf("static catalog default: %q %v", pool, err)
+	}
+}
+
 func bootstrapRegion(t *testing.T, srv *httptest.Server) string {
 	t.Helper()
 	dir := t.TempDir()

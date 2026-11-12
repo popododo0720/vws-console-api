@@ -21,6 +21,10 @@ func (r *router) OpenConsole(
 		if region.Name != scope.Region || scope.Region == "all" {
 			continue
 		}
+		scope, err = r.boundScope(ctx, scope)
+		if err != nil {
+			return resource.ConsoleSession{}, err
+		}
 		transport, err := r.resolve(ctx, region)
 		if err != nil {
 			return resource.ConsoleSession{}, regionalError(err)

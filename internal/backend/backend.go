@@ -25,6 +25,7 @@ type Scope struct {
 	Account   resource.AccountID `json:"account"`
 	Region    string             `json:"region"`
 	Principal string             `json:"principal"`
+	Pool      string             `json:"pool,omitempty"`
 }
 
 // Mutation identifies one client attempt at a long-running change.

@@ -30,14 +30,15 @@ type pendingConsole struct {
 	id      resource.InstanceID
 }
 
-func registerConsole(mux *http.ServeMux, console backend.Console, now func() time.Time) {
+func registerConsole(mux *http.ServeMux, cfg Config) {
+	console, now := cfg.Backend.Console, cfg.ConsoleNow
 	if now == nil {
 		now = time.Now
 	}
 	var mu sync.Mutex
 	opening := 0
 	sessions := map[string]pendingConsole{}
-	register(mux, nil, "Console", "OpenConsole", func(
+	register(mux, cfg, "Console", "OpenConsole", func(
 		ctx context.Context, scope backend.Scope, req consoleRequest,
 	) (consoleResult, error) {
 		if req.ID.IsZero() || (req.Kind != resource.ConsoleVNC && req.Kind != resource.ConsoleSerial) {
