@@ -18,6 +18,8 @@ import (
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
 	"github.com/popododo0720/vws-console-api/internal/admin/store"
+	"github.com/popododo0720/vws-console-api/internal/admin/store/etcdstore"
+	"github.com/popododo0720/vws-console-api/internal/globalconfig"
 	"github.com/popododo0720/vws-console-api/internal/proxy"
 )
 
@@ -30,7 +32,9 @@ func main() {
 
 func run(ctx context.Context) (err error) {
 	socket := flag.String("socket", "/run/vws/aws-proxy.sock", "unix socket in a private directory")
+	global := flag.String("global-config", "", "global.yaml bootstrap for the live admin registry")
 	accounts := flag.String("accounts", "", "JSON export of admin AWS account records")
+	projects := flag.String("projects", "", "JSON export of admin project mappings")
 	sts := flag.String("sts-endpoint", "", "STS endpoint URL")
 	stsRegion := flag.String("sts-region", "us-east-1",
 		"signing region of the STS endpoint (us-east-1 for the global endpoint)")
@@ -40,20 +44,11 @@ func run(ctx context.Context) (err error) {
 	if err != nil {
 		return err
 	}
-	data, err := os.ReadFile(*accounts)
+	registry, closeRegistry, err := openRegistry(ctx, *global, *accounts, *projects)
 	if err != nil {
-		return errors.New("read account registrations")
+		return err
 	}
-	var records []store.AWSAccount
-	if json.Unmarshal(data, &records) != nil {
-		return errors.New("decode account registrations")
-	}
-	registry := store.New(store.NewMemory())
-	for _, a := range records {
-		if _, err := registry.AWSAccounts().Create(ctx, a); err != nil {
-			return errors.New("load account registrations")
-		}
-	}
+	defer func() { err = errors.Join(err, closeRegistry()) }()
 	p, err := proxy.New(proxy.RegistryAccounts{
 		Registry:            registry,
 		CredentialDirectory: os.Getenv("CREDENTIALS_DIRECTORY"),
@@ -97,4 +92,49 @@ func run(ctx context.Context) (err error) {
 		return fmt.Errorf("shutdown: %w", err)
 	}
 	return nil
+}
+
+func openRegistry(ctx context.Context, global, accounts, projects string) (*store.Registry, func() error, error) {
+	if global != "" {
+		if accounts != "" || projects != "" {
+			return nil, nil, errors.New("global config conflicts with registration snapshots")
+		}
+		data, err := os.ReadFile(global) //nolint:gosec // operator-selected bootstrap file.
+		if err != nil {
+			return nil, nil, fmt.Errorf("read global config: %w", err)
+		}
+		cfg, err := globalconfig.Parse(data)
+		if err != nil {
+			return nil, nil, fmt.Errorf("parse global config: %w", err)
+		}
+		return etcdstore.Open(ctx, cfg.IAM)
+	}
+	data, err := os.ReadFile(accounts) //nolint:gosec // operator-selected snapshot file.
+	if err != nil {
+		return nil, nil, errors.New("read account registrations")
+	}
+	var records []store.AWSAccount
+	if json.Unmarshal(data, &records) != nil {
+		return nil, nil, errors.New("decode account registrations")
+	}
+	registry := store.New(store.NewMemory())
+	for _, a := range records {
+		if _, err := registry.AWSAccounts().Create(ctx, a); err != nil {
+			return nil, nil, errors.New("load account registrations")
+		}
+	}
+	data, err = os.ReadFile(projects) //nolint:gosec // operator-selected snapshot file.
+	if err != nil {
+		return nil, nil, errors.New("read project mappings")
+	}
+	var mappings []store.Project
+	if json.Unmarshal(data, &mappings) != nil {
+		return nil, nil, errors.New("decode project mappings")
+	}
+	for _, mapping := range mappings {
+		if _, err := registry.Projects().Put(ctx, mapping); err != nil {
+			return nil, nil, errors.New("load project mappings")
+		}
+	}
+	return registry, func() error { return nil }, nil
 }

@@ -17,8 +17,9 @@ import (
 
 type accounts struct{}
 
-func (accounts) Account(context.Context, string) (proxy.Account, error) {
+func (accounts) Account(context.Context, string, string) (proxy.Account, error) {
 	return proxy.Account{
+		ID:      "123456789012",
 		RoleARN: "arn:aws:iam::123456789012:role/inventory", ExternalID: "fixture",
 		Regions: []string{"us-east-1"},
 	}, nil
