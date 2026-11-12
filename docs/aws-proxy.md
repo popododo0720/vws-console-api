@@ -49,3 +49,32 @@ and HTTP server spans/metrics; sanitized STS decoding failures use `report.Error
 Phase 1 rebuilds the outbound headers from the Query content type and signature;
 it does not forward arbitrary client headers. Transparent service forwarding,
 streaming signatures and presigned requests remain #794/#795.
+
+## Private account connection tests
+
+`POST /internal/v1/aws-accounts/test` on the private Unix socket takes JSON
+`awsAccountId`, `roleArn` and `externalId`. The trusted local caller supplies
+`X-Vws-Account` matching the body, `X-Vws-Principal`, and
+`X-Vws-Target-Service: sts`. Content-Type must be application/json; queries,
+unknown or repeated fields, invalid metadata and bodies over 16 KiB are refused.
+This route is not registered on any public listener.
+
+Each test runs uncached AssumeRole then GetCallerIdentity against the configured
+STS endpoint, using forwarding's session duration, principal-derived session
+name and signing region. The 10-second sequence never calls the EC2 origin,
+reads or fills the credential cache, or writes registry state. Source and
+session credentials stay inside the proxy.
+
+The response is no-store JSON with ordered `assume_role` and
+`get_caller_identity` steps. Each has `name`, `result` and a fixed `message`;
+results are PASS, FAIL or SKIPPED. Failure skips later steps. A diagnostic
+requires one complete XML document with the expected root and one result,
+usable credentials, and exactly one 12-digit identity Account equal to the
+requested account. Unexpected XML is an unusable-response failure.
+Expected diagnostic denials do not generate error events; real faults and
+forwarding retain error reporting. ExternalId never appears in URLs, logs,
+error messages or responses.
+
+The public console routes and client are deferred to part 2 of #923.
+Inventory still reads its ExternalId from the interim credential file; a
+diagnostic tests only the supplied request-scoped value.

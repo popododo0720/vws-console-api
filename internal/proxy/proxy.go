@@ -76,6 +76,10 @@ func New(accounts Accounts, source sigv4.Credential, sts, stsRegion, origin stri
 }
 
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path == "/internal/v1/aws-accounts/test" {
+		p.serveTestConnection(w, r)
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 	r = r.WithContext(ctx)
@@ -216,6 +220,26 @@ func (p *Proxy) credentials(ctx context.Context, account, principal string, a Ac
 	if ok {
 		return c, nil
 	}
+	c, err := p.assumeRole(ctx, account, principal, a)
+	if err != nil {
+		return sigv4.Credential{}, err
+	}
+	p.mu.Lock()
+	if len(p.cache) >= 1024 {
+		clear(p.cache)
+	}
+	p.cache[key] = c
+	p.mu.Unlock()
+	return c, nil
+}
+
+func (p *Proxy) assumeRole(ctx context.Context, account, principal string, a Account) (sigv4.Credential, error) {
+	return p.assumeRoleRequest(ctx, account, principal, a, false)
+}
+
+func (p *Proxy) assumeRoleRequest(
+	ctx context.Context, account, principal string, a Account, diagnostic bool,
+) (sigv4.Credential, error) {
 	hash := sha256.Sum256([]byte(principal))
 	form := url.Values{
 		"Action": {"AssumeRole"}, "Version": {"2011-06-15"}, "RoleArn": {a.RoleARN},
@@ -242,21 +266,25 @@ func (p *Proxy) credentials(ctx context.Context, account, principal string, a Ac
 		} `xml:"AssumeRoleResult>Credentials"`
 	}
 	if readErr != nil || closeErr != nil || len(data) > 65536 || resp.StatusCode != http.StatusOK ||
-		xml.Unmarshal(data, &result) != nil {
-		return sigv4.Credential{}, fmt.Errorf("proxy: %w", report.Error(ctx, errors.New("STS response rejected")))
+		xml.Unmarshal(data, &result) != nil || diagnostic && !validAssumeResponse(data) {
+		cause := errors.New("STS response rejected")
+		if !diagnostic || readErr != nil || closeErr != nil || resp.StatusCode < 400 ||
+			resp.StatusCode >= 500 || resp.StatusCode == http.StatusTooManyRequests {
+			cause = report.Error(ctx, cause)
+		}
+		return sigv4.Credential{}, &stsError{
+			cause:   fmt.Errorf("proxy: %w", cause),
+			message: stsMessage(resp.StatusCode, data, false),
+		}
 	}
-	c = sigv4.Credential{
+	c := sigv4.Credential{
 		AccessKey: result.Credentials.AccessKeyID, Secret: result.Credentials.Secret,
 		SessionToken: result.Credentials.Token, Expires: result.Credentials.Expires,
 	}
 	if !validCredential(c) || c.SessionToken == "" || !p.now().Add(5*time.Minute).Before(c.Expires) {
-		return sigv4.Credential{}, errors.New("proxy: STS credentials rejected")
+		return sigv4.Credential{}, &stsError{
+			cause: errors.New("proxy: STS credentials rejected"), message: "STS returned an unusable response",
+		}
 	}
-	p.mu.Lock()
-	if len(p.cache) >= 1024 {
-		clear(p.cache)
-	}
-	p.cache[key] = c
-	p.mu.Unlock()
 	return c, nil
 }
