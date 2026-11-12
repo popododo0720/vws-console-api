@@ -14,6 +14,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"go.yaml.in/yaml/v3"
 )
 
 const (
@@ -308,6 +310,42 @@ func TestArchitectureRules(t *testing.T) {
 	}
 	for _, v := range archViolations(loadProduction(t, root)) {
 		t.Error(v)
+	}
+}
+
+func TestDepguardForbidsKubernetesEverywhere(t *testing.T) {
+	var cfg struct {
+		Linters struct {
+			Settings struct {
+				Depguard struct {
+					Rules map[string]struct {
+						Files []string `yaml:"files"`
+						Deny  []struct {
+							Pkg string `yaml:"pkg"`
+						} `yaml:"deny"`
+					} `yaml:"rules"`
+				} `yaml:"depguard"`
+			} `yaml:"settings"`
+		} `yaml:"linters"`
+	}
+	data, err := os.ReadFile(filepath.Join(repoRoot(t), ".golangci.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	rule := cfg.Linters.Settings.Depguard.Rules["no-kubernetes"]
+	if !reflect.DeepEqual(rule.Files, []string{"$all"}) {
+		t.Fatalf("Kubernetes depguard must cover every file without exceptions: %v", rule.Files)
+	}
+	var denied []string
+	for _, entry := range rule.Deny {
+		denied = append(denied, entry.Pkg)
+	}
+	sort.Strings(denied)
+	if !reflect.DeepEqual(denied, []string{"k8s.io", "sigs.k8s.io"}) {
+		t.Fatalf("Kubernetes depguard prefixes: %v", denied)
 	}
 }
 
