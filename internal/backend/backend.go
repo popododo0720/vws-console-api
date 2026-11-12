@@ -22,22 +22,22 @@ import (
 
 // Scope is the tenancy of a call.
 type Scope struct {
-	Account   resource.AccountID
-	Region    string
-	Principal string
+	Account   resource.AccountID `json:"account"`
+	Region    string             `json:"region"`
+	Principal string             `json:"principal"`
 }
 
 // Mutation identifies one client attempt at a long-running change.
 // Only package cloud builds a Mutation.
 type Mutation struct {
 	Scope
-	Key         string
-	Fingerprint string
+	Key         string `json:"key"`
+	Fingerprint string `json:"fingerprint"`
 	// MintedToken is set when the service minted the client token because
 	// the caller sent none. No caller can send that token again, so a
 	// backend need not remember the request beyond its own idempotency
 	// record. DetachVolume uses it to skip its replay record (#303).
-	MintedToken bool
+	MintedToken bool `json:"mintedToken"`
 }
 
 // ClientTokenWindow is how long a client token is remembered: a retry with

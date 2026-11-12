@@ -1,4 +1,4 @@
-// Package regionset combines read-only regional inventories into backend.Set.
+// Package regionset routes regional backends and combines their inventories.
 package regionset
 
 import (
@@ -23,8 +23,7 @@ type Resolver func(context.Context, backend.ProxmoxRegion) (regionclient.Transpo
 
 const maxCursorBytes = 4096
 
-// New reads the catalog on each request. Mutations remain unsupported until the
-// region transport supports them. AWS raw proxy routing is separate.
+// New reads the catalog on each request. AWS raw proxy routing is separate.
 func New(catalog backend.RegionCatalog, resolve Resolver) (backend.Set, error) {
 	if catalog == nil || resolve == nil {
 		return backend.Set{}, resource.Invalid("regions", "catalog and resolver are required")
@@ -55,13 +54,29 @@ func (r *router) regions(ctx context.Context) ([]backend.ProxmoxRegion, error) {
 	return regions, nil
 }
 
-func (r *router) Call(ctx context.Context, service, method string, s backend.Scope, q, dst any) error {
+func (r *router) Call(ctx context.Context, service, method string, input, q, dst any) error {
+	var s backend.Scope
+	switch value := input.(type) {
+	case backend.Scope:
+		s = value
+	case backend.Mutation:
+		s = value.Scope
+	default:
+		return resource.Invalid("scope", "expected scope or mutation")
+	}
 	regions, err := r.regions(ctx)
 	if err != nil {
 		return err
 	}
 	for _, region := range regions {
 		if region.Name == s.Region && s.Region != "all" {
+			if _, ok := input.(backend.Mutation); ok {
+				t, err := r.resolve(ctx, region)
+				if err == nil {
+					err = t.Call(ctx, service, method, input, q, dst)
+				}
+				return regionalError(err)
+			}
 			return r.call(ctx, region, service, method, s, q, dst)
 		}
 	}

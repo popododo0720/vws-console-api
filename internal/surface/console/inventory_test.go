@@ -22,8 +22,8 @@ import (
 
 type inventoryTransport func(context.Context, string, string, backend.Scope, any, any) error
 
-func (f inventoryTransport) Call(ctx context.Context, service, method string, s backend.Scope, q, dst any) error {
-	return f(ctx, service, method, s, q, dst)
+func (f inventoryTransport) Call(ctx context.Context, service, method string, s, q, dst any) error {
+	return f(ctx, service, method, s.(backend.Scope), q, dst)
 }
 
 func inventoryRoutes() []string {

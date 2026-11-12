@@ -123,7 +123,11 @@ type awsInventory struct {
 	socket  string
 }
 
-func (a awsInventory) Call(ctx context.Context, service, method string, scope backend.Scope, req, dst any) error {
+func (a awsInventory) Call(ctx context.Context, service, method string, input, req, dst any) error {
+	scope, ok := input.(backend.Scope)
+	if !ok {
+		return resource.Unsupported("Action", "AWS inventory does not serve mutations")
+	}
 	accounts, err := a.catalog.AWSAccounts(ctx)
 	if err != nil {
 		return err

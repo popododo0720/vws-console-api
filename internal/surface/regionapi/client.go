@@ -64,14 +64,27 @@ func (c *Client) Status(ctx context.Context) (resource.RegionStatus, error) {
 	return result, err
 }
 
-// Call executes one read and decodes its resource result into dst.
-func (c *Client) Call(ctx context.Context, iface, method string, scope backend.Scope, req, dst any) error {
-	data, err := json.Marshal(struct {
-		Scope backend.Scope `json:"scope"`
-		Req   any           `json:"req"`
-	}{Scope: scope, Req: req})
+// Call executes a scoped read or mutation and decodes its result into dst.
+func (c *Client) Call(ctx context.Context, iface, method string, scope, req, dst any) error {
+	envelope := struct {
+		Scope    any `json:"scope,omitempty"`
+		Mutation any `json:"mutation,omitempty"`
+		Req      any `json:"req"`
+	}{Req: req}
+	switch scope := scope.(type) {
+	case backend.Scope:
+		envelope.Scope = scope
+	case backend.Mutation:
+		envelope.Mutation = scope
+	default:
+		return resource.Invalid("scope", "expected scope or mutation")
+	}
+	data, err := json.Marshal(envelope)
 	if err != nil {
 		return fmt.Errorf("encode region request: %w", err)
+	}
+	if len(data) > requestLimit(iface, method) {
+		return resource.TooLarge("body exceeds the limit")
 	}
 	return c.do(ctx, http.MethodPost, "/internal/v1/"+iface+"/"+method, data, dst)
 }
