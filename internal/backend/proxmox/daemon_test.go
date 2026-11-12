@@ -187,7 +187,7 @@ func TestRegionDaemonReadsRestartAndReadiness(t *testing.T) {
 	pve.TLS = &tls.Config{MinVersion: tls.VersionTLS13, Certificates: tlsConfig.Certificates}
 	pve.StartTLS()
 	defer pve.Close()
-	writeFixture(t, filepath.Join(dir, "region.yaml"), []byte("read_only: true\n"))
+	writeFixture(t, filepath.Join(dir, "region.yaml"), []byte("read_only: true\npools:\n  project: '123456789012'\n"))
 	reg := filepath.Join(dir, "public", "registration.json")
 	const canary = "fake-secret"
 	transport := &http.Transport{TLSClientConfig: tlsConfig}
@@ -392,7 +392,7 @@ func TestRegionDaemonReadsRestartAndReadiness(t *testing.T) {
 	}
 	read := func(origin string) resource.Page[resource.Instance] {
 		var page resource.Page[resource.Instance]
-		data := `{"scope":{"account":"` + account.String() + `"},"req":{}}`
+		data := `{"scope":{"account":"` + account.String() + `","pool":"123456789012"},"req":{}}`
 		if err := json.Unmarshal(request(t, http.MethodPost, origin+"/internal/v1/Compute/DescribeInstances",
 			data, http.StatusOK), &page); err != nil {
 			t.Fatal(err)
@@ -402,6 +402,15 @@ func TestRegionDaemonReadsRestartAndReadiness(t *testing.T) {
 	want := read(first)
 	if got := read(second); !reflect.DeepEqual(got, want) {
 		t.Fatalf("two daemons disagree: got=%+v want=%+v", got, want)
+	}
+	for _, pool := range []string{"", "foreign-pool", "project"} {
+		data := `{"scope":{"account":"` + account.String() + `","pool":"` + pool + `"},"req":{}}`
+		for _, origin := range []string{first, second} {
+			body := request(t, http.MethodPost, origin+"/internal/v1/Compute/DescribeInstances", data, http.StatusBadRequest)
+			if !strings.Contains(string(body), `"code":"PermissionDenied"`) {
+				t.Fatalf("daemon accepted unmanaged pool %q: %s", pool, body)
+			}
+		}
 	}
 	var caps resource.RegionCapabilities
 	err = json.Unmarshal(request(t, http.MethodGet, second+"/internal/v1/capabilities", "", http.StatusOK), &caps)

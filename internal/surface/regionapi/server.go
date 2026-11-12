@@ -53,6 +53,7 @@ type Config struct {
 	Region       string
 	Version      Version
 	Gate         Gate
+	CheckScope   func(backend.Scope) error
 	// ConsoleNow supplies the console admission clock. Nil uses time.Now.
 	ConsoleNow func() time.Time
 	Status     interface {
@@ -85,71 +86,71 @@ func New(cfg Config) (http.Handler, error) {
 		return nil, fmt.Errorf("new region API: release line and cluster name are required")
 	}
 	mux := http.NewServeMux()
-	registerConsole(mux, cfg.Backend.Console, cfg.ConsoleNow)
+	registerConsole(mux, cfg)
 	c, s, n := cfg.Backend.Compute, cfg.Backend.Storage, cfg.Backend.Network
-	register(mux, cfg.Gate, "Compute", "RunInstances", c.RunInstances)
-	register(mux, cfg.Gate, "Compute", "StopInstances", c.StopInstances)
-	register(mux, cfg.Gate, "Compute", "StartInstances", c.StartInstances)
-	register(mux, cfg.Gate, "Compute", "TerminateInstances", c.TerminateInstances)
-	register(mux, cfg.Gate, "Compute", "RebootInstances", c.RebootInstances)
-	register(mux, cfg.Gate, "Compute", "CreateTags", c.CreateTags)
-	register(mux, cfg.Gate, "Compute", "DeleteTags", c.DeleteTags)
-	register(mux, cfg.Gate, "Compute", "CreateVolume", c.CreateVolume)
-	register(mux, cfg.Gate, "Compute", "TagVolumes", c.TagVolumes)
-	register(mux, cfg.Gate, "Compute", "UntagVolumes", c.UntagVolumes)
-	register(mux, cfg.Gate, "Compute", "AttachVolume", c.AttachVolume)
-	register(mux, cfg.Gate, "Compute", "DetachVolume", c.DetachVolume)
-	register(mux, cfg.Gate, "Compute", "DeleteVolume", c.DeleteVolume)
-	register(mux, cfg.Gate, "Compute", "ModifyVolume", c.ModifyVolume)
-	register(mux, cfg.Gate, "Compute", "CreateKeyPair", c.CreateKeyPair)
-	register(mux, cfg.Gate, "Compute", "DeleteKeyPair", c.DeleteKeyPair)
-	register(mux, cfg.Gate, "Compute", "CreateSnapshot", c.CreateSnapshot)
-	register(mux, cfg.Gate, "Compute", "DeleteSnapshot", c.DeleteSnapshot)
-	register(mux, cfg.Gate, "Compute", "RegisterImage", c.RegisterImage)
-	register(mux, cfg.Gate, "Network", "CreateSubnet", n.CreateSubnet)
-	register(mux, cfg.Gate, "Network", "CreateVpc", n.CreateVpc)
-	register(mux, cfg.Gate, "Network", "DeleteVpc", n.DeleteVpc)
-	register(mux, cfg.Gate, "Network", "TagVpcs", n.TagVpcs)
-	register(mux, cfg.Gate, "Network", "TagSubnets", n.TagSubnets)
-	register(mux, cfg.Gate, "Network", "UntagVpcs", n.UntagVpcs)
-	register(mux, cfg.Gate, "Network", "UntagSubnets", n.UntagSubnets)
-	register(mux, cfg.Gate, "Network", "CreateSecurityGroup", n.CreateSecurityGroup)
-	register(mux, cfg.Gate, "Network", "DeleteSecurityGroup", n.DeleteSecurityGroup)
-	register(mux, cfg.Gate, "Network", "AuthorizeSecurityGroupIngress", n.AuthorizeSecurityGroupIngress)
-	register(mux, cfg.Gate, "Network", "RevokeSecurityGroupIngress", n.RevokeSecurityGroupIngress)
-	register(mux, cfg.Gate, "Network", "DeleteSubnet", n.DeleteSubnet)
-	register(mux, cfg.Gate, "Network", "AllocateAddress", n.AllocateAddress)
-	register(mux, cfg.Gate, "Network", "ReleaseAddress", n.ReleaseAddress)
-	register(mux, cfg.Gate, "Network", "AssociateAddress", n.AssociateAddress)
-	register(mux, cfg.Gate, "Network", "DisassociateAddress", n.DisassociateAddress)
-	register(mux, cfg.Gate, "Compute", "DescribeInstances", c.DescribeInstances)
-	register(mux, cfg.Gate, "Compute", "DescribeVolumes", c.DescribeVolumes)
-	register(mux, cfg.Gate, "Compute", "DescribeImages", c.DescribeImages)
-	register(mux, cfg.Gate, "Compute", "DescribeKeyPairs", c.DescribeKeyPairs)
-	register(mux, cfg.Gate, "Compute", "DescribeSnapshots", c.DescribeSnapshots)
-	register(mux, cfg.Gate, "Compute", "GetOperation", c.GetOperation)
-	register(mux, cfg.Gate, "Network", "DescribeSubnets", n.DescribeSubnets)
-	register(mux, cfg.Gate, "Network", "DescribeVpcs", n.DescribeVpcs)
-	register(mux, cfg.Gate, "Network", "DescribeSecurityGroups", n.DescribeSecurityGroups)
-	register(mux, cfg.Gate, "Network", "DescribeAddresses", n.DescribeAddresses)
-	register(mux, cfg.Gate, "Network", "GetOperation", n.GetOperation)
-	register(mux, cfg.Gate, "Storage", "GetBucket", s.GetBucket)
-	register(mux, cfg.Gate, "Storage", "ListBuckets", s.ListBuckets)
-	register(mux, cfg.Gate, "Storage", "ListObjects", s.ListObjects)
-	register(mux, cfg.Gate, "Storage", "CreateBucket", s.CreateBucket, true)
-	register(mux, cfg.Gate, "Storage", "DeleteBucket", func(ctx context.Context, scope backend.Scope,
+	register(mux, cfg, "Compute", "RunInstances", c.RunInstances)
+	register(mux, cfg, "Compute", "StopInstances", c.StopInstances)
+	register(mux, cfg, "Compute", "StartInstances", c.StartInstances)
+	register(mux, cfg, "Compute", "TerminateInstances", c.TerminateInstances)
+	register(mux, cfg, "Compute", "RebootInstances", c.RebootInstances)
+	register(mux, cfg, "Compute", "CreateTags", c.CreateTags)
+	register(mux, cfg, "Compute", "DeleteTags", c.DeleteTags)
+	register(mux, cfg, "Compute", "CreateVolume", c.CreateVolume)
+	register(mux, cfg, "Compute", "TagVolumes", c.TagVolumes)
+	register(mux, cfg, "Compute", "UntagVolumes", c.UntagVolumes)
+	register(mux, cfg, "Compute", "AttachVolume", c.AttachVolume)
+	register(mux, cfg, "Compute", "DetachVolume", c.DetachVolume)
+	register(mux, cfg, "Compute", "DeleteVolume", c.DeleteVolume)
+	register(mux, cfg, "Compute", "ModifyVolume", c.ModifyVolume)
+	register(mux, cfg, "Compute", "CreateKeyPair", c.CreateKeyPair)
+	register(mux, cfg, "Compute", "DeleteKeyPair", c.DeleteKeyPair)
+	register(mux, cfg, "Compute", "CreateSnapshot", c.CreateSnapshot)
+	register(mux, cfg, "Compute", "DeleteSnapshot", c.DeleteSnapshot)
+	register(mux, cfg, "Compute", "RegisterImage", c.RegisterImage)
+	register(mux, cfg, "Network", "CreateSubnet", n.CreateSubnet)
+	register(mux, cfg, "Network", "CreateVpc", n.CreateVpc)
+	register(mux, cfg, "Network", "DeleteVpc", n.DeleteVpc)
+	register(mux, cfg, "Network", "TagVpcs", n.TagVpcs)
+	register(mux, cfg, "Network", "TagSubnets", n.TagSubnets)
+	register(mux, cfg, "Network", "UntagVpcs", n.UntagVpcs)
+	register(mux, cfg, "Network", "UntagSubnets", n.UntagSubnets)
+	register(mux, cfg, "Network", "CreateSecurityGroup", n.CreateSecurityGroup)
+	register(mux, cfg, "Network", "DeleteSecurityGroup", n.DeleteSecurityGroup)
+	register(mux, cfg, "Network", "AuthorizeSecurityGroupIngress", n.AuthorizeSecurityGroupIngress)
+	register(mux, cfg, "Network", "RevokeSecurityGroupIngress", n.RevokeSecurityGroupIngress)
+	register(mux, cfg, "Network", "DeleteSubnet", n.DeleteSubnet)
+	register(mux, cfg, "Network", "AllocateAddress", n.AllocateAddress)
+	register(mux, cfg, "Network", "ReleaseAddress", n.ReleaseAddress)
+	register(mux, cfg, "Network", "AssociateAddress", n.AssociateAddress)
+	register(mux, cfg, "Network", "DisassociateAddress", n.DisassociateAddress)
+	register(mux, cfg, "Compute", "DescribeInstances", c.DescribeInstances)
+	register(mux, cfg, "Compute", "DescribeVolumes", c.DescribeVolumes)
+	register(mux, cfg, "Compute", "DescribeImages", c.DescribeImages)
+	register(mux, cfg, "Compute", "DescribeKeyPairs", c.DescribeKeyPairs)
+	register(mux, cfg, "Compute", "DescribeSnapshots", c.DescribeSnapshots)
+	register(mux, cfg, "Compute", "GetOperation", c.GetOperation)
+	register(mux, cfg, "Network", "DescribeSubnets", n.DescribeSubnets)
+	register(mux, cfg, "Network", "DescribeVpcs", n.DescribeVpcs)
+	register(mux, cfg, "Network", "DescribeSecurityGroups", n.DescribeSecurityGroups)
+	register(mux, cfg, "Network", "DescribeAddresses", n.DescribeAddresses)
+	register(mux, cfg, "Network", "GetOperation", n.GetOperation)
+	register(mux, cfg, "Storage", "GetBucket", s.GetBucket)
+	register(mux, cfg, "Storage", "ListBuckets", s.ListBuckets)
+	register(mux, cfg, "Storage", "ListObjects", s.ListObjects)
+	register(mux, cfg, "Storage", "CreateBucket", s.CreateBucket, true)
+	register(mux, cfg, "Storage", "DeleteBucket", func(ctx context.Context, scope backend.Scope,
 		name resource.BucketName,
 	) (struct{}, error) {
 		return struct{}{}, s.DeleteBucket(ctx, scope, name)
 	}, true)
-	register(mux, cfg.Gate, "Storage", "DeleteObject", func(ctx context.Context, scope backend.Scope, req struct {
+	register(mux, cfg, "Storage", "DeleteObject", func(ctx context.Context, scope backend.Scope, req struct {
 		Bucket resource.BucketName `json:"bucket"`
 		Key    resource.ObjectKey  `json:"key"`
 	},
 	) (struct{}, error) {
 		return struct{}{}, s.DeleteObject(ctx, scope, req.Bucket, req.Key)
 	}, true)
-	register(mux, cfg.Gate, "Storage", "PutObject", func(ctx context.Context, scope backend.Scope, req struct {
+	register(mux, cfg, "Storage", "PutObject", func(ctx context.Context, scope backend.Scope, req struct {
 		Request resource.PutObjectRequest `json:"request"`
 		Body    []byte                    `json:"body"`
 	},
@@ -159,7 +160,7 @@ func New(cfg Config) (http.Handler, error) {
 		}
 		return s.PutObject(ctx, scope, req.Request, bytes.NewReader(req.Body))
 	}, true)
-	register(mux, cfg.Gate, "Storage", "GetObject", func(ctx context.Context, scope backend.Scope,
+	register(mux, cfg, "Storage", "GetObject", func(ctx context.Context, scope backend.Scope,
 		req resource.GetObjectRequest,
 	) (ObjectResult, error) {
 		obj, body, err := s.GetObject(ctx, scope, req)
@@ -218,7 +219,7 @@ func New(cfg Config) (http.Handler, error) {
 	return handler, nil
 }
 
-func register[S backend.Scope | backend.Mutation, Q, R any](mux *http.ServeMux, gate Gate, iface, method string,
+func register[S backend.Scope | backend.Mutation, Q, R any](mux *http.ServeMux, cfg Config, iface, method string,
 	call func(context.Context, S, Q) (R, error), writes ...bool,
 ) {
 	mux.HandleFunc("POST /internal/v1/"+iface+"/"+method, func(w http.ResponseWriter, r *http.Request) {
@@ -260,8 +261,14 @@ func register[S backend.Scope | backend.Mutation, Q, R any](mux *http.ServeMux, 
 			writeJSON(w, nil, err)
 			return
 		}
-		if mutation && gate != nil {
-			peer, err := gate.Admit(r.Context())
+		if cfg.CheckScope != nil {
+			if err := cfg.CheckScope(scope); err != nil {
+				writeJSON(w, nil, err)
+				return
+			}
+		}
+		if mutation && cfg.Gate != nil {
+			peer, err := cfg.Gate.Admit(r.Context())
 			if err != nil || peer != "" {
 				writeJSON(w, nil, &resource.Error{Code: resource.CodeUnavailable, Message: "region leader unavailable"})
 				return

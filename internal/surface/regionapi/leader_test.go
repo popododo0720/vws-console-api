@@ -36,13 +36,13 @@ func TestMutationRegistrationDerivesLeaderGate(t *testing.T) {
 			mux := http.NewServeMux()
 			gate := &mutationGate{peer: test.peer, err: test.err}
 			calls := 0
-			register(mux, gate, "Compute", "Mutation", func(
+			register(mux, Config{Gate: gate}, "Compute", "Mutation", func(
 				_ context.Context, _ backend.Mutation, _ struct{},
 			) (struct{}, error) {
 				calls++
 				return struct{}{}, nil
 			})
-			register(mux, gate, "Compute", "Read", func(
+			register(mux, Config{Gate: gate}, "Compute", "Read", func(
 				_ context.Context, _ backend.Scope, _ struct{},
 			) (struct{}, error) {
 				return struct{}{}, nil

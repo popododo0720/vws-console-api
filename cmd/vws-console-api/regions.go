@@ -17,6 +17,13 @@ import (
 
 type inventoryCatalog struct{ backend.RegionCatalog }
 
+func (c inventoryCatalog) ProjectPool(ctx context.Context, project resource.AccountID, region string) (string, error) {
+	if pools, ok := c.RegionCatalog.(backend.ProjectPools); ok {
+		return pools.ProjectPool(ctx, project, region)
+	}
+	return project.String(), nil
+}
+
 func (c inventoryCatalog) RegionCapabilities(ctx context.Context, region string) (resource.RegionCapabilities, error) {
 	accounts, catalogErr := c.AWSAccounts(ctx)
 	if catalogErr != nil {

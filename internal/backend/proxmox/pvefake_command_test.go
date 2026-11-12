@@ -44,7 +44,7 @@ func TestPVEFakeCommandRegionInventoryAndRestart(t *testing.T) {
 		}
 	}
 	writeFixture(t, filepath.Join(dir, "region-kek"), bytes.Repeat([]byte{42}, 32))
-	writeFixture(t, filepath.Join(dir, "region.yaml"), []byte("read_only: true\n"))
+	writeFixture(t, filepath.Join(dir, "region.yaml"), []byte("read_only: true\npools:\n  project: '123456789012'\n"))
 	t.Setenv("CREDENTIALS_DIRECTORY", dir)
 	t.Setenv("VWS_HELPER_TEST_ROOT", dir)
 	tlsConfig := daemonCertificates(t, dir)
@@ -184,7 +184,7 @@ func TestPVEFakeCommandRegionInventoryAndRestart(t *testing.T) {
 		awaitStatus(t, "http://"+ops+"/readyz", http.StatusOK)
 		for range 2 {
 			body := call(http.MethodPost, "https://"+addr+"/internal/v1/Compute/DescribeInstances",
-				`{"scope":{"account":"123456789012"},"req":{}}`)
+				`{"scope":{"account":"123456789012","pool":"123456789012"},"req":{}}`)
 			var page inventoryPage
 			if err := json.Unmarshal(body, &page); err != nil {
 				t.Fatal(err)

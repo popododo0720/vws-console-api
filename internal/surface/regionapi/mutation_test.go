@@ -175,6 +175,7 @@ func TestGlobalKernelMutationArrivesByteIdentical(t *testing.T) {
 	if len(original.Key) != 64 || len(original.Fingerprint) != 64 {
 		t.Fatalf("kernel hashes missing: %+v", original)
 	}
+	original.Pool = caller.Account.String()
 	global := cloud.New(cloud.Config{Backends: routed})
 	got, err := global.CreateVolume(t.Context(), caller, token, req)
 	if err != nil || !reflect.DeepEqual(want, got) || original != <-captured {

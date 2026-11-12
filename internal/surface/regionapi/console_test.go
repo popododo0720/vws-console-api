@@ -43,7 +43,7 @@ func TestConsoleCapacityPrecedesBackend(t *testing.T) {
 		}, nil
 	})
 	mux := http.NewServeMux()
-	registerConsole(mux, console, time.Now)
+	registerConsole(mux, Config{Backend: backend.Set{Console: console}, ConsoleNow: time.Now})
 	for i := range 1025 {
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/internal/v1/Console/OpenConsole",

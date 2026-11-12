@@ -84,7 +84,7 @@ func TestEveryInventoryListRoutesAndPreservesQueries(t *testing.T) {
 						seen := map[string]bool{}
 						for range want {
 							s := <-calls
-							if s.Account != account || s.Region == "all" || seen[s.Region] {
+							if s.Account != account || s.Pool != account.String() || s.Region == "all" || seen[s.Region] {
 								t.Fatalf("scope = %+v", s)
 							}
 							seen[s.Region] = true

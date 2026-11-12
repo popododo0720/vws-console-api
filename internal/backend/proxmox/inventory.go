@@ -23,10 +23,7 @@ func (b *Backend) ownsPool(s backend.Scope, pool string) bool {
 	if pool == "" {
 		return project == b.cfg.DefaultProject
 	}
-	if mapped, ok := b.cfg.Pools[project]; ok {
-		return mapped == pool
-	}
-	return project == pool
+	return b.scopePool(s) == pool
 }
 
 func (b *Backend) visibleVMs(ctx context.Context, s backend.Scope) ([]inventoryVM, error) {

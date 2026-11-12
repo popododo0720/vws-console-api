@@ -75,10 +75,14 @@ func (r *router) Call(ctx context.Context, service, method string, input, q, dst
 	}
 	for _, region := range regions {
 		if region.Name == s.Region && s.Region != "all" {
-			if _, ok := input.(backend.Mutation); ok {
+			if mutation, ok := input.(backend.Mutation); ok {
+				mutation.Scope, err = r.boundScope(ctx, s)
+				if err != nil {
+					return err
+				}
 				t, err := r.resolve(ctx, region)
 				if err == nil {
-					err = t.Call(ctx, service, method, input, q, dst)
+					err = t.Call(ctx, service, method, mutation, q, dst)
 				}
 				return regionalError(err)
 			}
@@ -100,11 +104,29 @@ func (r *router) call(ctx context.Context, region backend.ProxmoxRegion,
 			return nil
 		}
 	}
+	s, err := r.boundScope(ctx, s)
+	if err != nil {
+		return err
+	}
 	t, err := r.resolve(ctx, region)
 	if err == nil {
 		err = t.Call(ctx, service, method, s, q, dst)
 	}
 	return regionalError(err)
+}
+
+func (r *router) boundScope(ctx context.Context, s backend.Scope) (backend.Scope, error) {
+	s.Pool = s.Account.String()
+	if pools, ok := r.catalog.(backend.ProjectPools); ok {
+		ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		pool, err := pools.ProjectPool(ctx, s.Account, s.Region)
+		if err != nil {
+			return backend.Scope{}, regionalError(err)
+		}
+		s.Pool = pool
+	}
+	return s, nil
 }
 
 func regionalError(err error) error {

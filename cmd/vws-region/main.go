@@ -144,7 +144,7 @@ func run(ctx context.Context, args []string) (err error) {
 		}
 		h, err := regionapi.New(regionapi.Config{
 			Backend: b.Set(), Capabilities: b, Region: identity.Region.Name, Status: b, Pools: b,
-			Gate:    elected.Load(),
+			Gate: elected.Load(), CheckScope: proxmox.ScopeCheck(b),
 			Version: regionapi.Version{ReleaseLine: "1.0", ClusterName: identity.ClusterName},
 		})
 		if err == nil {
