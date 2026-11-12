@@ -52,7 +52,7 @@ func TestAWSSDKRegionLengthBound(t *testing.T) {
 
 func TestAWSSDKInstancesThroughProxy(t *testing.T) {
 	b := setup(t, "instances.xml", http.StatusOK)
-	account, err := resource.Parse[resource.AccountID]("111111111111")
+	account, err := resource.Parse[resource.AccountID]("123456789012")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,7 +83,27 @@ func TestAWSSDKInstancesThroughProxy(t *testing.T) {
 	}
 }
 
+func TestAWSSDKRejectsForeignAccount(t *testing.T) {
+	b := setup(t, "instances.xml", http.StatusOK)
+	account, err := resource.Parse[resource.AccountID]("111111111111")
+	if err != nil {
+		t.Fatal(err)
+	}
+	page, err := b.DescribeInstances(t.Context(), backend.Scope{
+		Account: account, Region: "us-east-1",
+	}, resource.InstanceQuery{})
+	var domain *resource.Error
+	if !errors.As(err, &domain) || domain.Code != resource.CodeInvalidArgument ||
+		domain.Field != "account" || len(page.Items) != 0 {
+		t.Fatalf("foreign account read: page=%+v error=%v", page, err)
+	}
+}
+
 func TestAWSSDKPreservesAWSErrorCode(t *testing.T) {
+	account, err := resource.Parse[resource.AccountID]("123456789012")
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, tc := range []struct {
 		status  int
 		fixture string
@@ -98,7 +118,9 @@ func TestAWSSDKPreservesAWSErrorCode(t *testing.T) {
 	} {
 		t.Run(strconv.Itoa(tc.status), func(t *testing.T) {
 			b := setup(t, tc.fixture, tc.status)
-			_, err := b.DescribeInstances(t.Context(), backend.Scope{Region: "us-east-1"}, resource.InstanceQuery{})
+			_, err := b.DescribeInstances(t.Context(), backend.Scope{
+				Account: account, Region: "us-east-1",
+			}, resource.InstanceQuery{})
 			var domain *resource.Error
 			var api smithy.APIError
 			if !errors.As(err, &domain) || domain.Code != tc.code ||

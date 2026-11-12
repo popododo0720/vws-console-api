@@ -24,6 +24,9 @@ func (b *Backend) DescribeInstances(
 	if s.Region != b.region {
 		return resource.Page[resource.Instance]{}, resource.Invalid("region", "not served by this backend")
 	}
+	if s.Account.String() != b.account {
+		return resource.Page[resource.Instance]{}, resource.Invalid("account", "not served by this backend")
+	}
 	q, err := q.Normalize()
 	if err != nil {
 		return resource.Page[resource.Instance]{}, err

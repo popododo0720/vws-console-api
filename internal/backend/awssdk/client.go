@@ -38,6 +38,7 @@ type Backend struct {
 	client    *ec2.Client
 	transport *http.Transport
 	region    string
+	account   string
 }
 
 // New creates an SDK client that cannot connect outside the proxy socket.
@@ -71,7 +72,7 @@ func New(cfg Config) (*Backend, error) {
 	}
 	return &Backend{
 		AllSupported: backend.AllSupported{Kind: resource.RegionKindAWS},
-		transport:    transport, region: cfg.Region,
+		transport:    transport, region: cfg.Region, account: cfg.Account,
 		client: ec2.New(ec2.Options{
 			Region: cfg.Region, Credentials: aws.AnonymousCredentials{},
 			BaseEndpoint: aws.String("http://proxy/"), HTTPClient: client, RetryMaxAttempts: 3,
