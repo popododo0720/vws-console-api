@@ -26,11 +26,6 @@ func (accounts) Account(context.Context, string) (proxy.Account, error) {
 
 func setup(t *testing.T, fixture string, status int) *Backend {
 	t.Helper()
-	t.Setenv("AWS_ACCESS_KEY_ID", "environment-key-canary")
-	t.Setenv("AWS_SECRET_ACCESS_KEY", "environment-secret-canary")
-	t.Setenv("AWS_SESSION_TOKEN", "environment-token-canary")
-	t.Setenv("HTTP_PROXY", "http://untrusted.invalid:8888")
-	t.Setenv("HTTPS_PROXY", "http://untrusted.invalid:8888")
 	xml, err := os.ReadFile(filepath.Join("testdata", fixture))
 	if err != nil {
 		t.Fatal(err)
@@ -39,20 +34,7 @@ func setup(t *testing.T, fixture string, status int) *Backend {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if err := r.ParseForm(); err != nil {
-			t.Error(err)
-		}
-		if r.Form.Get("ExternalId") != "fixture" || r.Form.Get("Action") != "AssumeRole" {
-			t.Errorf("unexpected STS request: %v", r.Form)
-		}
-		fmt.Fprint(w, `<AssumeRoleResponse><AssumeRoleResult><Credentials>`+
-			`<AccessKeyId>fixture-session</AccessKeyId><SecretAccessKey>fixture-secret</SecretAccessKey>`+
-			`<SessionToken>fixture-token</SessionToken><Expiration>2099-01-01T00:00:00Z</Expiration>`+
-			`</Credentials></AssumeRoleResult></AssumeRoleResponse>`)
-	}))
-	t.Cleanup(sts.Close)
-	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return setupOrigin(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if err := r.ParseForm(); err != nil {
 			t.Error(err)
 		}
@@ -70,6 +52,34 @@ func setup(t *testing.T, fixture string, status int) *Backend {
 		default:
 			t.Errorf("unexpected upstream cursor: %v", r.Form)
 		}
+	}))
+}
+
+func setupOrigin(t *testing.T, handler http.Handler) *Backend {
+	t.Helper()
+	t.Setenv("AWS_ACCESS_KEY_ID", "environment-key-canary")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "environment-secret-canary")
+	t.Setenv("AWS_SESSION_TOKEN", "environment-token-canary")
+	t.Setenv("HTTP_PROXY", "http://untrusted.invalid:8888")
+	t.Setenv("HTTPS_PROXY", "http://untrusted.invalid:8888")
+	sts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseForm(); err != nil {
+			t.Error(err)
+		}
+		if r.Form.Get("ExternalId") != "fixture" || r.Form.Get("Action") != "AssumeRole" {
+			t.Errorf("unexpected STS request: %v", r.Form)
+		}
+		fmt.Fprint(w, `<AssumeRoleResponse><AssumeRoleResult><Credentials>`+
+			`<AccessKeyId>fixture-session</AccessKeyId><SecretAccessKey>fixture-secret</SecretAccessKey>`+
+			`<SessionToken>fixture-token</SessionToken><Expiration>2099-01-01T00:00:00Z</Expiration>`+
+			`</Credentials></AssumeRoleResult></AssumeRoleResponse>`)
+	}))
+	t.Cleanup(sts.Close)
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Amz-Security-Token") != "fixture-token" || r.Header.Get("X-Vws-Account") != "" {
+			t.Error("request did not pass through the signing proxy")
+		}
+		handler.ServeHTTP(w, r)
 	}))
 	t.Cleanup(origin.Close)
 	p, err := proxy.New(accounts{}, sigv4.Credential{AccessKey: "fixture-source", Secret: "fixture-source-secret"},

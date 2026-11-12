@@ -1,4 +1,4 @@
-// Package awssdk reads AWS inventory through the credential-isolated forwarding proxy.
+// Package awssdk calls AWS through the credential-isolated forwarding proxy.
 package awssdk
 
 import (
@@ -123,5 +123,5 @@ func awsError(err error) error {
 		}
 		return (&resource.Error{Code: code, Message: api.ErrorCode() + ": " + api.ErrorMessage()}).WithCause(err)
 	}
-	return (&resource.Error{Code: resource.CodeUnavailable, Message: "AWS inventory unavailable"}).WithCause(err)
+	return (&resource.Error{Code: resource.CodeUnavailable, Message: "AWS service unavailable"}).WithCause(err)
 }
