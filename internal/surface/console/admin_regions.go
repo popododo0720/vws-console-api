@@ -36,14 +36,31 @@ func (h *handler) listRegions(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	names, err := h.svc.RegionNames(r.Context(), c)
+	items, err := h.svc.Regions(r.Context(), c)
 	if err != nil {
 		writeErr(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, struct {
-		Items []string `json:"items"`
-	}{Items: names})
+		Items []resource.RegionSummary `json:"items"`
+	}{Items: items})
+}
+
+func (h *handler) regionCapabilities(w http.ResponseWriter, r *http.Request) {
+	if r.URL.RawQuery != "" {
+		writeErr(w, r, resource.Invalid("query", "query parameters are not supported"))
+		return
+	}
+	c, ok := h.caller(w, r)
+	if !ok {
+		return
+	}
+	doc, err := h.svc.RegionCapabilities(r.Context(), c, r.PathValue("region"))
+	if err != nil {
+		writeErr(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, doc)
 }
 
 func (h *handler) adminWriteRegion(w http.ResponseWriter, r *http.Request) {

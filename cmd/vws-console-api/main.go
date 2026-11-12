@@ -186,6 +186,7 @@ func run(ctx context.Context, args []string) (err error) {
 
 	var set backend.Set
 	var caps backend.Capabilities
+	var discovery func(context.Context, backend.ProxmoxRegion) (resource.RegionCapabilities, error)
 	var localRegions backend.RegionCatalog
 	// sweep undoes the launches a dead request left behind; nil without a launch store.
 	var sweep func(context.Context)
@@ -279,17 +280,20 @@ func run(ctx context.Context, args []string) (err error) {
 			return connectErr
 		}
 		var closeBackends func()
-		set, closeBackends, err = registeredBackends(regions, connect, *awsProxySocket)
+		var regional cloud.Config
+		regional, closeBackends, err = registeredBackends(regions, connect, *awsProxySocket)
 		if err != nil {
 			return err
 		}
 		defer closeBackends()
-		caps = inventoryCatalog{regions}
+		caps = inventoryCatalog{RegionCatalog: regions}
+		set, discovery = regional.Backends, regional.Discovery
 		caller.Region = *defaultRegion
 	}
 	svc := cloud.New(cloud.Config{
 		Backends: set, Regions: regions, Capabilities: caps, Audit: logger, Launches: throttle.NewLaunches(launchLimits),
-		Region: caller.Region,
+		Discovery: discovery,
+		Region:    caller.Region,
 	})
 	// The static key remains the account root for SigV4. With -iam=grpc,
 	// vws-iam owns console passwords and sessions for every identity.

@@ -20,6 +20,7 @@ type RegionCatalog interface {
 // ProxmoxRegion is one registered Proxmox cluster.
 type ProxmoxRegion struct {
 	Name string
+	Kind resource.RegionKind `json:"-"`
 	// Endpoint is the region layer's internal API. It is empty for a region
 	// this process serves itself.
 	Endpoint string
