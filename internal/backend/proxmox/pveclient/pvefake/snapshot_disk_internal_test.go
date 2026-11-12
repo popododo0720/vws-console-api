@@ -28,17 +28,31 @@ func TestDeferredTasksRereadState(t *testing.T) {
 			"resize", http.MethodPut, "/resize", "disk=scsi0&size=10G", "disk 'scsi0' does not exist",
 			func(f *Fake) { f.s.Storages[0].Content = nil },
 		},
+		{
+			"move", http.MethodPost, "/move_disk", "disk=scsi0&storage=target", "disk does not exist",
+			func(f *Fake) { f.s.Storages[0].Content = nil },
+		},
+		{
+			"move-storage", http.MethodPost, "/move_disk", "disk=scsi0&storage=target", "storage does not exist",
+			func(f *Fake) { f.s.Storages = f.s.Storages[:1] },
+		},
+		{
+			"move-config", http.MethodPost, "/move_disk", "disk=scsi0&storage=target", "disk does not exist",
+			func(f *Fake) { delete(f.vm(100).Config, "scsi0") },
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s, err := Load("testdata/default.yaml")
 			if err != nil {
 				t.Fatal(err)
 			}
-			s.Roles = append(s.Roles, Role{ID: "Writer", Privs: []string{"VM.Snapshot", "VM.Config.Disk"}})
+			s.Roles = append(s.Roles, Role{ID: "Writer", Privs: []string{
+				"VM.Snapshot", "VM.Config.Disk", "Datastore.AllocateSpace",
+			}})
 			s.Tokens = append(s.Tokens, Token{ID: "writer@pve!one", Secret: "k", ACL: []ACE{{Path: "/", Role: "Writer"}}})
 			s.Storages = []Storage{{Node: "pve1", Name: "ceph", Content: []StorageContent{
 				{VolID: "ceph:vm-100-disk-0", VMID: 100, Size: 8 << 30, Content: "images", Format: "raw"},
-			}}}
+			}}, {Node: "pve1", Name: "target"}}
 			var now atomic.Int64
 			now.Store(1700000000)
 			f, err := NewWithClock(s, func() time.Time { return time.Unix(now.Load(), 0) })

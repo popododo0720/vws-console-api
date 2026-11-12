@@ -28,7 +28,7 @@ func newWriteWorld(t *testing.T, privileges ...string) *taskWorld {
 	}
 	s.Storages = []pvefake.Storage{{Node: "pve1", Name: "ceph", Content: []pvefake.StorageContent{
 		{VolID: "ceph:vm-100-disk-0", VMID: 100, Size: 8 << 30, Content: "images", Format: "raw"},
-	}}}
+	}}, {Node: "pve1", Name: "target"}}
 	s.Tokens = append(s.Tokens,
 		pvefake.Token{ID: "writer@pve!one", Secret: "k", ACL: []pvefake.ACE{{Path: "/", Role: "Writer"}}},
 		pvefake.Token{ID: "scoped@pve!one", Secret: "k", ACL: []pvefake.ACE{
