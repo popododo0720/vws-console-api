@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/popododo0720/vws-console-api/internal/backend/launch"
+	"github.com/popododo0720/vws-console-api/internal/backend/launch/storetest"
 	"github.com/popododo0720/vws-console-api/internal/resource"
 )
 
@@ -22,6 +23,10 @@ func account(t *testing.T) resource.AccountID {
 }
 
 func fixed() time.Time { return time.Date(2026, 11, 7, 0, 0, 0, 0, time.UTC) }
+
+func TestMemoryStoreContract(t *testing.T) {
+	storetest.Run(t, func(*testing.T) launch.Store { return &launch.Memory{} })
+}
 
 func TestPhaseTransitionsWriteOnce(t *testing.T) {
 	ctx := context.Background()
