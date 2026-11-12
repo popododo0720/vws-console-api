@@ -70,6 +70,8 @@ jobs:
             go-race-${{ runner.os }}-
       - name: go.mod and go.sum are tidy
         run: go mod tidy && git diff --exit-code go.mod go.sum
+      - name: generated code is current
+        run: go generate ./internal/surface/ec2query/... && git diff --exit-code && test -z "$(git status --porcelain)"
       - run: go vet ./...
       - name: Architecture rules and Judgment count
         run: scripts/guard-agents.sh archtest

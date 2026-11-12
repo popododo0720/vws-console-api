@@ -24,11 +24,11 @@ func modelDeviations() []modelDeviation {
 		{"DeleteVpc", "ClientToken", token},
 		{
 			"DescribeAddresses", "MaxResults",
-			"The shared describe filter accepts pagination absent from AWS. #TBD-DescribeAddresses-MaxResults",
+			"The shared describe filter accepts pagination absent from AWS. #917",
 		},
 		{
 			"DescribeAddresses", "NextToken",
-			"The shared describe filter accepts pagination absent from AWS. #TBD-DescribeAddresses-NextToken",
+			"The shared describe filter accepts pagination absent from AWS. #917",
 		},
 		{"DescribeAddresses", "dryRun", sdk},
 		{"DescribeAddresses", "maxResults", sdk},
@@ -36,7 +36,7 @@ func modelDeviations() []modelDeviation {
 		{"DescribeAvailabilityZones", "dryRun", sdk},
 		{
 			"DescribeImages", "OwnerId.1",
-			"VWS accepts OwnerId.N beside AWS Owner.N. #TBD-DescribeImages-OwnerId.1",
+			"VWS accepts OwnerId.N beside AWS Owner.N. #917",
 		},
 		{"DescribeImages", "dryRun", sdk},
 		{"DescribeImages", "maxResults", sdk},
@@ -55,11 +55,11 @@ func modelDeviations() []modelDeviation {
 		{"DescribeInstances", "nextToken", sdk},
 		{
 			"DescribeKeyPairs", "MaxResults",
-			"The shared describe filter accepts pagination absent from AWS. #TBD-DescribeKeyPairs-MaxResults",
+			"The shared describe filter accepts pagination absent from AWS. #917",
 		},
 		{
 			"DescribeKeyPairs", "NextToken",
-			"The shared describe filter accepts pagination absent from AWS. #TBD-DescribeKeyPairs-NextToken",
+			"The shared describe filter accepts pagination absent from AWS. #917",
 		},
 		{"DescribeKeyPairs", "dryRun", sdk},
 		{"DescribeKeyPairs", "maxResults", sdk},
@@ -73,7 +73,7 @@ func modelDeviations() []modelDeviation {
 		{"DescribeSecurityGroups", "nextToken", sdk},
 		{
 			"DescribeSnapshots", "OwnerId.1",
-			"VWS accepts OwnerId.N beside AWS Owner.N. #TBD-DescribeSnapshots-OwnerId.1",
+			"VWS accepts OwnerId.N beside AWS Owner.N. #917",
 		},
 		{"DescribeSnapshots", "dryRun", sdk},
 		{"DescribeSnapshots", "maxResults", sdk},
@@ -102,11 +102,11 @@ func modelDeviations() []modelDeviation {
 		{"RevokeSecurityGroupIngress", "ClientToken", token},
 		{
 			"RunInstances", "Tag.1.Key",
-			"VWS accepts direct tags beside AWS TagSpecification.N.Tag.N. #TBD-RunInstances-Tag.1.Key",
+			"VWS accepts direct tags beside AWS TagSpecification.N.Tag.N. #917",
 		},
 		{
 			"RunInstances", "Tag.1.Value",
-			"VWS accepts direct tags beside AWS TagSpecification.N.Tag.N. #TBD-RunInstances-Tag.1.Value",
+			"VWS accepts direct tags beside AWS TagSpecification.N.Tag.N. #917",
 		},
 		{"StartInstances", "ClientToken", token},
 		{"StopInstances", "ClientToken", token},
