@@ -1,4 +1,4 @@
-// Package proxy forwards authorized EC2 inventory requests using isolated AWS credentials.
+// Package proxy forwards authorized EC2 requests using isolated AWS credentials.
 package proxy
 
 import (
@@ -101,7 +101,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	valid := regexp.MustCompile(`^[A-Za-z0-9]+$`)
 	if err != nil || r.URL.Path != "/" || (r.Method != http.MethodGet && r.Method != http.MethodPost) ||
 		(r.Method == http.MethodGet && len(body) != 0) || len(q["Action"]) != 1 ||
-		!strings.HasPrefix(q.Get("Action"), "Describe") || len(q.Get("Action")) <= len("Describe") ||
+		!allowedAction(q.Get("Action")) ||
 		!valid.MatchString(q.Get("Action")) || r.Header.Get("X-Vws-Target-Service") != "ec2" ||
 		!regexp.MustCompile(`^[0-9]{12}$`).MatchString(account) || principal == "" || len(principal) > 2048 ||
 		!regexp.MustCompile(`^[a-z]{2}(-[a-z]+)+-[0-9]+$`).MatchString(region) ||
@@ -145,12 +145,35 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			pr.Out.GetBody = func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(body)), nil }
 			pr.Out.ContentLength = int64(len(body))
 		},
-		Transport: signedTransport{p: p, credential: cred, region: region},
+		Transport: signedTransport{
+			p: p, credential: cred, region: region, resend: repeatableAction(q.Get("Action"), q.Get("ClientToken")),
+		},
 		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, _ error) {
 			refuse(w, http.StatusBadGateway, "InternalError")
 		},
 	}
 	forward.ServeHTTP(w, r)
+}
+
+func allowedAction(action string) bool {
+	switch action {
+	case "RunInstances", "StartInstances", "StopInstances", "RebootInstances", "TerminateInstances",
+		"CreateSnapshot", "DeleteSnapshot", "CreateTags", "DeleteTags":
+		return true
+	default:
+		return strings.HasPrefix(action, "Describe") && len(action) > len("Describe")
+	}
+}
+
+func repeatableAction(action, token string) bool {
+	switch action {
+	case "RunInstances":
+		return token != ""
+	case "StartInstances", "StopInstances", "TerminateInstances", "DeleteSnapshot", "CreateTags", "DeleteTags":
+		return true
+	default:
+		return strings.HasPrefix(action, "Describe") && len(action) > len("Describe")
+	}
 }
 
 func refuse(w http.ResponseWriter, status int, code string) {
@@ -165,21 +188,23 @@ type signedTransport struct {
 	p          *Proxy
 	credential sigv4.Credential
 	region     string
+	resend     bool
 }
 
 func (s signedTransport) RoundTrip(r *http.Request) (*http.Response, error) {
-	return s.p.send(r, s.credential, sigv4.ServiceEC2, s.region)
+	return s.p.send(r, s.credential, sigv4.ServiceEC2, s.region, s.resend)
 }
 
 func (p *Proxy) send(
-	r *http.Request, c sigv4.Credential, service sigv4.Service, region string,
+	r *http.Request, c sigv4.Credential, service sigv4.Service, region string, resend bool,
 ) (*http.Response, error) {
 	for attempt := 0; attempt < 3; attempt++ {
 		if err := sigv4.Sign(r, c, service, region, p.now()); err != nil {
 			return nil, errors.New("proxy: signing failed")
 		}
 		resp, err := p.transport.RoundTrip(r)
-		if err == nil && (resp.StatusCode < 500 && resp.StatusCode != http.StatusTooManyRequests || attempt == 2) {
+		if err == nil && (resp.StatusCode < 500 && resp.StatusCode != http.StatusTooManyRequests ||
+			attempt == 2 || !resend && resp.StatusCode != http.StatusTooManyRequests) {
 			return resp, nil
 		}
 		if resp != nil {
@@ -187,7 +212,7 @@ func (p *Proxy) send(
 				return nil, errors.New("proxy: close response")
 			}
 		}
-		if attempt == 2 {
+		if attempt == 2 || !resend && (resp == nil || resp.StatusCode != http.StatusTooManyRequests) {
 			break
 		}
 		select {
@@ -251,7 +276,7 @@ func (p *Proxy) assumeRoleRequest(
 		return sigv4.Credential{}, errors.New("proxy: STS request")
 	}
 	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	resp, err := p.send(r, p.source, sigv4.ServiceSTS, p.stsRegion)
+	resp, err := p.send(r, p.source, sigv4.ServiceSTS, p.stsRegion, true)
 	if err != nil {
 		return sigv4.Credential{}, err
 	}

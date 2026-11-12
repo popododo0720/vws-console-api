@@ -89,7 +89,7 @@ func (p *Proxy) identityMessage(ctx context.Context, cred sigv4.Credential, acco
 		return "STS unavailable", errors.New("STS identity request unavailable")
 	}
 	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	resp, err := p.send(r, cred, sigv4.ServiceSTS, p.stsRegion)
+	resp, err := p.send(r, cred, sigv4.ServiceSTS, p.stsRegion, true)
 	if err != nil {
 		return "STS unavailable", err
 	}
