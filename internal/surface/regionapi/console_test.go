@@ -31,6 +31,36 @@ func (f consoleFunc) OpenConsole(
 	return f(ctx, s, id, k)
 }
 
+func TestConsoleCapacityPrecedesBackend(t *testing.T) {
+	calls := 0
+	console := consoleFunc(func(
+		context.Context, backend.Scope, resource.InstanceID, resource.ConsoleKind,
+	) (resource.ConsoleSession, error) {
+		calls++
+		return resource.ConsoleSession{
+			Kind: resource.ConsoleVNC, Expires: time.Now().Add(time.Hour),
+			Dial: func(context.Context) (resource.ConsoleStream, error) { return nil, resource.Denied("unused") },
+		}, nil
+	})
+	mux := http.NewServeMux()
+	registerConsole(mux, console, time.Now)
+	for i := range 1025 {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/internal/v1/Console/OpenConsole",
+			strings.NewReader(`{"scope":{"account":"123456789012"},"req":{"id":"i-0123456789abcdef0","kind":1}}`))
+		mux.ServeHTTP(rec, req)
+		if i < 1024 && rec.Code != http.StatusOK {
+			t.Fatalf("session %d: %s", i, rec.Body)
+		}
+		if i == 1024 && !strings.Contains(rec.Body.String(), "ResourceExhausted") {
+			t.Fatalf("full table: %s", rec.Body)
+		}
+	}
+	if calls != 1024 {
+		t.Fatalf("full table still called backend: %d calls", calls)
+	}
+}
+
 func TestConsoleRelayExpiryReuseAndRestart(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		upgrader := websocket.Upgrader{}

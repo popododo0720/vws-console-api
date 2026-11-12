@@ -37,6 +37,7 @@ func registerConsole(mux *http.ServeMux, console backend.Console, now func() tim
 		now = time.Now
 	}
 	var mu sync.Mutex
+	opening := 0
 	sessions := map[string]pendingConsole{}
 	register(mux, nil, "Console", "OpenConsole", func(
 		ctx context.Context, scope backend.Scope, req consoleRequest,
@@ -47,6 +48,23 @@ func registerConsole(mux *http.ServeMux, console backend.Console, now func() tim
 		if console == nil {
 			return consoleResult{}, resource.Unsupported("OpenConsole", "console unavailable")
 		}
+		mu.Lock()
+		for token, s := range sessions {
+			if !now().Before(s.session.Expires) {
+				delete(sessions, token)
+			}
+		}
+		if len(sessions)+opening >= 1024 {
+			mu.Unlock()
+			return consoleResult{}, &resource.Error{Code: resource.CodeResourceExhausted, Message: "console session limit"}
+		}
+		opening++
+		mu.Unlock()
+		defer func() {
+			mu.Lock()
+			opening--
+			mu.Unlock()
+		}()
 		ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		defer cancel()
 		session, err := console.OpenConsole(ctx, scope, req.ID, req.Kind)
@@ -58,14 +76,6 @@ func registerConsole(mux *http.ServeMux, console backend.Console, now func() tim
 		}
 		mu.Lock()
 		defer mu.Unlock()
-		for token, s := range sessions {
-			if !now().Before(s.session.Expires) {
-				delete(sessions, token)
-			}
-		}
-		if len(sessions) >= 1024 {
-			return consoleResult{}, &resource.Error{Code: resource.CodeResourceExhausted, Message: "console session limit"}
-		}
 		if limit := now().Add(5 * time.Minute); limit.Before(session.Expires) {
 			session.Expires = limit
 		}
