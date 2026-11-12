@@ -24,6 +24,11 @@ Invalid YAML or certificates fail startup; failed self-checks or shared files fa
 Interrupt and SIGTERM drain both listeners. `/metrics` uses the shared
 server exporter; regionapi uses the existing HTTP telemetry middleware.
 
+The daemon holds `/etc/pve/vws/leader` under the helper's named `leader` mkdir lock: 20 s leases renewed every 5 s,
+quorum checked every 2 s and fresh for 5 s (standalone: the local node's online state). Mutations need fresh quorum and
+more than 5 s of lease; a restarted process waits for its old lease to expire. `vws_region_leader{node}` and obs logs show
+leader changes. This first part of #766 fences followers with 503; forwarding, peer certificates and stale-read headers follow.
+
 ## Registration
 
 Before registration, `/readyz` returns 503 with `unregistered`.
@@ -40,7 +45,7 @@ environment. Snapshot decoder errors never echo submitted values.
 `lease-write`, taking contents on stdin (at most 1 MiB) and no path arguments.
 `token-read` takes no arguments and returns only the encrypted envelope.
 They atomically replace `/etc/pve/vws/registration.json`,
-`/etc/pve/priv/vws/pve-token` and `/etc/pve/vws/lease.json`.
+`/etc/pve/priv/vws/pve-token` and `/etc/pve/vws/leader`.
 Public identity and lease files use mode 0640 (pmxcfs owns them as root:www-data);
 token and snippet files use 0600. Token files contain a versioned AES-256-GCM envelope
 authenticated with the raw 32-byte `$CREDENTIALS_DIRECTORY/region-kek`.

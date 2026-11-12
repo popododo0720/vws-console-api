@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -103,8 +104,13 @@ func run(ctx context.Context, args []string) (err error) {
 	defer stop()
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	daemonCtx := ctx
 	var initialized atomic.Bool
 	var state atomic.Pointer[http.Handler]
+	var elected atomic.Pointer[proxmox.Leader]
+	var leaderBackend *proxmox.Backend
+	var leaderCancel context.CancelFunc
+	var leaderDone chan struct{}
 	probe := &readiness{check: func(ctx context.Context) error {
 		b, err := conn.Check(ctx)
 		if err != nil {
@@ -114,8 +120,28 @@ func run(ctx context.Context, args []string) (err error) {
 			return err
 		}
 		identity := proxmox.Identity(b)
+		if b != leaderBackend {
+			leader, err := proxmox.NewLeader(ctx, b, conn.Helper, filepath.Join(filepath.Dir(*registration), "leader"))
+			if err != nil {
+				state.Store(nil)
+				return err
+			}
+			if leaderCancel != nil {
+				leaderCancel()
+				<-leaderDone
+			}
+			leaderCtx, stopLeader := context.WithCancel(daemonCtx)
+			leaderCancel, leaderDone, leaderBackend = stopLeader, make(chan struct{}), b
+			elected.Store(leader)
+			done := leaderDone
+			go func() {
+				defer close(done)
+				leader.Run(leaderCtx)
+			}()
+		}
 		h, err := regionapi.New(regionapi.Config{
 			Backend: b.Set(), Capabilities: b, Region: identity.Region.Name, Status: b, Pools: b,
+			Gate:    elected.Load(),
 			Version: regionapi.Version{ReleaseLine: "1.0", ClusterName: identity.ClusterName},
 		})
 		if err == nil {
@@ -127,6 +153,12 @@ func run(ctx context.Context, args []string) (err error) {
 	go func() {
 		opsDone <- server.Serve(ctx, server.Options{
 			Logger: slog.Default(), OpsAddr: *opsAddr,
+			RegionLeader: func() string {
+				if leader := elected.Load(); leader != nil {
+					return leader.Current()
+				}
+				return ""
+			},
 			Ready: func(ctx context.Context) error {
 				if !initialized.Load() {
 					return errors.New("startup checks incomplete")
@@ -179,6 +211,12 @@ func run(ctx context.Context, args []string) (err error) {
 	}()
 	<-ctx.Done()
 	<-reloadDone
+	probe.mu.Lock()
+	if leaderCancel != nil {
+		leaderCancel()
+		<-leaderDone
+	}
+	probe.mu.Unlock()
 	initialized.Store(false)
 	shutCtx, shutCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer shutCancel()

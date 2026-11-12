@@ -22,6 +22,11 @@ import (
 
 const maxRequestBytes = 1 << 20
 
+// Gate admits a local mutation or names the peer holding the lease.
+type Gate interface {
+	Admit(context.Context) (string, error)
+}
+
 // Version identifies the release compatibility line and registered cluster.
 type Version struct {
 	ReleaseLine string `json:"releaseLine"`
@@ -35,6 +40,7 @@ type Config struct {
 	Capabilities backend.Capabilities
 	Region       string
 	Version      Version
+	Gate         Gate
 	Status       interface {
 		Status(context.Context) (resource.RegionStatus, error)
 	}
@@ -66,21 +72,21 @@ func New(cfg Config) (http.Handler, error) {
 	}
 	mux := http.NewServeMux()
 	c, s, n := cfg.Backend.Compute, cfg.Backend.Storage, cfg.Backend.Network
-	register(mux, "Compute", "DescribeInstances", c.DescribeInstances)
-	register(mux, "Compute", "DescribeVolumes", c.DescribeVolumes)
-	register(mux, "Compute", "DescribeImages", c.DescribeImages)
-	register(mux, "Compute", "DescribeKeyPairs", c.DescribeKeyPairs)
-	register(mux, "Compute", "DescribeSnapshots", c.DescribeSnapshots)
-	register(mux, "Compute", "GetOperation", c.GetOperation)
-	register(mux, "Network", "DescribeSubnets", n.DescribeSubnets)
-	register(mux, "Network", "DescribeVpcs", n.DescribeVpcs)
-	register(mux, "Network", "DescribeSecurityGroups", n.DescribeSecurityGroups)
-	register(mux, "Network", "DescribeAddresses", n.DescribeAddresses)
-	register(mux, "Network", "GetOperation", n.GetOperation)
-	register(mux, "Storage", "GetBucket", s.GetBucket)
-	register(mux, "Storage", "ListBuckets", s.ListBuckets)
-	register(mux, "Storage", "ListObjects", s.ListObjects)
-	register(mux, "Storage", "GetObject", func(ctx context.Context, scope backend.Scope,
+	register(mux, cfg.Gate, "Compute", "DescribeInstances", c.DescribeInstances)
+	register(mux, cfg.Gate, "Compute", "DescribeVolumes", c.DescribeVolumes)
+	register(mux, cfg.Gate, "Compute", "DescribeImages", c.DescribeImages)
+	register(mux, cfg.Gate, "Compute", "DescribeKeyPairs", c.DescribeKeyPairs)
+	register(mux, cfg.Gate, "Compute", "DescribeSnapshots", c.DescribeSnapshots)
+	register(mux, cfg.Gate, "Compute", "GetOperation", c.GetOperation)
+	register(mux, cfg.Gate, "Network", "DescribeSubnets", n.DescribeSubnets)
+	register(mux, cfg.Gate, "Network", "DescribeVpcs", n.DescribeVpcs)
+	register(mux, cfg.Gate, "Network", "DescribeSecurityGroups", n.DescribeSecurityGroups)
+	register(mux, cfg.Gate, "Network", "DescribeAddresses", n.DescribeAddresses)
+	register(mux, cfg.Gate, "Network", "GetOperation", n.GetOperation)
+	register(mux, cfg.Gate, "Storage", "GetBucket", s.GetBucket)
+	register(mux, cfg.Gate, "Storage", "ListBuckets", s.ListBuckets)
+	register(mux, cfg.Gate, "Storage", "ListObjects", s.ListObjects)
+	register(mux, cfg.Gate, "Storage", "GetObject", func(ctx context.Context, scope backend.Scope,
 		req resource.GetObjectRequest,
 	) (ObjectResult, error) {
 		obj, body, err := s.GetObject(ctx, scope, req)
@@ -135,13 +141,13 @@ func New(cfg Config) (http.Handler, error) {
 	return httpobs.Middleware("regionapi", nil)(mux), nil
 }
 
-func register[Q, R any](mux *http.ServeMux, iface, method string,
-	call func(context.Context, backend.Scope, Q) (R, error),
+func register[S backend.Scope | backend.Mutation, Q, R any](mux *http.ServeMux, gate Gate, iface, method string,
+	call func(context.Context, S, Q) (R, error),
 ) {
 	mux.HandleFunc("POST /internal/v1/"+iface+"/"+method, func(w http.ResponseWriter, r *http.Request) {
 		var input struct {
-			Scope *backend.Scope `json:"scope"`
-			Req   *Q             `json:"req"`
+			Scope *S `json:"scope"`
+			Req   *Q `json:"req"`
 		}
 		dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRequestBytes))
 		dec.DisallowUnknownFields()
@@ -152,7 +158,17 @@ func register[Q, R any](mux *http.ServeMux, iface, method string,
 				err = resource.Invalid("body", "expected one JSON document")
 			}
 		}
-		if err != nil || input.Scope == nil || input.Req == nil || input.Scope.Account.IsZero() {
+		var scope backend.Scope
+		mutation := false
+		if input.Scope != nil {
+			switch value := any(*input.Scope).(type) {
+			case backend.Scope:
+				scope = value
+			case backend.Mutation:
+				scope, mutation = value.Scope, true
+			}
+		}
+		if err != nil || input.Scope == nil || input.Req == nil || scope.Account.IsZero() {
 			var tooLarge *http.MaxBytesError
 			if errors.As(err, &tooLarge) {
 				err = resource.TooLarge("body exceeds the limit")
@@ -161,6 +177,13 @@ func register[Q, R any](mux *http.ServeMux, iface, method string,
 			}
 			writeJSON(w, nil, err)
 			return
+		}
+		if mutation && gate != nil {
+			peer, err := gate.Admit(r.Context())
+			if err != nil || peer != "" {
+				writeJSON(w, nil, &resource.Error{Code: resource.CodeUnavailable, Message: "region leader unavailable"})
+				return
+			}
 		}
 		result, err := call(r.Context(), *input.Scope, *input.Req)
 		writeJSON(w, result, err)
