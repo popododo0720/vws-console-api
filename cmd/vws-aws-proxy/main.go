@@ -105,7 +105,7 @@ func openRegistry(ctx context.Context, global, accounts, projects string) (*stor
 		}
 		cfg, err := globalconfig.Parse(data)
 		if err != nil {
-			return nil, nil, fmt.Errorf("parse global config: %w", err)
+			return nil, nil, errors.New("parse global config: invalid bootstrap settings")
 		}
 		return etcdstore.Open(ctx, cfg.IAM)
 	}

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/popododo0720/vws-console-api/internal/admin/store"
@@ -104,5 +105,18 @@ func TestRegistryBootstrapAndSnapshots(t *testing.T) {
 		if _, _, err := openRegistry(t.Context(), paths[0], paths[1], paths[2]); err == nil {
 			t.Fatal("invalid or conflicting registry inputs accepted")
 		}
+	}
+}
+
+func TestBootstrapErrorsHideCredentials(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "global.yaml")
+	data := "iam:\n  etcd_endpoints: [https://127.0.0.1:2379]\n  tls: {ca_file: /unused/ca}\n" +
+		"credentials: {kek_file: /unused/kek}\ndefault_project: secret-canary/value\n"
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err := openRegistry(t.Context(), path, "", "")
+	if err == nil || strings.Contains(err.Error(), "canary") {
+		t.Fatal("bootstrap error disclosed an invalid field value")
 	}
 }
