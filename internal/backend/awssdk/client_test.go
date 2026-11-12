@@ -5,7 +5,6 @@ import (
 	"errors"
 	"net"
 	"net/http"
-	"path/filepath"
 	"reflect"
 	"strconv"
 	"strings"
@@ -90,7 +89,7 @@ func TestAWSSDKPreservesAWSErrorCode(t *testing.T) {
 }
 
 func TestAWSSDKDialsOnlySocket(t *testing.T) {
-	socket := filepath.Join(t.TempDir(), "proxy.sock")
+	socket := fixtureSocket(t)
 	listener, err := (&net.ListenConfig{}).Listen(t.Context(), "unix", socket)
 	if err != nil {
 		t.Fatal(err)

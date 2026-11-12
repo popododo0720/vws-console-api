@@ -77,7 +77,7 @@ func setup(t *testing.T, fixture string, status int) *Backend {
 	if err != nil {
 		t.Fatal(err)
 	}
-	socket := filepath.Join(t.TempDir(), "proxy.sock")
+	socket := fixtureSocket(t)
 	listener, err := (&net.ListenConfig{}).Listen(t.Context(), "unix", socket)
 	if err != nil {
 		t.Fatal(err)
@@ -106,4 +106,18 @@ func setup(t *testing.T, fixture string, status int) *Backend {
 	}
 	t.Cleanup(b.Close)
 	return b
+}
+
+func fixtureSocket(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "aws")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.RemoveAll(dir); err != nil {
+			t.Error(err)
+		}
+	})
+	return filepath.Join(dir, "proxy.sock")
 }
