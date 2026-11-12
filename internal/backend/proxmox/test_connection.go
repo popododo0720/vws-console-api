@@ -78,22 +78,10 @@ func TestConnection(ctx context.Context, cfg ConnectionConfig) []resource.Connec
 	steps[1].Result, steps[1].Message = resource.ConnectionPass, "PVE version read succeeded"
 	steps[2].Result, steps[2].Message = resource.ConnectionFail, "cluster_name differs or could not be verified"
 	rows, err := client.ClusterStatus(ctx)
-	if err != nil {
+	if err != nil || checkClusterName(rows, cfg.ClusterName) != nil {
 		return steps
 	}
-	matched := false
-	for _, row := range rows {
-		if row.Type == "cluster" {
-			if row.Name != cfg.ClusterName {
-				return steps
-			}
-			matched = true
-		}
-	}
-	if !matched {
-		return steps
-	}
-	steps[2].Result, steps[2].Message = resource.ConnectionPass, "cluster_name matches"
+	steps[2].Result, steps[2].Message = resource.ConnectionPass, "cluster_name accepted"
 	steps[3].Result, steps[3].Message = resource.ConnectionFail, "token permissions could not be verified"
 	permissions, err := client.AccessPermissions(ctx, "")
 	if err != nil || permissions == nil {

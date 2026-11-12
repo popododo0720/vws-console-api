@@ -27,48 +27,60 @@ func TestAdminProxmoxConnectionSteps(t *testing.T) {
 	for _, tc := range []struct {
 		name, privilege, cluster, token string
 		saved, omitSecret, untrustedCA  bool
+		standalone                      bool
 		regionStatus                    int
 		want                            []resource.ConnectionResult
 	}{
 		{
-			"unsaved auditor", "", "test", "fake-secret", false, false, false, 200,
+			"unsaved auditor", "", "test", "fake-secret", false, false, false, false, 200,
 			[]resource.ConnectionResult{"PASS", "PASS", "PASS", "PASS", "PASS"},
 		},
 		{
-			"saved auditor", "", "test", "fake-secret", true, false, false, 200,
+			"saved auditor", "", "test", "fake-secret", true, false, false, false, 200,
 			[]resource.ConnectionResult{"PASS", "PASS", "PASS", "PASS", "PASS"},
 		},
 		{
-			"allocate privilege", "VM.Allocate", "test", "fake-secret", false, false, false, 200,
+			"unsaved standalone", "", "test", "fake-secret", false, false, false, true, 200,
+			[]resource.ConnectionResult{"PASS", "PASS", "PASS", "PASS", "PASS"},
+		},
+		{
+			"saved standalone", "", "test", "fake-secret", true, false, false, true, 200,
+			[]resource.ConnectionResult{"PASS", "PASS", "PASS", "PASS", "PASS"},
+		},
+		{
+			"allocate privilege", "VM.Allocate", "test", "fake-secret", false, false, false, false, 200,
 			[]resource.ConnectionResult{"PASS", "PASS", "PASS", "FAIL", "SKIPPED"},
 		},
 		{
-			"unknown privilege", "Future.Privilege", "test", "fake-secret", true, false, false, 200,
+			"unknown privilege", "Future.Privilege", "test", "fake-secret", true, false, false, false, 200,
 			[]resource.ConnectionResult{"PASS", "PASS", "PASS", "FAIL", "SKIPPED"},
 		},
 		{
-			"wrong cluster", "", "elsewhere", "fake-secret", true, false, false, 200,
+			"wrong cluster", "", "elsewhere", "fake-secret", true, false, false, false, 200,
 			[]resource.ConnectionResult{"PASS", "PASS", "FAIL", "SKIPPED", "SKIPPED"},
 		},
 		{
-			"missing saved secret", "", "test", "", true, true, false, 200,
+			"missing saved secret", "", "test", "", true, true, false, false, 200,
 			[]resource.ConnectionResult{"SKIPPED", "SKIPPED", "SKIPPED", "SKIPPED", "PASS"},
 		},
 		{
-			"bad token", "", "test", "token-canary-762", false, false, false, 200,
+			"bad token", "", "test", "token-canary-762", false, false, false, false, 200,
 			[]resource.ConnectionResult{"PASS", "FAIL", "SKIPPED", "SKIPPED", "SKIPPED"},
 		},
 		{
-			"untrusted CA", "", "test", "fake-secret", false, false, true, 200,
+			"untrusted CA", "", "test", "fake-secret", false, false, true, false, 200,
 			[]resource.ConnectionResult{"FAIL", "SKIPPED", "SKIPPED", "SKIPPED", "SKIPPED"},
 		},
 		{
-			"region failure", "", "test", "fake-secret", false, false, false, 503,
+			"region failure", "", "test", "fake-secret", false, false, false, false, 503,
 			[]resource.ConnectionResult{"PASS", "PASS", "PASS", "PASS", "FAIL"},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := scenario()
+			if tc.standalone {
+				s.Cluster = ""
+			}
 			if tc.privilege != "" {
 				s.Roles[0].Privs = append(s.Roles[0].Privs, tc.privilege)
 			}

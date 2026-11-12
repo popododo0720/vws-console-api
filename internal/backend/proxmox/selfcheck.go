@@ -59,10 +59,8 @@ func New(ctx context.Context, client *pveclient.Client, reg Registration, cfg Re
 	if err != nil {
 		return nil, fmt.Errorf("proxmox: check cluster_name: %w", err)
 	}
-	for _, row := range status {
-		if row.Type == "cluster" && row.Name != reg.ClusterName {
-			return nil, &resource.Error{Code: resource.CodeConflict, Message: "cluster_name differs from registration"}
-		}
+	if err := checkClusterName(status, reg.ClusterName); err != nil {
+		return nil, err
 	}
 	if len(cfg.Storages) != 0 || cfg.SnippetsStorage != "" {
 		rows, err := client.ClusterResources(ctx, pveclient.ResourceStorage)
@@ -91,4 +89,14 @@ func New(ctx context.Context, client *pveclient.Client, reg Registration, cfg Re
 
 func forbiddenPrivilege(p string) bool {
 	return !strings.HasSuffix(p, ".Audit")
+}
+
+// Standalone PVE has no cluster row and keeps the registered identity.
+func checkClusterName(status []pveclient.ClusterStatus, registered string) error {
+	for _, row := range status {
+		if row.Type == "cluster" && row.Name != registered {
+			return &resource.Error{Code: resource.CodeConflict, Message: "cluster_name differs from registration"}
+		}
+	}
+	return nil
 }
