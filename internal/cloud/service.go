@@ -18,6 +18,7 @@ type Config struct {
 	// declares every action supported, as the fake and gRPC backends serve.
 	Capabilities backend.Capabilities
 	Regions      backend.RegionCatalog
+	Region       string
 }
 
 // Service is the single entry the surfaces use.
@@ -27,6 +28,7 @@ type Service struct {
 	launches *throttle.Launches
 	caps     backend.Capabilities
 	regions  backend.RegionCatalog
+	region   string
 }
 
 // New builds a kernel. A nil logger discards audit lines.
@@ -40,13 +42,17 @@ func New(cfg Config) *Service {
 	if cfg.Regions == nil {
 		cfg.Regions = backend.DefaultRegions()
 	}
+	if cfg.Region == "" {
+		cfg.Region = resource.RegionName
+	}
 	return &Service{
 		backends: cfg.Backends, audit: cfg.Audit, launches: cfg.Launches,
 		caps:    cfg.Backends.Capabilities(cfg.Capabilities),
 		regions: cfg.Regions,
+		region:  cfg.Region,
 	}
 }
 
 func scope(c resource.Caller) backend.Scope {
-	return backend.Scope{Account: c.Account}
+	return backend.Scope{Account: c.Account, Region: c.Region, Principal: c.Principal}
 }

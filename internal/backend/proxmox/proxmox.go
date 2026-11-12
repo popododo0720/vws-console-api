@@ -26,7 +26,7 @@ func (b *Backend) Set() backend.Set { return backend.Set{Compute: b, Storage: b,
 
 // RegionCapabilities declares the regional inventory and disabled writes.
 func (b *Backend) RegionCapabilities(ctx context.Context, region string) (resource.RegionCapabilities, error) {
-	if region != b.region {
+	if region != b.region && region != "all" {
 		return resource.RegionCapabilities{}, resource.Invalid("region", "not served by this backend")
 	}
 	types, err := b.instanceTypes(ctx)

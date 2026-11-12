@@ -66,15 +66,39 @@ func TestDerivedReadRequiresExplicitEmptyCapability(t *testing.T) {
 		svc := New(Config{Capabilities: stubCapabilities{doc: resource.RegionCapabilities{
 			Actions: map[string]resource.ActionCapability{"ec2:DescribeRouteTables": {State: state}},
 		}}})
-		empty, err := svc.ReadIsEmpty(t.Context(), "DescribeRouteTables")
+		empty, err := svc.ReadIsEmpty(t.Context(), resource.Caller{}, "DescribeRouteTables")
 		if err != nil || empty != (state == resource.ActionEmpty) {
 			t.Fatalf("state=%s empty=%v error=%v", state, empty, err)
 		}
 	}
 	failure := errors.New("capabilities unavailable")
 	svc := New(Config{Capabilities: stubCapabilities{err: failure}})
-	if _, err := svc.ReadIsEmpty(t.Context(), "DescribeRouteTables"); !errors.Is(err, failure) {
+	if _, err := svc.ReadIsEmpty(t.Context(), resource.Caller{}, "DescribeRouteTables"); !errors.Is(err, failure) {
 		t.Fatalf("capability failure was lost: %v", err)
+	}
+}
+
+type regionalReads map[string]resource.ActionState
+
+func (c regionalReads) RegionCapabilities(_ context.Context, region string) (resource.RegionCapabilities, error) {
+	return resource.RegionCapabilities{
+		Region: region, Kind: resource.RegionKindProxmox,
+		Actions: map[string]resource.ActionCapability{"ec2:DescribeRouteTables": {State: c[region]}},
+	}, nil
+}
+
+func TestDerivedReadUsesRequestRegion(t *testing.T) {
+	svc := New(Config{Region: "us-east-1", Capabilities: regionalReads{
+		"us-east-1": resource.ActionEmpty, "pve-test-1": resource.ActionSupported, "all": resource.ActionSupported,
+	}})
+	for _, tc := range []struct {
+		region string
+		empty  bool
+	}{{"pve-test-1", false}, {"us-east-1", true}, {"", true}, {"all", false}} {
+		empty, err := svc.ReadIsEmpty(t.Context(), resource.Caller{Region: tc.region}, "DescribeRouteTables")
+		if err != nil || empty != tc.empty {
+			t.Errorf("region %q: empty=%t, error=%v; want empty=%t", tc.region, empty, err, tc.empty)
+		}
 	}
 }
 

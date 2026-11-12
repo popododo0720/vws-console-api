@@ -194,6 +194,20 @@ func (h *handler) gate(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, r, err)
 		return
 	}
+	if !isAdmin && pattern != routeSession && pattern != routeLogout {
+		if c.Region == "" {
+			c.Region = h.region
+		}
+		if len(r.Header.Values("X-Vws-Region")) > 1 {
+			writeErr(w, r, resource.Invalid("region", "expected one region header"))
+			return
+		}
+		c, err = h.svc.RequestRegion(r.Context(), c, r.Header.Get("X-Vws-Region"))
+		if err != nil {
+			writeErr(w, r, err)
+			return
+		}
+	}
 	if isAdmin {
 		if !c.Root {
 			if pattern == "GET /api/v1/admin/permissions" {

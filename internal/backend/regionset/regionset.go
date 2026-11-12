@@ -71,14 +71,38 @@ func (r *router) Call(ctx context.Context, service, method string, s backend.Sco
 func (r *router) call(ctx context.Context, region backend.ProxmoxRegion,
 	service, method string, s backend.Scope, q, dst any,
 ) error {
+	if caps, ok := r.catalog.(backend.Capabilities); ok {
+		doc, err := caps.RegionCapabilities(ctx, s.Region)
+		if err != nil {
+			return regionalError(err)
+		}
+		if doc.Actions["ec2:"+method].State == resource.ActionEmpty {
+			return nil
+		}
+	}
 	t, err := r.resolve(ctx, region)
-	if err != nil {
-		return fmt.Errorf("resolve region: %w", err)
+	if err == nil {
+		err = t.Call(ctx, service, method, s, q, dst)
 	}
-	if err := t.Call(ctx, service, method, s, q, dst); err != nil {
-		return fmt.Errorf("read region: %w", err)
+	return regionalError(err)
+}
+
+func regionalError(err error) error {
+	if err == nil {
+		return nil
 	}
-	return nil
+	var public *resource.Error
+	if errors.As(err, &public) && public.Code != resource.CodeUnavailable {
+		if public.Unwrap() == nil {
+			return public
+		}
+		return public.WithCause(nil)
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return (&resource.Error{Code: resource.CodeUnavailable, Message: "region timed out"}).
+			WithCause(context.DeadlineExceeded)
+	}
+	return &resource.Error{Code: resource.CodeUnavailable, Message: "region unavailable"}
 }
 
 func cursors(scope string, token string, regions []backend.ProxmoxRegion) (map[string]string, error) {
@@ -244,11 +268,7 @@ func list[T any](ctx context.Context, r *router, s backend.Scope, page resource.
 				message = "region timed out"
 			}
 			if s.Region != "all" {
-				var public *resource.Error
-				if errors.As(got.err, &public) {
-					return resource.Page[T]{}, public
-				}
-				return resource.Page[T]{}, &resource.Error{Code: resource.CodeUnavailable, Message: message}
+				return resource.Page[T]{}, regionalError(got.err)
 			}
 			out.Partial = append(out.Partial, resource.Partial{Region: region.Name, Error: message})
 			continue

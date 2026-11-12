@@ -48,6 +48,7 @@ func (b BearerTokens) Authenticate(_ context.Context, token string) (resource.Ca
 // bearer console token to the account root until that token is retired.
 type Config struct {
 	Service      *cloud.Service
+	Region       string
 	Auth         Authenticator
 	IAM          iam.Client
 	Registry     *store.Registry
@@ -95,6 +96,7 @@ func New(cfg Config) http.Handler {
 	lim := cfg.LoginLimits.withDefaults()
 	h := &handler{
 		svc: cfg.Service, auth: cfg.Auth, iam: cfg.IAM, log: log, mux: http.NewServeMux(),
+		region:  cfg.Region,
 		origins: cfg.Origins, trusted: cfg.TrustedProxies, now: now,
 		logins:       newLimiter(lim.IPBurst, lim.IPRefill, lim.MaxKeys),
 		users:        newLimiter(lim.UserBurst, lim.UserRefill, lim.MaxKeys),
@@ -194,6 +196,7 @@ type handler struct {
 	audit        *audit.Logger
 	registry     *store.Registry
 	svc          *cloud.Service
+	region       string
 	auth         Authenticator
 	iam          iam.Client
 	loginOff     bool

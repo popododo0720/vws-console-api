@@ -26,6 +26,7 @@ import (
 	"github.com/popododo0720/vws-console-api/internal/backend/grpcclient/iamclient"
 	"github.com/popododo0720/vws-console-api/internal/backend/launch"
 	"github.com/popododo0720/vws-console-api/internal/backend/launch/kubestore"
+	"github.com/popododo0720/vws-console-api/internal/backend/proxmox"
 	"github.com/popododo0720/vws-console-api/internal/cloud"
 	"github.com/popododo0720/vws-console-api/internal/globalconfig"
 	"github.com/popododo0720/vws-console-api/internal/iam"
@@ -69,9 +70,15 @@ func serve(ctx context.Context, args []string) (err error) {
 func run(ctx context.Context, args []string) (err error) {
 	fs := flag.NewFlagSet("vws-console-api", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
-	backendKind := fs.String("backend", "fake", "fake or grpc")
+	backendKind := fs.String("backend", "fake", "fake, grpc, regions or proxmox")
+	defaultRegion := fs.String("default-region", resource.RegionName, "default console region")
+	regionConfig := fs.String("region-config", "/etc/vws/region.yaml", "node-local Proxmox configuration")
+	registrationFile := fs.String("registration-file", "/etc/pve/vws/registration.json", "public Proxmox registration")
+	pveEndpoint := fs.String("pve-endpoint", "https://127.0.0.1:8006", "local pveproxy HTTPS origin")
+	pveCA := fs.String("pve-ca-file", "/etc/pve/pve-root-ca.pem", "PVE CA bundle")
+	helperPath := fs.String("helper-path", "", "region helper executable override")
 	auditLog := fs.String("audit-log", "", "append-only audit stream path; empty uses stderr")
-	awsProxySocket := fs.String("aws-proxy-socket", "/run/vws/aws-proxy.sock", "AWS connection test proxy unix socket")
+	awsProxySocket := fs.String("aws-proxy-socket", "/run/vws/aws-proxy.sock", "AWS inventory and test proxy socket")
 	globalConfig := fs.String("global-config", "", "global.yaml bootstrap path for the admin registry; "+
 		"empty uses memory with -backend=fake")
 	consoleAddr := fs.String("console-addr", "127.0.0.1:8080", "console listen address")
@@ -152,7 +159,7 @@ func run(ctx context.Context, args []string) (err error) {
 		return err
 	}
 	if *backendKind == "grpc" {
-		if err := requireExplicit(creds); err != nil {
+		if err := requireExplicit(creds, *backendKind); err != nil {
 			return err
 		}
 	}
@@ -178,6 +185,8 @@ func run(ctx context.Context, args []string) (err error) {
 	caller := resource.Caller{Account: account, Subject: *accessKey, Principal: iam.RootARN(account), Root: true}
 
 	var set backend.Set
+	var caps backend.Capabilities
+	var localRegions backend.RegionCatalog
 	// sweep undoes the launches a dead request left behind; nil without a launch store.
 	var sweep func(context.Context)
 	switch *backendKind {
@@ -212,8 +221,32 @@ func run(ctx context.Context, args []string) (err error) {
 			sweep = client.SweepLaunches
 		}
 		set = client.Set()
+	case "regions":
+		if *launchNamespace != "" {
+			return errors.New("-launch-namespace needs -backend=grpc")
+		}
+	case "proxmox":
+		if *launchNamespace != "" {
+			return errors.New("-launch-namespace needs -backend=grpc")
+		}
+		b, closeBackend, openErr := standaloneBackend(
+			ctx, *regionConfig, *registrationFile, *pveEndpoint, *pveCA, *helperPath,
+		)
+		if openErr != nil {
+			return openErr
+		}
+		defer closeBackend()
+		set, caps = b.Set(), b
+		identity := proxmox.Identity(b)
+		localRegions = backend.NewStaticRegions([]backend.ProxmoxRegion{identity.Region}, nil)
+		caller.Region = identity.Region.Name
 	default:
 		return fmt.Errorf("unknown -backend %q", *backendKind)
+	}
+	if *backendKind == "regions" || *backendKind == "proxmox" {
+		if err := requireExplicit(creds, *backendKind); err != nil {
+			return err
+		}
 	}
 
 	registry, adminKey, closeRegistry, err := openRegistry(ctx, *globalConfig, *backendKind)
@@ -237,8 +270,26 @@ func run(ctx context.Context, args []string) (err error) {
 	if *backendKind != "fake" {
 		regions = registry.Catalog()
 	}
+	if localRegions != nil {
+		regions = localRegions
+	}
+	if *backendKind == "regions" {
+		connect, connectErr := regionConnection(*globalConfig)
+		if connectErr != nil {
+			return connectErr
+		}
+		var closeBackends func()
+		set, closeBackends, err = registeredBackends(regions, connect, *awsProxySocket)
+		if err != nil {
+			return err
+		}
+		defer closeBackends()
+		caps = inventoryCatalog{regions}
+		caller.Region = *defaultRegion
+	}
 	svc := cloud.New(cloud.Config{
-		Backends: set, Regions: regions, Audit: logger, Launches: throttle.NewLaunches(launchLimits),
+		Backends: set, Regions: regions, Capabilities: caps, Audit: logger, Launches: throttle.NewLaunches(launchLimits),
+		Region: caller.Region,
 	})
 	// The static key remains the account root for SigV4. With -iam=grpc,
 	// vws-iam owns console passwords and sessions for every identity.
@@ -304,6 +355,7 @@ func run(ctx context.Context, args []string) (err error) {
 	return server.Serve(ctx, server.Options{Logger: logger, OpsAddr: *opsAddr, Surfaces: []server.Surface{
 		{Name: "console", Addr: *consoleAddr, Handler: console.New(console.Config{
 			Service:        svc,
+			Region:         caller.Region,
 			Registry:       registry,
 			AdminKey:       adminKey,
 			Audit:          audit.New(auditOut),
@@ -336,8 +388,8 @@ func openRegistry(
 	ctx context.Context, path, backendKind string,
 ) (*store.Registry, *adminsecret.Key, func() error, error) {
 	if path == "" {
-		if backendKind != "fake" {
-			return nil, nil, nil, errors.New("-global-config is required for the admin registry with -backend=grpc")
+		if backendKind != "fake" && backendKind != "proxmox" {
+			return nil, nil, nil, fmt.Errorf("-global-config is required for the admin registry with -backend=%s", backendKind)
 		}
 		return store.New(store.NewMemory()), nil, func() error { return nil }, nil
 	}
@@ -422,7 +474,7 @@ func resolveCredentials(ctx context.Context, fs *flag.FlagSet, env credentialEnv
 // requireExplicit rejects a run that would fall back to a built-in development
 // credential. The defaults (dev-token, AKIDEXAMPLE, secret) are public, so
 // against real backends each credential must be given (env, _FILE or flag).
-func requireExplicit(defaulted []credential) error {
+func requireExplicit(defaulted []credential, backendKind string) error {
 	if len(defaulted) == 0 {
 		return nil
 	}
@@ -430,7 +482,8 @@ func requireExplicit(defaulted []credential) error {
 	for _, c := range defaulted {
 		missing = append(missing, c.env+" (or "+c.env+"_FILE)")
 	}
-	return fmt.Errorf("-backend=grpc needs %s; the defaults are public development credentials", strings.Join(missing, ", "))
+	return fmt.Errorf("-backend=%s needs %s; the defaults are public development credentials",
+		backendKind, strings.Join(missing, ", "))
 }
 
 // signInEnabled reports whether -iam serves console sign-in. Static has only

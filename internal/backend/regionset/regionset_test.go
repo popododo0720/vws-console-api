@@ -328,6 +328,8 @@ func TestConcreteRegionFailureIsPublic(t *testing.T) {
 		errors.New("https://credential@internal/token"),
 		context.DeadlineExceeded,
 		resource.Invalid("filter", "unknown filter"),
+		(&resource.Error{Code: resource.CodeUnavailable, Message: "region unavailable"}).
+			WithCause(errors.New("https://credential@internal/token")),
 	} {
 		set := newSet(t, catalog(), func(context.Context, string, string, backend.Scope, any, any) error {
 			return failure
@@ -339,6 +341,11 @@ func TestConcreteRegionFailureIsPublic(t *testing.T) {
 		}
 		if resource.CodeOf(failure) == resource.CodeInvalidArgument && !errors.Is(err, failure) {
 			t.Fatalf("lost public validation error: %v", err)
+		}
+		_, err = set.Storage.GetBucket(t.Context(), backend.Scope{Region: "pve-a-1"}, resource.BucketName{})
+		if strings.Contains(err.Error(), "credential") ||
+			(resource.CodeOf(failure) != resource.CodeInvalidArgument && resource.CodeOf(err) != resource.CodeUnavailable) {
+			t.Fatalf("unsafe detail failure: %v", err)
 		}
 	}
 }

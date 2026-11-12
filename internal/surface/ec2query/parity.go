@@ -842,7 +842,7 @@ func (h *handler) describeVolumesModifications(w http.ResponseWriter, r *http.Re
 		writeErr(w, r, resource.Invalid("NextToken", invalidNextTokenMessage))
 		return
 	}
-	empty, err := h.svc.ReadIsEmpty(r.Context(), "DescribeVolumesModifications")
+	empty, err := h.svc.ReadIsEmpty(r.Context(), c, "DescribeVolumesModifications")
 	if err != nil {
 		writeErr(w, r, err)
 		return
@@ -1094,7 +1094,7 @@ func (h *handler) describeRouteTables(w http.ResponseWriter, r *http.Request, c 
 		return
 	}
 	ids := indexedStrings(r, "RouteTableId")
-	empty, err := h.svc.ReadIsEmpty(r.Context(), "DescribeRouteTables")
+	empty, err := h.svc.ReadIsEmpty(r.Context(), c, "DescribeRouteTables")
 	if err != nil {
 		writeErr(w, r, err)
 		return
