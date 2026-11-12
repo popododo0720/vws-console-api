@@ -1,6 +1,7 @@
 ------------------------------- MODULE detach -------------------------------
 (***************************************************************************)
-(* The DetachVolume recovery path of the gRPC backend (#343).              *)
+(* Historical DetachVolume recovery path of the retired gRPC backend.     *)
+(* Code mappings refer to the pre-#784 implementation in Git history.     *)
 (*                                                                         *)
 (* One instance (vws-compute) holds the attachment in spec.volumes and the *)
 (* replay state in labels: a detach record vws-detach-<vol> naming the     *)

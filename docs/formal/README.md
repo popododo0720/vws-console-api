@@ -71,15 +71,18 @@ successful destroy; the planned Describe API returns NotFound afterward.
 
 The Proxmox drive-serial/holder replacement for `detach.tla` (AC 3) is left
 for the next part of #881 to keep each PR within the 800-line budget. The
-existing gRPC detach model and its checks remain below.
+historical gRPC detach model and its checks remain below.
 
-## DetachVolume recovery path
+## Historical DetachVolume recovery path
 
-`detach.tla` is a TLA+ model of how the gRPC backend detaches an EBS volume
+`detach.tla` is an archived TLA+ model of how the retired gRPC backend detached an EBS volume
 and recovers a detach that was interrupted (#343). It checks every
 interleaving of two concurrent `DetachVolume` callers, a concurrent
 `CreateTags`, an `AttachVolume` that puts a detached volume back, console-api
-restarts at any step, and the client-token window passing.
+restarts at any step, and the client-token window passing. That backend was
+removed in #784. The code mappings below refer to the implementation before
+its removal, accessible in Git history; they are not mappings to current code.
+This model proves nothing about the Proxmox drive-serial/holder design.
 
 Run it with `scripts/tla-detach.sh` (needs Java 11+; about 5 minutes on 8
 cores). CI runs it in `.github/workflows/tla.yml`.
@@ -87,10 +90,10 @@ cores). CI runs it in `.github/workflows/tla.yml`.
 The IAM authorize, then read or write model is `iamauth.tla`, described in
 `iamauth.md` (#373).
 
-Last confirmed against the code at commit `6fd3fcb` with the #334 change. When a file in
-"Coverage" changes after that commit, read the change against the model
-before trusting a pass, and move this commit forward only once the model
-describes the new code.
+Last confirmed against the code at commit `6fd3fcb` with the #334 change.
+The mapping remains pinned to that historical implementation. Its checks
+remain reproducible, but no current backend implementation is claimed to
+match it.
 
 ## What is modeled
 
@@ -174,7 +177,7 @@ t2's retry after a restart reads an op id of other parameters and answers
   (`!drop && updated.GetDone()`), boot volumes, minted tokens.
 - Storage-side state (`DescribeVolumes` attaching/detaching display).
 
-## Findings in the current code
+## Findings in the historical implementation
 
 None. `scripts/tla-detach.sh` keeps a finding list for properties that fail
 on the real design; a fix shows up as a failing CI step, and the property

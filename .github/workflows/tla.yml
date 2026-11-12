@@ -1,5 +1,5 @@
-# Model-checks docs/formal/detach.tla (the DetachVolume recovery path, #343)
-# when the spec or the code it models changes. See docs/formal/README.md.
+# Checks the Proxmox lifecycle and archived gRPC detach design.
+# See docs/formal/README.md for the model boundaries.
 name: tla
 
 on:
@@ -11,8 +11,6 @@ on:
       - scripts/tla-instance_test.sh
       - internal/backend/proxmox/lifecycle*.go
       - .github/workflows/tla.yml
-      - internal/backend/grpcclient/ec2.go
-      - internal/backend/grpcclient/names.go
       - internal/backend/backend.go
   push:
     branches: [main]
@@ -23,8 +21,6 @@ on:
       - scripts/tla-instance_test.sh
       - internal/backend/proxmox/lifecycle*.go
       - .github/workflows/tla.yml
-      - internal/backend/grpcclient/ec2.go
-      - internal/backend/grpcclient/names.go
       - internal/backend/backend.go
 
 permissions:
@@ -76,5 +72,5 @@ jobs:
         with:
           path: ~/.cache/vws
           key: tla2tools-${{ steps.pin.outputs.TLA_SHA256 }}
-      - name: TLC passes the real design, fails every seeded bug and each known finding
+      - name: TLC passes the archived design and rejects its seeded bugs
         run: scripts/tla-detach.sh

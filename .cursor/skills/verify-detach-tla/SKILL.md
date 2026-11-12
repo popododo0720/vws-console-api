@@ -1,13 +1,15 @@
 ---
 name: verify-detach-tla
 description: >-
-  Use when a change touches the gRPC DetachVolume recovery path in
-  internal/backend/grpcclient/ec2.go (detach records, vws-dop- op ids, prune,
-  hold, label budget, persistDetachOp, CreateTags or AttachVolume label
-  writes), internal/backend/backend.go client-token window, or
-  docs/formal/detach.tla. Model-checks the change with TLA+.
+  Use when changing the archived gRPC DetachVolume model in
+  docs/formal/detach.tla or its runner. This is historical design evidence,
+  not a model of the current Proxmox backend.
 ---
 # Verify the DetachVolume recovery path
+
+The gRPC backend was removed in #784. Code mappings and test names below
+refer to its implementation in Git history. Do not use a model pass as
+evidence about a current backend; Proxmox detach modeling belongs to #881.
 
 `docs/formal/detach.tla` models every interleaving of concurrent detaches,
 same-token retries, a concurrent tag write, a reattach, console-api restarts

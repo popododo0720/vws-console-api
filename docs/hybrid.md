@@ -95,9 +95,9 @@ public keys and Proxmox cloud-init `sshkeys` still await #771 and the rest
 of #779. Without gRPC IAM, key mutations and keyed launches are unsupported;
 key pair inventory keeps the regional read path.
 
-`grpc` (vws-compute, vws-network and vws-storage on Kubernetes) is the old
-path. It stays only until `regions` and `proxmox` replace it (#755) and is not
-the production path.
+The Kubernetes compute, network and storage backend is removed. IAM still
+connects to vws-iam over gRPC with `-iam=grpc`; it is independent of the
+resource backend selected above.
 
 ## Phases
 

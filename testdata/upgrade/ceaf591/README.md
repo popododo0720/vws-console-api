@@ -39,9 +39,10 @@ VWS_UPGRADE_FIXTURES="$OLDPWD/testdata/upgrade/ceaf591" \
 
 Without `VWS_UPGRADE_FIXTURES` the generator skips. CI never runs it.
 
-## Current test
+## Current and historical coverage
 
-`internal/backend/grpcclient/upgrade_test.go` decodes the three label files and
-`internal/cloud/upgrade_test.go` decodes the idempotency record. The first test
-replays the saved operation id and prunes the held map. Changing a label key or
-the record value encoding leaves the fixture undecodable, and the test fails.
+`internal/cloud/upgrade_test.go` decodes the idempotency record.
+The label fixtures and their generator describe the retired gRPC backend;
+its `upgrade_test.go` was removed in #784. They remain historical inputs
+for reproducing that implementation from Git history, not current backend
+compatibility evidence.
