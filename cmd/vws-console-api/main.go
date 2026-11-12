@@ -80,7 +80,9 @@ func run(ctx context.Context, args []string) (err error) {
 	auditLog := fs.String("audit-log", "", "append-only audit stream path; empty uses stderr")
 	awsProxySocket := fs.String("aws-proxy-socket", "/run/vws/aws-proxy.sock", "AWS inventory and test proxy socket")
 	globalConfig := fs.String("global-config", "", "global.yaml bootstrap path for the admin registry; "+
-		"empty uses memory with -backend=fake")
+		"required for regions and grpc unless -admin-store memory; empty uses memory with fake and proxmox")
+	var bootstrap adminBootstrap
+	bootstrap.flags(fs)
 	consoleAddr := fs.String("console-addr", "127.0.0.1:8080", "console listen address")
 	ec2Addr := fs.String("ec2-addr", "127.0.0.1:8081", "query listen address")
 	s3Addr := fs.String("s3-addr", "127.0.0.1:8082", "object listen address")
@@ -151,6 +153,9 @@ func run(ctx context.Context, args []string) (err error) {
 		"longest a RunInstances call waits for room before RequestLimitExceeded (0 to 30s)")
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("flags: %w", err)
+	}
+	if err := bootstrap.validate(*globalConfig); err != nil {
+		return err
 	}
 
 	logger := slog.Default()
@@ -250,23 +255,22 @@ func run(ctx context.Context, args []string) (err error) {
 		}
 	}
 
-	registry, adminKey, closeRegistry, err := openRegistry(ctx, *globalConfig, *backendKind)
+	registry, adminKey, closeRegistry, err := bootstrap.open(ctx, *globalConfig, *backendKind)
 	if err != nil {
 		return err
 	}
 	defer func() { err = errors.Join(err, closeRegistry()) }()
-	health, err := regionHealth(*globalConfig)
+	if bootstrap.store == "memory" {
+		logger.WarnContext(ctx, "in-memory admin registry: registrations are lost on restart",
+			slog.String("admin_store", bootstrap.store))
+	}
+	files, err := regionMTLSFiles(*globalConfig, bootstrap.mtls)
 	if err != nil {
 		return err
 	}
-	registration, err := regionRegistration(*globalConfig)
-	if err != nil {
-		return err
-	}
-	pool, err := regionPool(*globalConfig)
-	if err != nil {
-		return err
-	}
+	health := regionHealth(files)
+	registration := regionRegistration(files)
+	pool := regionPool(files)
 	var regions backend.RegionCatalog = backend.DefaultRegions()
 	if *backendKind != "fake" {
 		regions = registry.Catalog()
@@ -275,10 +279,7 @@ func run(ctx context.Context, args []string) (err error) {
 		regions = localRegions
 	}
 	if *backendKind == "regions" {
-		connect, connectErr := regionConnection(*globalConfig)
-		if connectErr != nil {
-			return connectErr
-		}
+		connect := regionConnection(files)
 		var closeBackends func()
 		var regional cloud.Config
 		regional, closeBackends, err = registeredBackends(regions, connect, *awsProxySocket)

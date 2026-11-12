@@ -4,6 +4,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -11,7 +12,29 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/popododo0720/vws-console-api/internal/backend/grpcclient/iamclient"
+	"github.com/popododo0720/vws-console-api/internal/surface/console"
 )
+
+func regionTLSFiles(t *testing.T, srv *httptest.Server) iamclient.TLSFiles {
+	t.Helper()
+	dir := t.TempDir()
+	certPath, keyPath := filepath.Join(dir, "cert.pem"), filepath.Join(dir, "key.pem")
+	key, err := x509.MarshalPKCS8PrivateKey(srv.TLS.Certificates[0].PrivateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for path, data := range map[string][]byte{
+		certPath: pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw}),
+		keyPath:  pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: key}),
+	} {
+		if err := os.WriteFile(path, data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return iamclient.TLSFiles{CAFile: certPath, CertFile: certPath, KeyFile: keyPath}
+}
 
 func TestRegionHealthUsesBootstrapMTLS(t *testing.T) {
 	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -60,25 +83,20 @@ default_project: default
 	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	health, err := regionHealth(path)
+	files, err := regionMTLSFiles(path, iamclient.TLSFiles{})
 	if err != nil {
 		t.Fatal(err)
 	}
+	health := regionHealth(files)
 	got, err := health(t.Context(), srv.URL)
 	if err != nil || !got.Quorate || got.Nodes == nil {
 		t.Fatalf("bootstrap health: %+v %v", got, err)
 	}
-	register, err := regionRegistration(path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	register := regionRegistration(files)
 	if err := register(t.Context(), srv.URL, []byte(`{}`)); err != nil {
 		t.Fatalf("bootstrap registration: %v", err)
 	}
-	pool, err := regionPool(path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	pool := regionPool(files)
 	if exists, err := pool(t.Context(), srv.URL, "project"); err != nil || !exists {
 		t.Fatalf("bootstrap pool: %t %v", exists, err)
 	}
@@ -105,14 +123,61 @@ default_project: default
 }
 
 func TestRegionHealthRequiresBootstrapCredentials(t *testing.T) {
-	health, err := regionHealth("")
-	if err != nil {
-		t.Fatal(err)
+	health := regionHealth(iamclient.TLSFiles{})
+	_, err := health(t.Context(), "https://127.0.0.1:1234")
+	var config *console.RegionMTLSConfigError
+	if !errors.As(err, &config) || config.Err.Error() != "mTLS is not configured" {
+		t.Fatalf("missing bootstrap credentials: %v", err)
 	}
-	if _, err := health(t.Context(), "https://127.0.0.1:1234"); err == nil {
-		t.Fatal("missing bootstrap credentials accepted")
-	}
-	if _, err := regionHealth(filepath.Join(t.TempDir(), "missing")); err == nil {
+	if _, err := regionMTLSFiles(filepath.Join(t.TempDir(), "missing"), iamclient.TLSFiles{}); err == nil {
 		t.Fatal("missing bootstrap file accepted")
+	}
+}
+
+func TestRegionHealthUsesExplicitMTLS(t *testing.T) {
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/internal/v1/status":
+			w.Write([]byte(`{"quorate":true,"leader":null,"nodes":[],"lastError":null}`))
+		case "/internal/v1/registration":
+			w.Write([]byte(`{}`))
+		case "/internal/v1/pools/project":
+			w.Write([]byte(`{"exists":true}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	srv.TLS = &tls.Config{MinVersion: tls.VersionTLS13, ClientAuth: tls.RequireAnyClientCert}
+	srv.StartTLS()
+	defer srv.Close()
+	files := regionTLSFiles(t, srv)
+	for _, field := range []string{"valid", "ca", "cert", "key"} {
+		t.Run(field, func(t *testing.T) {
+			input := files
+			missing := filepath.Join(t.TempDir(), "missing")
+			switch field {
+			case "ca":
+				input.CAFile = missing
+			case "cert":
+				input.CertFile = missing
+			case "key":
+				input.KeyFile = missing
+			}
+			health := regionHealth(input)
+			got, err := health(t.Context(), srv.URL)
+			if field == "valid" {
+				if err != nil || !got.Quorate {
+					t.Fatalf("explicit mTLS health: %+v %v", got, err)
+				}
+				if err := regionRegistration(input)(t.Context(), srv.URL, []byte(`{}`)); err != nil {
+					t.Fatalf("explicit mTLS registration: %v", err)
+				}
+				if exists, err := regionPool(input)(t.Context(), srv.URL, "project"); err != nil || !exists {
+					t.Fatalf("explicit mTLS pool: %t %v", exists, err)
+				}
+			} else if err == nil || err.Error() != "region mTLS configuration failed" {
+				t.Fatalf("missing %s accepted or exposed: %v", field, err)
+			}
+		})
 	}
 }
