@@ -47,7 +47,7 @@ func Console(t *testing.T, newSet Harness) {
 			t.Fatalf("open %s: %v %+v", kind, err, got)
 		}
 		u, err := url.Parse(got.URL)
-		if err != nil || (u.Scheme != "ws" && u.Scheme != "wss") || u.Host == "" {
+		if got.Dial == nil && (err != nil || (u.Scheme != "ws" && u.Scheme != "wss") || u.Host == "") {
 			t.Fatalf("open %s: url %q is not a websocket address: %v", kind, got.URL, err)
 		}
 	}

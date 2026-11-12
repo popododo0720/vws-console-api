@@ -22,7 +22,11 @@ func New(transport Transport) (backend.Set, error) {
 	if transport == nil {
 		return backend.Set{}, resource.Invalid("transport", "region transport is required")
 	}
-	return backend.Set{Compute: compute{transport}, Storage: storage{transport}, Network: network{transport}}, nil
+	set := backend.Set{Compute: compute{transport}, Storage: storage{transport}, Network: network{transport}}
+	if console, ok := transport.(backend.Console); ok {
+		set.Console = console
+	}
+	return set, nil
 }
 
 type compute struct{ transport Transport }

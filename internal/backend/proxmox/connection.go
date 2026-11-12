@@ -59,7 +59,6 @@ func Open(configPath, registrationPath, endpoint string, transport *http.Client)
 	if err != nil {
 		return nil, err
 	}
-	cfg.ReadOnly = true
 	return &Connection{config: cfg, path: registrationPath, endpoint: endpoint, transport: transport}, nil
 }
 

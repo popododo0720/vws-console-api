@@ -25,7 +25,6 @@ func Identity(b *Backend) Registration {
 }
 
 // New checks configuration against PVE before exposing a backend.
-// Mutations remain disabled even when read_only is false in phase one.
 func New(ctx context.Context, client *pveclient.Client, reg Registration, cfg RegionConfig) (*Backend, error) {
 	if client == nil {
 		return nil, errors.New("proxmox: missing PVE client")

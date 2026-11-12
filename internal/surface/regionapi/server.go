@@ -15,6 +15,8 @@ import (
 	"net/http"
 	"time"
 
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+
 	"github.com/popododo0720/vws-lib/obs/httpobs"
 
 	"github.com/popododo0720/vws-console-api/internal/backend"
@@ -51,7 +53,9 @@ type Config struct {
 	Region       string
 	Version      Version
 	Gate         Gate
-	Status       interface {
+	// ConsoleNow supplies the console admission clock. Nil uses time.Now.
+	ConsoleNow func() time.Time
+	Status     interface {
 		Status(context.Context) (resource.RegionStatus, error)
 	}
 	Pools interface {
@@ -81,6 +85,7 @@ func New(cfg Config) (http.Handler, error) {
 		return nil, fmt.Errorf("new region API: release line and cluster name are required")
 	}
 	mux := http.NewServeMux()
+	registerConsole(mux, cfg.Backend.Console, cfg.ConsoleNow)
 	c, s, n := cfg.Backend.Compute, cfg.Backend.Storage, cfg.Backend.Network
 	register(mux, cfg.Gate, "Compute", "RunInstances", c.RunInstances)
 	register(mux, cfg.Gate, "Compute", "StopInstances", c.StopInstances)
@@ -206,7 +211,11 @@ func New(cfg Config) (http.Handler, error) {
 		caps, err := cfg.Backend.Capabilities(cfg.Capabilities).RegionCapabilities(r.Context(), cfg.Region)
 		writeJSON(w, caps, err)
 	})
-	return httpobs.Middleware("regionapi", nil)(mux), nil
+	handler := http.NewServeMux()
+	// httpobs v0.1.1 hides Hijacker; otelhttp preserves it for streaming routes.
+	handler.Handle("GET /internal/v1/console/{id}", otelhttp.NewHandler(mux, "regionapi.console"))
+	handler.Handle("/", httpobs.Middleware("regionapi", nil)(mux))
+	return handler, nil
 }
 
 func register[S backend.Scope | backend.Mutation, Q, R any](mux *http.ServeMux, gate Gate, iface, method string,

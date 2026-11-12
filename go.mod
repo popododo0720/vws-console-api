@@ -9,6 +9,7 @@ require (
 	github.com/aws/aws-sdk-go-v2 v1.48.0
 	github.com/aws/aws-sdk-go-v2/service/ec2 v1.345.0
 	github.com/aws/smithy-go v1.28.9
+	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674
 	github.com/popododo0720/vws-lib v0.1.1
 	github.com/popododo0720/vws-proto v0.24.0
 	go.etcd.io/etcd/client/pkg/v3 v3.7.0
@@ -72,7 +73,6 @@ require (
 	github.com/google/gnostic-models v0.7.0 // indirect
 	github.com/google/go-cmp v0.7.0 // indirect
 	github.com/google/uuid v1.6.0 // indirect
-	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674 // indirect
 	github.com/grpc-ecosystem/go-grpc-middleware/providers/prometheus v1.1.0 // indirect
 	github.com/grpc-ecosystem/go-grpc-middleware/v2 v2.3.3 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.30.0 // indirect

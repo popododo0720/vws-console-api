@@ -10,7 +10,7 @@ import (
 	"github.com/popododo0720/vws-console-api/internal/resource"
 )
 
-// Backend is the phase-one read-only Proxmox backend.
+// Backend implements Proxmox inventory and console access.
 type Backend struct {
 	region          string
 	cluster         string
@@ -21,10 +21,12 @@ type Backend struct {
 	lastStatusError *resource.RegionStatusError
 }
 
-// Set returns the three services sharing this backend.
-func (b *Backend) Set() backend.Set { return backend.Set{Compute: b, Storage: b, Network: b} }
+// Set returns the services sharing this backend.
+func (b *Backend) Set() backend.Set {
+	return backend.Set{Compute: b, Storage: b, Network: b, Console: b}
+}
 
-// RegionCapabilities declares the regional inventory and disabled writes.
+// RegionCapabilities declares regional action support.
 func (b *Backend) RegionCapabilities(ctx context.Context, region string) (resource.RegionCapabilities, error) {
 	if region != b.region && region != "all" {
 		return resource.RegionCapabilities{}, resource.Invalid("region", "not served by this backend")
@@ -69,6 +71,9 @@ func (b *Backend) RegionCapabilities(ctx context.Context, region string) (resour
 	}
 	for _, key := range []string{"ec2:DescribeRouteTables", "ec2:DescribeVolumesModifications"} {
 		doc.Actions[key] = resource.ActionCapability{State: resource.ActionEmpty}
+	}
+	if !b.cfg.ReadOnly {
+		doc.Actions["vws:OpenConsole"] = resource.ActionCapability{State: resource.ActionSupported}
 	}
 	return doc, nil
 }
