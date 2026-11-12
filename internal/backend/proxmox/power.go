@@ -231,6 +231,9 @@ func (b *Backend) GetOperation(
 		return resource.Operation{}, missing
 	}
 	if sync, ok := decoded.(syncOperation); ok {
+		if sync.action == resource.ActionCreateTags || sync.action == resource.ActionDeleteTags {
+			return b.tagOperation(ctx, s, id)
+		}
 		target, err := resource.Parse[resource.InstanceID]("i-" + sync.local)
 		if err != nil || sync.kind != resource.KindInstance {
 			return resource.Operation{}, missing

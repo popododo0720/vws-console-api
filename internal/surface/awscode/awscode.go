@@ -71,6 +71,8 @@ var EC2ByKind = map[errs.Code]map[errs.Kind]errs.AWSEntry{
 		errs.KindSnapshot: {HTTP: http.StatusBadRequest, Code: "IncorrectState"},
 		errs.KindVpc:      {HTTP: http.StatusBadRequest, Code: "DependencyViolation"},
 		errs.KindSubnet:   {HTTP: http.StatusBadRequest, Code: "DependencyViolation"},
+
+		errs.KindOperation: {HTTP: http.StatusBadRequest, Code: "IncorrectState"},
 	},
 }
 
