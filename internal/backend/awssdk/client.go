@@ -14,6 +14,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	"github.com/aws/smithy-go"
+	smithyhttp "github.com/aws/smithy-go/transport/http"
 	"github.com/popododo0720/vws-lib/obs"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
@@ -103,15 +104,20 @@ func awsError(err error) error {
 	var api smithy.APIError
 	if errors.As(err, &api) {
 		code := resource.CodeInvalidArgument
+		var response *smithyhttp.ResponseError
+		if errors.As(err, &response) {
+			switch {
+			case response.HTTPStatusCode() == http.StatusTooManyRequests:
+				code = resource.CodeResourceExhausted
+			case response.HTTPStatusCode() >= http.StatusInternalServerError:
+				code = resource.CodeUnavailable
+			}
+		}
 		switch api.ErrorCode() {
 		case "UnauthorizedOperation", "AuthFailure", "AccessDenied":
 			code = resource.CodePermissionDenied
 		case "RequestLimitExceeded", "Throttling", "ThrottlingException":
 			code = resource.CodeResourceExhausted
-		default:
-			if api.ErrorFault() == smithy.FaultServer {
-				code = resource.CodeUnavailable
-			}
 		}
 		return (&resource.Error{Code: code, Message: api.ErrorCode() + ": " + api.ErrorMessage()}).WithCause(err)
 	}

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -62,14 +63,29 @@ func TestAWSSDKInstancesThroughProxy(t *testing.T) {
 }
 
 func TestAWSSDKPreservesAWSErrorCode(t *testing.T) {
-	b := setup(t, "unauthorized.xml", http.StatusForbidden)
-	_, err := b.DescribeInstances(t.Context(), backend.Scope{Region: "us-east-1"}, resource.InstanceQuery{})
-	var domain *resource.Error
-	var api smithy.APIError
-	if !errors.As(err, &domain) || domain.Code != resource.CodePermissionDenied ||
-		!errors.As(domain, &api) || api.ErrorCode() != "UnauthorizedOperation" ||
-		!strings.Contains(domain.Message, "UnauthorizedOperation") {
-		t.Fatalf("AWS code lost: %v", err)
+	for _, tc := range []struct {
+		status  int
+		fixture string
+		awsCode string
+		code    resource.Code
+	}{
+		{http.StatusForbidden, "unauthorized.xml", "UnauthorizedOperation", resource.CodePermissionDenied},
+		{http.StatusInternalServerError, "internal-error.xml", "InternalError", resource.CodeUnavailable},
+		{http.StatusServiceUnavailable, "unavailable.xml", "ServiceUnavailable", resource.CodeUnavailable},
+		{http.StatusTooManyRequests, "throttled.xml", "SlowDown", resource.CodeResourceExhausted},
+		{http.StatusBadRequest, "invalid.xml", "InvalidParameterValue", resource.CodeInvalidArgument},
+	} {
+		t.Run(strconv.Itoa(tc.status), func(t *testing.T) {
+			b := setup(t, tc.fixture, tc.status)
+			_, err := b.DescribeInstances(t.Context(), backend.Scope{Region: "us-east-1"}, resource.InstanceQuery{})
+			var domain *resource.Error
+			var api smithy.APIError
+			if !errors.As(err, &domain) || domain.Code != tc.code ||
+				!errors.As(domain, &api) || api.ErrorCode() != tc.awsCode ||
+				!strings.Contains(domain.Message, tc.awsCode) {
+				t.Fatalf("want %v with AWS code %s preserved, got %v", tc.code, tc.awsCode, err)
+			}
+		})
 	}
 }
 
