@@ -25,6 +25,10 @@ func (f *Fake) SetNextIDs(ids ...int) error {
 }
 
 func (f *Fake) writeRoutes() {
+	f.handleMethod(http.MethodPost, "/nodes/{node}/qemu/{vmid}/snapshot", f.writeSnapshot)
+	f.handleMethod(http.MethodDelete, "/nodes/{node}/qemu/{vmid}/snapshot/{snapname}", f.writeSnapshot)
+	f.handleMethod(http.MethodPut, "/nodes/{node}/qemu/{vmid}/resize", f.resizeDisk)
+	f.handleMethod(http.MethodPut, "/nodes/{node}/qemu/{vmid}/unlink", f.unlinkDisk)
 	f.handle("/cluster/nextid", f.nextID)
 	f.handleMethod(http.MethodPost, "/nodes/{node}/qemu/{vmid}/clone", f.cloneVM)
 	f.handleMethod(http.MethodPost, "/nodes/{node}/qemu", f.createVM)
@@ -85,6 +89,9 @@ func writeForm(r *http.Request, keys ...string) *failure {
 		if len(v[0]) > 10<<20 {
 			return parameter(k, "value exceeds the form size limit")
 		}
+		if k == "digest" && len(v[0]) > 40 {
+			return parameter(k, "value exceeds the digest length limit")
+		}
 		pattern := ""
 		if k == "name" {
 			pattern = `^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*$`
@@ -97,8 +104,9 @@ func writeForm(r *http.Request, keys ...string) *failure {
 				return parameter(k, "value does not match the PVE format")
 			}
 		}
-		if slices.Contains([]string{"full", "start", "purge", "destroy-unreferenced-disks", "protection"}, k) &&
-			v[0] != "0" && v[0] != "1" {
+		if slices.Contains([]string{
+			"full", "start", "purge", "destroy-unreferenced-disks", "protection", "vmstate", "force", "skiplock",
+		}, k) && v[0] != "0" && v[0] != "1" {
 			return parameter(k, "expected 0 or 1")
 		}
 	}

@@ -21,6 +21,7 @@ func newWriteWorld(t *testing.T, privileges ...string) *taskWorld {
 	s.Roles = append(s.Roles, pvefake.Role{ID: "Writer", Privs: []string{
 		"VM.Allocate", "VM.Clone", "VM.Config.Options", "VM.Config.CPU", "VM.Config.Memory",
 		"VM.Config.HWType", "VM.Config.Cloudinit", "Datastore.AllocateSpace", "SDN.Use",
+		"VM.Snapshot", "VM.Config.Disk",
 	}})
 	if len(privileges) > 0 {
 		s.Roles[len(s.Roles)-1].Privs = privileges
