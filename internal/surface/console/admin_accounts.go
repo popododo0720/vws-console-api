@@ -131,22 +131,8 @@ func (h *handler) adminWriteAccount(w http.ResponseWriter, r *http.Request) {
 }
 
 func validateAccount(v store.AWSAccount, external *string, create bool) error {
-	if !regexp.MustCompile(`^[0-9]{12}$`).MatchString(v.ID) {
-		return resource.Invalid("awsAccountId", "must be 12 digits")
-	}
-	role, ok := strings.CutPrefix(v.RoleARN, "arn:aws:iam::"+v.ID+":role/")
-	path, name := "", role
-	if i := strings.LastIndex(role, "/"); i >= 0 {
-		path, name = "/"+role[:i+1], role[i+1:]
-	}
-	if !ok || len(v.RoleARN) > 2048 || len(path) > 512 ||
-		!regexp.MustCompile(`^[\w+=,.@-]{1,64}$`).MatchString(name) ||
-		(path != "" && !regexp.MustCompile(`^/[\x21-\x7e]+/$`).MatchString(path)) {
-		return resource.Invalid("roleArn", "must name an IAM role in awsAccountId")
-	}
-	if create && external == nil || external != nil &&
-		(len(*external) < 2 || len(*external) > 1224 || !regexp.MustCompile(`^[\w+=,.@:/-]+$`).MatchString(*external)) {
-		return resource.Invalid("externalId", "must be 2 to 1224 STS ExternalId characters")
+	if err := resource.ValidateAWSAccount(v.ID, v.RoleARN, external, create); err != nil {
+		return err
 	}
 	seen := make(map[string]bool)
 	for _, region := range v.AllowedRegions {

@@ -2,12 +2,100 @@ package console
 
 import (
 	"context"
+	"mime"
 	"net/http"
+	"regexp"
 	"time"
 
 	"github.com/popododo0720/vws-console-api/internal/admin/store"
 	"github.com/popododo0720/vws-console-api/internal/resource"
 )
+
+func (h *handler) adminTestAWSAccount(w http.ResponseWriter, r *http.Request) {
+	media, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if err != nil || media != "application/json" {
+		unsupportedMedia(w)
+		return
+	}
+	if !h.adminReady(w, r) {
+		return
+	}
+	if h.adminKey == nil || h.accountConnection == nil {
+		writeErr(w, r, &resource.Error{Code: resource.CodeUnavailable, Message: "AWS connection test requires KEK and proxy"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+	r = r.WithContext(ctx)
+	var v store.AWSAccount
+	var external string
+	id := r.PathValue("id")
+	if id != "" {
+		if !regexp.MustCompile(`^[0-9]{12}$`).MatchString(id) {
+			writeErr(w, r, resource.Invalid("awsAccountId", "must be 12 digits"))
+			return
+		}
+		var empty *struct{}
+		if err := decode(w, r, &empty); err != nil || empty == nil {
+			writeErr(w, r, resource.Invalid("body", "saved tests require an empty JSON object"))
+			return
+		}
+		var err error
+		v, err = h.registry.AWSAccounts().Get(ctx, id)
+		if err != nil {
+			adminError(w, r, err)
+			return
+		}
+		plain, err := h.adminKey.Open(v.SealedExternalID, id)
+		if err != nil {
+			unusableSavedAccount(w)
+			return
+		}
+		defer clear(plain)
+		external = string(plain)
+	} else {
+		var in *accountInput
+		if err := decode(w, r, &in); err != nil {
+			if resource.CodeOf(err) != resource.CodePayloadTooLarge {
+				err = resource.Invalid("body", "invalid AWS connection test body")
+			}
+			writeErr(w, r, err)
+			return
+		}
+		if in == nil || in.ID == nil || in.RoleARN == nil || in.ExternalID == nil || in.AllowedRegions == nil {
+			writeErr(w, r, resource.Invalid("body", "all AWS account fields are required"))
+			return
+		}
+		v = store.AWSAccount{ID: *in.ID, RoleARN: *in.RoleARN, AllowedRegions: *in.AllowedRegions}
+		external = *in.ExternalID
+	}
+	if err := validateAccount(v, &external, true); err != nil {
+		if id != "" {
+			unusableSavedAccount(w)
+			return
+		}
+		writeErr(w, r, err)
+		return
+	}
+	c, ok := h.caller(w, r)
+	if !ok {
+		return
+	}
+	steps := h.accountConnection(ctx, resource.AWSConnectionRequest{
+		AccountID: v.ID, RoleARN: v.RoleARN, ExternalID: external,
+	}, c.Principal)
+	writeJSON(w, http.StatusOK, struct {
+		Steps []resource.ConnectionStep `json:"steps"`
+	}{steps})
+}
+
+func unusableSavedAccount(w http.ResponseWriter) {
+	steps := resource.AWSConnectionSteps(false, false)
+	steps[0].Message = "saved registration cannot be used; save it again"
+	writeJSON(w, http.StatusOK, struct {
+		Steps []resource.ConnectionStep `json:"steps"`
+	}{steps})
+}
 
 func (h *handler) adminTestRegion(w http.ResponseWriter, r *http.Request) {
 	if !h.adminReady(w, r) {

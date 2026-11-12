@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"log/slog"
 	"net/http"
 	"os"
@@ -90,6 +91,23 @@ func TestRegistryConfiguration(t *testing.T) {
 	}
 	if _, _, _, err := openRegistry(t.Context(), path, "fake"); err == nil {
 		t.Fatal("invalid bootstrap accepted")
+	}
+}
+
+func TestAWSProxySocketConfiguration(t *testing.T) {
+	clearCredentialEnv(t)
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	for _, path := range []string{
+		"", "/", "relative.sock", "/run/vws/../proxy.sock", "/run//proxy.sock", "/" + strings.Repeat("x", 107),
+	} {
+		err := run(ctx, []string{
+			"-aws-proxy-socket=" + path,
+			"-console-addr=127.0.0.1:0", "-ec2-addr=127.0.0.1:0", "-s3-addr=127.0.0.1:0", "-iam-addr=127.0.0.1:0", "-ops-addr=",
+		})
+		if err == nil || !strings.Contains(err.Error(), "socket") {
+			t.Fatalf("invalid socket accepted: %q: %v", path, err)
+		}
 	}
 }
 

@@ -27,7 +27,7 @@ func (h *handler) adminPermissions(w http.ResponseWriter, r *http.Request) {
 		"vws:AdminListRegions", "vws:AdminListAwsAccounts",
 		"vws:AdminRegisterAwsAccount", "vws:AdminUpdateAwsAccount", "vws:AdminRemoveAwsAccount",
 		"vws:AdminRegisterRegion", "vws:AdminUpdateRegion", "vws:AdminRemoveRegion",
-		"vws:AdminMapProject",
+		"vws:AdminMapProject", "vws:AdminTestConnection",
 	}})
 }
 

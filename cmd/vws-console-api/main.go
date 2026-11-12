@@ -20,6 +20,7 @@ import (
 	"github.com/popododo0720/vws-console-api/internal/admin/store/etcdstore"
 	"github.com/popododo0720/vws-console-api/internal/audit"
 	"github.com/popododo0720/vws-console-api/internal/backend"
+	"github.com/popododo0720/vws-console-api/internal/backend/awssdk"
 	"github.com/popododo0720/vws-console-api/internal/backend/fake"
 	"github.com/popododo0720/vws-console-api/internal/backend/grpcclient"
 	"github.com/popododo0720/vws-console-api/internal/backend/grpcclient/iamclient"
@@ -70,6 +71,7 @@ func run(ctx context.Context, args []string) (err error) {
 	fs.SetOutput(os.Stderr)
 	backendKind := fs.String("backend", "fake", "fake or grpc")
 	auditLog := fs.String("audit-log", "", "append-only audit stream path; empty uses stderr")
+	awsProxySocket := fs.String("aws-proxy-socket", "/run/vws/aws-proxy.sock", "AWS connection test proxy unix socket")
 	globalConfig := fs.String("global-config", "", "global.yaml bootstrap path for the admin registry; "+
 		"empty uses memory with -backend=fake")
 	consoleAddr := fs.String("console-addr", "127.0.0.1:8080", "console listen address")
@@ -294,6 +296,11 @@ func run(ctx context.Context, args []string) (err error) {
 		}
 		defer func() { err = errors.Join(err, auditOut.Close()) }()
 	}
+	connection, err := awssdk.NewConnectionClient(*awsProxySocket)
+	if err != nil {
+		return err
+	}
+	defer connection.Close()
 	return server.Serve(ctx, server.Options{Logger: logger, OpsAddr: *opsAddr, Surfaces: []server.Surface{
 		{Name: "console", Addr: *consoleAddr, Handler: console.New(console.Config{
 			Service:        svc,
@@ -313,6 +320,7 @@ func run(ctx context.Context, args []string) (err error) {
 
 			RegionRegistration: registration,
 			RegionConnection:   testRegionConnection,
+			AccountConnection:  connection.TestConnection,
 		})},
 		{Name: "ec2", Addr: *ec2Addr, Handler: ec2query.New(ec2query.Config{
 			Service: svc, Verifier: ec2, Authorizer: auth, Requests: requests,
