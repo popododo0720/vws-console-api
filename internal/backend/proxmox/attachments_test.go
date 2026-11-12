@@ -2,6 +2,7 @@ package proxmox
 
 import (
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -258,7 +259,7 @@ func TestDetachSkipsCorruptUnrelatedReplay(t *testing.T) {
 	key := sha256.Sum256([]byte(m.Key))
 	if err := b.client.VolumeWrite(t.Context(), http.MethodPost, "/nodes/pve1/qemu", url.Values{
 		"vmid": {"200"}, "pool": {"tenant_pool"}, "description": {"vws:detach invalid"},
-		"tags": {fmt.Sprintf("vws.d.%x.bad.1", key[:8])},
+		"tags": {fmt.Sprintf("vws.d.%x.bad.1", key[8:16])},
 	}, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -277,8 +278,10 @@ func TestDetachSkipsCorruptUnrelatedReplay(t *testing.T) {
 		t.Fatal(err)
 	}
 	before := len(f.Requests())
-	if _, err := b.DetachVolume(t.Context(), m, resource.DetachVolumeRequest{VolumeID: vol}); err == nil {
-		t.Fatal("target's corrupt replay allowed detach")
+	var rerr *resource.Error
+	if _, err := b.DetachVolume(t.Context(), m, resource.DetachVolumeRequest{VolumeID: vol}); !errors.As(err, &rerr) ||
+		rerr.Code != resource.CodeUnavailable {
+		t.Fatalf("matched corrupt replay: %v, want Unavailable", err)
 	}
 	for _, call := range f.Requests()[before:] {
 		if !strings.HasPrefix(call, "GET ") {

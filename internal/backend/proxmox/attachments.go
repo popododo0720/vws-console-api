@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"net/url"
 	"slices"
@@ -191,9 +190,9 @@ func (b *Backend) DetachVolume(
 			}
 			records, _, err := detachRecords(cfg.Description)
 			if err != nil {
-				slog.WarnContext(ctx, "skipping VM with undecodable detach replay records",
-					slog.Int("vmid", row.VMID), slog.Any("error", err))
-				continue
+				return zero, (&resource.Error{
+					Code: resource.CodeUnavailable, Message: "detach replay record is unreadable",
+				}).WithCause(err)
 			}
 			for i, rec := range records {
 				if rec.Key != key16 || detachRecordExpired(rec, now) {
