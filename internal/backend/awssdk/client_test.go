@@ -28,6 +28,28 @@ func TestAWSSDKConfigHasNoCredentials(t *testing.T) {
 	}
 }
 
+func TestAWSSDKRegionLengthBound(t *testing.T) {
+	for _, size := range []int{32, 33} {
+		t.Run(strconv.Itoa(size), func(t *testing.T) {
+			b, err := New(Config{
+				Socket: fixtureSocket(t), Account: "123456789012",
+				Region:    "us-" + strings.Repeat("a", size-5) + "-1",
+				Principal: func(context.Context) string { return "principal" },
+			})
+			if b != nil {
+				t.Cleanup(b.Close)
+			}
+			if size == 32 {
+				if err != nil {
+					t.Fatal(err)
+				}
+			} else if resource.CodeOf(err) != resource.CodeInvalidArgument {
+				t.Fatalf("region with %d bytes was accepted: %v", size, err)
+			}
+		})
+	}
+}
+
 func TestAWSSDKInstancesThroughProxy(t *testing.T) {
 	b := setup(t, "instances.xml", http.StatusOK)
 	account, err := resource.Parse[resource.AccountID]("111111111111")

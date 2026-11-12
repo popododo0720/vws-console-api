@@ -44,7 +44,8 @@ type Backend struct {
 func New(cfg Config) (*Backend, error) {
 	if !filepath.IsAbs(cfg.Socket) || filepath.Clean(cfg.Socket) != cfg.Socket ||
 		!regexp.MustCompile(`^[0-9]{12}$`).MatchString(cfg.Account) ||
-		!regexp.MustCompile(`^[a-z]{2}(-[a-z]+)+-[0-9]+$`).MatchString(cfg.Region) || cfg.Principal == nil {
+		len(cfg.Region) > 32 || !regexp.MustCompile(`^[a-z]{2}(-[a-z]+)+-[0-9]+$`).MatchString(cfg.Region) ||
+		cfg.Principal == nil {
 		return nil, resource.Invalid("awssdk", "socket, account, region and principal source are required")
 	}
 	transport := &http.Transport{
