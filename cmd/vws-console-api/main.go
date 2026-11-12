@@ -24,8 +24,6 @@ import (
 	"github.com/popododo0720/vws-console-api/internal/backend/fake"
 	"github.com/popododo0720/vws-console-api/internal/backend/grpcclient"
 	"github.com/popododo0720/vws-console-api/internal/backend/grpcclient/iamclient"
-	"github.com/popododo0720/vws-console-api/internal/backend/launch"
-	"github.com/popododo0720/vws-console-api/internal/backend/launch/kubestore"
 	"github.com/popododo0720/vws-console-api/internal/backend/proxmox"
 	"github.com/popododo0720/vws-console-api/internal/cloud"
 	"github.com/popododo0720/vws-console-api/internal/globalconfig"
@@ -94,10 +92,6 @@ func run(ctx context.Context, args []string) (err error) {
 	computeAddr := fs.String("compute-addr", "127.0.0.1:19001", "compute gRPC address")
 	storageAddr := fs.String("storage-addr", "127.0.0.1:19002", "storage gRPC address")
 	networkAddr := fs.String("network-addr", "127.0.0.1:19003", "network gRPC address")
-	launchNamespace := fs.String("launch-namespace", "", "Kubernetes namespace that holds the RunInstances launch "+
-		"records as ConfigMaps, with -backend=grpc; empty records no launches")
-	kubeconfig := fs.String("kubeconfig", "", "kubeconfig path for -launch-namespace; "+
-		"empty uses $KUBECONFIG, then the default path, then the in-cluster service account")
 	iamMode := fs.String("iam", "static", "static: only the -access-key root key, no IAM/STS management; "+
 		"fake: in-memory IAM users, groups, roles, policies and STS sessions, lost on restart; "+
 		"grpc: vws-iam at -iam-endpoint authenticates keys, authorizes requests and serves console sign-in and STS AssumeRole")
@@ -193,13 +187,8 @@ func run(ctx context.Context, args []string) (err error) {
 	var caps backend.Capabilities
 	var discovery func(context.Context, backend.ProxmoxRegion) (resource.RegionCapabilities, error)
 	var localRegions backend.RegionCatalog
-	// sweep undoes the launches a dead request left behind; nil without a launch store.
-	var sweep func(context.Context)
 	switch *backendKind {
 	case "fake":
-		if *launchNamespace != "" {
-			return errors.New("-launch-namespace needs -backend=grpc")
-		}
 		direct, parseErr := resource.Parse[resource.SubnetID]("subnet-direct-prod")
 		if parseErr != nil {
 			return parseErr
@@ -216,25 +205,9 @@ func run(ctx context.Context, args []string) (err error) {
 		}
 		defer func() { err = errors.Join(err, client.Close()) }()
 		client.SetLogger(logger)
-		if *launchNamespace == "" {
-			logger.WarnContext(ctx, "no -launch-namespace: RunInstances steps are not recorded")
-		} else {
-			store, openErr := kubestore.Open(*kubeconfig, *launchNamespace)
-			if openErr != nil {
-				return fmt.Errorf("-launch-namespace: %w", openErr)
-			}
-			client.SetLaunches(launch.NewTracker(store, nil))
-			sweep = client.SweepLaunches
-		}
 		set = client.Set()
 	case "regions":
-		if *launchNamespace != "" {
-			return errors.New("-launch-namespace needs -backend=grpc")
-		}
 	case "proxmox":
-		if *launchNamespace != "" {
-			return errors.New("-launch-namespace needs -backend=grpc")
-		}
 		b, closeBackend, openErr := standaloneBackend(
 			ctx, *regionConfig, *registrationFile, *pveEndpoint, *pveCA, *helperPath,
 		)
@@ -352,9 +325,6 @@ func run(ctx context.Context, args []string) (err error) {
 
 	ctx, stop := signal.NotifyContext(ctx, stopSignals()...)
 	defer stop()
-	if sweep != nil {
-		go sweep(ctx)
-	}
 	connection, err := awssdk.NewConnectionClient(*awsProxySocket)
 	if err != nil {
 		return err

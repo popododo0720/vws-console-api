@@ -94,8 +94,8 @@ var ownerRules = []struct {
 	},
 	{
 		hasPrefix("k8s.io", "sigs.k8s.io"),
-		[]string{"internal/backend/launch/kubestore"},
-		"Kubernetes types stay inside internal/backend/launch/kubestore",
+		nil,
+		"Kubernetes imports are forbidden",
 	},
 	{
 		func(imp string) bool {
@@ -191,10 +191,10 @@ func TestArchitectureRules(t *testing.T) {
 		"internal/widget/proto.go": `package widget; import _ "` + vwsProto + `/gen/go/vws/common/v1"`,
 		"internal/widget/longrunning.go": `package widget; import _ "` +
 			`cloud.google.com/go/longrunning/autogen/longrunningpb"`,
-		"internal/backend/grpcclient/ok.go":       `package grpcclient; import _ "google.golang.org/grpc"`,
-		"internal/widget/kube.go":                 `package widget; import _ "k8s.io/client-go/kubernetes"`,
-		"internal/widget/runtime.go":              `package widget; import _ "sigs.k8s.io/controller-runtime/pkg/client"`,
-		"internal/backend/launch/kubestore/ok.go": `package kubestore; import _ "k8s.io/api/core/v1"`,
+		"internal/backend/grpcclient/ok.go":        `package grpcclient; import _ "google.golang.org/grpc"`,
+		"internal/widget/kube.go":                  `package widget; import _ "k8s.io/client-go/kubernetes"`,
+		"internal/widget/runtime.go":               `package widget; import _ "sigs.k8s.io/controller-runtime/pkg/client"`,
+		"internal/backend/launch/kubestore/bad.go": `package kubestore; import _ "k8s.io/api/core/v1"`,
 		"internal/backend/grpcclient/pve.go": `package grpcclient; import _ "` +
 			module + `/internal/backend/proxmox/pveclient"`,
 		"internal/backend/proxmox/ok.go": `package proxmox; import _ "` +
@@ -215,6 +215,7 @@ func TestArchitectureRules(t *testing.T) {
 		writeFile(t, filepath.Join(probe, rel), src)
 	}
 	want := []string{
+		"internal/backend/launch/kubestore imports k8s.io/api/core/v1: Kubernetes imports are forbidden",
 		"cmd/pvefake imports " + module + "/internal/backend/proxmox/pveclient: " +
 			"PVE API types stay inside internal/backend/proxmox",
 		"internal/widget imports " + module + "/internal/backend/proxmox/pveclient/pvefake: " +
@@ -250,9 +251,9 @@ func TestArchitectureRules(t *testing.T) {
 		"internal/widget imports go.etcd.io/etcd/client/v3: " +
 			"etcd types stay inside internal/admin/store/etcdstore",
 		"internal/widget imports k8s.io/client-go/kubernetes: " +
-			"Kubernetes types stay inside internal/backend/launch/kubestore",
+			"Kubernetes imports are forbidden",
 		"internal/widget imports sigs.k8s.io/controller-runtime/pkg/client: " +
-			"Kubernetes types stay inside internal/backend/launch/kubestore",
+			"Kubernetes imports are forbidden",
 	}
 	sort.Strings(want)
 	if got := archViolations(loadProduction(t, probe)); !reflect.DeepEqual(got, want) {

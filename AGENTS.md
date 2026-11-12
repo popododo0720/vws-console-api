@@ -20,7 +20,6 @@ project is someone else's cloud.
 | `internal/backend/backendtest` | The contract as tests. Every backend runs it. |
 | `internal/backend/grpcclient` | The contract over gRPC. The only package that sees protobuf. |
 | `internal/backend/launch` | The RunInstances launch record and the tracker that writes it on transitions. |
-| `internal/backend/launch/kubestore` | Launch records as ConfigMaps. The only package that sees Kubernetes types. |
 | `internal/backend/proxmox` | The Proxmox VE backend; `ids.go` computes EC2 ids from Proxmox data; `ops.go` is the operation id codec; `tags.go` is the reversible AWS tag to Proxmox tag codec and the `vws:tags` description block. |
 | `internal/admin/store` | Operator registrations (regions, AWS accounts) under `/vws/admin/`, CAS on a version; `storetest` is its contract. |
 | `internal/admin/store/etcdstore` | The registry on etcd. The only package that sees etcd types. |
@@ -81,7 +80,7 @@ change both files together.
 | The kernel never sees HTTP, signatures or a surface. | depguard `kernel-knows-no-wire` |
 | Protobuf and gRPC types stay in `internal/backend/grpcclient`. | depguard `grpc-stays-in-grpcclient` |
 | The deprecated vws-proto compute, network and storage services are used only by the retired `grpc` backend and go with it. | depguard `grpc-stays-in-grpcclient`; `.golangci.yml` SA1019 exclusion |
-| Kubernetes types stay in `internal/backend/launch/kubestore`. | depguard `kube-stays-in-kubestore` |
+| Kubernetes imports are forbidden everywhere. | depguard `no-kubernetes`; `TestArchitectureRules` |
 | PVE API types (`pveclient`) stay in `internal/backend/proxmox`. | depguard `pve-stays-in-proxmox` |
 | etcd types stay in `internal/admin/store/etcdstore`. | depguard `etcd-stays-in-etcdstore` |
 | An admin registration under `/vws/admin/` is written only by compare-and-swap on its version; etcd and memory behave the same (#752). | `storetest.Run` |

@@ -151,25 +151,11 @@ func TestGRPCAcceptsCredentialsFromEnvAndFile(t *testing.T) {
 	}
 }
 
-func TestLaunchNamespaceNeedsAKubeconfig(t *testing.T) {
-	clearCredentialEnv(t)
-	t.Setenv("VWS_CONSOLE_TOKEN", "tok-env-value")
-	t.Setenv("VWS_ACCESS_KEY", "AKIDREAL")
-	t.Setenv("VWS_SECRET_KEY", "sk-env-value")
-	t.Setenv("KUBERNETES_SERVICE_HOST", "")
-	missing := filepath.Join(t.TempDir(), "kubeconfig")
-	err := run(t.Context(), []string{
-		"-backend=grpc", "-ops-addr=", "-launch-namespace=vws-system", "-kubeconfig=" + missing,
-	})
-	if err == nil || !strings.Contains(err.Error(), "-launch-namespace") {
-		t.Fatalf("err %v", err)
-	}
-}
-
-func TestLaunchNamespaceNeedsTheGRPCBackend(t *testing.T) {
-	clearCredentialEnv(t)
-	err := run(t.Context(), []string{"-backend=fake", "-ops-addr=", "-launch-namespace=vws-system"})
-	if err == nil || !strings.Contains(err.Error(), "-launch-namespace needs -backend=grpc") {
-		t.Fatalf("err %v", err)
+func TestKubernetesFlagsAreRejected(t *testing.T) {
+	for _, name := range []string{"launch-namespace", "kubeconfig"} {
+		err := run(t.Context(), []string{"-" + name + "=retired"})
+		if err == nil || !strings.Contains(err.Error(), "flag provided but not defined: -"+name) {
+			t.Fatalf("%s: %v", name, err)
+		}
 	}
 }

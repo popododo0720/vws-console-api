@@ -106,15 +106,14 @@ linters:
               desc: long-running types stay inside the gRPC client
             - pkg: google.golang.org/genproto
               desc: generated API types stay inside the gRPC client
-        kube-stays-in-kubestore:
+        no-kubernetes:
           files:
             - "$all"
-            - "!**/internal/backend/launch/kubestore/**"
           deny:
             - pkg: k8s.io
-              desc: only internal/backend/launch/kubestore speaks to the Kubernetes API
+              desc: Kubernetes imports are forbidden
             - pkg: sigs.k8s.io
-              desc: only internal/backend/launch/kubestore speaks to the Kubernetes API
+              desc: Kubernetes imports are forbidden
         pve-stays-in-proxmox:
           files:
             - "$all"
