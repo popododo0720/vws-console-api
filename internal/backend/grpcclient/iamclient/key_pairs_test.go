@@ -36,7 +36,7 @@ type keyPairServer struct {
 	bad        bool
 	deleteLost int
 	listErr    error
-	corrupt    bool
+	corrupt    *iamv1.KeyPair
 }
 
 func (s *keyPairServer) ImportKeyPair(
@@ -83,16 +83,15 @@ func (s *keyPairServer) ListKeyPairs(
 	out := &iamv1.ListKeyPairsResponse{}
 	if s.bad {
 		out.KeyPairs = append(out.KeyPairs, &iamv1.KeyPair{
-			Name: "projects/999999999999/keyPairs/key-00000000000000001",
+			Name: "projects/999999999999/keyPairs/key-00000000000000002",
+			Spec: &iamv1.KeyPairSpec{KeyName: "unrelated"},
 		})
 	}
 	if s.key != nil && (req.GetRegion() == "" || req.GetRegion() == s.key.GetSpec().GetRegion()) &&
 		(len(req.GetKeyNames()) == 0 || slices.Contains(req.GetKeyNames(), s.key.GetSpec().GetKeyName())) {
 		key := s.key
-		if s.corrupt {
-			key = &iamv1.KeyPair{Name: key.GetName(), Spec: &iamv1.KeyPairSpec{
-				KeyName: key.GetSpec().GetKeyName(), Region: key.GetSpec().GetRegion(), PublicKey: "invalid",
-			}}
+		if s.corrupt != nil {
+			key = s.corrupt
 		}
 		out.KeyPairs = append(out.KeyPairs, key)
 	}
@@ -339,7 +338,10 @@ func TestIAMKeyPairRefusesCorruptSelectedRecords(t *testing.T) {
 	}
 	id := created.Items[0].ID
 	s.mu.Lock()
-	s.corrupt = true
+	s.corrupt = &iamv1.KeyPair{
+		Name: projectName(m.Account) + "/keyPairs/" + id.String(),
+		Spec: &iamv1.KeyPairSpec{KeyName: "login", Region: m.Region, PublicKey: "invalid"},
+	}
 	s.mu.Unlock()
 	for _, q := range []resource.KeyPairQuery{{IDs: []resource.KeyPairID{id}}, {Names: []string{"login"}}} {
 		if _, err := client.DescribeKeyPairs(t.Context(), m.Scope, q); resource.CodeOf(err) != resource.CodeInternal {
@@ -353,6 +355,70 @@ func TestIAMKeyPairRefusesCorruptSelectedRecords(t *testing.T) {
 	}
 	if len(s.deletes) != 0 {
 		t.Fatal("corrupt selected key reached delete")
+	}
+}
+
+func TestIAMKeyPairAmbiguousSelectorRecords(t *testing.T) {
+	m := keyPairMutation(t)
+	id, err := resource.Parse[resource.KeyPairID]("key-00000000000000001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name string
+		raw  *iamv1.KeyPair
+		req  resource.DeleteKeyPairRequest
+	}{
+		{
+			name: "unknown key name",
+			raw:  &iamv1.KeyPair{Name: projectName(m.Account) + "/keyPairs/key-00000000000000002"},
+			req:  resource.DeleteKeyPairRequest{Name: "login"},
+		},
+		{
+			name: "undecodable ID",
+			raw:  &iamv1.KeyPair{Name: "broken", Spec: &iamv1.KeyPairSpec{KeyName: "unrelated"}},
+			req:  resource.DeleteKeyPairRequest{ID: id},
+		},
+		{
+			name: "empty record by name",
+			raw:  &iamv1.KeyPair{},
+			req:  resource.DeleteKeyPairRequest{Name: "login"},
+		},
+		{
+			name: "empty record by ID",
+			raw:  &iamv1.KeyPair{},
+			req:  resource.DeleteKeyPairRequest{ID: id},
+		},
+		{
+			name: "matching raw ID outside account",
+			raw:  &iamv1.KeyPair{Name: "projects/999999999999/keyPairs/" + id.String()},
+			req:  resource.DeleteKeyPairRequest{ID: id},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := &keyPairServer{
+				key: &iamv1.KeyPair{
+					Name: projectName(m.Account) + "/keyPairs/" + id.String(),
+					Spec: &iamv1.KeyPairSpec{KeyName: "login", Region: m.Region},
+				},
+				corrupt: tc.raw,
+			}
+			client := New(keyPairConnection(t, s), Options{})
+			q := resource.KeyPairQuery{Names: []string{tc.req.Name}}
+			if tc.req.Name == "" {
+				q = resource.KeyPairQuery{IDs: []resource.KeyPairID{id}}
+			}
+			if _, err := client.DescribeKeyPairs(t.Context(), m.Scope, q); resource.CodeOf(err) != resource.CodeInternal {
+				t.Errorf("ambiguous filtered read = %v", err)
+			}
+			if _, err := client.DeleteKeyPair(t.Context(), m, tc.req); resource.CodeOf(err) != resource.CodeInternal {
+				t.Errorf("ambiguous delete = %v", err)
+			}
+			page, err := client.DescribeKeyPairs(t.Context(), m.Scope, resource.KeyPairQuery{})
+			if err != nil || len(page.Items) != 0 || len(s.deletes) != 0 {
+				t.Fatalf("unfiltered skip = %+v %v, delete calls = %d", page, err, len(s.deletes))
+			}
+		})
 	}
 }
 
