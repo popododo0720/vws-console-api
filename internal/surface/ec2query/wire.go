@@ -411,6 +411,7 @@ type createKeyXML struct {
 	KeyFingerprint string   `xml:"keyFingerprint"`
 	KeyMaterial    string   `xml:"keyMaterial"`
 	KeyPairID      string   `xml:"keyPairId"`
+	Tags           *tagSet  `xml:"tagSet,omitempty"`
 }
 
 type deleteKeyXML struct {
@@ -429,11 +430,12 @@ type describeKeysXML struct {
 }
 
 type keyItem struct {
-	KeyPairID   string `xml:"keyPairId"`
-	KeyName     string `xml:"keyName"`
-	Fingerprint string `xml:"keyFingerprint"`
-	KeyType     string `xml:"keyType,omitempty"`
-	Created     string `xml:"createTime,omitempty"`
+	KeyPairID   string  `xml:"keyPairId"`
+	KeyName     string  `xml:"keyName"`
+	Fingerprint string  `xml:"keyFingerprint"`
+	KeyType     string  `xml:"keyType,omitempty"`
+	Tags        *tagSet `xml:"tagSet,omitempty"`
+	Created     string  `xml:"createTime,omitempty"`
 }
 
 type importKeyXML struct {
@@ -442,6 +444,7 @@ type importKeyXML struct {
 	KeyFingerprint string   `xml:"keyFingerprint"`
 	KeyName        string   `xml:"keyName"`
 	KeyPairID      string   `xml:"keyPairId"`
+	Tags           *tagSet  `xml:"tagSet,omitempty"`
 }
 
 type instanceAttributeXML struct {
@@ -829,6 +832,7 @@ func keyXML(key resource.KeyPair) keyItem {
 	return keyItem{
 		KeyPairID: key.ID.String(), KeyName: key.Name, Fingerprint: key.Fingerprint, KeyType: string(key.Type),
 		Created: awsTime(key.CreateTime),
+		Tags:    tagSetOf(key.Tags),
 	}
 }
 

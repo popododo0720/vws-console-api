@@ -2,6 +2,7 @@ package iamclient
 
 import (
 	"context"
+	"maps"
 	"net"
 	"slices"
 	"strings"
@@ -155,12 +156,12 @@ func TestIAMKeyPairImportRestartAndRetry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	req := resource.CreateKeyPairRequest{Name: "login", PublicKey: pair.Public}
+	req := resource.CreateKeyPairRequest{Name: "login", PublicKey: pair.Public, Tags: map[string]string{"Name": "login"}}
 	for range 2 {
 		client := New(conn, Options{Backoff: time.Millisecond})
 		got, err := client.CreateKeyPair(t.Context(), m, req)
 		if err != nil || len(got.Items) != 1 || got.Items[0].Material != "" ||
-			got.Operation.State != resource.OperationSucceeded {
+			got.Operation.State != resource.OperationSucceeded || !maps.Equal(got.Items[0].Tags, req.Tags) {
 			t.Fatalf("import after restart: %+v %v", got, err)
 		}
 	}
@@ -201,7 +202,7 @@ func TestIAMKeyPairCreateDescribeDelete(t *testing.T) {
 			}
 			page, err := client.DescribeKeyPairs(t.Context(), m.Scope, resource.KeyPairQuery{Names: []string{"login"}})
 			if err != nil || len(page.Items) != 1 || page.Items[0].Fingerprint != key.Fingerprint ||
-				page.Items[0].Material != "" {
+				page.Items[0].Material != "" || len(page.Items[0].Tags) != 0 || len(key.Tags) != 0 {
 				t.Fatalf("describe = %+v %v", page, err)
 			}
 			again, err := New(conn, Options{}).CreateKeyPair(t.Context(), m, req)

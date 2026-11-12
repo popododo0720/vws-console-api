@@ -536,6 +536,8 @@ func (c compute) CreateKeyPair(ctx context.Context, m backend.Mutation, req reso
 		}
 		if ok && len(acc.Items) == 1 {
 			if _, live := c.w.key[acc.Items[0].ID]; live {
+				acc.Items = slices.Clone(acc.Items)
+				acc.Items[0].Tags = copyTags(acc.Items[0].Tags)
 				return acc, nil
 			}
 		}
@@ -552,7 +554,10 @@ func (c compute) CreateKeyPair(ctx context.Context, m backend.Mutation, req reso
 	if _, exists := c.w.key[id]; exists {
 		return resource.Accepted[resource.KeyPair]{}, resource.Internal(errors.New("identifier collision"))
 	}
-	key := resource.KeyPair{ID: id, OwnerID: m.Account, Name: req.Name, Type: req.Type, CreateTime: c.w.now().UTC()}
+	key := resource.KeyPair{
+		ID: id, OwnerID: m.Account, Name: req.Name, Type: req.Type,
+		CreateTime: c.w.now().UTC(), Tags: copyTags(req.Tags),
+	}
 	if req.PublicKey != "" {
 		pub, err := sshkey.ParsePublic(req.PublicKey)
 		if err != nil {
@@ -575,6 +580,7 @@ func (c compute) CreateKeyPair(ctx context.Context, m backend.Mutation, req reso
 	}
 	stored := key
 	stored.Material = ""
+	stored.Tags = copyTags(key.Tags)
 	c.w.key[id] = &stored
 	// The idempotency record keeps no private key.
 	acc := resource.Accepted[resource.KeyPair]{Operation: op, Items: []resource.KeyPair{stored}}

@@ -940,13 +940,14 @@ const (
 // KeyPair is an SSH key. Material is set only on the create that minted it.
 type KeyPair struct {
 	Regional
-	ID          KeyPairID `json:"keyPairId"`
-	OwnerID     AccountID `json:"ownerId"`
-	Name        string    `json:"keyName"`
-	Fingerprint string    `json:"keyFingerprint"`
-	Material    string    `json:"keyMaterial,omitempty"`
-	Type        KeyType   `json:"keyType,omitempty"`
-	CreateTime  time.Time `json:"createTime,omitzero"`
+	ID          KeyPairID         `json:"keyPairId"`
+	OwnerID     AccountID         `json:"ownerId"`
+	Name        string            `json:"keyName"`
+	Fingerprint string            `json:"keyFingerprint"`
+	Material    string            `json:"keyMaterial,omitempty"`
+	Type        KeyType           `json:"keyType,omitempty"`
+	Tags        map[string]string `json:"tags,omitempty"`
+	CreateTime  time.Time         `json:"createTime,omitzero"`
 }
 
 // redactedKeyMaterial is what formatting and logging show in place of the
@@ -991,7 +992,8 @@ type CreateKeyPairRequest struct {
 	Type      KeyType `json:"keyType,omitempty"`
 	PublicKey string  `json:"publicKeyMaterial,omitempty"`
 	// Format is the private key format of a created key.
-	Format KeyFormat `json:"keyFormat,omitempty"`
+	Format KeyFormat         `json:"keyFormat,omitempty"`
+	Tags   map[string]string `json:"tags,omitempty"`
 }
 
 // Action returns CreateKeyPair.
@@ -1002,6 +1004,9 @@ func (CreateKeyPairRequest) Action() Action { return ActionCreateKeyPair }
 func (r CreateKeyPairRequest) Normalize() (CreateKeyPairRequest, error) {
 	if r.Name == "" || len(r.Name) > 255 {
 		return CreateKeyPairRequest{}, Invalid("keyName", "malformed")
+	}
+	if err := validRequestTags(r.Tags); err != nil {
+		return CreateKeyPairRequest{}, err
 	}
 	if r.PublicKey != "" {
 		r.Type, r.Format = "", ""

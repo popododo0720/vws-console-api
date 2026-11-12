@@ -377,8 +377,13 @@ func (h *handler) importKeyPair(w http.ResponseWriter, r *http.Request, c resour
 		writeErr(w, r, resource.Invalid("PublicKeyMaterial", "required"))
 		return
 	}
+	tags, err := tagSpecificationsFor(r, "key-pair")
+	if err != nil {
+		writeErr(w, r, err)
+		return
+	}
 	acc, err := h.svc.CreateKeyPair(r.Context(), c, resource.ClientToken{}, resource.CreateKeyPairRequest{
-		Name: r.Form.Get("KeyName"), PublicKey: public,
+		Name: r.Form.Get("KeyName"), PublicKey: public, Tags: tags,
 	})
 	if err != nil {
 		writeErr(w, r, err)
@@ -387,6 +392,7 @@ func (h *handler) importKeyPair(w http.ResponseWriter, r *http.Request, c resour
 	key := acc.Items[0]
 	writeXML(w, importKeyXML{
 		RequestID: requestID(r), KeyFingerprint: key.Fingerprint, KeyName: key.Name, KeyPairID: key.ID.String(),
+		Tags: tagSetOf(key.Tags),
 	})
 }
 
