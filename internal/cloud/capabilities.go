@@ -14,7 +14,7 @@ func (s *Service) AvailabilityZones(ctx context.Context, c resource.Caller) ([]r
 	if err := requireCaller(c); err != nil {
 		return nil, err
 	}
-	caps, err := s.caps.RegionCapabilities(ctx, resource.RegionName)
+	caps, err := s.caps.RegionCapabilities(ctx, s.capabilityRegion(c.Region))
 	if err != nil {
 		return nil, fmt.Errorf("availability zones: %w", err)
 	}
@@ -51,7 +51,7 @@ func (s *Service) RegionNames(ctx context.Context, c resource.Caller) ([]string,
 // ReadIsEmpty lets derived surface reads honor an explicit empty capability.
 // A missing entry keeps the surface's existing behavior.
 func (s *Service) ReadIsEmpty(ctx context.Context, action string) (bool, error) {
-	caps, err := s.caps.RegionCapabilities(ctx, resource.RegionName)
+	caps, err := s.caps.RegionCapabilities(ctx, s.region)
 	if err != nil {
 		return false, fmt.Errorf("capabilities of %s: %w", resource.RegionName, err)
 	}
@@ -63,7 +63,7 @@ func (s *Service) InstanceTypes(ctx context.Context, c resource.Caller) ([]resou
 	if err := requireCaller(c); err != nil {
 		return nil, err
 	}
-	caps, err := s.caps.RegionCapabilities(ctx, resource.RegionName)
+	caps, err := s.caps.RegionCapabilities(ctx, s.capabilityRegion(c.Region))
 	if err != nil {
 		return nil, fmt.Errorf("instance types: capabilities of %s: %w", resource.RegionName, err)
 	}
@@ -79,12 +79,12 @@ func (s *Service) InstanceTypes(ctx context.Context, c resource.Caller) ([]resou
 	return types, nil
 }
 
-// admit refuses a mutation the region does not serve, before the backend
-// sees it. Until Scope carries a region the kernel serves resource.RegionName.
-func (s *Service) admit(ctx context.Context, a resource.Action) error {
-	caps, err := s.caps.RegionCapabilities(ctx, resource.RegionName)
+// admit refuses a mutation the region does not serve before the backend sees it.
+func (s *Service) admit(ctx context.Context, a resource.Action, region string) error {
+	region = s.capabilityRegion(region)
+	caps, err := s.caps.RegionCapabilities(ctx, region)
 	if err != nil {
-		return fmt.Errorf("capabilities of %s: %w", resource.RegionName, err)
+		return fmt.Errorf("capabilities of %s: %w", region, err)
 	}
 	got := caps.Mutation(a)
 	switch got.State {
@@ -92,7 +92,7 @@ func (s *Service) admit(ctx context.Context, a resource.Action) error {
 		return nil
 	case resource.ActionUnsupported, resource.ActionEmpty:
 	}
-	message := fmt.Sprintf("%s is not supported in region %s", a, resource.RegionName)
+	message := fmt.Sprintf("%s is not supported in region %s", a, region)
 	if got.Reason != "" {
 		message += ": " + got.Reason
 	}
@@ -107,7 +107,7 @@ func served[Q any, T any](
 	call func(context.Context, backend.Scope, Q) (resource.Page[T], error),
 ) func(context.Context, backend.Scope, Q) (resource.Page[T], error) {
 	return func(ctx context.Context, sc backend.Scope, q Q) (resource.Page[T], error) {
-		caps, err := s.caps.RegionCapabilities(ctx, resource.RegionName)
+		caps, err := s.caps.RegionCapabilities(ctx, s.capabilityRegion(sc.Region))
 		if err != nil {
 			return resource.Page[T]{}, fmt.Errorf("capabilities of %s: %w", resource.RegionName, err)
 		}
@@ -118,4 +118,11 @@ func served[Q any, T any](
 		}
 		return resource.Page[T]{}, nil
 	}
+}
+
+func (s *Service) capabilityRegion(region string) string {
+	if region == "" {
+		return s.region
+	}
+	return region
 }
