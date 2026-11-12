@@ -16,8 +16,8 @@ import (
 	"github.com/popododo0720/vws-console-api/internal/resource"
 )
 
-// DescribeInstances reads every upstream page before applying the model's page size.
-// EC2's minimum MaxResults is five, while the model permits a page of one.
+// DescribeInstances orders the complete inventory before applying the model's page size.
+// EC2 response order is unspecified, so a later page can contain smaller IDs.
 func (b *Backend) DescribeInstances(
 	ctx context.Context, s backend.Scope, q resource.InstanceQuery,
 ) (resource.Page[resource.Instance], error) {

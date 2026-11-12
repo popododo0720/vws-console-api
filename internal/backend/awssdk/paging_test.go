@@ -46,3 +46,18 @@ func TestAWSSDKCursorSurvivesInstanceRemoval(t *testing.T) {
 		})
 	}
 }
+
+func TestAWSSDKSortsAcrossUpstreamPages(t *testing.T) {
+	b := setup(t, "instances-unsorted.xml", http.StatusOK)
+	account, err := resource.Parse[resource.AccountID]("123456789012")
+	if err != nil {
+		t.Fatal(err)
+	}
+	page, err := b.DescribeInstances(t.Context(), backend.Scope{
+		Account: account, Region: "us-east-1",
+	}, resource.InstanceQuery{Page: resource.PageRequest{Size: 1}})
+	if err != nil || len(page.Items) != 1 || page.Items[0].ID.String() != "i-1123456789abcdef0" ||
+		page.NextToken != "i-1123456789abcdef0" {
+		t.Fatalf("later upstream page did not precede the first page's larger IDs: %+v, %v", page, err)
+	}
+}
