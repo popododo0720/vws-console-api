@@ -159,6 +159,11 @@ type server struct {
 	updateRole    []*iamv1.UpdateRoleRequest
 	updateRoleRes *longrunningpb.Operation
 	updateRoleErr error
+	// roleRace, when set, is the role another writer deleted and created
+	// again after the client's GetRole: the next UpdateRole finds it there.
+	roleRace *iamv1.Role
+	// roleUpdated counts the UpdateRole calls applied.
+	roleUpdated int
 	// Access key calls.
 	listUsers       []*iamv1.ListUsersRequest
 	listUsersRes    *iamv1.ListUsersResponse
@@ -231,6 +236,14 @@ func (s *server) UpdateRole(ctx context.Context, req *iamv1.UpdateRoleRequest) (
 	if s.updateRoleErr != nil {
 		return nil, s.updateRoleErr
 	}
+	if s.roleRace != nil {
+		s.getRoleRes, s.roleRace = s.roleRace, nil
+	}
+	// The Role.etag precondition of vws-iam (internal/grpcapi/roles.go).
+	if e := req.GetRole().GetEtag(); e != "" && e != s.getRoleRes.GetEtag() {
+		return nil, awsErr(codes.Aborted, "ETAG_MISMATCH", "ConcurrentModification")
+	}
+	s.roleUpdated++
 	return s.updateRoleRes, nil
 }
 

@@ -59,7 +59,7 @@ Shape == [a \in Actions |->
       [] a = "UpdateAccessKey" -> "expect" \* access_keys.go: keyUser, write with ExpectedUserArn
       [] a = "EnableMFADevice" -> "undo"   \* admin.go: boundUser, enable, unchangedUser, undo
       [] a = "CreateAccessKey" -> "create" \* access_keys.go: boundUser, then a create under its etag (user_etag, #624)
-      [] a = "UpdateRole"      -> "none"]  \* admin.go: roleAt, then UpdateRole with no etag
+      [] a = "UpdateRole"      -> "cas"]   \* admin.go: roleAt, then UpdateRole under its etag (#625)
 
 VARIABLES
     arn,      \* the entity's current ARN
@@ -265,11 +265,13 @@ UndoCatchesMoves ==
 (* A CreateAccessKey never creates a key on the user at another ARN. *)
 CreateAccessKeyBound == \A r \in Reqs: act[r] = "CreateAccessKey" => ~tainted[r]
 
+(* A role write never changes the role at another ARN. *)
+UpdateRoleBound == \A r \in Reqs: act[r] = "UpdateRole" => ~tainted[r]
+
 (* Findings in the current code (iamauth.md): *)
 
 (* An enable made at another ARN does not stay after a restart. *)
 EnableNeverStaysUnverified ==
     \A r \in Reqs: ShapeIs(r, "undo") /\ pc[r] = "done" => ~(applied[r] /\ tainted[r])
 
-UpdateRoleBound == \A r \in Reqs: act[r] = "UpdateRole" => ~tainted[r]
 =============================================================================

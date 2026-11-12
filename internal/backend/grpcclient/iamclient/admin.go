@@ -180,8 +180,20 @@ func (a STSAdmin) roleAt(
 	return role, nil
 }
 
+// roleWriteError maps a vws-iam failure of UpdateRole. The write carries the
+// etag of the roleAt read, so ABORTED is a role changed, or deleted and
+// created again, since then (#625): ConcurrentModification, and nothing was
+// written. The rest is authError's.
+func roleWriteError(err error) error {
+	if status.Code(err) == codes.Aborted {
+		return iam.Changed(iam.RoleChanged)
+	}
+	return authError(err)
+}
+
 // UpdateRole implements iam.Admin over RoleService.UpdateRole with a mask on
-// the fields the caller set. want must be the role's ARN when it is read.
+// the fields the caller set. want must be the role's ARN when it is read, and
+// the write carries that read's etag.
 func (a STSAdmin) UpdateRole(
 	ctx context.Context, account resource.AccountID, name string, in iam.RoleUpdate, want iam.AuthorizedPrincipal,
 ) error {
@@ -219,18 +231,19 @@ func (a STSAdmin) UpdateRole(
 		paths = append(paths, "spec.max_session_duration_seconds")
 	}
 	req := &iamv1.UpdateRoleRequest{
-		Role:       &iamv1.Role{Name: roleName(account, name), Spec: spec},
+		Role:       &iamv1.Role{Name: roleName(account, name), Etag: existing.GetEtag(), Spec: spec},
 		UpdateMask: &fieldmaskpb.FieldMask{Paths: paths},
 	}
 	op, err := call(ctx, a.roles.UpdateRole, req)
 	if err != nil {
-		return authError(err)
+		return roleWriteError(err)
 	}
 	return operationResult(op)
 }
 
 // UpdateRoleDescription implements iam.Admin over RoleService.UpdateRole with
-// a mask on spec.description. want must be the role's ARN when it is read.
+// a mask on spec.description. want must be the role's ARN when it is read,
+// and the write carries that read's etag.
 func (a STSAdmin) UpdateRoleDescription(
 	ctx context.Context, account resource.AccountID, name, description string, want iam.AuthorizedPrincipal,
 ) (iam.Role, error) {
@@ -249,14 +262,14 @@ func (a STSAdmin) UpdateRoleDescription(
 	}
 	req := &iamv1.UpdateRoleRequest{
 		Role: &iamv1.Role{
-			Name: roleName(account, name),
+			Name: roleName(account, name), Etag: existing.GetEtag(),
 			Spec: &iamv1.RoleSpec{Description: description},
 		},
 		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.description"}},
 	}
 	op, err := call(ctx, a.roles.UpdateRole, req)
 	if err != nil {
-		return iam.Role{}, authError(err)
+		return iam.Role{}, roleWriteError(err)
 	}
 	if err := operationResult(op); err != nil {
 		return iam.Role{}, err
