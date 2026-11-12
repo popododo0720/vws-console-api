@@ -54,19 +54,20 @@ func (c *Client) Console(
 	}
 	var answer struct {
 		Data struct {
-			Port   int    `json:"port"`
-			Ticket string `json:"ticket"`
+			Port   json.Number `json:"port"`
+			Ticket string      `json:"ticket"`
 		} `json:"data"`
 	}
 	err = json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&answer)
 	err = errors.Join(err, resp.Body.Close())
-	if err != nil || resp.StatusCode != http.StatusOK || answer.Data.Port < 1 ||
-		answer.Data.Port > 65535 || answer.Data.Ticket == "" {
+	port, portErr := answer.Data.Port.Int64()
+	if err != nil || portErr != nil || resp.StatusCode != http.StatusOK || port < 1 ||
+		port > 65535 || answer.Data.Ticket == "" {
 		return nil, errors.New("pve console: proxy refused")
 	}
 	u.Path = path + "/vncwebsocket"
 	u.RawQuery = url.Values{
-		"port": {strconv.Itoa(answer.Data.Port)}, "vncticket": {answer.Data.Ticket},
+		"port": {strconv.FormatInt(port, 10)}, "vncticket": {answer.Data.Ticket},
 	}.Encode()
 	u.Scheme = map[string]string{"http": "ws", "https": "wss"}[u.Scheme]
 	dialer := websocket.Dialer{

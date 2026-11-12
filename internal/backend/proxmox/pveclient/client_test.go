@@ -159,6 +159,25 @@ func newClient(t *testing.T, h http.HandlerFunc, log *slog.Logger) (*Client, *de
 	return c, rt
 }
 
+func TestConsolePortRepresentations(t *testing.T) {
+	for _, port := range []string{`5900`, `"5900"`, `0`, `65536`, `"bad"`, `1.5`, `null`} {
+		t.Run(port, func(t *testing.T) {
+			c, rt := newClient(t, func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/api2/json/nodes/pve1/qemu/100/vncproxy" {
+					t.Errorf("console path: %s", r.URL.Path)
+				}
+				fmt.Fprintf(w, `{"data":{"port":%s,"ticket":"test-ticket"}}`, port)
+			}, nil)
+			c.http.Transport = rt.next
+			dial, err := c.Console(t.Context(), VM{Node: "pve1", VMID: 100}, false)
+			valid := port == `5900` || port == `"5900"`
+			if valid != (err == nil && dial != nil) {
+				t.Fatalf("port %s: dial=%t err=%v", port, dial != nil, err)
+			}
+		})
+	}
+}
+
 func TestTypedCallsReadTheirPathsWithTheToken(t *testing.T) {
 	for _, tc := range calls {
 		t.Run(tc.name, func(t *testing.T) {
