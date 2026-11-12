@@ -131,6 +131,9 @@ func (f *Fake) power(t *Token, r *http.Request) (any, *failure) {
 			fmt.Sprintf("Configuration file 'nodes/%s/qemu-server/%d.conf' does not exist", node, vmid),
 		}
 	}
+	if (action == "start" || action == "reboot") && slices.Contains(strings.Split(vm.Tags, ";"), "vws.holder") {
+		return nil, &failure{http.StatusForbidden, "VWS volume holder must never start"}
+	}
 	if !f.quorate {
 		return nil, &failure{http.StatusInternalServerError, "cluster not ready - no quorum?"}
 	}

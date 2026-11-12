@@ -325,8 +325,14 @@ func setConfig(vm *VM, key, value string, remove bool) *failure {
 }
 
 func (f *Fake) writeConfig(t *Token, r *http.Request) (any, *failure) {
-	if fail := writeForm(r, "digest", "delete", "name", "tags", "description", "protection",
-		"cores", "sockets", "cpu", "memory", "balloon", "smbios1", "ciuser", "sshkeys", "ipconfig0"); fail != nil {
+	allowed := []string{
+		"digest", "delete", "name", "tags", "description", "protection",
+		"cores", "sockets", "cpu", "memory", "balloon", "smbios1", "ciuser", "sshkeys", "ipconfig0",
+	}
+	for i := range 31 {
+		allowed = append(allowed, fmt.Sprintf("scsi%d", i))
+	}
+	if fail := writeForm(r, allowed...); fail != nil {
 		return nil, fail
 	}
 	keys := []string{}
@@ -340,16 +346,27 @@ func (f *Fake) writeConfig(t *Token, r *http.Request) (any, *failure) {
 	}
 	var vm *VM
 	for _, key := range keys {
-		if !slices.Contains([]string{
-			"name", "tags", "description", "protection", "cores", "sockets",
-			"cpu", "memory", "balloon", "smbios1", "ciuser", "sshkeys", "ipconfig0",
-		}, key) {
+		if !slices.Contains(allowed, key) || key == "digest" || key == "delete" {
 			return nil, parameter("delete", "unsupported config key")
 		}
 		var fail *failure
 		vm, fail = f.writeGuest(t, r, configPrivilege(key))
 		if fail != nil {
 			return nil, fail
+		}
+		if strings.HasPrefix(key, "scsi") {
+			if !r.Form.Has(key) || vm.Config[key] != "" {
+				return nil, parameter(key, "only attachment to an empty slot is modeled")
+			}
+			volume, _, _ := strings.Cut(r.Form.Get(key), ",")
+			storage, _, ok := strings.Cut(volume, ":")
+			disk := f.diskContent(vm.Node, volume)
+			if !ok || disk == nil || disk.VMID != vm.VMID {
+				return nil, parameter(key, "disk is not owned by this VM")
+			}
+			if fail := f.need(t, "/storage/"+storage, "Datastore.AllocateSpace"); fail != nil {
+				return nil, fail
+			}
 		}
 		if slices.Contains([]string{"cores", "sockets", "memory", "balloon"}, key) && r.Form.Has(key) {
 			n, err := strconv.Atoi(r.Form.Get(key))
@@ -408,7 +425,8 @@ func (f *Fake) createVM(t *Token, r *http.Request) (any, *failure) {
 	if fail != nil {
 		return nil, fail
 	}
-	if fail := writeForm(r, "vmid", "pool", "start", "name", "description", "protection", "cores", "memory"); fail != nil {
+	if fail := writeForm(r, "vmid", "pool", "start", "name", "tags",
+		"description", "protection", "cores", "memory"); fail != nil {
 		return nil, fail
 	}
 	if r.Form.Get("start") == "1" {
@@ -428,7 +446,7 @@ func (f *Fake) createVM(t *Token, r *http.Request) (any, *failure) {
 		VMID: id, Node: node, Pool: r.Form.Get("pool"), Status: "stopped",
 		MaxCPU: 1, MaxMem: 512 << 20, Config: map[string]string{"cores": "1", "memory": "512"},
 	}
-	for _, k := range []string{"name", "description", "protection", "cores", "memory"} {
+	for _, k := range []string{"name", "tags", "description", "protection", "cores", "memory"} {
 		if r.Form.Has(k) {
 			if k == "cores" || k == "memory" {
 				if n, err := strconv.Atoi(r.Form.Get(k)); err != nil || n < 1 || n > 1<<40 {
