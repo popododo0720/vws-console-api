@@ -177,6 +177,7 @@ change both files together.
 | No deployment manifests; `publish.yml` is the only release step. | CI job `hygiene` |
 | Never push to `main`. | `.githooks/pre-push` |
 | Each commit is one logical change that passes tests. | Judgment: `git rebase -x 'go test ./...' origin/main` |
+| Proxmox instance and volume tag writes preserve system tags and operator text, refuse reserved keys, send config digests and retry a conflict once. Instance overflow uses the description; volume tags must fit 128 encoded characters. | `TestTagWritesRoundTripRetryRestart`, `TestTagWritesRejectReservedAndBoundary`, `TestTagWritesDigestConflict`, `TestMutationMethodsRejectOtherPools` |
 | The repo is English only. | CI job `english` |
 
 ## Working here

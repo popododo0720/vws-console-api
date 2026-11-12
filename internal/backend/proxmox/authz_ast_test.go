@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/popododo0720/vws-console-api/internal/backend"
 	"github.com/popododo0720/vws-console-api/internal/resource"
 )
 
@@ -142,6 +143,30 @@ func TestMutationMethodsRejectOtherPools(t *testing.T) {
 		},
 		"TerminateInstances": func(t *testing.T, b *Backend) (resource.Kind, string, error) {
 			return powerCrossPool(t, b, "destroy")
+		},
+		"CreateTags": func(t *testing.T, b *Backend) (resource.Kind, string, error) {
+			iid, _ := tagMutationIDs()
+			_, err := b.CreateTags(t.Context(), backend.Mutation{Scope: inventoryScope()},
+				resource.CreateTagsRequest{IDs: []resource.InstanceID{iid}, Tags: map[string]string{"env": "dev"}})
+			return resource.KindInstance, iid.String(), err
+		},
+		"DeleteTags": func(t *testing.T, b *Backend) (resource.Kind, string, error) {
+			iid, _ := tagMutationIDs()
+			_, err := b.DeleteTags(t.Context(), backend.Mutation{Scope: inventoryScope()},
+				resource.DeleteTagsRequest{IDs: []resource.InstanceID{iid}})
+			return resource.KindInstance, iid.String(), err
+		},
+		"TagVolumes": func(t *testing.T, b *Backend) (resource.Kind, string, error) {
+			_, vid := tagMutationIDs()
+			_, err := b.TagVolumes(t.Context(), backend.Mutation{Scope: inventoryScope()},
+				resource.TagVolumesRequest{IDs: []resource.VolumeID{vid}, Tags: map[string]string{"env": "dev"}})
+			return resource.KindVolume, vid.String(), err
+		},
+		"UntagVolumes": func(t *testing.T, b *Backend) (resource.Kind, string, error) {
+			_, vid := tagMutationIDs()
+			_, err := b.UntagVolumes(t.Context(), backend.Mutation{Scope: inventoryScope()},
+				resource.UntagVolumesRequest{IDs: []resource.VolumeID{vid}})
+			return resource.KindVolume, vid.String(), err
 		},
 	}
 	functions := mutationFunctions(t)

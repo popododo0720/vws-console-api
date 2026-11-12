@@ -84,6 +84,13 @@ func (b *Backend) RegionCapabilities(ctx context.Context, region string) (resour
 			State: resource.ActionPartial, ReasonCode: "RetainedDisks",
 			Reason: "retained disks require holder support",
 		}
+		for _, key := range []string{"ec2:CreateTags", "ec2:DeleteTags"} {
+			doc.Actions[key] = resource.ActionCapability{
+				State:      resource.ActionPartial,
+				ReasonCode: "InstanceVolumeTags",
+				Reason:     "instances and volumes only; volume tags require at most 128 encoded characters",
+			}
+		}
 	}
 	return doc, nil
 }
@@ -95,32 +102,11 @@ func (b *Backend) RunInstances(
 	return resource.Accepted[resource.Instance]{}, resource.Unsupported("RunInstances", "read-only")
 }
 
-// CreateTags is unavailable in the phase-one backend.
-func (b *Backend) CreateTags(
-	ctx context.Context, m backend.Mutation, req resource.CreateTagsRequest,
-) (resource.Accepted[resource.Instance], error) {
-	return resource.Accepted[resource.Instance]{}, resource.Unsupported("CreateTags", "read-only")
-}
-
-// DeleteTags is unavailable in the phase-one backend.
-func (b *Backend) DeleteTags(
-	ctx context.Context, m backend.Mutation, req resource.DeleteTagsRequest,
-) (resource.Accepted[resource.Instance], error) {
-	return resource.Accepted[resource.Instance]{}, resource.Unsupported("DeleteTags", "read-only")
-}
-
 // CreateVolume is unavailable in the phase-one backend.
 func (b *Backend) CreateVolume(
 	ctx context.Context, m backend.Mutation, req resource.CreateVolumeRequest,
 ) (resource.Accepted[resource.Volume], error) {
 	return resource.Accepted[resource.Volume]{}, resource.Unsupported("CreateVolume", "read-only")
-}
-
-// TagVolumes is unavailable in the phase-one backend.
-func (b *Backend) TagVolumes(
-	ctx context.Context, m backend.Mutation, req resource.TagVolumesRequest,
-) (resource.Accepted[resource.Volume], error) {
-	return resource.Accepted[resource.Volume]{}, resource.Unsupported("TagVolumes", "read-only")
 }
 
 // AttachVolume is unavailable in the phase-one backend.
@@ -142,13 +128,6 @@ func (b *Backend) DeleteVolume(
 	ctx context.Context, m backend.Mutation, req resource.DeleteVolumeRequest,
 ) (resource.Accepted[resource.Volume], error) {
 	return resource.Accepted[resource.Volume]{}, resource.Unsupported("DeleteVolume", "read-only")
-}
-
-// UntagVolumes is unavailable in the phase-one backend.
-func (b *Backend) UntagVolumes(
-	ctx context.Context, m backend.Mutation, req resource.UntagVolumesRequest,
-) (resource.Accepted[resource.Volume], error) {
-	return resource.Accepted[resource.Volume]{}, resource.Unsupported("DeleteTags", "read-only")
 }
 
 // ModifyVolume is unavailable in the phase-one backend.
