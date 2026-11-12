@@ -150,6 +150,7 @@ it. When you add or change a rule, change its row here and its line in
 | Console JSON field names are camelCase. | `tagliatelle` |
 | The resource API is the `github.com/popododo0720/vws-proto` module at a release tag (`vX.Y.Z`, no pseudo-version) from the module proxy. This repo does not generate it, does not copy it, and does not keep a local proto tree. | `internal/hygiene` (`TestRepositoryRules`, `TestProtoModuleRules`) rejects a vws-proto `replace`, an untagged require, `third_party/vws-proto`, `*.pb.go` and `proto/` |
 | Google Go style and formatting. | golangci-lint in CI job `lint` |
+| pvefake allocates VM IDs without reserving them, clones under a task lock, compares config digests, and refuses protected deletion with token ACLs. | `TestNextIDConcurrentCloneCollision`, `TestCloneLockFailureAndClientRestart`, `TestConfigCASAndAtomicPrivileges`, `TestCreateDeleteProtectionAndFailures`, `TestMutationACLAndBoundaryRefusals`, `TestCloneCopiesDisksAndConfigACLsAreAtomic` |
 | Tests pass under the race detector. | CI job `test` |
 | `//nolint` names one linter and gives a reason. | `nolintlint` |
 | No swallowed errors. A blank error, an unchecked type assertion, `if err != nil { return nil }`, and an unwrapped foreign error fail lint. Tests are exempt from errcheck and wrapcheck. | `errcheck` (check-blank, check-type-assertions), `nilerr`, `nilnil`, `wrapcheck`, `errorlint`, `errname`, `contextcheck`, `sloglint` |

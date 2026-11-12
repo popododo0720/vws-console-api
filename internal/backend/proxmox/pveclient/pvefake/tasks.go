@@ -17,6 +17,7 @@ type task struct {
 	exit                       string
 	done                       bool
 	apply                      func() string
+	finish                     func(string)
 }
 
 // SetTaskDelay affects tasks submitted after this call.
@@ -38,13 +39,16 @@ func (f *Fake) FailNext(kind, exitstatus string) {
 	f.failNext[kind] = append(f.failNext[kind], exitstatus)
 }
 
-func (f *Fake) submit(t *Token, node, kind, id string, apply func() string) string {
+func (f *Fake) submit(t *Token, node, kind, id string, apply func() string, finish ...func(string)) string {
 	now := f.clock()
 	x := &task{
 		node: node, kind: kind, id: id, user: t.ID, pid: len(f.tasks) + 1,
 		start: now.Unix(), due: now.Add(f.delay), apply: apply,
 	}
 	x.upid = fmt.Sprintf("UPID:%s:%08X:%08X:%08X:%s:%s:%s:", node, x.pid, 1, x.start, kind, id, t.ID)
+	if len(finish) != 0 {
+		x.finish = finish[0]
+	}
 	if queue := f.failNext[kind]; len(queue) > 0 {
 		x.exit, f.failNext[kind] = queue[0], queue[1:]
 	}
@@ -67,6 +71,10 @@ func (f *Fake) settle() {
 		if x.exit == "" {
 			x.exit = x.apply()
 		}
+		if x.finish != nil {
+			x.finish(x.exit)
+		}
+		x.finish = nil
 		x.apply, x.done, x.end = nil, true, x.due.Unix()
 		f.archive = append(f.archive, x)
 	}
@@ -117,6 +125,9 @@ func (f *Fake) power(t *Token, r *http.Request) (any, *failure) {
 	}
 	return f.submit(t, node, "qm"+action, strconv.Itoa(vmid), func() string {
 		vm := f.vm(vmid)
+		if vm == nil {
+			return "VM " + id + " does not exist"
+		}
 		if lock := vm.Config["lock"]; lock != "" {
 			return "VM is locked (" + lock + ")"
 		}

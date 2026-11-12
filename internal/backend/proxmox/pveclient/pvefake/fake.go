@@ -30,6 +30,7 @@ type Fake struct {
 	failNext   map[string][]string
 	tickets    map[string]consoleTicket
 	files      map[string]pmxcfsEntry
+	nextIDs    []int
 }
 
 // failure is a PVE error answer: the status and PVE's message.
