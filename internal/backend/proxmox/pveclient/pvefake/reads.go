@@ -42,6 +42,7 @@ func (f *Fake) routes() {
 	f.handle("/nodes/{node}/storage/{storage}/content", f.storageContent)
 	f.handle("/access/permissions", f.permissions)
 	f.taskRoutes()
+	f.writeRoutes()
 	f.consoleRoutes()
 	f.mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		msg := fmt.Sprintf("Method '%s %s' not implemented", r.Method, r.URL.Path)
@@ -218,6 +219,10 @@ func (f *Fake) config(t *Token, r *http.Request) (any, *failure) {
 	if fail != nil {
 		return nil, fail
 	}
+	return configRow(vm), nil
+}
+
+func configRow(vm *VM) map[string]any {
 	cfg := map[string]any{}
 	for k, v := range vm.Config {
 		cfg[k] = v
@@ -238,7 +243,7 @@ func (f *Fake) config(t *Token, r *http.Request) (any, *failure) {
 	}
 	digest := sha1.Sum([]byte(text.String()))
 	cfg["digest"] = hex.EncodeToString(digest[:])
-	return cfg, nil
+	return cfg
 }
 
 // permissions answers for the path asked or, as get_effective_permissions
