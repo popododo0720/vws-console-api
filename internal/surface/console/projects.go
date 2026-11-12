@@ -1,7 +1,6 @@
 package console
 
 import (
-	"errors"
 	"net/http"
 	"slices"
 	"strings"
@@ -47,21 +46,20 @@ func (h *handler) listProjects(w http.ResponseWriter, r *http.Request) {
 	for _, pool := range v.Pools {
 		view.Regions = append(view.Regions, projectRegion{Name: pool.Region, Kind: "pve", Pool: pool.Pool})
 	}
+	// AWS forwarding refuses every region when a mapped account cannot be
+	// read, and a region that more than one mapped account allows.
 	allowedBy := map[string]int{}
 	for _, id := range v.AWSAccounts {
 		account, err := h.registry.AWSAccounts().Get(r.Context(), id)
-		if errors.Is(err, store.ErrNotFound) {
-			continue
-		}
 		if err != nil {
-			projectReadError(w, r, err)
-			return
+			h.log.WarnContext(r.Context(), "project AWS regions omitted: a mapped AWS account is unreadable")
+			clear(allowedBy)
+			break
 		}
 		for _, name := range account.AllowedRegions {
 			allowedBy[name]++
 		}
 	}
-	// AWS forwarding refuses a region more than one mapped account allows.
 	var aws []string
 	for name, n := range allowedBy {
 		if n == 1 {

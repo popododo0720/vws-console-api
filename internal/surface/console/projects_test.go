@@ -71,7 +71,7 @@ func TestListProjectsMappedAndDefault(t *testing.T) {
 	if _, err := g.Projects().Put(t.Context(), store.Project{
 		Project:     "123456789012",
 		Pools:       []store.ProjectPool{{Region: "pve-other-1", Pool: "team-a"}},
-		AWSAccounts: []string{"345678901234", "210987654321", "999999999999"},
+		AWSAccounts: []string{"345678901234", "210987654321"},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -86,12 +86,50 @@ func TestListProjectsMappedAndDefault(t *testing.T) {
 		t.Fatalf("mapped project: %+v", items)
 	}
 	for _, private := range []string{
-		"210987654321", "345678901234", "999999999999", "canary-role", "canary-external",
+		"210987654321", "345678901234", "canary-role", "canary-external",
 		store.DescribeSecret("canary-external-one").Fingerprint, store.DescribeSecret("pve-other-secret").Fingerprint,
 		store.DescribeSecret("pve-test-secret").Fingerprint, "canary-token-id", "10.20.30.40", "awsAccounts", "roleArn",
 	} {
 		if strings.Contains(body, private) {
 			t.Fatalf("project list exposes %q: %s", private, body)
+		}
+	}
+}
+
+func TestListProjectsUnreadableAWSAccountKeepsProxmoxRegions(t *testing.T) {
+	e, _, app, _ := accountFixture(t)
+	b := store.NewMemory()
+	g := store.New(b)
+	e.h.(*handler).registry = g
+	if _, err := g.AWSAccounts().Create(t.Context(), store.AWSAccount{
+		ID: "210987654321", RoleARN: "arn:aws:iam::210987654321:role/canary-role-one", AllowedRegions: []string{"us-east-1"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.Create(t.Context(), "aws-accounts/345678901234", []byte("private-undecodable-account")); err != nil {
+		t.Fatal(err)
+	}
+	pve := []projectRegion{{Name: "pve-lab-1", Kind: "pve", Pool: "team-a"}}
+	for _, mapped := range [][]string{{"210987654321", "999999999999"}, {"210987654321", "345678901234"}} {
+		v, err := g.Projects().Get(t.Context(), "123456789012")
+		if err != nil && !errors.Is(err, store.ErrNotFound) {
+			t.Fatal(err)
+		}
+		v.Project, v.Pools, v.AWSAccounts = "123456789012", []store.ProjectPool{{Region: "pve-lab-1", Pool: "team-a"}}, mapped
+		if _, err := g.Projects().Put(t.Context(), v); err != nil {
+			t.Fatal(err)
+		}
+		items, _ := listProjectsCall(t, e, http.StatusOK)
+		if len(items) != 1 || !slices.Equal(items[0].Regions, pve) {
+			t.Fatalf("accounts %v: %+v, want only the Proxmox region", mapped, items)
+		}
+	}
+	if strings.Count(app.String(), "a mapped AWS account is unreadable") != 2 {
+		t.Fatalf("want one warning per listing: %s", app)
+	}
+	for _, private := range []string{"210987654321", "345678901234", "999999999999", "private-undecodable-account"} {
+		if strings.Contains(app.String(), private) {
+			t.Fatalf("warning contains %q: %s", private, app)
 		}
 	}
 }
