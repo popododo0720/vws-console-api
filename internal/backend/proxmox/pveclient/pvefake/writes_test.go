@@ -115,7 +115,8 @@ func TestConfigCASAndAtomicPrivileges(t *testing.T) {
 	w := newWriteWorld(t)
 	path := "/nodes/pve1/qemu/100/config"
 	digest := w.config(t, "pve1", 100)["digest"].(string)
-	w.write(t, "PUT", path, "digest="+digest+"&description=one&cores=3", "writer@pve!one", 200)
+	w.write(t, "PUT", path, "digest="+digest+"&description=one&cores=3&name=web.example&tags=env-prod%3Bteam_a",
+		"writer@pve!one", 200)
 	for _, method := range []string{"POST", "PUT"} {
 		w.write(t, method, path, "digest="+digest+"&description=stale", "writer@pve!one", 500)
 	}
@@ -267,6 +268,9 @@ func TestMutationACLAndBoundaryRefusals(t *testing.T) {
 		{"/nodes/pve1/qemu/9000/clone", "newid=102&target=unknown"},
 		{"/nodes/pve1/qemu/100/config", "delete=lock"},
 		{"/nodes/pve1/qemu/100/config", "cores=wrong"},
+		{"/nodes/pve1/qemu", "vmid=102&name=bad_name"},
+		{"/nodes/pve1/qemu/9000/clone", "newid=102&name=bad..name"},
+		{"/nodes/pve1/qemu/100/config", "cores=3&tags=bad%24tag"},
 	} {
 		w.write(t, "POST", tc.path, tc.body, "writer@pve!one", 400)
 	}

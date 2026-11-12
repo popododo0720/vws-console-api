@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"maps"
 	"net/http"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -80,6 +81,21 @@ func writeForm(r *http.Request, keys ...string) *failure {
 	for k, v := range r.Form {
 		if len(v) != 1 || !slices.Contains(keys, k) {
 			return parameter(k, "unknown or repeated parameter")
+		}
+		if len(v[0]) > 10<<20 {
+			return parameter(k, "value exceeds the form size limit")
+		}
+		pattern := ""
+		if k == "name" {
+			pattern = `^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*$`
+		}
+		if k == "tags" {
+			pattern = `^([a-zA-Z0-9_][a-zA-Z0-9_+.-]*|[,;[:space:]\x00])*$`
+		}
+		if pattern != "" {
+			if valid, err := regexp.MatchString(pattern, v[0]); err != nil || !valid {
+				return parameter(k, "value does not match the PVE format")
+			}
 		}
 		if slices.Contains([]string{"full", "start", "purge", "destroy-unreferenced-disks", "protection"}, k) &&
 			v[0] != "0" && v[0] != "1" {
@@ -437,7 +453,6 @@ func (f *Fake) deleteVM(t *Token, r *http.Request) (any, *failure) {
 		return nil, &failure{http.StatusInternalServerError, "can't remove VM - protection mode enabled"}
 	}
 	id := vm.VMID
-	vm.Config = maps.Clone(vm.Config)
 	if vm.Config == nil {
 		vm.Config = map[string]string{}
 	}
