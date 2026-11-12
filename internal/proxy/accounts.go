@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/popododo0720/vws-console-api/internal/admin/store"
@@ -13,29 +15,54 @@ import (
 )
 
 // RegistryAccounts reads role and region metadata from the admin registry.
-// External IDs remain systemd credentials until the registry has an encrypted field.
+// Forwarding external IDs remain systemd credentials; sealed registry values serve admin diagnostics.
 type RegistryAccounts struct {
 	Registry            *store.Registry
 	CredentialDirectory string
 }
 
-// Account reads current metadata and its per-account external ID.
-func (a RegistryAccounts) Account(ctx context.Context, id string) (Account, error) {
-	if !accountID(id) {
+// Account selects the sole mapped account allowing the requested region.
+func (a RegistryAccounts) Account(ctx context.Context, project, region string) (Account, error) {
+	if !accountID(project) {
 		return Account{}, errors.New("proxy: account unavailable")
 	}
-	v, err := a.Registry.AWSAccounts().Get(ctx, id)
+	mapping, err := a.Registry.Projects().Get(ctx, project)
 	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return Account{}, fmt.Errorf("proxy: project unavailable: %w", store.ErrNotFound)
+		}
 		return Account{}, errors.New("proxy: account unavailable")
+	}
+	out := Account{MappingVersion: int64(mapping.Version)}
+	var selected store.AWSAccount
+	for _, id := range mapping.AWSAccounts {
+		if !accountID(id) {
+			return out, errors.New("proxy: account unavailable")
+		}
+		v, err := a.Registry.AWSAccounts().Get(ctx, id)
+		if err != nil {
+			return out, errors.New("proxy: account unavailable")
+		}
+		if slices.Contains(v.AllowedRegions, region) {
+			if selected.ID != "" {
+				return out, errors.New("proxy: ambiguous account mapping")
+			}
+			selected = v
+		}
+	}
+	if selected.ID == "" {
+		return out, errors.New("proxy: account unavailable")
 	}
 	if a.CredentialDirectory == "" {
-		return Account{}, errors.New("proxy: external ID unavailable")
+		return out, errors.New("proxy: external ID unavailable")
 	}
-	b, err := os.ReadFile(filepath.Join(a.CredentialDirectory, "aws-external-id-"+id))
+	b, err := os.ReadFile(filepath.Join(a.CredentialDirectory, "aws-external-id-"+selected.ID))
 	if err != nil || len(strings.TrimSpace(string(b))) == 0 {
-		return Account{}, errors.New("proxy: external ID unavailable")
+		return out, errors.New("proxy: external ID unavailable")
 	}
-	return Account{RoleARN: v.RoleARN, Regions: v.AllowedRegions, ExternalID: strings.TrimSpace(string(b))}, nil
+	out.ID, out.RoleARN, out.Regions = selected.ID, selected.RoleARN, selected.AllowedRegions
+	out.ExternalID = strings.TrimSpace(string(b))
+	return out, nil
 }
 
 // accountID reports a 12-digit AWS account ID. It becomes part of a

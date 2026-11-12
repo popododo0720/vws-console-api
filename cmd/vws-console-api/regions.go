@@ -138,9 +138,9 @@ func (a awsInventory) Call(ctx context.Context, service, method string, input, r
 		return err
 	}
 	if !slices.ContainsFunc(accounts, func(account backend.AWSAccount) bool {
-		return account.ID == scope.Account.String() && slices.Contains(account.AllowedRegions, scope.Region)
+		return slices.Contains(account.AllowedRegions, scope.Region)
 	}) {
-		return resource.Invalid("account", "no registered AWS account for this region")
+		return resource.Invalid("region", "no registered AWS account for this region")
 	}
 	if service != "Compute" || method != "DescribeInstances" {
 		return resource.Unsupported("Action", "AWS inventory does not serve this read")

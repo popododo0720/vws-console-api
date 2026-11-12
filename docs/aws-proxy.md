@@ -3,27 +3,45 @@
 `cmd/vws-aws-proxy` accepts only local, already authenticated and authorized
 requests. Its unix socket is mode 0700; run the global API under the same user
 and place the socket in a private directory. The API must replace all client
-`X-Vws-*` headers with its verified account, principal, target region and service.
+`X-Vws-*` headers with its verified VWS project, principal, target region and service.
 The service is `ec2`; only unambiguous `Describe*` Query actions pass.
 Bodies are limited to 1 MiB. Requests have a 30-second deadline. Transient
 upstream failures get at most three attempts with 100/200 ms backoff.
 
-Flags: `-socket`, `-accounts`, `-sts-endpoint`, `-sts-region`, `-ec2-endpoint`.
+Flags: `-socket`, `-global-config`, `-accounts`, `-projects`, `-sts-endpoint`,
+`-sts-region`, `-ec2-endpoint`.
 AssumeRole is signed for `-sts-region` (default `us-east-1`, the global STS
 endpoint's region), never for the EC2 region of the request; a regional STS
 endpoint needs its own region here.
 Endpoints must use HTTPS, except numeric loopback addresses for offline tests.
 The EC2 endpoint can contain `{region}`. Redirects are returned, never followed.
 
-`-accounts` is an interim phase-1 JSON snapshot exported from admin registrations:
+Use `-global-config /etc/vws/global.yaml` to read the live admin registry over
+the bootstrap's IAM etcd TLS connection. Project remaps and account changes
+take effect on the next request without restart. The proxy does not need
+the registry KEK: forwarding ExternalId remains a systemd credential.
+
+For offline snapshot mode, omit `-global-config` and supply both `-accounts`
+and `-projects`. Mixing live bootstrap and snapshots is refused.
+`-accounts` is a JSON snapshot exported from admin registrations:
 
 ```json
 [{"awsAccountId":"123456789012","roleArn":"arn:aws:iam::123456789012:role/inventory","allowedRegions":["us-east-1"]}]
 ```
 
-Restart after replacing this snapshot. Live registry wiring replaces this flag
-in #755; the proxy core consumes only `Accounts`, while `RegistryAccounts`
-already resolves role ARN and allowed regions through `Registry.AWSAccounts()`.
+`-projects` is a JSON snapshot of admin project mappings:
+
+```json
+[{"project":"111111111111","pools":[],"awsAccounts":["123456789012"]}]
+```
+
+Restart after replacing either snapshot. The proxy core consumes only `Accounts`;
+`RegistryAccounts`
+reads `Registry.Projects()` and resolves role ARN and allowed regions through
+`Registry.AWSAccounts()` on each request. Only one mapped account may allow
+the target region. No mapping, no match, unreadable registrations or multiple
+matches return `AccessDenied` without STS or EC2 calls. Account ordering does
+not break ties. The role ARN must belong to the selected AWS account.
 Neither registration nor source credentials are accepted from request metadata.
 
 Supply these files using systemd `LoadCredential=` and its
@@ -37,11 +55,16 @@ malformed, or example/default keys. AWS environment variables and shared profile
 are never read. This increment uses the systemd-file source option; it does not
 implement an instance role provider. Restart for source key rotation. ExternalId
 is read for each request and changes invalidate cached sessions. Registry-backed,
-encrypted ExternalId storage remains for later, alongside live registry wiring.
+encrypted ExternalId storage for forwarding remains for later.
 
 Sessions are held only in memory until five minutes before expiry. Cache keys
-include account, role, ExternalId and principal, so each STS session name records
-the correct principal hash. The cache is bounded to 1024 entries; restart drops it.
+include the selected AWS account, role, ExternalId and principal, isolated by
+project and mapping revision. Observing a changed mapping drops that project's
+older sessions, including when unmapped; mapping away and back cannot revive
+a prior session. An unreadable project mapping denies forwarding while retaining
+cached sessions until its revision can be read again. Each STS session name
+records the VWS project and principal hash. The cache is bounded to 1024 entries;
+restart drops it.
 All outbound errors exposed to callers are fixed messages, never response bodies,
 credential fields or transport error strings. The command uses vws-lib telemetry
 and HTTP server spans/metrics; sanitized STS decoding failures use `report.Error`.
@@ -106,7 +129,7 @@ messages cross back to the console. Proxy, client and console deadlines are
 a saved record that cannot be opened asks the operator to save it again.
 
 A saved PASS proves the current sealed registry registration. Inventory
-forwarding still uses the interim credential-file ExternalId and the startup
-registration snapshot described above. Operators must keep those inputs
-consistent; migrating inventory to sealed registry credentials is outside
+forwarding still uses the credential-file ExternalId. Snapshot mode also needs
+the startup registrations described above. Operators must keep these inputs
+consistent; migrating forwarding to sealed registry credentials is outside
 the connection-test implementation.

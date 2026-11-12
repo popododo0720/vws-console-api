@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -26,6 +27,7 @@ type fixture struct {
 	registry              *store.Registry
 	dir                   string
 	stsHost               string
+	stsForms              []url.Values
 }
 
 func setup(t *testing.T) *fixture {
@@ -35,6 +37,11 @@ func setup(t *testing.T) *fixture {
 		ID: "123456789012", RoleARN: "arn:aws:iam::123456789012:role/inventory", AllowedRegions: []string{"us-east-1"},
 	})
 	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.registry.Projects().Put(t.Context(), store.Project{
+		Project: "123456789012", AWSAccounts: []string{"123456789012"},
+	}); err != nil {
 		t.Fatal(err)
 	}
 	os.WriteFile(filepath.Join(f.dir, "aws-external-id-123456789012"), []byte("external-canary"), 0o600)
@@ -61,10 +68,10 @@ func setup(t *testing.T) *fixture {
 		f.stsCalls++
 		checkSignature(r, source, sigv4.ServiceSTS)
 		r.ParseForm()
+		f.stsForms = append(f.stsForms, r.Form)
 		h := sha256.Sum256([]byte("principal"))
-		if r.Form.Get("ExternalId") != "external-canary" || r.Form.Get("DurationSeconds") != "3600" ||
-			r.Form.Get("RoleSessionName") != fmt.Sprintf("vws-123456789012-%x", h[:16]) ||
-			r.Form.Get("RoleArn") != "arn:aws:iam::123456789012:role/inventory" {
+		if r.Form.Get("DurationSeconds") != "3600" ||
+			!strings.HasSuffix(r.Form.Get("RoleSessionName"), fmt.Sprintf("-%x", h[:16])) {
 			t.Error("incorrect AssumeRole parameters")
 		}
 		if f.stsBody != "" {
@@ -107,9 +114,13 @@ func (f *fixture) request(raw string) *httptest.ResponseRecorder {
 }
 
 func (f *fixture) requestAs(raw, principal, region string) *httptest.ResponseRecorder {
+	return f.requestProject(raw, principal, region, "123456789012")
+}
+
+func (f *fixture) requestProject(raw, principal, region, project string) *httptest.ResponseRecorder {
 	r := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/", strings.NewReader(raw))
 	for k, v := range map[string]string{
-		"X-Vws-Account": "123456789012", "X-Vws-Principal": principal,
+		"X-Vws-Account": project, "X-Vws-Principal": principal,
 		"X-Vws-Target-Region": region, "X-Vws-Target-Service": "ec2", "X-Amz-Security-Token": "old-token",
 	} {
 		r.Header.Set(k, v)
@@ -131,6 +142,11 @@ func TestResignCacheAndExpiry(t *testing.T) {
 	}
 	if f.stsCalls != 1 || f.originCalls != 2 {
 		t.Fatal("cache missed")
+	}
+	if f.stsForms[0].Get("ExternalId") != "external-canary" ||
+		f.stsForms[0].Get("RoleArn") != "arn:aws:iam::123456789012:role/inventory" ||
+		!strings.HasPrefix(f.stsForms[0].Get("RoleSessionName"), "vws-123456789012-") {
+		t.Fatal("incorrect AssumeRole binding")
 	}
 	now = now.Add(55 * time.Minute)
 	f.request("Action=DescribeInstances")
@@ -225,11 +241,11 @@ func TestAccountIDIsBoundedBeforeTheFilesystem(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, id := range []string{"", "12345678901", "1234567890123", "12345678901a", "../123456789", "12345678901\x00"} {
-		if _, err := accounts.Account(context.Background(), id); err == nil {
+		if _, err := accounts.Account(context.Background(), id, "us-east-1"); err == nil {
 			t.Errorf("account %q was accepted", id)
 		}
 	}
-	if _, err := accounts.Account(context.Background(), "123456789012"); err != nil {
+	if _, err := accounts.Account(context.Background(), "123456789012", "us-east-1"); err != nil {
 		t.Fatal(err)
 	}
 }

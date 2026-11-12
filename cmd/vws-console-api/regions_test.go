@@ -137,7 +137,7 @@ func TestRegionsProcessInventoryAndRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := registry.AWSAccounts().Create(t.Context(), store.AWSAccount{
-		ID: "123456789012", AllowedRegions: []string{"us-east-1"},
+		ID: "987654321098", AllowedRegions: []string{"us-east-1"},
 	}); err != nil {
 		t.Fatal(err)
 	}

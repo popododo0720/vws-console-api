@@ -141,7 +141,7 @@ func TestAWSConnectionStepsAndCacheIsolation(t *testing.T) {
 			}))
 			defer sts.Close()
 			f.p.sts = sts.URL
-			f.p.cache[[32]byte{1}] = sigv4.Credential{AccessKey: "sentinel"}
+			f.p.cache[sessionKey{project: "sentinel"}] = sigv4.Credential{AccessKey: "sentinel"}
 			before, _ := f.registry.AWSAccounts().Get(t.Context(), "123456789012")
 			var logs bytes.Buffer
 			var reports atomic.Int32
@@ -174,7 +174,8 @@ func TestAWSConnectionStepsAndCacheIsolation(t *testing.T) {
 					t.Fatalf("identity fault reports: got %d, want %d", reports.Load(), wantReports)
 				}
 			}
-			if !reflect.DeepEqual(before, after) || len(f.p.cache) != 1 || f.p.cache[[32]byte{1}].AccessKey != "sentinel" ||
+			if !reflect.DeepEqual(before, after) || len(f.p.cache) != 1 ||
+				f.p.cache[sessionKey{project: "sentinel"}].AccessKey != "sentinel" ||
 				f.originCalls != 0 || assumes.Load() < 2 || (identities.Load() != 0) != tc.assumed {
 				t.Fatal("test reused cache, wrote state, skipped fresh STS, or called origin")
 			}

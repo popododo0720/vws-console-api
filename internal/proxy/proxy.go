@@ -20,18 +20,26 @@ import (
 
 	"github.com/popododo0720/vws-lib/obs/report"
 
+	"github.com/popododo0720/vws-console-api/internal/admin/store"
 	"github.com/popododo0720/vws-console-api/internal/sigv4"
 )
 
 // Account contains the role binding, never source credentials.
 type Account struct {
-	RoleARN, ExternalID string
-	Regions             []string
+	ID, RoleARN, ExternalID string
+	MappingVersion          int64
+	Regions                 []string
 }
 
 // Accounts resolves the current operator registration on every request.
 type Accounts interface {
-	Account(context.Context, string) (Account, error)
+	Account(context.Context, string, string) (Account, error)
+}
+
+type sessionKey struct {
+	project        string
+	mappingVersion int64
+	binding        [32]byte
 }
 
 // Proxy accepts forwarding metadata only from the trusted local API process.
@@ -42,7 +50,7 @@ type Proxy struct {
 	stsRegion   string
 	transport   http.RoundTripper
 	mu          sync.Mutex
-	cache       map[[32]byte]sigv4.Credential
+	cache       map[sessionKey]sigv4.Credential
 	now         func() time.Time
 }
 
@@ -71,7 +79,7 @@ func New(accounts Accounts, source sigv4.Credential, sts, stsRegion, origin stri
 			TLSHandshakeTimeout: 3 * time.Second, ResponseHeaderTimeout: 5 * time.Second,
 			IdleConnTimeout: 30 * time.Second,
 		},
-		cache: make(map[[32]byte]sigv4.Credential), now: time.Now,
+		cache: make(map[sessionKey]sigv4.Credential), now: time.Now,
 	}, nil
 }
 
@@ -115,14 +123,23 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	a, err := p.accounts.Account(ctx, account)
+	a, err := p.accounts.Account(ctx, account, region)
+	if err == nil || a.MappingVersion != 0 || errors.Is(err, store.ErrNotFound) {
+		p.mu.Lock()
+		for key := range p.cache {
+			if key.project == account && key.mappingVersion != a.MappingVersion {
+				delete(p.cache, key)
+			}
+		}
+		p.mu.Unlock()
+	}
 	allowed := false
 	for _, v := range a.Regions {
 		allowed = allowed || v == region
 	}
 	if err != nil || !allowed || a.ExternalID == "" ||
-		!strings.HasPrefix(a.RoleARN, "arn:aws:iam::"+account+":role/") {
-		refuse(w, http.StatusForbidden, "UnauthorizedOperation")
+		!accountID(a.ID) || !strings.HasPrefix(a.RoleARN, "arn:aws:iam::"+a.ID+":role/") {
+		refuse(w, http.StatusForbidden, "AccessDenied")
 		return
 	}
 	cred, err := p.credentials(ctx, account, principal, a)
@@ -233,7 +250,10 @@ func (p *Proxy) send(
 // STS call, so a slow AssumeRole delays no other request.
 func (p *Proxy) credentials(ctx context.Context, account, principal string, a Account) (sigv4.Credential, error) {
 	// Include the principal and binding so rotation cannot reuse another session's identity.
-	key := sha256.Sum256([]byte(account + "\x00" + a.RoleARN + "\x00" + a.ExternalID + "\x00" + principal))
+	key := sessionKey{
+		project: account, mappingVersion: a.MappingVersion,
+		binding: sha256.Sum256([]byte(a.ID + "\x00" + a.RoleARN + "\x00" + a.ExternalID + "\x00" + principal)),
+	}
 	p.mu.Lock()
 	for k, c := range p.cache {
 		if !p.now().Add(5 * time.Minute).Before(c.Expires) {
