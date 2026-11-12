@@ -61,7 +61,11 @@ func (f *Fake) writeSnapshot(t *Token, r *http.Request) (any, *failure) {
 		return nil, &failure{http.StatusInternalServerError, "cannot snapshot a template"}
 	}
 	return f.submitVM(t, vm, kind, lock, func(vm *VM) string {
+		index := slices.IndexFunc(vm.Snapshots, func(s Snapshot) bool { return s.Name == name })
 		if r.Method == http.MethodDelete {
+			if index < 0 {
+				return "snapshot '" + name + "' does not exist"
+			}
 			parent := vm.Snapshots[index].Parent
 			vm.Snapshots = slices.Delete(vm.Snapshots, index, index+1)
 			for i := range vm.Snapshots {
@@ -70,6 +74,9 @@ func (f *Fake) writeSnapshot(t *Token, r *http.Request) (any, *failure) {
 				}
 			}
 			return "OK"
+		}
+		if index >= 0 {
+			return "snapshot name '" + name + "' already used"
 		}
 		parent := ""
 		if len(vm.Snapshots) > 0 {
@@ -157,6 +164,9 @@ func (f *Fake) resizeDisk(t *Token, r *http.Request) (any, *failure) {
 	}
 	return f.submitVM(t, vm, "qmresize", "disk", func(vm *VM) string {
 		disk := f.diskContent(vm.Node, volume)
+		if disk == nil {
+			return "disk '" + key + "' does not exist"
+		}
 		disk.Size = target
 		parts := strings.Split(vm.Config[key], ",")
 		parts = slices.DeleteFunc(parts, func(s string) bool { return strings.HasPrefix(s, "size=") })
