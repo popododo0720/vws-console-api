@@ -1015,7 +1015,7 @@ func allowDeleteVolume(key string) bool {
 
 func allowModifyVolume(key string) bool {
 	switch key {
-	case "Action", "Version", "ClientToken", "VolumeId", "Size", "VolumeType", "Iops", "Throughput":
+	case "Action", "Version", "VolumeId", "Size", "VolumeType", "Iops", "Throughput":
 		return true
 	default:
 		return false

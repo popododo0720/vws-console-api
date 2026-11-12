@@ -330,13 +330,8 @@ func (h *handler) deleteVolume(w http.ResponseWriter, r *http.Request, c resourc
 }
 
 // modifyVolume changes a volume's Size, VolumeType, Iops and Throughput in
-// one request.
+// one request. EC2 ModifyVolume takes no ClientToken, so none is read.
 func (h *handler) modifyVolume(w http.ResponseWriter, r *http.Request, c resource.Caller) {
-	token, err := optionalClientToken(r)
-	if err != nil {
-		writeErr(w, r, err)
-		return
-	}
 	id, err := resource.Parse[resource.VolumeID](r.Form.Get("VolumeId"))
 	if err != nil {
 		writeErr(w, r, err)
@@ -362,7 +357,7 @@ func (h *handler) modifyVolume(w http.ResponseWriter, r *http.Request, c resourc
 		return
 	}
 	orig := before.Items[0]
-	acc, err := h.svc.ModifyVolume(r.Context(), c, token, req)
+	acc, err := h.svc.ModifyVolume(r.Context(), c, resource.ClientToken{}, req)
 	if err != nil {
 		writeErr(w, r, err)
 		return
