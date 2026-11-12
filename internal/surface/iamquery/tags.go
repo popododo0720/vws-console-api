@@ -42,9 +42,9 @@ func badMember(field, constraint string) error {
 		"' failed to satisfy constraint: "+constraint)
 }
 
-// requirePolicyArn checks PolicyArn (required, 20 to 2048 characters) and
-// applies the AWS rule that tagging or untagging also needs permission to
-// list tags.
+// requirePolicyArn checks PolicyArn (required, 20 to 2048 characters, an IAM
+// policy ARN or InvalidInput as AWS answers) and applies the AWS rule that
+// tagging also needs permission to list tags.
 func requirePolicyArn(c *exchange, h *handler, action string) error {
 	arn := c.form("PolicyArn")
 	if arn == "" {
@@ -53,6 +53,9 @@ func requirePolicyArn(c *exchange, h *handler, action string) error {
 	if n := len(arn); n < 20 || n > 2048 {
 		return resource.Invalid("policyArn", "1 validation error detected: Value '"+arn+
 			"' at 'policyArn' failed to satisfy constraint: Member must have length between 20 and 2048")
+	}
+	if !policyARNRE.MatchString(arn) {
+		return resource.Invalid("PolicyArn", "ARN "+arn+" is not valid.")
 	}
 	// AWS requires the list permission only to add tags, not to remove them.
 	if action == "iam:TagPolicy" {

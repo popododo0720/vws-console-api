@@ -380,6 +380,40 @@ func TestListPolicyTagsParameterErrors(t *testing.T) {
 	has(t, call(t, h, root, sigv4.ServiceIAM, unsupported), http.StatusBadRequest, `<Code>InvalidInput</Code>`)
 }
 
+// A PolicyArn of a valid length that is not a policy ARN is InvalidInput on
+// every action that reads it through requirePolicyArn, as the AWS reference
+// documents; a well-formed ARN that does not exist stays NoSuchEntity.
+func TestMalformedPolicyArnIsInvalidInput(t *testing.T) {
+	h, _, _, root := harness(t)
+	createTagPolicy(t, h, root)
+	for _, arn := range []string{
+		"not-a-policy-arn-value",
+		"arn:aws:iam::123456789012:role/tagged",
+		"arn:aws:iam::12345678901:policy/tagged",
+		"arn:aws:iam::123456789012:policy/",
+	} {
+		for _, form := range []url.Values{
+			{"Action": {"ListPolicyTags"}, "PolicyArn": {arn}},
+			{"Action": {"ListPolicyVersions"}, "PolicyArn": {arn}},
+			{"Action": {"TagPolicy"}, "PolicyArn": {arn}, "Tags.member.1.Key": {"k"}, "Tags.member.1.Value": {"v"}},
+			{"Action": {"UntagPolicy"}, "PolicyArn": {arn}, "TagKeys.member.1": {"k"}},
+		} {
+			t.Run(form.Get("Action")+" "+arn, func(t *testing.T) {
+				// A re-run answers the same and writes nothing.
+				for range 2 {
+					has(t, call(t, h, root, sigv4.ServiceIAM, form), http.StatusBadRequest,
+						`<Code>InvalidInput</Code>`, "ARN "+arn+" is not valid.")
+				}
+			})
+		}
+	}
+	has(t, call(t, h, root, sigv4.ServiceIAM, url.Values{"Action": {"ListPolicyTags"}, "PolicyArn": {policyTagARN}}),
+		http.StatusOK, `<Tags></Tags>`)
+	has(t, call(t, h, root, sigv4.ServiceIAM, url.Values{
+		"Action": {"ListPolicyTags"}, "PolicyArn": {"arn:aws:iam::123456789012:policy/ghost"},
+	}), http.StatusNotFound, `<Code>NoSuchEntity</Code>`)
+}
+
 func TestTagPolicyRequiresTagMembers(t *testing.T) {
 	h, _, _, root := harness(t)
 	createTagPolicy(t, h, root)
