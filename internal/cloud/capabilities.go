@@ -3,7 +3,9 @@ package cloud
 import (
 	"context"
 	"fmt"
+	"maps"
 	"slices"
+	"time"
 
 	"github.com/popododo0720/vws-console-api/internal/backend"
 	"github.com/popododo0720/vws-console-api/internal/resource"
@@ -26,26 +28,70 @@ func (s *Service) AvailabilityZones(ctx context.Context, c resource.Caller) ([]r
 
 // RegionNames reads registrations without contacting a region backend.
 func (s *Service) RegionNames(ctx context.Context, c resource.Caller) ([]string, error) {
+	kinds, err := s.RegionKinds(ctx, c)
+	if err != nil {
+		return nil, err
+	}
+	return slices.Sorted(maps.Keys(kinds)), nil
+}
+
+// RegionKinds reads registered names and kinds without contacting a region.
+func (s *Service) RegionKinds(ctx context.Context, c resource.Caller) (map[string]resource.RegionKind, error) {
 	if err := requireCaller(c); err != nil {
 		return nil, err
 	}
 	regions, err := s.regions.ProxmoxRegions(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("describe regions: %w", err)
+		return nil, &resource.Error{Code: resource.CodeUnavailable, Message: "region catalog unavailable"}
 	}
 	accounts, err := s.regions.AWSAccounts(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("describe regions: %w", err)
+		return nil, &resource.Error{Code: resource.CodeUnavailable, Message: "region catalog unavailable"}
 	}
-	var names []string
+	kinds := map[string]resource.RegionKind{}
 	for _, region := range regions {
-		names = append(names, region.Name)
+		kinds[region.Name] = resource.RegionKindProxmox
 	}
 	for _, account := range accounts {
-		names = append(names, account.AllowedRegions...)
+		for _, name := range account.AllowedRegions {
+			kinds[name] = resource.RegionKindAWS
+		}
 	}
-	slices.Sort(names)
-	return slices.Compact(names), nil
+	return kinds, nil
+}
+
+// RegionCapabilities reads one registered region within the regional read bound.
+func (s *Service) RegionCapabilities(
+	ctx context.Context, c resource.Caller, name string,
+) (resource.RegionCapabilities, error) {
+	if err := requireCaller(c); err != nil {
+		return resource.RegionCapabilities{}, err
+	}
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if _, err := s.RequestRegion(ctx, c, name); err != nil {
+		return resource.RegionCapabilities{}, err
+	}
+	if name == "" || name == "all" {
+		return resource.RegionCapabilities{}, resource.Invalid("region", "a registered region is required")
+	}
+	type result struct {
+		doc resource.RegionCapabilities
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		doc, err := s.discovery.RegionCapabilities(ctx, name)
+		done <- result{doc, err}
+	}()
+	select {
+	case got := <-done:
+		if got.err == nil {
+			return got.doc, nil
+		}
+	case <-ctx.Done():
+	}
+	return resource.RegionCapabilities{}, &resource.Error{Code: resource.CodeUnavailable, Message: "region unavailable"}
 }
 
 // ReadIsEmpty lets derived surface reads honor an explicit empty capability.

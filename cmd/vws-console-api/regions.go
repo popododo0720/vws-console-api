@@ -13,9 +13,38 @@ import (
 	"github.com/popododo0720/vws-console-api/internal/surface/regionapi"
 )
 
-type inventoryCatalog struct{ backend.RegionCatalog }
+type inventoryCatalog struct {
+	backend.RegionCatalog
+	connect func(string) (*regionapi.Client, error)
+}
 
 func (c inventoryCatalog) RegionCapabilities(ctx context.Context, region string) (resource.RegionCapabilities, error) {
+	if c.connect != nil {
+		regions, err := c.RegionCatalog.ProxmoxRegions(ctx)
+		if err != nil {
+			return resource.RegionCapabilities{}, &resource.Error{
+				Code: resource.CodeUnavailable, Message: "region catalog unavailable",
+			}
+		}
+		for _, registered := range regions {
+			if registered.Name == region {
+				client, err := c.connect(registered.Endpoint)
+				if err != nil {
+					return resource.RegionCapabilities{}, &resource.Error{
+						Code: resource.CodeUnavailable, Message: "region unavailable",
+					}
+				}
+				defer client.Close()
+				doc, err := client.Capabilities(ctx)
+				if err != nil {
+					return resource.RegionCapabilities{}, &resource.Error{
+						Code: resource.CodeUnavailable, Message: "region unavailable",
+					}
+				}
+				return doc, nil
+			}
+		}
+	}
 	doc, err := (backend.AllSupported{Kind: resource.RegionKindProxmox}).RegionCapabilities(ctx, region)
 	if err != nil {
 		return doc, err
@@ -63,7 +92,7 @@ func registeredBackends(catalog backend.RegionCatalog, connect func(string) (*re
 ) (backend.Set, func(), error) {
 	var mu sync.Mutex
 	clients := map[string]*regionapi.Client{}
-	set, err := regionset.New(inventoryCatalog{catalog}, func(
+	set, err := regionset.New(inventoryCatalog{RegionCatalog: catalog}, func(
 		_ context.Context, region backend.ProxmoxRegion,
 	) (regionclient.Transport, error) {
 		if region.Endpoint == "" {

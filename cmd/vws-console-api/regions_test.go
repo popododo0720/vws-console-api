@@ -14,6 +14,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -195,6 +196,21 @@ func TestRegionsProcessInventoryAndRestart(t *testing.T) {
 		if !strings.Contains(body, "pve-test-1") || !strings.Contains(body, "us-east-1") {
 			t.Fatalf("missing registered regions: %s", body)
 		}
+		if !strings.Contains(body, `"kind":"pve"`) || !strings.Contains(body, `"kind":"aws"`) ||
+			!strings.Contains(body, `"state":`) {
+			t.Fatalf("missing region health: %s", body)
+		}
+		want, err := b.Set().Capabilities(b).RegionCapabilities(t.Context(), "pve-test-1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		for range 2 {
+			var doc resource.RegionCapabilities
+			body := call("/api/v1/regions/pve-test-1/capabilities", "", 200)
+			if err := json.Unmarshal([]byte(body), &doc); err != nil || !reflect.DeepEqual(doc, want) {
+				t.Fatalf("mTLS capability document changed: %s; %v", body, err)
+			}
+		}
 		beforePVE, beforeAWS := pveCalls.Load(), awsCalls.Load()
 		call("/api/v1/instances", "", 200)
 		call("/api/v1/instances", "pve-test-1", 200)
@@ -217,6 +233,10 @@ func TestRegionsProcessInventoryAndRestart(t *testing.T) {
 		if attempt == 1 {
 			region.Close()
 			proxy.Close()
+			call("/api/v1/regions/pve-test-1/capabilities", "", 503)
+			if body := call("/api/v1/regions", "", 200); !strings.Contains(body, `"state":"unavailable"`) {
+				t.Fatalf("offline region disappeared: %s", body)
+			}
 			call("/api/v1/buckets/probe-bucket", "pve-test-1", 503)
 			call("/api/v1/instances", "us-east-1", 503)
 		}

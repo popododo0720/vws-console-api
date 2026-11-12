@@ -144,6 +144,7 @@ func (h *handler) routes(mux *http.ServeMux) {
 	handle("PATCH /api/v1/admin/regions/{name}", h.adminWriteRegion)
 	handle("DELETE /api/v1/admin/regions/{name}", h.adminWriteRegion)
 	handle("GET /api/v1/regions", h.listRegions)
+	handle("GET /api/v1/regions/{region}/capabilities", h.regionCapabilities)
 	handle("GET /api/v1/admin/aws-accounts", h.adminAccounts)
 	handle("GET /api/v1/admin/aws-accounts/{id}", h.adminAccount)
 	handle("POST /api/v1/admin/aws-accounts", h.adminWriteAccount)

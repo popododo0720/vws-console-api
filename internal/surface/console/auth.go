@@ -95,6 +95,7 @@ func routeAction(pattern string) (authorization, bool) {
 		"PATCH /api/v1/admin/regions/{name}":             nil,
 		"DELETE /api/v1/admin/regions/{name}":            nil,
 		"GET /api/v1/regions":                            ec2("DescribeRegions"),
+		"GET /api/v1/regions/{region}/capabilities":      ec2("DescribeRegions"),
 		"GET /api/v1/admin/regions/{name}":               nil,
 		"GET /api/v1/admin/regions/{name}/health":        nil,
 		"GET /api/v1/admin/aws-accounts":                 nil,
