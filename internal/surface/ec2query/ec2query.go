@@ -1067,11 +1067,13 @@ func legacyRuleField(key string) bool {
 }
 
 func allowCreateKey(key string) bool {
-	return key == "Action" || key == "Version" || key == "ClientToken" || key == "KeyName" || key == "KeyType" || key == "KeyFormat"
+	return key == "Action" || key == "Version" || key == "ClientToken" ||
+		key == "KeyName" || key == "KeyType" || key == "KeyFormat" || tagSpecField(key)
 }
 
 func allowImportKey(key string) bool {
-	return key == "Action" || key == "Version" || key == "KeyName" || key == "PublicKeyMaterial"
+	return key == "Action" || key == "Version" || key == "KeyName" ||
+		key == "PublicKeyMaterial" || tagSpecField(key)
 }
 
 func allowInstanceAttribute(key string) bool {

@@ -419,6 +419,17 @@ func tagChunkKey(i int) string {
 	return fmt.Sprintf("%s%0*d", labelTagChunk, tagChunkDigits, i)
 }
 
+// EncodeTagLabels shares the resource tag encoding with the IAM key pair client.
+// Reserved vws- keys are packed so user tags cannot overwrite internal labels.
+func EncodeTagLabels(tags, internal map[string]string) (map[string]string, error) {
+	return withInternalLabels(tags, internal)
+}
+
+// DecodeTagLabels reads user tags without exposing reserved internal labels.
+func DecodeTagLabels(labels map[string]string) (map[string]string, error) {
+	return userTags(labels)
+}
+
 // withInternalLabels returns extra plus the encoded tags. It fails only when
 // the tags cannot fit in the labels compute allows.
 func withInternalLabels(tags map[string]string, extra map[string]string) (map[string]string, error) {

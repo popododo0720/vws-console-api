@@ -546,9 +546,14 @@ func (h *handler) createKeyPair(w http.ResponseWriter, r *http.Request, c resour
 		writeErr(w, r, err)
 		return
 	}
+	tags, err := tagSpecificationsFor(r, "key-pair")
+	if err != nil {
+		writeErr(w, r, err)
+		return
+	}
 	acc, err := h.svc.CreateKeyPair(r.Context(), c, token, resource.CreateKeyPairRequest{
 		Name: r.Form.Get("KeyName"), Type: resource.KeyType(r.Form.Get("KeyType")),
-		Format: resource.KeyFormat(r.Form.Get("KeyFormat")),
+		Format: resource.KeyFormat(r.Form.Get("KeyFormat")), Tags: tags,
 	})
 	if err != nil {
 		writeErr(w, r, err)
@@ -557,7 +562,7 @@ func (h *handler) createKeyPair(w http.ResponseWriter, r *http.Request, c resour
 	key := acc.Items[0]
 	writeXML(w, createKeyXML{
 		RequestID: requestID(r), KeyName: key.Name, KeyFingerprint: key.Fingerprint,
-		KeyMaterial: key.Material, KeyPairID: key.ID.String(),
+		KeyMaterial: key.Material, KeyPairID: key.ID.String(), Tags: tagSetOf(key.Tags),
 	})
 }
 

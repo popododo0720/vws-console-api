@@ -18,6 +18,10 @@ func (c compute) DeleteKeyPair(ctx context.Context, m backend.Mutation, req reso
 	defer c.w.mu.Unlock()
 	c.w.settle(c.w.now())
 	if acc, ok, err := replay[resource.Accepted[resource.KeyPair]](c.w, m.Key, m.Fingerprint); err != nil || ok {
+		acc.Items = slices.Clone(acc.Items)
+		for i := range acc.Items {
+			acc.Items[i].Tags = copyTags(acc.Items[i].Tags)
+		}
 		return acc, err
 	}
 	key, err := c.w.findKey(m.Account, req)
@@ -33,8 +37,11 @@ func (c compute) DeleteKeyPair(ctx context.Context, m backend.Mutation, req reso
 	}
 	item := *key
 	item.Material = ""
+	item.Tags = copyTags(key.Tags)
 	acc := resource.Accepted[resource.KeyPair]{Operation: op, Items: []resource.KeyPair{item}}
 	c.w.finish(m.Key, m.Fingerprint, acc)
+	acc.Items = slices.Clone(acc.Items)
+	acc.Items[0].Tags = copyTags(item.Tags)
 	return acc, nil
 }
 
@@ -52,6 +59,7 @@ func (c compute) DescribeKeyPairs(ctx context.Context, s backend.Scope, q resour
 		}
 		item := *key
 		item.Material = ""
+		item.Tags = copyTags(key.Tags)
 		items = append(items, item)
 	}
 	sortOwned(items)

@@ -19,6 +19,7 @@ import (
 	iamv1 "github.com/popododo0720/vws-proto/gen/go/vws/iam/v1"
 
 	"github.com/popododo0720/vws-console-api/internal/backend"
+	"github.com/popododo0720/vws-console-api/internal/backend/grpcclient"
 	"github.com/popododo0720/vws-console-api/internal/resource"
 	"github.com/popododo0720/vws-console-api/internal/sshkey"
 )
@@ -75,9 +76,13 @@ func keyPairModel(s backend.Scope, in *iamv1.KeyPair) (resource.KeyPair, error) 
 	if in.GetCreateTime() != nil {
 		created = in.GetCreateTime().AsTime().UTC()
 	}
+	tags, err := grpcclient.DecodeTagLabels(in.GetLabels())
+	if err != nil {
+		return resource.KeyPair{}, err
+	}
 	return resource.KeyPair{
 		Regional: resource.Regional{Region: in.GetSpec().GetRegion()}, ID: id, OwnerID: s.Account,
-		Name: in.GetSpec().GetKeyName(), Fingerprint: fingerprint, Type: pub.Type,
+		Name: in.GetSpec().GetKeyName(), Fingerprint: fingerprint, Type: pub.Type, Tags: tags,
 		CreateTime: created,
 	}, nil
 }
@@ -183,7 +188,10 @@ func (c *Client) CreateKeyPair(
 		return resource.Accepted[resource.KeyPair]{}, err
 	}
 	var pair sshkey.Pair
-	labels := map[string]string{}
+	labels, err := grpcclient.EncodeTagLabels(req.Tags, nil)
+	if err != nil {
+		return resource.Accepted[resource.KeyPair]{}, err
+	}
 	requestID := keyPairRequestID(m, "ImportKeyPair")
 	if req.PublicKey != "" {
 		pub, err := sshkey.ParsePublic(req.PublicKey)
