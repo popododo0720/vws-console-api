@@ -61,6 +61,7 @@ func (s *SubnetState) UnmarshalText(b []byte) error {
 
 // Subnet is a network segment.
 type Subnet struct {
+	Regional
 	ID           SubnetID    `json:"subnetId"`
 	OwnerID      AccountID   `json:"ownerId"`
 	VpcID        VpcID       `json:"vpcId,omitzero"`

@@ -7,6 +7,7 @@ const MaxObjectBytes = 4 << 20
 
 // Bucket is an object container.
 type Bucket struct {
+	Regional
 	Name         BucketName `json:"name"`
 	OwnerID      AccountID  `json:"ownerId"`
 	CreationDate string     `json:"creationDate"`

@@ -14,6 +14,7 @@ import (
 
 // Vpc is a regional IPv4 network.
 type Vpc struct {
+	Regional
 	ID      VpcID     `json:"vpcId"`
 	OwnerID AccountID `json:"ownerId"`
 	Cidr    string    `json:"cidrBlock"`
@@ -122,6 +123,7 @@ const (
 
 // Volume is a block device.
 type Volume struct {
+	Regional
 	ID         VolumeID    `json:"volumeId"`
 	OwnerID    AccountID   `json:"ownerId"`
 	SizeGiB    int64       `json:"size"`
@@ -537,6 +539,7 @@ func (q VolumeQuery) Normalize() (VolumeQuery, error) {
 
 // SecurityGroup is a set of ingress rules.
 type SecurityGroup struct {
+	Regional
 	ID      SecurityGroupID `json:"groupId"`
 	OwnerID AccountID       `json:"ownerId"`
 	Name    string          `json:"groupName"`
@@ -880,6 +883,7 @@ func canonicalProtocol(raw string) (string, error) {
 // Image is a machine image. Public marks one every project in its region can
 // read, as an AWS public AMI. OwnerID is the account that owns it.
 type Image struct {
+	Regional
 	ID          ImageID   `json:"imageId"`
 	OwnerID     AccountID `json:"ownerId"`
 	Name        string    `json:"name"`
@@ -935,6 +939,7 @@ const (
 
 // KeyPair is an SSH key. Material is set only on the create that minted it.
 type KeyPair struct {
+	Regional
 	ID          KeyPairID `json:"keyPairId"`
 	OwnerID     AccountID `json:"ownerId"`
 	Name        string    `json:"keyName"`

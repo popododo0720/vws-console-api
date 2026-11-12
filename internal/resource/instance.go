@@ -119,6 +119,7 @@ func (s InstanceState) EC2Code() int {
 
 // Instance is a virtual machine.
 type Instance struct {
+	Regional
 	ID            InstanceID    `json:"instanceId"`
 	ReservationID ReservationID `json:"reservationId"`
 	OwnerID       AccountID     `json:"ownerId"`

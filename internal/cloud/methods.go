@@ -284,9 +284,11 @@ func (s *Service) DescribeInstances(ctx context.Context, c resource.Caller, q re
 	if err != nil || len(page.Items) == 0 {
 		return page, err
 	}
-	if err := s.fillPublicIPs(ctx, c, page.Items); err != nil {
+	stale, err := s.fillPublicIPs(ctx, c, page.Items)
+	if err != nil {
 		return resource.Page[resource.Instance]{}, err
 	}
+	page.Stale = page.Stale || stale
 	return page, nil
 }
 

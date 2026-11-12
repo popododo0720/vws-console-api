@@ -39,7 +39,7 @@ func (h *handler) listKeyPairs(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, out)
+	writeInventory(w, out)
 }
 
 func (h *handler) deleteSecurityGroup(w http.ResponseWriter, r *http.Request) {
@@ -75,7 +75,7 @@ func (h *handler) listSecurityGroups(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, out)
+	writeInventory(w, out)
 }
 
 func (h *handler) deleteSubnet(w http.ResponseWriter, r *http.Request) {
@@ -189,7 +189,7 @@ func (h *handler) listAddresses(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, out)
+	writeInventory(w, out)
 }
 
 func (h *handler) createSnapshot(w http.ResponseWriter, r *http.Request) {
@@ -261,5 +261,5 @@ func (h *handler) listSnapshots(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, out)
+	writeInventory(w, out)
 }

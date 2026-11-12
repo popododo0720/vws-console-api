@@ -298,7 +298,11 @@ type Page[T any] struct {
 	Items     []T       `json:"items"`
 	NextToken string    `json:"nextPageToken,omitempty"`
 	Partial   []Partial `json:"partial,omitempty"`
+	Stale     bool      `json:"-"`
 }
+
+// SetStale records whether the regional transport served cached inventory.
+func (p *Page[T]) SetStale(stale bool) { p.Stale = stale }
 
 // Partial identifies a region whose inventory could not be read.
 // Error is a public classification, never an underlying transport error.

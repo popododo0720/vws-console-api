@@ -4,6 +4,7 @@ import "strings"
 
 // Address is a static public address. Domain is "vpc".
 type Address struct {
+	Regional
 	ID         AddressID  `json:"allocationId"`
 	OwnerID    AccountID  `json:"ownerId"`
 	PublicIP   string     `json:"publicIp,omitempty"`

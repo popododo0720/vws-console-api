@@ -273,7 +273,14 @@ func list[T any](ctx context.Context, r *router, s backend.Scope, page resource.
 			out.Partial = append(out.Partial, resource.Partial{Region: region.Name, Error: message})
 			continue
 		}
+		for i := range got.page.Items {
+			if regional, ok := any(&got.page.Items[i]).(interface{ SetRegion(string) }); ok {
+				regional.SetRegion(region.Name)
+			}
+		}
 		out.Items = append(out.Items, got.page.Items...)
+		out.Partial = append(out.Partial, got.page.Partial...)
+		out.Stale = out.Stale || got.page.Stale
 		if got.page.NextToken == "" {
 			delete(pending, region.Name)
 		} else {

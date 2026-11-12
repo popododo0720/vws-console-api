@@ -31,7 +31,7 @@ func mapPage[A, B any](page resource.Page[A], convert func(A) B) resource.Page[B
 			items[i] = convert(item)
 		}
 	}
-	return resource.Page[B]{Items: items, NextToken: page.NextToken}
+	return resource.Page[B]{Items: items, NextToken: page.NextToken, Partial: page.Partial, Stale: page.Stale}
 }
 
 func encodeResult(value any) any {
