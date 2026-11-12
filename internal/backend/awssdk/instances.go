@@ -70,13 +70,11 @@ func (b *Backend) DescribeInstances(
 	slices.SortFunc(rows, func(a, b resource.Instance) int {
 		return cmp.Compare(a.ID.String(), b.ID.String())
 	})
-	start := 0
-	if q.Page.Token != "" {
-		index := slices.IndexFunc(rows, func(i resource.Instance) bool { return i.ID.String() == q.Page.Token })
-		if index < 0 {
-			return resource.Page[resource.Instance]{}, resource.Invalid("pageToken", "unknown")
-		}
-		start = index + 1
+	start, found := slices.BinarySearchFunc(rows, q.Page.Token, func(row resource.Instance, token string) int {
+		return cmp.Compare(row.ID.String(), token)
+	})
+	if found {
+		start++
 	}
 	end := min(start+q.Page.Size, len(rows))
 	result := resource.Page[resource.Instance]{Items: rows[start:end]}
