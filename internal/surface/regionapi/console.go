@@ -3,9 +3,6 @@ package regionapi
 import (
 	"context"
 	"crypto/rand"
-	"errors"
-	"io"
-	"log/slog"
 	"net/http"
 	"net/url"
 	"sync"
@@ -14,6 +11,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"github.com/popododo0720/vws-console-api/internal/backend"
+	"github.com/popododo0720/vws-console-api/internal/consolestream"
 	"github.com/popododo0720/vws-console-api/internal/resource"
 )
 
@@ -117,52 +115,14 @@ func registerConsole(mux *http.ServeMux, console backend.Console, now func() tim
 			writeJSON(w, nil, &resource.Error{Code: resource.CodeUnavailable, Message: "console unavailable"})
 			return
 		}
-		defer closeConsole(ctx, upstream)
+		defer consolestream.Close(ctx, upstream)
 		upgrader := websocket.Upgrader{HandshakeTimeout: 10 * time.Second}
 		downstream, upgradeErr := upgrader.Upgrade(w, r, nil)
 		if upgradeErr != nil {
 			return
 		}
-		defer closeConsole(ctx, downstream)
+		defer consolestream.Close(ctx, downstream)
 		downstream.SetReadLimit(4 << 20)
-		stop := context.AfterFunc(ctx, func() {
-			closeConsole(ctx, upstream)
-			closeConsole(ctx, downstream)
-		})
-		defer stop()
-		done := make(chan error, 2)
-		go func() { done <- copyConsole(upstream, downstream) }()
-		go func() { done <- copyConsole(downstream, upstream) }()
-		if err := <-done; err != nil {
-			slog.DebugContext(ctx, "console stream ended")
-		}
-		closeConsole(ctx, upstream)
-		closeConsole(ctx, downstream)
-		if err := <-done; err != nil {
-			slog.DebugContext(ctx, "console peer ended")
-		}
+		consolestream.Relay(ctx, upstream, downstream)
 	})
-}
-
-func closeConsole(ctx context.Context, stream resource.ConsoleStream) {
-	if err := stream.Close(); err != nil {
-		slog.DebugContext(ctx, "console close ended")
-	}
-}
-
-func copyConsole(dst, src resource.ConsoleStream) error {
-	for {
-		kind, reader, err := src.NextReader()
-		if err != nil {
-			return err
-		}
-		writer, err := dst.NextWriter(kind)
-		if err != nil {
-			return err
-		}
-		_, err = io.Copy(writer, reader)
-		if err = errors.Join(err, writer.Close()); err != nil {
-			return err
-		}
-	}
 }

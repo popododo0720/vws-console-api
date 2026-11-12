@@ -10,6 +10,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"github.com/popododo0720/vws-console-api/internal/backend"
+	"github.com/popododo0720/vws-console-api/internal/consolestream"
 	"github.com/popododo0720/vws-console-api/internal/resource"
 )
 
@@ -44,7 +45,7 @@ func (c *Client) OpenConsole(
 		}
 		if err != nil {
 			if conn != nil {
-				closeConsole(ctx, conn)
+				consolestream.Close(ctx, conn)
 			}
 			return nil, &resource.Error{Code: resource.CodeUnavailable, Message: "console unavailable"}
 		}

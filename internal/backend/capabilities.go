@@ -31,7 +31,7 @@ func (s setCapabilities) RegionCapabilities(ctx context.Context, region string) 
 	if err != nil {
 		return resource.RegionCapabilities{}, fmt.Errorf("backend capabilities: %w", err)
 	}
-	if s.set.Console == nil {
+	if s.set.Console == nil && doc.Actions["vws:OpenConsole"].State != resource.ActionUnsupported {
 		doc.Actions = maps.Clone(doc.Actions)
 		if doc.Actions == nil {
 			doc.Actions = map[string]resource.ActionCapability{}
@@ -44,8 +44,8 @@ func (s setCapabilities) RegionCapabilities(ctx context.Context, region string) 
 }
 
 // AllSupported declares every action and read supported in a region of
-// Kind. The fake and gRPC backends serve every action, and an AWS region
-// takes this document because AWS itself answers what it does not support.
+// Kind. AWS itself answers which EC2 actions it supports; its consoles use
+// EC2 Instance Connect instead of the VWS websocket path.
 type AllSupported struct {
 	Kind resource.RegionKind
 }
@@ -55,6 +55,11 @@ func (a AllSupported) RegionCapabilities(_ context.Context, region string) (reso
 	actions := map[string]resource.ActionCapability{}
 	supported := resource.ActionCapability{State: resource.ActionSupported}
 	actions["vws:OpenConsole"] = supported
+	if a.Kind == resource.RegionKindAWS {
+		actions["vws:OpenConsole"] = resource.ActionCapability{
+			State: resource.ActionUnsupported, ReasonCode: "NoConsole", Reason: "use EC2 Instance Connect",
+		}
+	}
 	for _, m := range resource.Actions() {
 		actions[m.CapabilityKey()] = supported
 	}
