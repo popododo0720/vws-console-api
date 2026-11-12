@@ -196,6 +196,8 @@ func accountAction(pattern string) string {
 		return "AdminUpdateRegion"
 	case "DELETE /api/v1/admin/regions/{name}":
 		return "AdminRemoveRegion"
+	case "PUT /api/v1/admin/projects/{project}":
+		return "vws:AdminMapProject"
 	}
 	return ""
 }

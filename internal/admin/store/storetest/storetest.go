@@ -38,6 +38,182 @@ func Account(id string) store.AWSAccount {
 func Run(t *testing.T, newBackend func(t *testing.T) store.Backend) {
 	t.Run("lifecycle", func(t *testing.T) { lifecycle(t, newBackend(t)) })
 	t.Run("one writer wins", func(t *testing.T) { oneWriterWins(t, newBackend(t)) })
+	t.Run("project pool claims", func(t *testing.T) { projectClaims(t, newBackend(t)) })
+	t.Run("project concurrency", func(t *testing.T) { projectConcurrency(t, newBackend(t)) })
+	t.Run("project interrupted write", func(t *testing.T) { projectInterruptedWrite(t, newBackend(t)) })
+	t.Run("project transaction limit", func(t *testing.T) { projectTransactionLimit(t, newBackend(t)) })
+}
+
+func projectTransactionLimit(t *testing.T, b store.Backend) {
+	v := store.Project{Project: "111111111111"}
+	for i := range 32 {
+		v.Pools = append(v.Pools, store.ProjectPool{Region: "pve-site-" + strconv.Itoa(i), Pool: "old"})
+	}
+	projects := store.New(b).Projects()
+	v, err := projects.Put(t.Context(), v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range v.Pools {
+		v.Pools[i].Pool = "new"
+	}
+	v, err = projects.Put(t.Context(), v)
+	if err != nil {
+		t.Fatalf("largest replacement transaction: %v", err)
+	}
+	v.Pools = append(v.Pools, store.ProjectPool{Region: "pve-extra-1", Pool: "overflow"})
+	if _, err := projects.Put(t.Context(), v); err == nil {
+		t.Fatal("oversized transaction accepted")
+	}
+	claims, err := b.List(t.Context(), "project-pools/")
+	if err != nil || len(claims) != 32 {
+		t.Fatalf("boundary update claims: count=%d err=%v", len(claims), err)
+	}
+}
+
+func projectClaims(t *testing.T, b store.Backend) {
+	ctx := t.Context()
+	projects := store.New(b).Projects()
+	pool := store.ProjectPool{Region: "pve-test-1", Pool: "shared"}
+	first, err := projects.Put(ctx, store.Project{Project: "111111111111", Pools: []store.ProjectPool{pool}})
+	if err != nil || first.Version == 0 {
+		t.Fatalf("create mapping: %+v %v", first, err)
+	}
+	again, err := store.New(b).Projects().Put(ctx, first)
+	if err != nil || again.Version != first.Version {
+		t.Fatalf("idempotent retry after registry recreation: %+v %v", again, err)
+	}
+	second := store.Project{Project: "222222222222", Pools: []store.ProjectPool{pool}}
+	if _, err := projects.Put(ctx, second); !errors.Is(err, store.ErrExists) {
+		t.Fatalf("exclusive pool: %v", err)
+	}
+	otherRegion := second
+	otherRegion.Pools = []store.ProjectPool{{Region: "pve-other-1", Pool: pool.Pool}}
+	if _, err := projects.Put(ctx, otherRegion); err != nil {
+		t.Fatalf("same pool name in another region: %v", err)
+	}
+	first.Pools = []store.ProjectPool{{Region: pool.Region, Pool: "replacement"}}
+	updated, err := projects.Put(ctx, first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stale := first
+	stale.Pools = []store.ProjectPool{{Region: pool.Region, Pool: "must-not-leak"}}
+	if _, err := projects.Put(ctx, stale); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("stale update: %v", err)
+	}
+	if _, err := b.Get(ctx, "project-pools/"+pool.Region+"/must-not-leak"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("failed CAS leaked a claim: %v", err)
+	}
+	second.Project = "333333333333"
+	if _, err := projects.Put(ctx, second); err != nil {
+		t.Fatalf("released pool could not move: %v", err)
+	}
+	got, err := projects.Get(ctx, first.Project)
+	if err != nil || got.Version != updated.Version || !slices.Equal(got.Pools, updated.Pools) {
+		t.Fatalf("stored mapping changed: %+v %v", got, err)
+	}
+}
+
+func projectConcurrency(t *testing.T, b store.Backend) {
+	const writers = 8
+	ctx := t.Context()
+	results := make(chan error, writers)
+	start := make(chan struct{})
+	for i := range writers {
+		go func() {
+			<-start
+			_, err := store.New(b).Projects().Put(ctx, store.Project{
+				Project: strconv.FormatInt(111111111111+int64(i), 10),
+				Pools:   []store.ProjectPool{{Region: "pve-test-1", Pool: "race"}},
+			})
+			results <- err
+		}()
+	}
+	close(start)
+	winners := 0
+	for range writers {
+		err := <-results
+		switch {
+		case err == nil:
+			winners++
+		case !errors.Is(err, store.ErrExists) && !errors.Is(err, store.ErrConflict):
+			t.Fatalf("race returned %v", err)
+		}
+	}
+	if winners != 1 {
+		t.Fatalf("%d projects acquired one pool", winners)
+	}
+	base, err := store.New(b).Projects().Put(ctx, store.Project{Project: "999999999999"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range writers {
+		go func() {
+			v := base
+			v.Pools = []store.ProjectPool{{Region: "pve-test-1", Pool: "writer-" + strconv.Itoa(i)}}
+			_, err := store.New(b).Projects().Put(ctx, v)
+			results <- err
+		}()
+	}
+	winners = 0
+	for range writers {
+		err := <-results
+		if err == nil {
+			winners++
+		} else if !errors.Is(err, store.ErrConflict) {
+			t.Fatalf("same-project race: %v", err)
+		}
+	}
+	claims, err := b.List(ctx, "project-pools/")
+	if err != nil || winners != 1 || len(claims) != 2 {
+		t.Fatalf("race leaked claims: winners=%d claims=%d err=%v", winners, len(claims), err)
+	}
+}
+
+type interruptedProjectStore struct {
+	store.Backend
+	after bool
+}
+
+func (b interruptedProjectStore) Swap(
+	ctx context.Context, checks, puts []store.Entry, deletes []string,
+) (store.Version, error) {
+	if b.after {
+		if _, err := b.Backend.Swap(ctx, checks, puts, deletes); err != nil {
+			return 0, err
+		}
+	}
+	return 0, context.Canceled
+}
+
+func projectInterruptedWrite(t *testing.T, b store.Backend) {
+	ctx := t.Context()
+	v := store.Project{
+		Project: "111111111111", Pools: []store.ProjectPool{{Region: "pve-test-1", Pool: "crash"}},
+	}
+	if _, err := store.New(interruptedProjectStore{Backend: b}).Projects().Put(ctx, v); err == nil {
+		t.Fatal("interrupted write succeeded")
+	}
+	claims, err := b.List(ctx, "project-pools/")
+	if err != nil || len(claims) != 0 {
+		t.Fatalf("interrupted write left claims: %+v %v", claims, err)
+	}
+	if _, err := store.New(interruptedProjectStore{Backend: b, after: true}).Projects().Put(ctx, v); err == nil {
+		t.Fatal("lost response succeeded")
+	}
+	projects := store.New(b).Projects()
+	stored, err := projects.Get(ctx, v.Project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retry, err := projects.Put(ctx, stored); err != nil || retry.Version != stored.Version {
+		t.Fatalf("retry after committed but lost response: %+v %v", retry, err)
+	}
+	v.Project = "222222222222"
+	if _, err := projects.Put(ctx, v); !errors.Is(err, store.ErrExists) {
+		t.Fatalf("lost response lost the exclusive claim: %v", err)
+	}
 }
 
 func oneWriterWins(t *testing.T, b store.Backend) {

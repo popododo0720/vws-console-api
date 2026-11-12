@@ -50,7 +50,7 @@ func TestAdminRoutesRequireRoot(t *testing.T) {
 		`{"account":"123456789012","userName":"root","password":"root password 9"}`, nil)
 	root := cookie(t, login, SessionCookie)
 	for _, path := range []string{
-		"regions", "regions/pve-lab-1", "aws-accounts", "aws-accounts/123456789012", "permissions",
+		"regions", "regions/pve-lab-1", "aws-accounts", "aws-accounts/123456789012", "permissions", "projects/123456789012",
 	} {
 		for _, who := range []struct {
 			name   string
@@ -85,7 +85,7 @@ func TestAdminRoutesRequireRoot(t *testing.T) {
 						t.Fatal(err)
 					}
 					if body.Permissions == nil || (who.status == 403 && len(body.Permissions) != 0) ||
-						(who.status == 200 && len(body.Permissions) != 8) {
+						(who.status == 200 && len(body.Permissions) != 9) {
 						t.Fatalf("permissions: %s", rec.Body)
 					}
 				}
