@@ -278,24 +278,6 @@ func run(ctx context.Context, args []string) (err error) {
 	if localRegions != nil {
 		regions = localRegions
 	}
-	if *backendKind == "regions" {
-		connect := regionConnection(files)
-		var closeBackends func()
-		var regional cloud.Config
-		regional, closeBackends, err = registeredBackends(regions, connect, *awsProxySocket)
-		if err != nil {
-			return err
-		}
-		defer closeBackends()
-		caps = inventoryCatalog{RegionCatalog: regions}
-		set, discovery = regional.Backends, regional.Discovery
-		caller.Region = *defaultRegion
-	}
-	svc := cloud.New(cloud.Config{
-		Backends: set, Regions: regions, Capabilities: caps, Audit: logger, Launches: throttle.NewLaunches(launchLimits),
-		Discovery: discovery,
-		Region:    caller.Region,
-	})
 	// The static key remains the account root for SigV4. With -iam=grpc,
 	// vws-iam owns console passwords and sessions for every identity.
 	root := iam.NewStatic(*accessKey, *secret, account)
@@ -307,6 +289,7 @@ func run(ctx context.Context, args []string) (err error) {
 	}
 	var auth iam.Client = root
 	var admin iam.Directory
+	var remote *iamclient.Client
 	switch *iamMode {
 	case "static":
 	case "fake":
@@ -322,7 +305,8 @@ func run(ctx context.Context, args []string) (err error) {
 		if tlsErr != nil {
 			return tlsErr
 		}
-		remote, dialErr := iamclient.Dial(*iamEndpoint, dialOpts...)
+		var dialErr error
+		remote, dialErr = iamclient.Dial(*iamEndpoint, dialOpts...)
 		if dialErr != nil {
 			return dialErr
 		}
@@ -332,6 +316,24 @@ func run(ctx context.Context, args []string) (err error) {
 	default:
 		return fmt.Errorf("unknown -iam %q", *iamMode)
 	}
+	if *backendKind == "regions" {
+		connect := regionConnection(files)
+		var closeBackends func()
+		var regional cloud.Config
+		regional, closeBackends, err = registeredBackends(regions, connect, *awsProxySocket, remote)
+		if err != nil {
+			return err
+		}
+		defer closeBackends()
+		caps = inventoryCatalog{RegionCatalog: regions}
+		set, discovery = regional.Backends, regional.Discovery
+		caller.Region = *defaultRegion
+	}
+	svc := cloud.New(cloud.Config{
+		Backends: set, Regions: regions, Capabilities: caps, Audit: logger, Launches: throttle.NewLaunches(launchLimits),
+		Discovery: discovery,
+		Region:    caller.Region,
+	})
 	warnSignIn(ctx, logger, *iamMode, *rootPasswordFile)
 	authn := iam.Authenticator(auth)
 	verifier := func(s sigv4.Service) *sigv4.Verifier {

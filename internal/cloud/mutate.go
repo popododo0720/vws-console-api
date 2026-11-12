@@ -71,7 +71,7 @@ func mutate[R resource.Request[R], T resource.Owned](
 	if err != nil {
 		return resource.Accepted[T]{}, err
 	}
-	if err := guardAccepted(c.Account, acc); err != nil {
+	if err := guardAccepted(c.Account, acc, req.Action()); err != nil {
 		return resource.Accepted[T]{}, err
 	}
 	s.audit.LogAttrs(ctx, slog.LevelInfo, "mutation accepted",
@@ -171,7 +171,9 @@ func requireCaller(c resource.Caller) error {
 	return nil
 }
 
-func guardAccepted[T resource.Owned](account resource.AccountID, acc resource.Accepted[T]) error {
+func guardAccepted[T resource.Owned](
+	account resource.AccountID, acc resource.Accepted[T], action resource.Action,
+) error {
 	if acc.Operation.ID.IsZero() || acc.Operation.State.String() == "" {
 		return resource.Internal(errors.New("backend returned no operation"))
 	}
@@ -179,6 +181,10 @@ func guardAccepted[T resource.Owned](account resource.AccountID, acc resource.Ac
 		return resource.Internal(errors.New("backend returned another account"))
 	}
 	if len(acc.Items) == 0 {
+		if action == resource.ActionDeleteKeyPair && acc.Operation.Action == action &&
+			acc.Operation.State == resource.OperationSucceeded && len(acc.Operation.Targets) == 0 {
+			return nil
+		}
 		return resource.Internal(errors.New("backend returned no resources"))
 	}
 	ids := map[string]struct{}{}

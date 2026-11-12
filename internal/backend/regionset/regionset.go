@@ -24,7 +24,7 @@ type Resolver func(context.Context, backend.ProxmoxRegion) (regionclient.Transpo
 const maxCursorBytes = 4096
 
 // New reads the catalog on each request. AWS raw proxy routing is separate.
-func New(catalog backend.RegionCatalog, resolve Resolver) (backend.Set, error) {
+func New(catalog backend.RegionCatalog, resolve Resolver, keys ...keyPairClient) (backend.Set, error) {
 	if catalog == nil || resolve == nil {
 		return backend.Set{}, resource.Invalid("regions", "catalog and resolver are required")
 	}
@@ -33,8 +33,12 @@ func New(catalog backend.RegionCatalog, resolve Resolver) (backend.Set, error) {
 	if err != nil {
 		return backend.Set{}, err
 	}
+	var keyPairs keyPairClient
+	if len(keys) != 0 {
+		keyPairs = keys[0]
+	}
 	return backend.Set{
-		Compute: compute{base.Compute, r},
+		Compute: compute{base.Compute, r, keyPairs},
 		Network: network{base.Network, r},
 		Storage: storage{base.Storage, r},
 	}, nil

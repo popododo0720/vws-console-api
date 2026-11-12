@@ -24,6 +24,7 @@ import (
 	"github.com/popododo0720/vws-console-api/internal/admin/store/etcdstore/etcdtest"
 	"github.com/popododo0720/vws-console-api/internal/backend"
 	"github.com/popododo0720/vws-console-api/internal/backend/grpcclient/iamclient"
+	"github.com/popododo0720/vws-console-api/internal/backend/grpcclient/iamclient/iamtest"
 	"github.com/popododo0720/vws-console-api/internal/backend/proxmox"
 	"github.com/popododo0720/vws-console-api/internal/backend/proxmox/proxmoxtest"
 	"github.com/popododo0720/vws-console-api/internal/cloud"
@@ -367,6 +368,41 @@ func TestRegisteredRegionTransportDeadline(t *testing.T) {
 	)
 	if err != nil || len(page.Partial) != 1 || time.Since(start) >= 8*time.Second {
 		t.Fatalf("stalled mTLS region: %+v %v after %s", page, err, time.Since(start))
+	}
+}
+
+func TestRegisteredBackendsWireIAMKeyPairs(t *testing.T) {
+	endpoint, _ := iamtest.Serve(t)
+	client, err := iamclient.Dial(endpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := client.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+	var calls atomic.Int32
+	catalog := backend.NewStaticRegions([]backend.ProxmoxRegion{
+		{Name: "pve-test-1", Endpoint: "https://region.invalid"},
+	}, nil)
+	regional, closeBackends, err := registeredBackends(catalog, func(string) (*regionapi.Client, error) {
+		calls.Add(1)
+		return nil, fmt.Errorf("region should not be contacted")
+	}, "", client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeBackends()
+	account, err := resource.Parse[resource.AccountID]("123456789012")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = regional.Backends.Compute.DescribeKeyPairs(t.Context(),
+		backend.Scope{Account: account, Region: "pve-test-1"}, resource.KeyPairQuery{})
+	// The session-only fixture has no KeyPairService, so IAM returns Unimplemented.
+	if resource.CodeOf(err) != resource.CodeInternal || calls.Load() != 0 {
+		t.Fatalf("IAM wiring: error=%v region calls=%d", err, calls.Load())
 	}
 }
 
