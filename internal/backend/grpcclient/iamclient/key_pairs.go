@@ -138,6 +138,12 @@ func (c *Client) listKeyPairs(
 		for _, raw := range resp.GetKeyPairs() {
 			key, err := keyPairModel(s, raw)
 			if err != nil {
+				if slices.Contains(q.Names, raw.GetSpec().GetKeyName()) ||
+					slices.ContainsFunc(q.IDs, func(id resource.KeyPairID) bool {
+						return raw.GetName() == projectName(s.Account)+"/keyPairs/"+id.String()
+					}) {
+					return nil, err
+				}
 				c.logger().WarnContext(ctx, "skipping invalid IAM key pair", slog.String("reason", "invalid record"))
 				continue
 			}

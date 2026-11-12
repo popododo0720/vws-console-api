@@ -36,6 +36,7 @@ type keyPairServer struct {
 	bad        bool
 	deleteLost int
 	listErr    error
+	corrupt    bool
 }
 
 func (s *keyPairServer) ImportKeyPair(
@@ -87,7 +88,13 @@ func (s *keyPairServer) ListKeyPairs(
 	}
 	if s.key != nil && (req.GetRegion() == "" || req.GetRegion() == s.key.GetSpec().GetRegion()) &&
 		(len(req.GetKeyNames()) == 0 || slices.Contains(req.GetKeyNames(), s.key.GetSpec().GetKeyName())) {
-		out.KeyPairs = append(out.KeyPairs, s.key)
+		key := s.key
+		if s.corrupt {
+			key = &iamv1.KeyPair{Name: key.GetName(), Spec: &iamv1.KeyPairSpec{
+				KeyName: key.GetSpec().GetKeyName(), Region: key.GetSpec().GetRegion(), PublicKey: "invalid",
+			}}
+		}
+		out.KeyPairs = append(out.KeyPairs, key)
 	}
 	return out, nil
 }
@@ -314,6 +321,38 @@ func TestIAMKeyPairSkipsBadFilteredRecords(t *testing.T) {
 	deleted, err := client.DeleteKeyPair(t.Context(), m, resource.DeleteKeyPairRequest{ID: id})
 	if err != nil || len(deleted.Items) != 1 || deleted.Items[0].ID != id {
 		t.Fatalf("delete with unrelated corrupt record = %+v %v", deleted, err)
+	}
+}
+
+func TestIAMKeyPairRefusesCorruptSelectedRecords(t *testing.T) {
+	s := new(keyPairServer)
+	client := New(keyPairConnection(t, s), Options{})
+	m := keyPairMutation(t)
+	pair, err := sshkey.Generate(resource.KeyTypeEd25519, strings.NewReader(strings.Repeat("a", 36)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := client.CreateKeyPair(t.Context(), m,
+		resource.CreateKeyPairRequest{Name: "login", PublicKey: pair.Public})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := created.Items[0].ID
+	s.mu.Lock()
+	s.corrupt = true
+	s.mu.Unlock()
+	for _, q := range []resource.KeyPairQuery{{IDs: []resource.KeyPairID{id}}, {Names: []string{"login"}}} {
+		if _, err := client.DescribeKeyPairs(t.Context(), m.Scope, q); resource.CodeOf(err) != resource.CodeInternal {
+			t.Errorf("corrupt selected read = %v", err)
+		}
+	}
+	for _, req := range []resource.DeleteKeyPairRequest{{ID: id}, {Name: "login"}} {
+		if _, err := client.DeleteKeyPair(t.Context(), m, req); resource.CodeOf(err) != resource.CodeInternal {
+			t.Errorf("corrupt selected delete = %v", err)
+		}
+	}
+	if len(s.deletes) != 0 {
+		t.Fatal("corrupt selected key reached delete")
 	}
 }
 
