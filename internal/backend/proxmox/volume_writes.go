@@ -184,15 +184,7 @@ func (b *Backend) DeleteVolume(
 	}
 	b.volumeMu.Lock()
 	defer b.volumeMu.Unlock()
-	vm, _, key, err := b.volumeDrive(ctx, m.Scope, req.ID)
-	if err != nil {
-		return resource.Accepted[resource.Volume]{}, err
-	}
-	if err := b.client.VolumeWrite(ctx, http.MethodPut, volumeVMPath(vm)+"/unlink",
-		url.Values{"idlist": {key}, "force": {"1"}}, nil); err != nil {
-		return resource.Accepted[resource.Volume]{}, fmt.Errorf("proxmox: delete volume: %w", err)
-	}
-	cfg, err := b.client.VMConfig(ctx, vm)
+	vm, cfg, key, err := b.volumeDrive(ctx, m.Scope, req.ID)
 	if err != nil {
 		return resource.Accepted[resource.Volume]{}, err
 	}
@@ -203,6 +195,10 @@ func (b *Backend) DeleteVolume(
 	if err := b.client.VolumeWrite(ctx, http.MethodPut, volumeVMPath(vm)+"/config",
 		url.Values{"tags": {strings.Join(tags, ";")}, "digest": {cfg.Digest}}, nil); err != nil {
 		return resource.Accepted[resource.Volume]{}, fmt.Errorf("proxmox: remove deleted volume tags: %w", err)
+	}
+	if err := b.client.VolumeWrite(ctx, http.MethodPut, volumeVMPath(vm)+"/unlink",
+		url.Values{"idlist": {key}, "force": {"1"}}, nil); err != nil {
+		return resource.Accepted[resource.Volume]{}, fmt.Errorf("proxmox: delete volume: %w", err)
 	}
 	vol.State = resource.VolumeDeleting
 	return volumeAccepted(m.Scope, m.Key, resource.ActionDeleteVolume, vol)

@@ -153,6 +153,10 @@ func TestVolumeCreateRecoversAllocationAfterConfigFailure(t *testing.T) {
 	var fail atomic.Bool
 	fail.Store(true)
 	b, _ := volumeWorld(t, func(w http.ResponseWriter, r *http.Request) bool {
+		if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/qemu/100/config") {
+			w.WriteHeader(http.StatusForbidden)
+			return true
+		}
 		if r.Method == http.MethodPut && strings.HasSuffix(r.URL.Path, "/config") && fail.Swap(false) {
 			w.WriteHeader(http.StatusInternalServerError)
 			if err := json.NewEncoder(w).Encode(map[string]string{"message": "injected config outage"}); err != nil {
@@ -162,7 +166,7 @@ func TestVolumeCreateRecoversAllocationAfterConfigFailure(t *testing.T) {
 		}
 		return false
 	})
-	req := resource.CreateVolumeRequest{SizeGiB: 2, Zone: "pve-test-1a"}
+	req := resource.CreateVolumeRequest{SizeGiB: 2, Zone: "pve-test-1a", Tags: map[string]string{"Name": "recovery"}}
 	if _, err := b.CreateVolume(t.Context(), volumeMutation(), req); err == nil {
 		t.Fatal("config failure disappeared")
 	}
@@ -170,13 +174,29 @@ func TestVolumeCreateRecoversAllocationAfterConfigFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := fresh.CreateVolume(t.Context(), volumeMutation(), req); err != nil {
+	got, err := fresh.CreateVolume(t.Context(), volumeMutation(), req)
+	if err != nil {
 		t.Fatal(err)
 	}
 	rows, err := b.client.StorageContent(t.Context(), "pve1", "local")
 	if err != nil || len(rows) != 1 {
 		t.Fatalf("allocation duplicated after restart: %+v %v", rows, err)
 	}
+	fail.Store(true)
+	del := resource.DeleteVolumeRequest{ID: got.Items[0].ID}
+	if _, err := fresh.DeleteVolume(t.Context(), volumeMutation(), del); err == nil {
+		t.Fatal("delete ignored failed tag cleanup")
+	}
+	page, err := fresh.DescribeVolumes(t.Context(), inventoryScope(),
+		resource.VolumeQuery{IDs: []resource.VolumeID{del.ID}})
+	if err != nil || page.Items[0].Tags["Name"] != "recovery" {
+		t.Fatalf("failed cleanup removed the disk or tags: %+v %v", page, err)
+	}
+	if _, err := fresh.DeleteVolume(t.Context(), volumeMutation(), del); err != nil {
+		t.Fatal(err)
+	}
+	_, err = fresh.DeleteVolume(t.Context(), volumeMutation(), del)
+	assertMutationNotFound(t, err, resource.KindVolume, del.ID.String())
 	t.Log("restart recovered the allocated image after a failed config write without allocating a duplicate")
 }
 
@@ -233,6 +253,8 @@ func TestVolumeDeleteInUseAndForeignPool(t *testing.T) {
 		t.Fatal(err)
 	}
 	id, _ := resource.Parse[resource.VolumeID]("vol-0123456789abcdef0")
+	_, _, _, err = b.volumeDrive(t.Context(), m.Scope, id)
+	assertMutationNotFound(t, err, resource.KindVolume, id.String())
 	if _, err := b.DeleteVolume(t.Context(), m, resource.DeleteVolumeRequest{ID: id}); err == nil ||
 		err.Error() != resource.VolumeAttached(id).Error() {
 		t.Fatalf("in-use delete: %v", err)

@@ -26,6 +26,9 @@ func (b *Backend) volumeHolder(ctx context.Context, scope backend.Scope, pool, z
 		return pveclient.VM{}, err
 	}
 	for _, row := range vms {
+		if !slices.Contains(strings.Split(row.Tags, ";"), "vws.holder") {
+			continue
+		}
 		vm := pveclient.VM{Node: row.Node, VMID: row.VMID}
 		cfg, err := b.client.VMConfig(ctx, vm)
 		if err != nil {
@@ -84,12 +87,18 @@ func (b *Backend) volumeDrive(
 		return pveclient.VM{}, pveclient.VMConfig{}, "", err
 	}
 	for _, row := range rows {
+		if !slices.Contains(strings.Split(row.Tags, ";"), "vws.holder") {
+			continue
+		}
 		vm := pveclient.VM{Node: row.Node, VMID: row.VMID}
 		cfg, err := b.client.VMConfig(ctx, vm)
 		if err != nil {
-			return vm, cfg, "", err
+			if ctx.Err() != nil {
+				return vm, cfg, "", err
+			}
+			continue
 		}
-		if cfg.Template != 0 {
+		if cfg.Template != 0 || !slices.Contains(strings.Split(cfg.Tags, ";"), "vws.holder") {
 			continue
 		}
 		for key, drive := range cfg.Drives {
