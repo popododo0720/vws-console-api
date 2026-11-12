@@ -297,7 +297,11 @@ func TestLeaderStandaloneAndLeaseErrors(t *testing.T) {
 	s.Cluster = ""
 	leader, fake, clock := testLeader(t, s)
 	acquireLeader(t, leader)
-	clock.advance(2*time.Second + time.Nanosecond)
+	clock.advance(quorumFresh)
+	if _, err := leader.Admit(t.Context()); err != nil {
+		t.Fatal("quorum read within its freshness window was refused", err)
+	}
+	clock.advance(time.Nanosecond)
 	if _, err := leader.Admit(t.Context()); resource.CodeOf(err) != resource.CodeUnavailable {
 		t.Fatal("stale quorum admitted")
 	}

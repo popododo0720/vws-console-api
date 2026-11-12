@@ -24,14 +24,10 @@ Invalid YAML or certificates fail startup; failed self-checks or shared files fa
 Interrupt and SIGTERM drain both listeners. `/metrics` uses the shared
 server exporter; regionapi uses the existing HTTP telemetry middleware.
 
-The daemon acquires `/etc/pve/vws/leader` under the helper's named `leader`
-mkdir lock. Leases last 20 s and renew every 5 s; quorum checks run every 2 s.
-Mutation admission requires fresh quorum and more than 5 s of lease time.
-Standalone nodes use the local node's online state for quorum.
-The operations exporter exposes `vws_region_leader{node}` and leader changes
-are logged through obs. A restarted process waits for its old lease to expire.
-This first part of #766 fences followers with 503; one-hop forwarding,
-peer client certificates and stale-read headers remain for the next part.
+The daemon holds `/etc/pve/vws/leader` under the helper's named `leader` mkdir lock: 20 s leases renewed every 5 s,
+quorum checked every 2 s and fresh for 5 s (standalone: the local node's online state). Mutations need fresh quorum and
+more than 5 s of lease; a restarted process waits for its old lease to expire. `vws_region_leader{node}` and obs logs show
+leader changes. This first part of #766 fences followers with 503; forwarding, peer certificates and stale-read headers follow.
 
 ## Registration
 

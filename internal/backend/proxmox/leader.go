@@ -14,7 +14,10 @@ import (
 	"github.com/popododo0720/vws-console-api/internal/resource"
 )
 
-const leaderPath = "/etc/pve/vws/leader"
+const (
+	leaderPath  = "/etc/pve/vws/leader"
+	quorumFresh = 5 * time.Second // The next 2 s check keeps its 2 s timeout to answer.
+)
 
 // LeaseWriter confines privileged lease writes and mkdir locks to the helper.
 type LeaseWriter interface {
@@ -187,7 +190,7 @@ func (l *Leader) renew(ctx context.Context) (err error) {
 }
 
 func (l *Leader) hasQuorum() bool {
-	return l.quorate && l.now().Sub(l.checked) <= 2*time.Second
+	return l.quorate && l.now().Sub(l.checked) <= quorumFresh
 }
 
 func (l *Leader) current() string {
