@@ -58,6 +58,7 @@ type Config struct {
 	RegionPool   func(context.Context, string, string) (bool, error)
 
 	RegionRegistration func(context.Context, string, json.RawMessage) error
+	RegionConnection   func(context.Context, store.Region, string) []resource.ConnectionStep
 	// Origins are browser origins allowed besides the console's own host,
 	// such as https://console.vws.example.
 	Origins []string
@@ -105,6 +106,7 @@ func New(cfg Config) http.Handler {
 		regionPool:   cfg.RegionPool,
 
 		regionRegistration: cfg.RegionRegistration,
+		regionConnection:   cfg.RegionConnection,
 	}
 	h.routes(h.mux)
 	return h
@@ -133,6 +135,8 @@ func (h *handler) routes(mux *http.ServeMux) {
 	handle("GET /api/v1/admin/regions/{name}", h.adminRegion)
 	handle("GET /api/v1/admin/regions/{name}/health", h.adminHealth)
 	handle("POST /api/v1/admin/regions", h.adminWriteRegion)
+	handle("POST /api/v1/admin/regions/test", h.adminTestRegion)
+	handle("POST /api/v1/admin/regions/{name}/test", h.adminTestRegion)
 	handle("PATCH /api/v1/admin/regions/{name}", h.adminWriteRegion)
 	handle("DELETE /api/v1/admin/regions/{name}", h.adminWriteRegion)
 	handle("GET /api/v1/regions", h.listRegions)
@@ -202,6 +206,7 @@ type handler struct {
 	regionPool   func(context.Context, string, string) (bool, error)
 
 	regionRegistration func(context.Context, string, json.RawMessage) error
+	regionConnection   func(context.Context, store.Region, string) []resource.ConnectionStep
 }
 
 func (h *handler) mutation(action resource.Action) (string, string, http.HandlerFunc) {

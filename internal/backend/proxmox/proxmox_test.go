@@ -61,6 +61,7 @@ func TestStartupChecks(t *testing.T) {
 	for _, privilege := range []string{
 		"VM.Allocate", "VM.PowerMgmt", "VM.Config.CPU", "VM.Config.Future",
 		"VM.Snapshot", "VM.Console", "Permissions.Modify", "Pool.Allocate", "Sys.Modify", "Datastore.Allocate",
+		"Sys.Console", "Future.Privilege",
 	} {
 		t.Run(privilege, func(t *testing.T) {
 			s := scenario()

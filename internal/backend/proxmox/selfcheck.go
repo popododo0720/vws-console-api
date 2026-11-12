@@ -90,14 +90,5 @@ func New(ctx context.Context, client *pveclient.Client, reg Registration, cfg Re
 }
 
 func forbiddenPrivilege(p string) bool {
-	if strings.HasPrefix(p, "VM.Config.") {
-		return true
-	}
-	switch p {
-	case "VM.Allocate", "VM.PowerMgmt", "VM.Snapshot", "VM.Console", "Permissions.Modify",
-		"Pool.Allocate", "Sys.Modify", "Datastore.Allocate":
-		return true
-	default:
-		return false
-	}
+	return !strings.HasSuffix(p, ".Audit")
 }
