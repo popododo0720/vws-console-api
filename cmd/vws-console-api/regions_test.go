@@ -22,6 +22,7 @@ import (
 	"github.com/popododo0720/vws-console-api/internal/admin/store"
 	"github.com/popododo0720/vws-console-api/internal/admin/store/etcdstore/etcdtest"
 	"github.com/popododo0720/vws-console-api/internal/backend"
+	"github.com/popododo0720/vws-console-api/internal/backend/proxmox"
 	"github.com/popododo0720/vws-console-api/internal/backend/proxmox/proxmoxtest"
 	"github.com/popododo0720/vws-console-api/internal/cloud"
 	"github.com/popododo0720/vws-console-api/internal/iam"
@@ -65,6 +66,14 @@ func TestRegionsProcessInventoryAndRestart(t *testing.T) {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(app, nil)))
 	t.Cleanup(func() { slog.SetDefault(previous) })
 	b := proxmoxtest.New(t)
+	ids, err := proxmox.NewIDs("test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pveID, _, err := ids.Instance(proxmox.VM{UUID: "5f0c3e9a-8b5d-4b8e-9a51-0c2d6c1f7a10"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	handler, err := regionapi.New(regionapi.Config{
 		Backend: b.Set(), Capabilities: b, Region: "pve-test-1",
 		Version: regionapi.Version{ReleaseLine: "1.0", ClusterName: "test"},
@@ -157,11 +166,26 @@ func TestRegionsProcessInventoryAndRestart(t *testing.T) {
 			if err != nil || resp.StatusCode != want {
 				t.Fatalf("%s %q: %d %s %v", path, name, resp.StatusCode, body, err)
 			}
-			if path == "/api/v1/instances" && want == 200 && (name == "us-east-1" || name == "all") {
+			if path == "/api/v1/instances" && want == 200 {
 				var page resource.Page[resource.Instance]
-				if err := json.Unmarshal(body, &page); err != nil || len(page.Items) != 1 ||
-					page.Items[0].ID.String() != "i-0123456789abcdef0" {
+				if err := json.Unmarshal(body, &page); err != nil {
 					t.Fatalf("wrong regional instance identities: %s; %v", body, err)
+				}
+				wantIDs := map[string]bool{pveID.String(): true}
+				switch name {
+				case "us-east-1":
+					wantIDs = map[string]bool{"i-0123456789abcdef0": true}
+				case "all":
+					wantIDs["i-0123456789abcdef0"] = true
+				}
+				if len(page.Items) != len(wantIDs) {
+					t.Fatalf("wrong regional instance count: %s", body)
+				}
+				for _, inst := range page.Items {
+					if !wantIDs[inst.ID.String()] {
+						t.Fatalf("unexpected regional instance: %s", body)
+					}
+					delete(wantIDs, inst.ID.String())
 				}
 			}
 			responses.Write(body)
@@ -174,17 +198,17 @@ func TestRegionsProcessInventoryAndRestart(t *testing.T) {
 		beforePVE, beforeAWS := pveCalls.Load(), awsCalls.Load()
 		call("/api/v1/instances", "", 200)
 		call("/api/v1/instances", "pve-test-1", 200)
-		if pveCalls.Load() != beforePVE+2 || awsCalls.Load() != beforeAWS {
+		if pveCalls.Load() != beforePVE+4 || awsCalls.Load() != beforeAWS {
 			t.Fatal("default or named PVE routing reached another region")
 		}
 		call("/api/v1/instances", "us-east-1", 200)
 		call("/api/v1/instances", "all", 200)
-		if pveCalls.Load() != beforePVE+4 || awsCalls.Load() != beforeAWS+2 {
+		if pveCalls.Load() != beforePVE+6 || awsCalls.Load() != beforeAWS+2 {
 			t.Fatal("AWS or all-region inventory did not route correctly")
 		}
 		call("/api/v1/instances", "pve-unknown-1", 400)
 		call("/api/v1/instances", strings.Repeat("a", 64), 400)
-		if pveCalls.Load() != beforePVE+4 || awsCalls.Load() != beforeAWS+2 {
+		if pveCalls.Load() != beforePVE+6 || awsCalls.Load() != beforeAWS+2 {
 			t.Fatal("invalid header reached inventory")
 		}
 		if strings.Contains(call("/api/v1/addresses", "all", 200), "partial") {

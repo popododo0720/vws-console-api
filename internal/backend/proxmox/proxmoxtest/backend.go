@@ -18,7 +18,11 @@ func New(t testing.TB) *proxmox.Backend {
 	f, err := pvefake.New(pvefake.Scenario{
 		Cluster: "test", Version: pvefake.Version{Version: "9.2", Release: "9.2"},
 		Nodes: []pvefake.Node{{Name: "pve1"}},
-		Roles: []pvefake.Role{{ID: "PVEAuditor", Privs: []string{"Sys.Audit", "VM.Audit", "Datastore.Audit"}}},
+		Roles: []pvefake.Role{{ID: "PVEAuditor", Privs: []string{"Sys.Audit", "VM.Audit", "Datastore.Audit", "Pool.Audit"}}},
+		VMs: []pvefake.VM{{
+			VMID: 100, Node: "pve1", Pool: "123456789012", Status: "running",
+			Config: map[string]string{"smbios1": "uuid=5f0c3e9a-8b5d-4b8e-9a51-0c2d6c1f7a10"},
+		}},
 		Tokens: []pvefake.Token{{
 			ID: "vws@pve!inventory", Secret: "fake-secret",
 			ACL: []pvefake.ACE{{Path: "/", Role: "PVEAuditor"}},

@@ -33,6 +33,36 @@ func inventoryScope() backend.Scope {
 	return backend.Scope{Account: account}
 }
 
+func TestInventoryReservationSurvivesRestart(t *testing.T) {
+	for _, uuid := range []string{"5f0c3e9a-8b5d-4b8e-9a51-0c2d6c1f7a10", ""} {
+		t.Run(uuid, func(t *testing.T) {
+			var want resource.ReservationID
+			for range 2 {
+				s := inventoryScenario()
+				s.VMs[0].Config["smbios1"] = "uuid=" + uuid
+				client, _ := serve(t, s)
+				for range 2 {
+					b, err := New(t.Context(), client, registration(), RegionConfig{})
+					if err != nil {
+						t.Fatal(err)
+					}
+					for range 2 {
+						page, err := b.DescribeInstances(t.Context(), inventoryScope(), resource.InstanceQuery{})
+						if err != nil || len(page.Items) != 1 || page.Items[0].ReservationID.IsZero() {
+							t.Fatalf("reservation after restart/re-run: %+v, %v", page, err)
+						}
+						got := page.Items[0].ReservationID
+						if !want.IsZero() && got != want {
+							t.Fatalf("reservation changed: got %s, want %s", got, want)
+						}
+						want = got
+					}
+				}
+			}
+		})
+	}
+}
+
 func TestInventoryInstanceFields(t *testing.T) {
 	s := inventoryScenario()
 	c, _ := serve(t, s)
@@ -48,9 +78,14 @@ func TestInventoryInstanceFields(t *testing.T) {
 	}
 	ids, _ := NewIDs("test")
 	id, _, _ := ids.Instance(VM{UUID: "5f0c3e9a-8b5d-4b8e-9a51-0c2d6c1f7a10"})
+	reservation, err := ids.Reservation(id.String())
+	if err != nil {
+		t.Fatal(err)
+	}
 	unknown, _ := ids.UnknownImage()
 	got := page.Items[0]
-	if got.ID != id || got.ImageID != unknown || got.OwnerID != inventoryScope().Account ||
+	if got.ID != id || got.ReservationID != reservation || got.ImageID != unknown ||
+		got.OwnerID != inventoryScope().Account ||
 		got.State != resource.InstanceRunning || got.InstanceType != "vws.small" || len(got.Tags) != 0 ||
 		got.Zone != "pve-test-1b" || got.LaunchTime.Unix() != 1700000000 {
 		t.Fatalf("instance=%+v", got)
@@ -84,8 +119,13 @@ func TestInventoryInstanceFields(t *testing.T) {
 			vm := inventoryVM{pveclient.ClusterResource{VMID: 100, Node: "pve1", Status: tc.status}}
 			inst, err := b.instance(t.Context(), ids, vm, cfg)
 			expect, _, _ := ids.Instance(VM{UUID: tc.uuid, VMID: 100, Ctime: "1700000000"})
+			reservation, reservationErr := ids.Reservation(expect.String())
+			if reservationErr != nil {
+				t.Fatal(reservationErr)
+			}
 			if err != nil || inst.ID != expect || inst.State != tc.want || len(inst.Tags) != 2 ||
-				inst.Tags["Name"] != "web" || inst.ImageID.String() != "ami-0123456789abcdef0" {
+				inst.ReservationID != reservation || inst.Tags["Name"] != "web" ||
+				inst.ImageID.String() != "ami-0123456789abcdef0" {
 				t.Fatalf("mapped=%+v error=%v", inst, err)
 			}
 		})

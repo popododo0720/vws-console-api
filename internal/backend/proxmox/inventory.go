@@ -95,6 +95,10 @@ func (b *Backend) instance(
 	if err != nil {
 		return resource.Instance{}, err
 	}
+	reservation, err := ids.Reservation(id.String())
+	if err != nil {
+		return resource.Instance{}, err
+	}
 	tags, err := ReadTags(strings.Split(cfg.Tags, ";"), cfg.Description)
 	if err != nil {
 		return resource.Instance{}, err
@@ -131,7 +135,7 @@ func (b *Backend) instance(
 		cfg.Memory = 512
 	}
 	inst := resource.Instance{
-		ID: id, ImageID: image, State: state, Tags: tags.User,
+		ID: id, ReservationID: reservation, ImageID: image, State: state, Tags: tags.User,
 		InstanceType: NearestInstanceType(cfg.Cores*cfg.Sockets, cfg.Memory),
 		Zone:         b.region + b.nodeLetter(ctx, vm.Node),
 	}
