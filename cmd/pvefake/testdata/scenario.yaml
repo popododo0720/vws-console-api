@@ -1,0 +1,30 @@
+version:
+  version: "9.2.13"
+  release: "9.2"
+cluster: test
+nodes:
+  - name: pve1
+    maxcpu: 8
+    maxmem: 17179869184
+roles:
+  - id: PVEAuditor
+    privs: [Sys.Audit, VM.Audit, Datastore.Audit, Pool.Audit]
+tokens:
+  - id: vws@pve!inventory
+    secret: fake-secret
+    acl:
+      - path: /
+        role: PVEAuditor
+pools: ["123456789012"]
+vms:
+  - vmid: 100
+    node: pve1
+    name: web-1
+    status: running
+    pool: "123456789012"
+    maxcpu: 2
+    maxmem: 2147483648
+    config:
+      smbios1: uuid=5f0c3e9a-8b5d-4b8e-9a51-0c2d6c1f7a10
+      cores: "2"
+      memory: "2048"

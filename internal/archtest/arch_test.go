@@ -98,9 +98,17 @@ var ownerRules = []struct {
 		"Kubernetes types stay inside internal/backend/launch/kubestore",
 	},
 	{
-		hasPrefix(module + "/internal/backend/proxmox/pveclient"),
+		func(imp string) bool {
+			return hasPrefix(module+"/internal/backend/proxmox/pveclient")(imp) &&
+				imp != module+"/internal/backend/proxmox/pveclient/pvefake"
+		},
 		[]string{"internal/backend/proxmox"},
 		"PVE API types stay inside internal/backend/proxmox",
+	},
+	{
+		hasPrefix(module + "/internal/backend/proxmox/pveclient/pvefake"),
+		[]string{"internal/backend/proxmox", "cmd/pvefake"},
+		"the fake PVE handler belongs to Proxmox tests and its standalone command",
 	},
 	{
 		hasPrefix("go.etcd.io"),
@@ -191,6 +199,12 @@ func TestArchitectureRules(t *testing.T) {
 			module + `/internal/backend/proxmox/pveclient"`,
 		"internal/backend/proxmox/ok.go": `package proxmox; import _ "` +
 			module + `/internal/backend/proxmox/pveclient"`,
+		"cmd/pvefake/ok.go": `package main; import _ "` +
+			module + `/internal/backend/proxmox/pveclient/pvefake"`,
+		"cmd/pvefake/client.go": `package main; import _ "` +
+			module + `/internal/backend/proxmox/pveclient"`,
+		"internal/widget/fake.go": `package widget; import _ "` +
+			module + `/internal/backend/proxmox/pveclient/pvefake"`,
 		"internal/surface/ec2query/ok.go":      `package ec2query; import _ "` + module + `/internal/cloud"`,
 		"internal/resource/std.go":             `package resource; import _ "fmt"`,
 		"internal/cloud/backend.go":            `package cloud; import _ "` + module + `/internal/backend"`,
@@ -201,6 +215,10 @@ func TestArchitectureRules(t *testing.T) {
 		writeFile(t, filepath.Join(probe, rel), src)
 	}
 	want := []string{
+		"cmd/pvefake imports " + module + "/internal/backend/proxmox/pveclient: " +
+			"PVE API types stay inside internal/backend/proxmox",
+		"internal/widget imports " + module + "/internal/backend/proxmox/pveclient/pvefake: " +
+			"the fake PVE handler belongs to Proxmox tests and its standalone command",
 		"internal/backend/grpcclient imports " + module + "/internal/backend/proxmox/pveclient: " +
 			"PVE API types stay inside internal/backend/proxmox",
 		"internal/cloud imports net/http: the kernel takes and returns resource types, " +

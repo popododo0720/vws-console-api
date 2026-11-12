@@ -110,9 +110,13 @@ func unusedAddress(t *testing.T) string {
 
 func awaitStatus(t *testing.T, url string, status int) {
 	t.Helper()
+	awaitClientStatus(t, &http.Client{Timeout: time.Second}, url, status)
+}
+
+func awaitClientStatus(t *testing.T, client *http.Client, url string, status int) {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
 	defer cancel()
-	client := &http.Client{Timeout: time.Second}
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
 	for {
