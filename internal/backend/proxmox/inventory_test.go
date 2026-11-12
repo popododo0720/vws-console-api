@@ -241,7 +241,7 @@ func TestInventoryPagingAndFailures(t *testing.T) {
 		t.Fatalf("invalid cursor: %v", err)
 	}
 	for _, status := range []int{403, 503} {
-		for _, path := range []string{"/cluster/resources", "/nodes"} {
+		for _, path := range []string{"/cluster/resources", "/nodes", "/nodes/pve1/qemu/100/config"} {
 			t.Run(fmt.Sprint(status)+path, func(t *testing.T) {
 				s := inventoryScenario()
 				s.Tokens[0].Secret = "test-secret"
@@ -258,9 +258,13 @@ func TestInventoryPagingAndFailures(t *testing.T) {
 					t.Fatal(err)
 				}
 				var he *pveclient.HTTPError
-				_, err = b.DescribeInstances(t.Context(), inventoryScope(), resource.InstanceQuery{})
+				_, err = b.DescribeInstances(t.Context(), inventoryScope(),
+					resource.InstanceQuery{IDs: []resource.InstanceID{powerID(t)}})
 				if path == "/nodes" {
 					_, err = b.availabilityZones(t.Context())
+				}
+				if strings.HasSuffix(path, "/config") && resource.CodeOf(err) != resource.CodeUnavailable {
+					t.Fatalf("unreadable config was not unavailable: %v", err)
 				}
 				if !errors.As(err, &he) || he.Status != status || !strings.Contains(err.Error(), path) {
 					t.Fatalf("error=%v", err)

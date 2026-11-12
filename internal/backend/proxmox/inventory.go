@@ -177,8 +177,13 @@ func (b *Backend) DescribeInstances(
 		return resource.Page[resource.Instance]{}, err
 	}
 	out := resource.Page[resource.Instance]{NextToken: page.NextToken}
+	found := map[resource.InstanceID]bool{}
+	var configError error
 	for _, vm := range page.Items {
 		cfg, err := b.client.VMConfig(ctx, pveclient.VM{Node: vm.Node, VMID: vm.VMID})
+		if err != nil {
+			configError = err
+		}
 		var inst resource.Instance
 		if err == nil {
 			if cfg.Template == 1 || slices.Contains(strings.Split(cfg.Tags, ";"), "vws.holder") {
@@ -193,10 +198,19 @@ func (b *Backend) DescribeInstances(
 			slog.WarnContext(ctx, "skipping invalid VM", slog.Int("vmid", vm.VMID), slog.Any("error", err))
 			continue
 		}
+		found[inst.ID] = true
 		if (len(q.IDs) == 0 || slices.Contains(q.IDs, inst.ID)) &&
 			(len(q.States) == 0 || slices.Contains(q.States, inst.State)) {
 			inst.OwnerID = s.Account
 			out.Items = append(out.Items, inst)
+		}
+	}
+	for _, id := range q.IDs {
+		if !found[id] {
+			if configError != nil {
+				return resource.Page[resource.Instance]{}, powerUnavailable(configError)
+			}
+			return resource.Page[resource.Instance]{}, resource.NotFound(resource.KindInstance, id.String())
 		}
 	}
 	if filtered {

@@ -130,7 +130,20 @@ func mutationGuardFirst(fn *ast.FuncDecl) bool {
 }
 
 func TestMutationMethodsRejectOtherPools(t *testing.T) {
-	cases := map[string]func(*testing.T, *Backend) (resource.Kind, string, error){}
+	cases := map[string]func(*testing.T, *Backend) (resource.Kind, string, error){
+		"StartInstances": func(t *testing.T, b *Backend) (resource.Kind, string, error) {
+			return powerCrossPool(t, b, "start")
+		},
+		"StopInstances": func(t *testing.T, b *Backend) (resource.Kind, string, error) {
+			return powerCrossPool(t, b, "shutdown")
+		},
+		"RebootInstances": func(t *testing.T, b *Backend) (resource.Kind, string, error) {
+			return powerCrossPool(t, b, "reboot")
+		},
+		"TerminateInstances": func(t *testing.T, b *Backend) (resource.Kind, string, error) {
+			return powerCrossPool(t, b, "destroy")
+		},
+	}
 	functions := mutationFunctions(t)
 	implemented := map[string]bool{}
 	for _, fn := range functions {

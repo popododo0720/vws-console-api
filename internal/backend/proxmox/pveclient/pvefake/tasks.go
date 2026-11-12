@@ -108,9 +108,21 @@ func (f *Fake) power(t *Token, r *http.Request) (any, *failure) {
 	if err := r.ParseForm(); err != nil {
 		return nil, parameter("body", "unable to parse parameters")
 	}
-	// Optional power controls need their own behavioral model before accepting them.
+	action := r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:]
 	for key := range r.Form {
-		return nil, parameter(key, "property is not defined in the fake's power schema")
+		switch {
+		case action == "shutdown" && key == "timeout":
+			n, err := strconv.Atoi(r.Form.Get(key))
+			if err != nil || n < 1 {
+				return nil, parameter(key, "expected positive seconds")
+			}
+		case action == "shutdown" && key == "forceStop":
+			if r.Form.Get(key) != "1" && r.Form.Get(key) != "0" {
+				return nil, parameter(key, "expected boolean")
+			}
+		default:
+			return nil, parameter(key, "property is not defined in the fake's power schema")
+		}
 	}
 	vm := f.vm(vmid)
 	if vm == nil || vm.Node != node {
@@ -119,7 +131,6 @@ func (f *Fake) power(t *Token, r *http.Request) (any, *failure) {
 			fmt.Sprintf("Configuration file 'nodes/%s/qemu-server/%d.conf' does not exist", node, vmid),
 		}
 	}
-	action := r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:]
 	if !f.quorate {
 		return nil, &failure{http.StatusInternalServerError, "cluster not ready - no quorum?"}
 	}
