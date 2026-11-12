@@ -406,7 +406,7 @@ func authError(err error) error {
 			Message: "The security token included in the request is invalid.",
 		})
 	}
-	switch st.Code() { //nolint:exhaustive // every other code is "unavailable" below.
+	switch st.Code() { //nolint:exhaustive // every other code is an internal error below.
 	case codes.Unauthenticated:
 		switch aws {
 		case "InvalidToken":
@@ -447,12 +447,13 @@ func authError(err error) error {
 		default:
 			return fmt.Errorf("vws-iam: %w", errors.New(st.Code().String()))
 		}
+	case codes.Unavailable, codes.DeadlineExceeded, codes.Canceled:
+		return backendUnavailable(err)
 	default:
 		if aws == "UnmodifiableEntity" {
 			return &resource.Error{Code: resource.CodeConflict, Field: "UnmodifiableEntity", Message: st.Message()}
 		}
-		// Unavailable, deadline, internal: the surfaces answer "unavailable"
-		// without echoing vws-iam's message.
+		// The surfaces answer an internal error without echoing vws-iam's message.
 		return fmt.Errorf("vws-iam: %w", errors.New(st.Code().String()))
 	}
 }
