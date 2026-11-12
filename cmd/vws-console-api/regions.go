@@ -17,6 +17,9 @@ type inventoryCatalog struct{ backend.RegionCatalog }
 
 func (c inventoryCatalog) RegionCapabilities(ctx context.Context, region string) (resource.RegionCapabilities, error) {
 	doc, err := (backend.AllSupported{Kind: resource.RegionKindProxmox}).RegionCapabilities(ctx, region)
+	if err != nil {
+		return doc, err
+	}
 	accounts, catalogErr := c.AWSAccounts(ctx)
 	if catalogErr != nil {
 		return doc, &resource.Error{Code: resource.CodeUnavailable, Message: "region catalog unavailable"}
@@ -33,7 +36,7 @@ func (c inventoryCatalog) RegionCapabilities(ctx context.Context, region string)
 			}
 		}
 	}
-	return doc, err
+	return doc, nil
 }
 
 func (c inventoryCatalog) ProxmoxRegions(ctx context.Context) ([]backend.ProxmoxRegion, error) {
