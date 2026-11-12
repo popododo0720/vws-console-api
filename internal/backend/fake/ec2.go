@@ -552,7 +552,7 @@ func (c compute) CreateKeyPair(ctx context.Context, m backend.Mutation, req reso
 	if _, exists := c.w.key[id]; exists {
 		return resource.Accepted[resource.KeyPair]{}, resource.Internal(errors.New("identifier collision"))
 	}
-	key := resource.KeyPair{ID: id, OwnerID: m.Account, Name: req.Name, Type: req.Type}
+	key := resource.KeyPair{ID: id, OwnerID: m.Account, Name: req.Name, Type: req.Type, CreateTime: c.w.now().UTC()}
 	if req.PublicKey != "" {
 		pub, err := sshkey.ParsePublic(req.PublicKey)
 		if err != nil {

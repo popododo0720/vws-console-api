@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"slices"
 	"strings"
+	"time"
 
 	"cloud.google.com/go/longrunning/autogen/longrunningpb"
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
@@ -70,9 +71,14 @@ func keyPairModel(s backend.Scope, in *iamv1.KeyPair) (resource.KeyPair, error) 
 	if sha1 := in.GetLabels()["vws-key-sha1"]; sha1 != "" {
 		fingerprint = sshkey.ColonHex(sha1)
 	}
+	var created time.Time
+	if in.GetCreateTime() != nil {
+		created = in.GetCreateTime().AsTime().UTC()
+	}
 	return resource.KeyPair{
 		Regional: resource.Regional{Region: in.GetSpec().GetRegion()}, ID: id, OwnerID: s.Account,
 		Name: in.GetSpec().GetKeyName(), Fingerprint: fingerprint, Type: pub.Type,
+		CreateTime: created,
 	}, nil
 }
 

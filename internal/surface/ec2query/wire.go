@@ -433,6 +433,7 @@ type keyItem struct {
 	KeyName     string `xml:"keyName"`
 	Fingerprint string `xml:"keyFingerprint"`
 	KeyType     string `xml:"keyType,omitempty"`
+	Created     string `xml:"createTime,omitempty"`
 }
 
 type importKeyXML struct {
@@ -825,7 +826,10 @@ func volumeXML(v resource.Volume) volumeItem {
 }
 
 func keyXML(key resource.KeyPair) keyItem {
-	return keyItem{KeyPairID: key.ID.String(), KeyName: key.Name, Fingerprint: key.Fingerprint, KeyType: string(key.Type)}
+	return keyItem{
+		KeyPairID: key.ID.String(), KeyName: key.Name, Fingerprint: key.Fingerprint, KeyType: string(key.Type),
+		Created: awsTime(key.CreateTime),
+	}
 }
 
 func groupXML(group resource.SecurityGroup) groupItem {
