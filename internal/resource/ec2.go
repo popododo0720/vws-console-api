@@ -946,6 +946,7 @@ type KeyPair struct {
 	Fingerprint string    `json:"keyFingerprint"`
 	Material    string    `json:"keyMaterial,omitempty"`
 	Type        KeyType   `json:"keyType,omitempty"`
+	CreateTime  time.Time `json:"createTime,omitzero"`
 }
 
 // redactedKeyMaterial is what formatting and logging show in place of the
