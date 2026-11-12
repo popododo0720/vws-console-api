@@ -65,6 +65,7 @@
     "userData": true,
     "linkedClones": false,
     "snapshotScope": "vm",
-    "privateIpMode": "static"
+    "privateIpMode": "static",
+    "liveTests": false
   }
 }

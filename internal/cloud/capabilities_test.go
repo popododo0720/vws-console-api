@@ -430,6 +430,9 @@ func TestAllSupportedDeclaresEveryActionAndRead(t *testing.T) {
 	if err := doc.Validate(); err != nil {
 		t.Fatal(err)
 	}
+	if doc.Features.LiveTests {
+		t.Error("an AWS region declares liveTests")
+	}
 	for _, a := range resource.Actions() {
 		if doc.Mutation(a).State != resource.ActionSupported {
 			t.Errorf("%s is not supported", a)

@@ -90,6 +90,7 @@ func TestRegionCapabilitiesUnchangedAndRetry(t *testing.T) {
 	doc.Zones = []resource.RegionZone{{
 		ZoneName: "pve-test-1a", ZoneID: "test-a", State: "available", Nodes: []string{"pve1"},
 	}}
+	doc.Features.LiveTests = true
 	catalog := backend.NewStaticRegions([]backend.ProxmoxRegion{
 		{Name: doc.Region, Endpoint: "https://internal.example"},
 	}, nil)
@@ -106,6 +107,9 @@ func TestRegionCapabilitiesUnchangedAndRetry(t *testing.T) {
 			var got resource.RegionCapabilities
 			if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil || rec.Code != 200 || !reflect.DeepEqual(got, doc) {
 				t.Fatalf("capabilities changed: %d %s; %v", rec.Code, rec.Body, err)
+			}
+			if !strings.Contains(rec.Body.String(), `"liveTests":true`) {
+				t.Fatalf("features.liveTests not served: %s", rec.Body)
 			}
 		}
 	}
