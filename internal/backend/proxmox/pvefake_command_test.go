@@ -58,7 +58,8 @@ func TestPVEFakeCommandRegionInventoryAndRestart(t *testing.T) {
 	}
 	if len(scenario.VMs) != 1 || len(scenario.Nodes) != 1 || len(scenario.Tokens) != 1 ||
 		scenario.VMs[0].Pool != "123456789012" || scenario.Roles[0].ID != "PVEAuditor" {
-		t.Fatalf("unexpected example: %+v", scenario)
+		t.Fatalf("unexpected example: vms=%d nodes=%d tokens=%d roles=%d",
+			len(scenario.VMs), len(scenario.Nodes), len(scenario.Tokens), len(scenario.Roles))
 	}
 	ids, err := NewIDs(scenario.Cluster)
 	if err != nil {
