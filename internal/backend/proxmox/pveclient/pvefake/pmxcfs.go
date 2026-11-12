@@ -21,9 +21,28 @@ type pmxcfsEntry struct {
 // PMXCFS returns a handle to this fake's shared filesystem.
 func (f *Fake) PMXCFS() *PMXCFS { return &PMXCFS{f: f} }
 
+// Path limits are Linux PATH_MAX and NAME_MAX, which the FUSE mount enforces.
+const (
+	maxPMXCFSPath = 4096
+	maxPMXCFSName = 255
+)
+
 func validPMXCFSPath(name string) bool {
-	return path.Clean(name) == name && !strings.ContainsRune(name, 0) &&
-		(name == "/etc/pve" || strings.HasPrefix(name, "/etc/pve/"))
+	if len(name) > maxPMXCFSPath || path.Clean(name) != name ||
+		(name != "/etc/pve" && !strings.HasPrefix(name, "/etc/pve/")) {
+		return false
+	}
+	for _, c := range []byte(name) {
+		if c < 0x20 || c == 0x7f {
+			return false
+		}
+	}
+	for part := range strings.SplitSeq(name, "/") {
+		if len(part) > maxPMXCFSName {
+			return false
+		}
+	}
+	return true
 }
 
 // ReadFile returns a copy of a file, including while quorum is absent.

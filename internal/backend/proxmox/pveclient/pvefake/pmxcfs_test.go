@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io/fs"
 	"net/http"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -74,7 +75,11 @@ func TestPMXCFSIsReadOnlyWithoutQuorum(t *testing.T) {
 	if err := p.Remove(file); !errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("missing lease: %v", err)
 	}
-	for _, name := range []string{"/etc/pve-other/x", "/etc/pve/../x", "etc/pve/x", "/else", "/etc/pve/a\x00b"} {
+	for _, name := range []string{
+		"/etc/pve-other/x", "/etc/pve/../x", "etc/pve/x", "/else", "/etc/pve/a\x00b",
+		"/etc/pve/a\nb", "/etc/pve/a\tb", "/etc/pve/a\x7fb",
+		"/etc/pve/" + strings.Repeat("n", 256), "/etc/pve" + strings.Repeat("/n", 2045),
+	} {
 		for _, err := range []error{
 			p.WriteFile(name, nil), p.Mkdir(name), p.Remove(name),
 		} {

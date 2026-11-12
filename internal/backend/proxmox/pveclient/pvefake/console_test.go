@@ -62,7 +62,8 @@ func consoleProxy(t *testing.T, srv *httptest.Server, endpoint string) consoleAn
 	}
 	if resp.StatusCode != http.StatusOK || env.Data.Port < 1 ||
 		env.Data.Ticket == "" || env.Data.User != "alice@pve" {
-		t.Fatalf("proxy %s: status=%d data=%+v", endpoint, resp.StatusCode, env.Data)
+		t.Fatalf("proxy %s: status=%d port=%d user=%q ticket set=%t",
+			endpoint, resp.StatusCode, env.Data.Port, env.Data.User, env.Data.Ticket != "")
 	}
 	return env.Data
 }
@@ -139,7 +140,7 @@ func TestConsoleTicketsOpenOneWebsocket(t *testing.T) {
 			kind := "vncproxy"
 			if endpoint == "vncproxy" {
 				if answer.Cert == "" || answer.Password == "" {
-					t.Fatalf("missing cert or generated password: %+v", answer)
+					t.Fatalf("cert set=%t, generated password set=%t", answer.Cert != "", answer.Password != "")
 				}
 			} else {
 				kind = "vncterm"
