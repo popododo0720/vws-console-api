@@ -127,7 +127,8 @@ func surfaceHandler(logger *slog.Logger, metrics *Metrics, sf Surface) http.Hand
 	// httpobs v0.1.1 hides Hijacker; otelhttp preserves it for streaming routes.
 	streaming := otelhttp.NewHandler(base, service.Name)
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if websocket.IsWebSocketUpgrade(r) {
+		if sf.Name == "console" && routePattern(sf.Handler)(r) == "GET /api/v1/instances/{id}/console" &&
+			websocket.IsWebSocketUpgrade(r) {
 			streaming.ServeHTTP(w, r)
 			return
 		}
@@ -214,7 +215,10 @@ func wrap(logger *slog.Logger, name string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		id := obs.RequestID(r.Context())
 		if id == "" {
-			id = obs.NewRequestID()
+			id = r.Header.Get(httpobs.RequestIDHeader)
+			if !safeRequestID(id) {
+				id = obs.NewRequestID()
+			}
 			r = r.WithContext(obs.WithRequestID(r.Context(), id))
 		}
 		w.Header().Set(httpobs.RequestIDHeader, id)

@@ -52,7 +52,7 @@ func (h *handler) openConsole(w http.ResponseWriter, r *http.Request) {
 		HandshakeTimeout: 10 * time.Second,
 		CheckOrigin:      func(r *http.Request) bool { return h.originOK(r.Header.Get("Origin"), r.Host) },
 	}
-	downstream, err := upgrader.Upgrade(w, r, nil)
+	downstream, err := upgrader.Upgrade(w, r, w.Header())
 	if err != nil {
 		return
 	}

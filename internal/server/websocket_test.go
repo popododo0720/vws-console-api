@@ -14,10 +14,25 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+type consoleWebsocketHandler struct{ http.Handler }
+
+func (consoleWebsocketHandler) RoutePattern(*http.Request) string {
+	return "GET /api/v1/instances/{id}/console"
+}
+
 func TestWebsocketSurfaceUpgrade(t *testing.T) {
+	for _, surface := range []string{"console", "ec2", "s3"} {
+		t.Run(surface, func(t *testing.T) {
+			testWebsocketSurface(t, surface)
+		})
+	}
+}
+
+func testWebsocketSurface(t *testing.T, surface string) {
+	t.Helper()
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		upgrader := websocket.Upgrader{}
-		conn, err := upgrader.Upgrade(w, r, nil)
+		conn, err := upgrader.Upgrade(w, r, w.Header())
 		if err != nil {
 			return
 		}
@@ -27,7 +42,8 @@ func TestWebsocketSurfaceUpgrade(t *testing.T) {
 		}
 	})
 	metrics := NewMetrics()
-	wrapped := surfaceHandler(slog.New(slog.DiscardHandler), metrics, Surface{Name: "console", Handler: handler})
+	wrapped := surfaceHandler(slog.New(slog.DiscardHandler), metrics,
+		Surface{Name: surface, Handler: consoleWebsocketHandler{handler}})
 	done := make(chan struct{})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer close(done)
@@ -36,9 +52,20 @@ func TestWebsocketSurfaceUpgrade(t *testing.T) {
 	defer srv.Close()
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
-	conn, resp, err := websocket.DefaultDialer.DialContext(ctx, "ws"+strings.TrimPrefix(srv.URL, "http"), nil)
+	conn, resp, err := websocket.DefaultDialer.DialContext(ctx, "ws"+strings.TrimPrefix(srv.URL, "http"),
+		http.Header{"X-Request-Id": {"console-websocket"}})
 	if resp != nil {
 		defer resp.Body.Close()
+		if resp.Header.Get("X-Request-Id") != "console-websocket" {
+			t.Fatal("websocket headers lost the validated client request id")
+		}
+	}
+	if surface != "console" {
+		if err == nil {
+			conn.Close()
+			t.Fatal("non-console request bypassed normal HTTP telemetry")
+		}
+		return
 	}
 	if err != nil {
 		t.Fatal(err)
