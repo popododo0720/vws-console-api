@@ -256,6 +256,17 @@ func TestRootLogin(t *testing.T) {
 // Every console route names the IAM action it is authorized as, so a new
 // route cannot ship unauthorized.
 func TestEveryRouteIsAuthorized(t *testing.T) {
+	for _, route := range []string{
+		"POST /api/v1/admin/aws-accounts/test", "POST /api/v1/admin/aws-accounts/{id}/test",
+	} {
+		found := false
+		for _, pattern := range Routes() {
+			found = found || pattern == route
+		}
+		if _, ok := routeAction(route); !ok || !found {
+			t.Errorf("missing authorized AWS connection route %s", route)
+		}
+	}
 	for _, pattern := range Routes() {
 		if _, ok := routeAction(pattern); !ok {
 			t.Errorf("route %s has no IAM action", pattern)

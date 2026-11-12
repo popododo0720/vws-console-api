@@ -17,12 +17,13 @@ import (
 )
 
 func TestAWSSDKConfigHasNoCredentials(t *testing.T) {
-	typ := reflect.TypeFor[Config]()
-	for i := range typ.NumField() {
-		field := typ.Field(i)
-		for _, word := range []string{"credential", "key", "secret", "token"} {
-			if strings.Contains(strings.ToLower(field.Name), word) {
-				t.Errorf("credential-like config field: %s", field.Name)
+	for _, typ := range []reflect.Type{reflect.TypeFor[Config](), reflect.TypeFor[ConnectionClient]()} {
+		for i := range typ.NumField() {
+			field := typ.Field(i)
+			for _, word := range []string{"credential", "key", "secret", "token"} {
+				if strings.Contains(strings.ToLower(field.Name), word) {
+					t.Errorf("credential-like config field: %s", field.Name)
+				}
 			}
 		}
 	}

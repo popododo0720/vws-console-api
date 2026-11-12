@@ -75,6 +75,38 @@ Expected diagnostic denials do not generate error events; real faults and
 forwarding retain error reporting. ExternalId never appears in URLs, logs,
 error messages or responses.
 
-The public console routes and client are deferred to part 2 of #923.
 Inventory still reads its ExternalId from the interim credential file; a
 diagnostic tests only the supplied request-scoped value.
+
+## Account connection tests
+
+The console's `-aws-proxy-socket` defaults to `/run/vws/aws-proxy.sock` and
+requires an absolute, clean socket path of at most 107 bytes. Root callers can POST a complete account
+form to `/api/v1/admin/aws-accounts/test`, or an empty JSON object to
+`/api/v1/admin/aws-accounts/{id}/test` to test the saved registration.
+Both require the global KEK, cookie CSRF, and the admin write limiter.
+Responses have `Cache-Control: no-store` and ordered `assume_role` and
+`get_caller_identity` steps with PASS, FAIL or SKIPPED results.
+
+The console opens the saved account-bound seal and sends only the account id,
+role ARN and request-scoped ExternalId as JSON to the private socket's
+`POST /internal/v1/aws-accounts/test`. Headers supply the authenticated
+principal, matching account, request id and target service `sts`.
+The proxy accepts at most 16 KiB, rejects queries, unknown or repeated fields
+and invalid metadata, and performs fresh AssumeRole then GetCallerIdentity
+against its configured STS endpoint. It uses forwarding's session duration
+and principal-derived session name. The identity must match the requested
+account. Failure skips later steps; no test reads or fills the session cache,
+calls the EC2 origin, or writes the registry.
+
+Source and session credentials stay in the proxy. ExternalId is never a URL,
+header, log, audit field, error or response value. Only fixed diagnostic
+messages cross back to the console. Proxy, client and console deadlines are
+10, 12 and 15 seconds. A proxy outage or older proxy becomes FAIL/SKIPPED;
+a saved record that cannot be opened asks the operator to save it again.
+
+A saved PASS proves the current sealed registry registration. Inventory
+forwarding still uses the interim credential-file ExternalId and the startup
+registration snapshot described above. Operators must keep those inputs
+consistent; migrating inventory to sealed registry credentials is outside
+the connection-test implementation.

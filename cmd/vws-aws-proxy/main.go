@@ -1,4 +1,4 @@
-// Command vws-aws-proxy serves the local EC2 inventory forwarding boundary.
+// Command vws-aws-proxy serves local EC2 inventory and AWS connection tests.
 package main
 
 import (

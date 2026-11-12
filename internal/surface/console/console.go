@@ -59,6 +59,7 @@ type Config struct {
 
 	RegionRegistration func(context.Context, string, json.RawMessage) error
 	RegionConnection   func(context.Context, store.Region, string) []resource.ConnectionStep
+	AccountConnection  func(context.Context, resource.AWSConnectionRequest, string) []resource.ConnectionStep
 	// Origins are browser origins allowed besides the console's own host,
 	// such as https://console.vws.example.
 	Origins []string
@@ -107,6 +108,7 @@ func New(cfg Config) http.Handler {
 
 		regionRegistration: cfg.RegionRegistration,
 		regionConnection:   cfg.RegionConnection,
+		accountConnection:  cfg.AccountConnection,
 	}
 	h.routes(h.mux)
 	return h
@@ -143,6 +145,8 @@ func (h *handler) routes(mux *http.ServeMux) {
 	handle("GET /api/v1/admin/aws-accounts", h.adminAccounts)
 	handle("GET /api/v1/admin/aws-accounts/{id}", h.adminAccount)
 	handle("POST /api/v1/admin/aws-accounts", h.adminWriteAccount)
+	handle("POST /api/v1/admin/aws-accounts/test", h.adminTestAWSAccount)
+	handle("POST /api/v1/admin/aws-accounts/{id}/test", h.adminTestAWSAccount)
 	handle("PATCH /api/v1/admin/aws-accounts/{id}", h.adminWriteAccount)
 	handle("DELETE /api/v1/admin/aws-accounts/{id}", h.adminWriteAccount)
 	handle("GET /api/v1/admin/permissions", h.adminPermissions)
@@ -207,6 +211,7 @@ type handler struct {
 
 	regionRegistration func(context.Context, string, json.RawMessage) error
 	regionConnection   func(context.Context, store.Region, string) []resource.ConnectionStep
+	accountConnection  func(context.Context, resource.AWSConnectionRequest, string) []resource.ConnectionStep
 }
 
 func (h *handler) mutation(action resource.Action) (string, string, http.HandlerFunc) {

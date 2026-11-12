@@ -100,6 +100,8 @@ func routeAction(pattern string) (authorization, bool) {
 		"GET /api/v1/admin/aws-accounts":                 nil,
 		"GET /api/v1/admin/aws-accounts/{id}":            nil,
 		"POST /api/v1/admin/aws-accounts":                nil,
+		"POST /api/v1/admin/aws-accounts/test":           nil,
+		"POST /api/v1/admin/aws-accounts/{id}/test":      nil,
 		"PATCH /api/v1/admin/aws-accounts/{id}":          nil,
 		"DELETE /api/v1/admin/aws-accounts/{id}":         nil,
 		"GET /api/v1/admin/permissions":                  nil,

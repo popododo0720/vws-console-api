@@ -1,15 +1,27 @@
 package console
 
 import (
+	"context"
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/popododo0720/vws-console-api/internal/resource"
 )
 
 func TestAdminConnectionRequiresRootKeyAndCSRF(t *testing.T) {
-	for _, path := range []string{regionPath + "/test", regionPath + "/pve-lab-1/test"} {
+	for _, path := range []string{
+		regionPath + "/test", regionPath + "/pve-lab-1/test",
+		accountPath + "/test", accountPath + "/" + accountID + "/test",
+	} {
 		t.Run(path, func(t *testing.T) {
 			e, _, _, _ := accountFixture(t)
+			calls := 0
+			h := e.h.(*handler)
+			h.accountConnection = func(context.Context, resource.AWSConnectionRequest, string) []resource.ConnectionStep {
+				calls++
+				return resource.AWSConnectionSteps(true, true)
+			}
 			user, _ := e.login(t)
 			rec := e.do(t, "POST", path, "{}", map[string]string{CSRFHeader: csrfToken(user.Value)}, user)
 			if rec.Code != http.StatusForbidden {
@@ -17,7 +29,7 @@ func TestAdminConnectionRequiresRootKeyAndCSRF(t *testing.T) {
 			}
 			e.h.(*handler).adminKey = nil
 			rec = e.do(t, "POST", path, "{}", map[string]string{"Authorization": "Bearer tok"})
-			if rec.Code != http.StatusServiceUnavailable {
+			if rec.Code != http.StatusServiceUnavailable || calls != 0 {
 				t.Fatalf("missing key: %d %s", rec.Code, rec.Body)
 			}
 			if err := e.root.SetPassword(t.Context(), "root password 9"); err != nil {
