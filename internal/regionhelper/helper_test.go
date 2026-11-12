@@ -75,7 +75,7 @@ func TestCommandsAndConfinement(t *testing.T) {
 			t.Fatalf("%s: %v", verb, err)
 		}
 	}
-	for _, name := range []string{"registration.json", "lease.json"} {
+	for _, name := range []string{"registration.json", "leader"} {
 		st, err := os.Stat(filepath.Join(h.public, name))
 		if err != nil || st.Mode().Perm() != 0o640 {
 			t.Fatalf("public document is not readable: %v", err)

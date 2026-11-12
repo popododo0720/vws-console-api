@@ -19,10 +19,11 @@ const metricPrefix = "vws_console_api_"
 // Metrics counts requests per surface. It lives on the Serve call, not in
 // package state, so the process stays stateless between runs.
 type Metrics struct {
-	mu       sync.Mutex
-	requests map[requestKey]uint64
-	seconds  map[string]float64
-	count    map[string]uint64
+	mu           sync.Mutex
+	requests     map[requestKey]uint64
+	seconds      map[string]float64
+	count        map[string]uint64
+	regionLeader func() string
 }
 
 type requestKey struct {
@@ -78,6 +79,12 @@ func (m *Metrics) WriteTo(w io.Writer) (int64, error) {
 		b = fmt.Appendf(b, "%shttp_request_duration_seconds_count{surface=%q} %d\n", metricPrefix, s, m.count[s])
 	}
 	m.mu.Unlock()
+	if m.regionLeader != nil {
+		b = append(b, "# HELP vws_region_leader Current region lease holder.\n# TYPE vws_region_leader gauge\n"...)
+		if node := m.regionLeader(); node != "" {
+			b = fmt.Appendf(b, "vws_region_leader{node=%q} 1\n", node)
+		}
+	}
 	n, err := w.Write(b)
 	if err != nil {
 		return int64(n), fmt.Errorf("write metrics: %w", err)

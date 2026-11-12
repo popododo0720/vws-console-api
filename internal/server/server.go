@@ -37,6 +37,8 @@ type Options struct {
 	OpsAddr string
 	// Ready checks dependencies after listeners have started and before shutdown.
 	Ready func(context.Context) error
+	// RegionLeader supplies the current unexpired lease holder for the ops gauge.
+	RegionLeader func() string
 }
 
 // Serve serves surfaces, plus an optional operations listener, until ctx is
@@ -50,6 +52,7 @@ func Serve(ctx context.Context, opts Options) error {
 		logger = slog.New(slog.DiscardHandler)
 	}
 	metrics := NewMetrics()
+	metrics.regionLeader = opts.RegionLeader
 	var ready atomic.Bool
 	type listener struct {
 		name    string

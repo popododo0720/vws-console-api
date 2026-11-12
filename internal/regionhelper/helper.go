@@ -94,7 +94,7 @@ func (h helper) run(args []string, stdin io.Reader) (err error) {
 	case "token-write":
 		root, name, write, encrypt = h.private, "pve-token", true, true
 	case "lease-write":
-		root, name, write = h.public, "lease.json", true
+		root, name, write = h.public, "leader", true
 	case "lock", "unlock":
 		if len(args) != 2 || !validLockName(args[1]) {
 			return errors.New("invalid lock name")
