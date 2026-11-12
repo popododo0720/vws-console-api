@@ -237,6 +237,19 @@ func (b *Backend) GetOperation(
 		if sync.action == resource.ActionCreateTags || sync.action == resource.ActionDeleteTags {
 			return b.tagOperation(ctx, s, id)
 		}
+		if sync.kind == resource.KindVolume {
+			target, err := resource.Parse[resource.VolumeID]("vol-" + sync.local)
+			if err != nil {
+				return resource.Operation{}, missing
+			}
+			if _, err := b.volumeForMutation(ctx, s, target); err != nil {
+				return resource.Operation{}, err
+			}
+			return resource.Operation{
+				ID: id, Action: sync.action, OwnerID: s.Account,
+				Targets: []resource.Ref{target.Ref()}, State: resource.OperationSucceeded,
+			}, nil
+		}
 		target, err := resource.Parse[resource.InstanceID]("i-" + sync.local)
 		if err != nil || sync.kind != resource.KindInstance {
 			return resource.Operation{}, missing

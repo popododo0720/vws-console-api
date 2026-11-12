@@ -184,6 +184,18 @@ func TestMutationMethodsRejectOtherPools(t *testing.T) {
 				resource.CreateSnapshotRequest{VolumeID: id})
 			return resource.KindVolume, id.String(), err
 		},
+		"AttachVolume": func(t *testing.T, b *Backend) (resource.Kind, string, error) {
+			iid, id := tagMutationIDs()
+			_, err := b.AttachVolume(t.Context(), backend.Mutation{Scope: inventoryScope()},
+				resource.AttachVolumeRequest{VolumeID: id, InstanceID: iid, Device: "/dev/sdf"})
+			return resource.KindVolume, id.String(), err
+		},
+		"DetachVolume": func(t *testing.T, b *Backend) (resource.Kind, string, error) {
+			_, id := tagMutationIDs()
+			_, err := b.DetachVolume(t.Context(), backend.Mutation{Scope: inventoryScope()},
+				resource.DetachVolumeRequest{VolumeID: id})
+			return resource.KindVolume, id.String(), err
+		},
 	}
 	functions := mutationFunctions(t)
 	implemented := map[string]bool{}
