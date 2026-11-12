@@ -136,9 +136,12 @@ func readPageGuarded[Q resource.Query[Q], T resource.Owned](
 	if err != nil {
 		return resource.Page[T]{}, err
 	}
-	for _, item := range page.Items {
+	for i, item := range page.Items {
 		if err := guard(c.Account, item); err != nil {
 			return resource.Page[T]{}, err
+		}
+		if regional, ok := any(&page.Items[i]).(interface{ DefaultRegion(string) }); ok {
+			regional.DefaultRegion(c.Region)
 		}
 	}
 	return page, nil

@@ -57,7 +57,7 @@ func (h *handler) listVpcs(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, out)
+	writeInventory(w, out)
 }
 
 func (h *handler) createVolume(w http.ResponseWriter, r *http.Request) {
@@ -163,7 +163,7 @@ func (h *handler) listVolumes(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, out)
+	writeInventory(w, out)
 }
 
 func (h *handler) listImages(w http.ResponseWriter, r *http.Request) {
@@ -181,7 +181,7 @@ func (h *handler) listImages(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, out)
+	writeInventory(w, out)
 }
 
 func (h *handler) createSecurityGroup(w http.ResponseWriter, r *http.Request) {

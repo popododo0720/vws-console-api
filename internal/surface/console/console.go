@@ -353,7 +353,7 @@ func (h *handler) listInstances(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, page)
+	writeInventory(w, page)
 }
 
 func (h *handler) getInstance(w http.ResponseWriter, r *http.Request) {
@@ -411,7 +411,7 @@ func (h *handler) listSubnets(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, out)
+	writeInventory(w, out)
 }
 
 func (h *handler) getSubnet(w http.ResponseWriter, r *http.Request) {
@@ -451,7 +451,7 @@ func (h *handler) listBuckets(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, out)
+	writeInventory(w, out)
 }
 
 func (h *handler) createBucket(w http.ResponseWriter, r *http.Request) {

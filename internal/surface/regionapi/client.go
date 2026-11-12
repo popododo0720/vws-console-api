@@ -121,5 +121,8 @@ func (c *Client) do(ctx context.Context, method, path string, data []byte, dst a
 	if err := decodeResult(body, dst); err != nil {
 		return fmt.Errorf("decode region result: %w", err)
 	}
+	if stale, ok := dst.(interface{ SetStale(bool) }); ok {
+		stale.SetStale(resp.Header.Get("X-Vws-Stale") == "true")
+	}
 	return nil
 }

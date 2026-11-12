@@ -8,6 +8,7 @@ const (
 
 // Snapshot is a copy of one volume.
 type Snapshot struct {
+	Regional
 	ID          SnapshotID        `json:"snapshotId"`
 	OwnerID     AccountID         `json:"ownerId"`
 	VolumeID    VolumeID          `json:"volumeId"`

@@ -12,9 +12,10 @@ const maxAddressPages = 20
 // fillPublicIPs sets each instance's public IP from the elastic IP associated
 // with it. Compute does not know about elastic IPs; the network service does.
 // A network backend that has no addresses leaves the fields empty.
-func (s *Service) fillPublicIPs(ctx context.Context, c resource.Caller, items []resource.Instance) error {
+func (s *Service) fillPublicIPs(ctx context.Context, c resource.Caller, items []resource.Instance) (bool, error) {
+	stale := false
 	if s.backends.Network == nil {
-		return nil
+		return stale, nil
 	}
 	byInstance := map[resource.InstanceID]resource.Address{}
 	addresses := served(s, resource.ReadDescribeAddresses, s.backends.Network.DescribeAddresses)
@@ -22,11 +23,12 @@ func (s *Service) fillPublicIPs(ctx context.Context, c resource.Caller, items []
 	for range maxAddressPages {
 		page, err := readPage(ctx, c, resource.AddressQuery{Page: resource.PageRequest{Size: 100, Token: token}}, addresses)
 		if resource.CodeOf(err) == resource.CodeUnimplemented {
-			return nil
+			return stale, nil
 		}
 		if err != nil {
-			return err
+			return stale, err
 		}
+		stale = stale || page.Stale
 		for _, addr := range page.Items {
 			if !addr.InstanceID.IsZero() && addr.PublicIP != "" {
 				byInstance[addr.InstanceID] = addr
@@ -43,5 +45,5 @@ func (s *Service) fillPublicIPs(ctx context.Context, c resource.Caller, items []
 			items[i].PublicIPAllocationID = addr.ID
 		}
 	}
-	return nil
+	return stale, nil
 }
