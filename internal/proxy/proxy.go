@@ -1,4 +1,4 @@
-// Package proxy forwards authorized EC2 inventory requests using isolated AWS credentials.
+// Package proxy forwards authorized EC2 requests using isolated AWS credentials.
 package proxy
 
 import (
@@ -101,7 +101,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	valid := regexp.MustCompile(`^[A-Za-z0-9]+$`)
 	if err != nil || r.URL.Path != "/" || (r.Method != http.MethodGet && r.Method != http.MethodPost) ||
 		(r.Method == http.MethodGet && len(body) != 0) || len(q["Action"]) != 1 ||
-		!strings.HasPrefix(q.Get("Action"), "Describe") || len(q.Get("Action")) <= len("Describe") ||
+		!allowedAction(q.Get("Action")) ||
 		!valid.MatchString(q.Get("Action")) || r.Header.Get("X-Vws-Target-Service") != "ec2" ||
 		!regexp.MustCompile(`^[0-9]{12}$`).MatchString(account) || principal == "" || len(principal) > 2048 ||
 		!regexp.MustCompile(`^[a-z]{2}(-[a-z]+)+-[0-9]+$`).MatchString(region) ||
@@ -151,6 +151,16 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		},
 	}
 	forward.ServeHTTP(w, r)
+}
+
+func allowedAction(action string) bool {
+	switch action {
+	case "RunInstances", "StartInstances", "StopInstances", "RebootInstances", "TerminateInstances",
+		"CreateSnapshot", "DeleteSnapshot", "CreateTags", "DeleteTags":
+		return true
+	default:
+		return strings.HasPrefix(action, "Describe") && len(action) > len("Describe")
+	}
 }
 
 func refuse(w http.ResponseWriter, status int, code string) {

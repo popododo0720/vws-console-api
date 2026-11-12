@@ -236,17 +236,35 @@ func TestAccountIDIsBoundedBeforeTheFilesystem(t *testing.T) {
 
 func TestDeniedNeverCallsOutbound(t *testing.T) {
 	for _, raw := range []string{
-		"Action=RunInstances", "Action=Describe", "Action=Describe%00Instances",
+		"Action=RunScheduledInstances", "Action=ModifyInstanceAttribute", "Action=DeleteVolume",
+		"Action=CreateSnapshots", "Action=DeleteTagsExtra", "Action=Describe", "Action=Describe%00Instances",
 		"Action=%zz", "Action=DescribeInstances&Action=RunInstances", "Action=DescribeInstances;Action=RunInstances",
 		"Action=DescribeInstances&X-Amz-Credential=evil", "", "Action=DescribeInstances&Filter=1&Filter=2",
 	} {
 		t.Run(raw, func(t *testing.T) {
 			f := setup(t)
-			if w := f.request(raw); w.Code != 403 {
-				t.Fatalf("status=%d", w.Code)
+			if w := f.request(raw); w.Code != 403 || !strings.Contains(w.Body.String(), "<Code>UnauthorizedOperation</Code>") {
+				t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
 			}
 			if f.stsCalls != 0 || f.originCalls != 0 {
 				t.Fatal("denied request made an outbound call")
+			}
+		})
+	}
+}
+
+func TestMutationAllowlist(t *testing.T) {
+	for _, action := range []string{
+		"RunInstances", "StartInstances", "StopInstances", "RebootInstances", "TerminateInstances",
+		"CreateSnapshot", "DeleteSnapshot", "CreateTags", "DeleteTags",
+	} {
+		t.Run(action, func(t *testing.T) {
+			f := setup(t)
+			if w := f.request("Action=" + action); w.Code != http.StatusOK {
+				t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+			}
+			if f.stsCalls != 1 || f.originCalls != 1 {
+				t.Fatalf("STS=%d origin=%d", f.stsCalls, f.originCalls)
 			}
 		})
 	}
