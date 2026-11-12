@@ -41,6 +41,7 @@ func New(catalog backend.RegionCatalog, resolve Resolver, keys ...keyPairClient)
 		Compute: compute{base.Compute, r, keyPairs},
 		Network: network{base.Network, r},
 		Storage: storage{base.Storage, r},
+		Console: r,
 	}, nil
 }
 

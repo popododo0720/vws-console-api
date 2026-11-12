@@ -1,9 +1,11 @@
 package server
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"sort"
 	"strconv"
@@ -111,6 +113,15 @@ type codeRecorder struct {
 func (c *codeRecorder) WriteHeader(code int) {
 	c.code = code
 	c.ResponseWriter.WriteHeader(code)
+}
+
+func (c *codeRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	conn, rw, err := http.NewResponseController(c.ResponseWriter).Hijack()
+	if err != nil {
+		return nil, nil, fmt.Errorf("hijack metrics response: %w", err)
+	}
+	c.code = http.StatusSwitchingProtocols
+	return conn, rw, nil
 }
 
 // opsHandler serves the liveness, readiness, and metrics endpoints. It runs

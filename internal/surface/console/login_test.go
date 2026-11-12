@@ -258,6 +258,7 @@ func TestRootLogin(t *testing.T) {
 func TestEveryRouteIsAuthorized(t *testing.T) {
 	for _, route := range []string{
 		"POST /api/v1/admin/aws-accounts/test", "POST /api/v1/admin/aws-accounts/{id}/test",
+		routeConsole,
 	} {
 		found := false
 		for _, pattern := range Routes() {
@@ -274,6 +275,16 @@ func TestEveryRouteIsAuthorized(t *testing.T) {
 	}
 	if len(Routes()) < 40 {
 		t.Errorf("only %d routes listed", len(Routes()))
+	}
+}
+
+func TestConsoleRequiresIAMPermission(t *testing.T) {
+	e := newLoginEnv(t)
+	session, _ := e.login(t)
+	rec := e.do(t, http.MethodGet, "/api/v1/instances/i-0123456789abcdef0/console?kind=vnc", "",
+		map[string]string{"Origin": "http://127.0.0.1:8080", "Connection": "Upgrade", "Upgrade": "websocket"}, session)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("console without vws:OpenConsole permission: %d %s", rec.Code, rec.Body)
 	}
 }
 

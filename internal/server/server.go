@@ -3,15 +3,20 @@
 package server
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/gorilla/websocket"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
 	"github.com/popododo0720/vws-lib/obs"
 	"github.com/popododo0720/vws-lib/obs/httpobs"
@@ -117,8 +122,17 @@ func Serve(ctx context.Context, opts Options) error {
 // span and vws.http.server.* metrics, the restored client headers, then the
 // request id, access log, and panic recovery.
 func surfaceHandler(logger *slog.Logger, metrics *Metrics, sf Surface) http.Handler {
-	handler := httpobs.Middleware(service.Name, routePattern(sf.Handler))(
-		restoreInbound(wrap(logger, sf.Name, sf.Handler)))
+	base := restoreInbound(wrap(logger, sf.Name, sf.Handler))
+	observed := httpobs.Middleware(service.Name, routePattern(sf.Handler))(base)
+	// httpobs v0.1.1 hides Hijacker; otelhttp preserves it for streaming routes.
+	streaming := otelhttp.NewHandler(base, service.Name)
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if websocket.IsWebSocketUpgrade(r) {
+			streaming.ServeHTTP(w, r)
+			return
+		}
+		observed.ServeHTTP(w, r)
+	})
 	return instrument(metrics, sf.Name, sanitizeInbound(handler))
 }
 
@@ -281,4 +295,13 @@ func (s *statusRecorder) noteFailure(err error) { s.failure = errors.Join(s.fail
 func (s *statusRecorder) WriteHeader(code int) {
 	s.status = code
 	s.ResponseWriter.WriteHeader(code)
+}
+
+func (s *statusRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	conn, rw, err := http.NewResponseController(s.ResponseWriter).Hijack()
+	if err != nil {
+		return nil, nil, fmt.Errorf("hijack response: %w", err)
+	}
+	s.status = http.StatusSwitchingProtocols
+	return conn, rw, nil
 }

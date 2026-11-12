@@ -29,3 +29,25 @@ func TestConsoleCapabilityFollowsBackendSet(t *testing.T) {
 		}
 	}
 }
+
+func TestAWSConsoleCapability(t *testing.T) {
+	doc, err := (backend.AllSupported{Kind: resource.RegionKindAWS}).RegionCapabilities(t.Context(), "us-east-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := doc.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	got := doc.Actions["vws:OpenConsole"]
+	if got.State != resource.ActionUnsupported || got.ReasonCode != "NoConsole" ||
+		got.Reason != "use EC2 Instance Connect" {
+		t.Fatalf("AWS console capability: %+v", got)
+	}
+	bound, err := (backend.Set{}).Capabilities(backend.AllSupported{Kind: resource.RegionKindAWS}).
+		RegionCapabilities(t.Context(), "us-east-1")
+	boundConsole := bound.Actions["vws:OpenConsole"]
+	if err != nil || boundConsole.State != got.State || boundConsole.ReasonCode != got.ReasonCode ||
+		boundConsole.Reason != got.Reason {
+		t.Fatalf("backend binding lost AWS console reason: %+v %v", bound, err)
+	}
+}

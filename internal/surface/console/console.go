@@ -164,6 +164,7 @@ func (h *handler) routes(mux *http.ServeMux) {
 	handle("POST /api/v1/instances/start", h.startInstances)
 	handle("POST /api/v1/instances/terminate", h.terminateInstances)
 	handle("GET /api/v1/instances/{id}", h.getInstance)
+	handle(routeConsole, h.openConsole)
 	handle("GET /api/v1/operations/{id}", h.getOperation)
 	handle("GET /api/v1/subnets", h.listSubnets)
 	handle("GET /api/v1/subnets/{id}", h.getSubnet)

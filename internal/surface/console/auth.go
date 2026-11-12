@@ -142,6 +142,9 @@ func routeAction(pattern string) (authorization, bool) {
 		routeLogin:   nil,
 		routeLogout:  nil,
 		routeSession: nil,
+		routeConsole: func(*http.Request) (string, string) {
+			return "vws:OpenConsole", "*"
+		},
 	}[pattern]
 	return z, ok
 }
@@ -194,6 +197,19 @@ func (h *handler) gate(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeErr(w, r, err)
 		return
+	}
+	if pattern == routeConsole {
+		if c.Subject != "session" || r.Header.Get("Authorization") != "" {
+			writeErr(w, r, resource.Unauthenticated("console session required"))
+			return
+		}
+		if len(r.Header.Values("Origin")) != 1 {
+			writeErr(w, r, resource.Denied("one origin required"))
+			return
+		}
+		if !h.browserWriteOK(w, r, false) {
+			return
+		}
 	}
 	if !isAdmin && pattern != routeSession && pattern != routeLogout {
 		if c.Region == "" {
