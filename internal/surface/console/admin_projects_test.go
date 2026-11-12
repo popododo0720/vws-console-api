@@ -79,6 +79,46 @@ func TestProjectMappingDefaultsPoolToProject(t *testing.T) {
 	}
 }
 
+func TestProjectMappingDefaultsSkipUndecodableRegions(t *testing.T) {
+	e, _, app, auditLog := accountFixture(t)
+	b := store.NewMemory()
+	g := store.New(b)
+	if _, err := g.Regions().Create(t.Context(), store.Region{Name: "pve-valid-1"}); err != nil {
+		t.Fatal(err)
+	}
+	const badKey, badValue = "regions/pve-corrupt-1", "private-undecodable-region-value"
+	if _, err := b.Create(t.Context(), badKey, []byte(badValue)); err != nil {
+		t.Fatal(err)
+	}
+	e.h.(*handler).registry = g
+	rec := projectCall(t, e, "GET", projectPath, nil, "", 200)
+	var got store.Project
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Pools) != 1 || got.Pools[0] != (store.ProjectPool{Region: "pve-valid-1", Pool: "123456789012"}) ||
+		rec.Header().Get("ETag") != `"0"` || auditLog.Len() != 0 {
+		t.Fatalf("default mapping with a corrupt region: %+v", got)
+	}
+	lines := strings.Split(strings.TrimSpace(app.String()), "\n")
+	if len(lines) != 1 {
+		t.Fatalf("warning lines=%d, want 1", len(lines))
+	}
+	var entry map[string]any
+	if err := json.Unmarshal([]byte(lines[0]), &entry); err != nil {
+		t.Fatal(err)
+	}
+	if entry["level"] != "WARN" || entry["msg"] != "admin registry skipped undecodable records" ||
+		entry["count"] != float64(1) || len(entry) != 4 {
+		t.Fatalf("warning must contain only time, level, message and count: %s", app)
+	}
+	for _, private := range []string{badKey, "pve-corrupt-1", badValue, "pve-valid-1", "123456789012"} {
+		if strings.Contains(app.String(), private) {
+			t.Fatal("warning contains a registry key, value or identifier")
+		}
+	}
+}
+
 func TestProjectMappingRefusesUnregisteredAccount(t *testing.T) {
 	e, g, _ := projectFixture(t)
 	body := projectBody("shared")

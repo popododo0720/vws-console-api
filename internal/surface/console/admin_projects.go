@@ -3,6 +3,7 @@ package console
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -38,8 +39,7 @@ func (h *handler) adminProject(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if len(skipped) != 0 {
-			adminError(w, r, errors.New("invalid region registration"))
-			return
+			h.log.WarnContext(r.Context(), "admin registry skipped undecodable records", slog.Int("count", len(skipped)))
 		}
 		v = store.Project{Project: id, Pools: []store.ProjectPool{}, AWSAccounts: []string{}}
 		for _, region := range regions {
