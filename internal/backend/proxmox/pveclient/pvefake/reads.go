@@ -23,6 +23,7 @@ func (f *Fake) routes() {
 	f.handle("/cluster/status", f.clusterStatus)
 	f.handle("/cluster/resources", f.clusterResources)
 	f.handle("/nodes", f.nodes)
+	f.handle("/pools/{pool}", f.pool)
 	f.handle("/nodes/{node}/network", f.network)
 	f.handle("/nodes/{node}/qemu/{vmid}/config", f.config)
 	f.handle("/nodes/{node}/qemu/{vmid}/snapshot", f.snapshots)
@@ -32,6 +33,29 @@ func (f *Fake) routes() {
 		msg := fmt.Sprintf("Method '%s %s' not implemented", r.Method, r.URL.Path)
 		reply(w, nil, &failure{http.StatusNotImplemented, msg})
 	})
+}
+
+func (f *Fake) pool(t *Token, r *http.Request) (any, *failure) {
+	name := r.PathValue("pool")
+	if fail := f.need(t, "/pool/"+name, "Pool.Audit"); fail != nil {
+		return nil, fail
+	}
+	exists := slices.Contains(f.s.Pools, name)
+	members := []map[string]any{}
+	for _, vm := range f.s.VMs {
+		if vm.Pool == name {
+			exists = true
+			if f.can(t, "/vms/"+strconv.Itoa(vm.VMID), "VM.Audit") {
+				members = append(members, map[string]any{
+					"type": "qemu", "vmid": vm.VMID, "node": vm.Node, "id": "qemu/" + strconv.Itoa(vm.VMID),
+				})
+			}
+		}
+	}
+	if !exists {
+		return nil, &failure{http.StatusInternalServerError, fmt.Sprintf("pool '%s' does not exist", name)}
+	}
+	return map[string]any{"members": members}, nil
 }
 
 func (f *Fake) snapshots(t *Token, r *http.Request) (any, *failure) {

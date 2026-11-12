@@ -45,6 +45,21 @@ func regionRegistration(path string) (func(context.Context, string, json.RawMess
 	}, nil
 }
 
+func regionPool(path string) (func(context.Context, string, string) (bool, error), error) {
+	connect, err := regionConnection(path)
+	if err != nil {
+		return nil, err
+	}
+	return func(ctx context.Context, endpoint, pool string) (bool, error) {
+		client, err := connect(endpoint)
+		if err != nil {
+			return false, err
+		}
+		defer client.Close()
+		return client.PoolExists(ctx, pool)
+	}, nil
+}
+
 func regionConnection(path string) (func(string) (*regionapi.Client, error), error) {
 	if path == "" {
 		return func(string) (*regionapi.Client, error) {

@@ -73,6 +73,28 @@ func (m *Memory) Delete(_ context.Context, key string, expected Version) error {
 	return nil
 }
 
+// Swap compares all keys and changes them under one lock and revision.
+func (m *Memory) Swap(ctx context.Context, checks, puts []Entry, deletes []string) (Version, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	for _, e := range checks {
+		if m.entries[e.Key].Version != e.Version {
+			return 0, ErrConflict
+		}
+	}
+	m.rev++
+	for _, e := range puts {
+		m.entries[e.Key] = Entry{Key: e.Key, Value: slices.Clone(e.Value), Version: m.rev}
+	}
+	for _, key := range deletes {
+		delete(m.entries, key)
+	}
+	return m.rev, nil
+}
+
 func (m *Memory) check(key string, expected Version) error {
 	e, ok := m.entries[key]
 	switch {

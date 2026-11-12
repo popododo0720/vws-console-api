@@ -55,6 +55,7 @@ type Config struct {
 	Audit        *audit.Logger
 	Logger       *slog.Logger
 	RegionStatus func(context.Context, string) (resource.RegionStatus, error)
+	RegionPool   func(context.Context, string, string) (bool, error)
 
 	RegionRegistration func(context.Context, string, json.RawMessage) error
 	// Origins are browser origins allowed besides the console's own host,
@@ -101,6 +102,7 @@ func New(cfg Config) http.Handler {
 		adminKey:     cfg.AdminKey,
 		audit:        cfg.Audit,
 		regionStatus: cfg.RegionStatus,
+		regionPool:   cfg.RegionPool,
 
 		regionRegistration: cfg.RegionRegistration,
 	}
@@ -140,6 +142,8 @@ func (h *handler) routes(mux *http.ServeMux) {
 	handle("PATCH /api/v1/admin/aws-accounts/{id}", h.adminWriteAccount)
 	handle("DELETE /api/v1/admin/aws-accounts/{id}", h.adminWriteAccount)
 	handle("GET /api/v1/admin/permissions", h.adminPermissions)
+	handle("GET /api/v1/admin/projects/{project}", h.adminProject)
+	handle("PUT /api/v1/admin/projects/{project}", h.adminMapProject)
 	for _, action := range resource.Actions() {
 		method, pattern, fn := h.mutation(action)
 		handle(method+" "+pattern, fn)
@@ -195,6 +199,7 @@ type handler struct {
 	users        *limiter
 	requests     *throttle.Limiter
 	regionStatus func(context.Context, string) (resource.RegionStatus, error)
+	regionPool   func(context.Context, string, string) (bool, error)
 
 	regionRegistration func(context.Context, string, json.RawMessage) error
 }

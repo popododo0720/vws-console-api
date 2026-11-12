@@ -45,6 +45,9 @@ type Backend interface {
 	List(ctx context.Context, prefix string) ([]Entry, error)
 	Update(ctx context.Context, key string, value []byte, expected Version) (Version, error)
 	Delete(ctx context.Context, key string, expected Version) error
+	// Swap applies every put and delete atomically only while all checks match.
+	// A check at version 0 requires absence; a mismatch returns ErrConflict.
+	Swap(ctx context.Context, checks, puts []Entry, deletes []string) (Version, error)
 }
 
 // Region is one registered Proxmox cluster.

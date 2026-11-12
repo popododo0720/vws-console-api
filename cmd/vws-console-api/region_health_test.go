@@ -15,6 +15,10 @@ import (
 
 func TestRegionHealthUsesBootstrapMTLS(t *testing.T) {
 	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/internal/v1/pools/project" && r.Method == http.MethodGet {
+			w.Write([]byte(`{"exists":true}`))
+			return
+		}
 		if r.URL.Path == "/internal/v1/registration" && r.Method == http.MethodPut {
 			w.Write([]byte(`{}`))
 			return
@@ -71,6 +75,13 @@ default_project: default
 	if err := register(t.Context(), srv.URL, []byte(`{}`)); err != nil {
 		t.Fatalf("bootstrap registration: %v", err)
 	}
+	pool, err := regionPool(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if exists, err := pool(t.Context(), srv.URL, "project"); err != nil || !exists {
+		t.Fatalf("bootstrap pool: %t %v", exists, err)
+	}
 	if _, err := health(t.Context(), "https://user:credential@127.0.0.1:1234"); err == nil ||
 		strings.Contains(err.Error(), "credential") || strings.Contains(err.Error(), "user:") {
 		t.Fatalf("credential-bearing region endpoint was not safely refused: %v", err)
@@ -80,6 +91,10 @@ default_project: default
 	}
 	if _, err := health(t.Context(), srv.URL); err == nil || err.Error() != "region mTLS configuration failed" {
 		t.Fatalf("missing client key was not safely refused: %v", err)
+	}
+	if _, err := pool(t.Context(), srv.URL, "project"); err == nil ||
+		err.Error() != "region mTLS configuration failed" {
+		t.Fatalf("pool accepted missing client key: %v", err)
 	}
 	if err := os.WriteFile(keyPath, []byte("credential-canary"), 0o600); err != nil {
 		t.Fatal(err)

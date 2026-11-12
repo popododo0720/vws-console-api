@@ -330,3 +330,30 @@ func TestStorageAndSnapshotReads(t *testing.T) {
 		t.Fatalf("snapshot without VM.Audit: %v", err)
 	}
 }
+
+func TestPoolReadsIncludeEmptyAndVMPools(t *testing.T) {
+	s := scenario(t)
+	s.Pools = []string{"empty"}
+	f, srv := start(t, s)
+	s.Pools[0] = "changed-after-new"
+	c := client(t, srv, auditor, auditorKey)
+	for pool, want := range map[string]bool{"vws-a": true, "empty": true, "missing": false, "changed-after-new": false} {
+		if got, err := c.Pool(t.Context(), pool); err != nil || got != want {
+			t.Fatalf("pool %s = %t, %v, want %t", pool, got, err, want)
+		}
+	}
+	if err := f.MoveVM(100, "new-pool"); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := c.Pool(t.Context(), "new-pool"); !got || err != nil {
+		t.Fatalf("moved VM pool: %t %v", got, err)
+	}
+	limited := client(t, srv, poolA, poolAKey)
+	if got, err := limited.Pool(t.Context(), "vws-a"); got || status(err) != 403 {
+		t.Fatalf("pool without Pool.Audit: %t %v", got, err)
+	}
+	parsed, err := pvefake.Parse([]byte("pools: [empty, another]\n"))
+	if err != nil || len(parsed.Pools) != 2 {
+		t.Fatalf("scenario pools: %+v %v", parsed.Pools, err)
+	}
+}

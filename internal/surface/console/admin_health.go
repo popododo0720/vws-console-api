@@ -47,39 +47,7 @@ func (h *handler) adminHealth(w http.ResponseWriter, r *http.Request) {
 	state := "ok"
 	if err != nil {
 		state = "unreachable"
-		message := "region transport failed"
-		var config *RegionMTLSConfigError
-		var network *net.OpError
-		var errno syscall.Errno
-		var certificate *tls.CertificateVerificationError
-		var record tls.RecordHeaderError
-		switch {
-		case errors.As(err, &config):
-			message = config.Error()
-			reason := "invalid certificate or CA"
-			if errors.Is(err, os.ErrNotExist) {
-				reason = "credential file missing"
-			} else if errors.Is(err, os.ErrPermission) {
-				reason = "credential file permission denied"
-			}
-			h.log.WarnContext(r.Context(), "region mTLS configuration failed", slog.String("reason", reason))
-		case errors.Is(err, context.DeadlineExceeded):
-			message += ": deadline exceeded"
-		case errors.Is(err, context.Canceled):
-			message += ": request canceled"
-		case errors.As(err, &certificate), errors.As(err, &record):
-			message += ": TLS handshake failed"
-		case errors.As(err, &network):
-			switch network.Op {
-			case "dial", "read", "write":
-				message += ": " + network.Op
-				if errors.As(network.Err, &errno) {
-					message += ": " + errno.Error()
-				}
-			case "remote error":
-				message += ": TLS handshake failed"
-			}
-		}
+		message := h.regionFailure(r.Context(), err)
 		status = resource.RegionStatus{
 			Nodes:     []resource.RegionNode{},
 			LastError: &resource.RegionStatusError{Time: h.now().UTC(), Message: message},
@@ -90,4 +58,41 @@ func (h *handler) adminHealth(w http.ResponseWriter, r *http.Request) {
 		Status    string    `json:"status"`
 		CheckedAt time.Time `json:"checkedAt"`
 	}{RegionStatus: status, Status: state, CheckedAt: h.now().UTC()})
+}
+
+func (h *handler) regionFailure(ctx context.Context, err error) string {
+	message := "region transport failed"
+	var config *RegionMTLSConfigError
+	var network *net.OpError
+	var errno syscall.Errno
+	var certificate *tls.CertificateVerificationError
+	var record tls.RecordHeaderError
+	switch {
+	case errors.As(err, &config):
+		message = config.Error()
+		reason := "invalid certificate or CA"
+		if errors.Is(err, os.ErrNotExist) {
+			reason = "credential file missing"
+		} else if errors.Is(err, os.ErrPermission) {
+			reason = "credential file permission denied"
+		}
+		h.log.WarnContext(ctx, "region mTLS configuration failed", slog.String("reason", reason))
+	case errors.Is(err, context.DeadlineExceeded):
+		message += ": deadline exceeded"
+	case errors.Is(err, context.Canceled):
+		message += ": request canceled"
+	case errors.As(err, &certificate), errors.As(err, &record):
+		message += ": TLS handshake failed"
+	case errors.As(err, &network):
+		switch network.Op {
+		case "dial", "read", "write":
+			message += ": " + network.Op
+			if errors.As(network.Err, &errno) {
+				message += ": " + errno.Error()
+			}
+		case "remote error":
+			message += ": TLS handshake failed"
+		}
+	}
+	return message
 }

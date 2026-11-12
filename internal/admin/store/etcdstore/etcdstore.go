@@ -90,6 +90,31 @@ func (s *Store) Delete(ctx context.Context, key string, expected store.Version) 
 	return err
 }
 
+// Swap compares the project and pool claims in the same transaction as their writes.
+func (s *Store) Swap(ctx context.Context, checks, puts []store.Entry, deletes []string) (store.Version, error) {
+	ctx, cancel := context.WithTimeout(ctx, CallTimeout)
+	defer cancel()
+	conditions := make([]clientv3.Cmp, 0, len(checks))
+	for _, e := range checks {
+		conditions = append(conditions, clientv3.Compare(clientv3.ModRevision(store.Prefix+e.Key), "=", int64(e.Version)))
+	}
+	ops := make([]clientv3.Op, 0, len(puts)+len(deletes))
+	for _, e := range puts {
+		ops = append(ops, clientv3.OpPut(store.Prefix+e.Key, string(e.Value)))
+	}
+	for _, key := range deletes {
+		ops = append(ops, clientv3.OpDelete(store.Prefix+key))
+	}
+	resp, err := s.kv.Txn(ctx).If(conditions...).Then(ops...).Commit()
+	if err != nil {
+		return 0, fmt.Errorf("etcd swap project mapping: %w", err)
+	}
+	if !resp.Succeeded {
+		return 0, store.ErrConflict
+	}
+	return store.Version(resp.Header.Revision), nil
+}
+
 // ifAt runs op when key is at expected. On a miss the same transaction reads
 // key, which tells a missing key from a changed one.
 func (s *Store) ifAt(ctx context.Context, key string, expected store.Version, op clientv3.Op) (store.Version, error) {

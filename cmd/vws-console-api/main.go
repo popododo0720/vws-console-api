@@ -227,6 +227,10 @@ func run(ctx context.Context, args []string) (err error) {
 	if err != nil {
 		return err
 	}
+	pool, err := regionPool(*globalConfig)
+	if err != nil {
+		return err
+	}
 	var regions backend.RegionCatalog = backend.DefaultRegions()
 	if *backendKind != "fake" {
 		regions = registry.Catalog()
@@ -297,6 +301,7 @@ func run(ctx context.Context, args []string) (err error) {
 			AdminKey:       adminKey,
 			Audit:          audit.New(auditOut),
 			RegionStatus:   health,
+			RegionPool:     pool,
 			Auth:           console.BearerTokens{*consoleToken: caller},
 			IAM:            auth,
 			Logger:         logger,
