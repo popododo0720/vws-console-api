@@ -119,6 +119,9 @@ func run(ctx context.Context, args []string) (err error) {
 			}
 			return err
 		}
+		if b == leaderBackend && state.Load() != nil {
+			return nil
+		}
 		identity := proxmox.Identity(b)
 		if b != leaderBackend {
 			leader, err := proxmox.NewLeader(ctx, b, conn.Helper, filepath.Join(filepath.Dir(*registration), "leader"))

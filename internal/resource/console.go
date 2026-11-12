@@ -1,6 +1,10 @@
 package resource
 
-import "time"
+import (
+	"context"
+	"io"
+	"time"
+)
 
 // ConsoleKind is how a console session reaches an instance.
 type ConsoleKind int
@@ -35,4 +39,14 @@ type ConsoleSession struct {
 	Kind    ConsoleKind
 	URL     string `json:"-"`
 	Expires time.Time
+	// Dial opens the backend-owned transport without exporting its credentials.
+	Dial func(context.Context) (ConsoleStream, error) `json:"-"`
+}
+
+// ConsoleStream preserves text and binary messages across a console relay.
+// One reader and one writer may run concurrently; Close interrupts both.
+type ConsoleStream interface {
+	NextReader() (int, io.Reader, error)
+	NextWriter(int) (io.WriteCloser, error)
+	Close() error
 }
