@@ -110,7 +110,7 @@ func setup(t *testing.T, fixture string, status int) *Backend {
 
 func fixtureSocket(t *testing.T) string {
 	t.Helper()
-	dir, err := os.MkdirTemp("", "aws")
+	dir, err := os.MkdirTemp("", "a")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,5 +119,5 @@ func fixtureSocket(t *testing.T) string {
 			t.Error(err)
 		}
 	})
-	return filepath.Join(dir, "proxy.sock")
+	return filepath.Join(dir, "s")
 }
