@@ -38,7 +38,8 @@ modeled action stands for the code path it takes (`Shape` in the spec):
 | `cas`: write under the bound etag | `UpdateUser` | `DeleteUser`, `UpdateGroup`, `DeleteGroup`, group membership, user and group policy writes |
 | `expect`: write with `expected_user_arn` | `UpdateAccessKey` | `DeleteAccessKey` |
 | `undo`: write, etag reread, undo | `EnableMFADevice` | |
-| `none`: write with no precondition | `CreateAccessKey`, `UpdateRole` | `UpdateRoleDescription` |
+| `create`: key create under the bound etag (`user_etag`) | `CreateAccessKey` | |
+| `none`: write with no precondition | `UpdateRole` | `UpdateRoleDescription` |
 
 A `read` call may make more RPCs after the bind read, but they read other
 resources: `ListGroupsForUser` reads each group the user's status names, and
@@ -58,6 +59,7 @@ there every call is one step and cannot break these properties.
 | `ReadsBound` | A one-call read returns data only of the entity at the authorized ARN. | `AuthorizedPrincipal.Bind` on every entity read (#331, #342) | `FixBind=FALSE`: read by name |
 | `PagesBound` | A read of several calls returns no page read while the entity was elsewhere, a move away and back included. | `unchangedUser` compares the etag (#407) | `FixPageEtag=FALSE`: the reread checks the ARN only |
 | `WritesBound` | A guarded write never applies to the entity at another ARN. | the etag on `UpdateUser` and `UpdateGroup`; `expected_user_arn` on access key writes (#340) | `FixWriteEtag=FALSE` or `FixExpectARN=FALSE` |
+| `CreateAccessKeyBound` | A `CreateAccessKey` never creates a key on the user at another ARN. | `user_etag` on `CreateAccessKeyRequest`, from `boundUser` (#624) | `FixWriteEtag=FALSE` |
 | `UndoCatchesMoves` | An `EnableMFADevice` that answers leaves no enable made at another ARN. | `EnableMFADevice`'s `unchangedUser` and `undoEnableMFADevice` | `FixUndoEtag=FALSE`: the reread checks the ARN only |
 
 `scripts/tla-iam.sh` checks the real design (every `Fix*` TRUE) with all
@@ -75,17 +77,12 @@ Each fails on the real design. `scripts/tla-iam.sh` keeps them in its list
 and fails once one holds, so a fix shows up as a failing CI step; the
 property then moves into `iamauth.cfg`.
 
-1. `CreateAccessKeyBound` (#624): `CreateAccessKey` binds the user with `keyUser`,
-   then sends `CreateAccessKeyRequest`, which has no `expected_user_arn` or
-   etag in vws-proto, and does not read the user again. A user moved to a
-   denied path in between gets the key, and the caller gets its secret
-   (5 states).
-2. `UpdateRoleBound` (#625): `UpdateRole` and `UpdateRoleDescription` bind the role
+1. `UpdateRoleBound` (#625): `UpdateRole` and `UpdateRoleDescription` bind the role
    with `roleAt`, then send `UpdateRoleRequest` without the role's etag. A
    role deleted and created again on a denied path in between is changed
    (5 states). `UpdateRoleRequest.role` already carries `Role.etag` in
    vws-proto.
-3. `EnableNeverStaysUnverified` (#626): `EnableMFADevice` enables the device first
+2. `EnableNeverStaysUnverified` (#626): `EnableMFADevice` enables the device first
    and checks the user after. A restart between the enable and the check
    (or an undo whose outcome is unknown, which the code already answers as
    an internal error) leaves the device enabled for a user at a denied path
@@ -97,7 +94,7 @@ property then moves into `iamauth.cfg`.
   denied ARN.
 - Up to 2 moves per run (a move away and back) and 1 restart.
 - A paged read reads 2 pages.
-- Real design result: 18,081 distinct states, 0 violations, depth 13.
+- Real design result: 18,085 distinct states, 0 violations, depth 13.
 
 ## Not modeled
 

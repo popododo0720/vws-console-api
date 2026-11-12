@@ -77,9 +77,9 @@ type directory struct {
 	// keyState, when set, is the state ListAccessKeys and GetAccessKey report
 	// for every key, so tests see INACTIVE and states vws-iam never sends.
 	keyState iamv1.AccessKeyState
-	// keyRace is the number of UpdateAccessKey and DeleteAccessKey calls that
-	// find the user moved to keyRacePath by another writer after the client
-	// read it.
+	// keyRace is the number of CreateAccessKey, UpdateAccessKey and
+	// DeleteAccessKey calls that find the user moved to keyRacePath by another
+	// writer after the client read it.
 	keyRace     int
 	keyRacePath string
 	// createSecret, when set, replaces the secret CreateAccessKey returns.
@@ -657,6 +657,11 @@ func (d *directory) CreateAccessKey(
 	user := fold(req.GetParent())
 	if d.users[user] == nil {
 		return nil, awsErr(codes.NotFound, "NOT_FOUND", "NoSuchEntity")
+	}
+	d.raceKeyUser(user)
+	// The user_etag precondition of vws-iam #139 (internal/grpcapi/keys.go).
+	if e := req.GetUserEtag(); e != "" && e != strconv.Itoa(d.users[user].version) {
+		return nil, awsErr(codes.Aborted, "ETAG_MISMATCH", "ConcurrentModification")
 	}
 	if d.keysOf(user) >= 2 {
 		return nil, awsErr(codes.ResourceExhausted, "QUOTA_EXCEEDED", "LimitExceeded")
