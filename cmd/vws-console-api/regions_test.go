@@ -23,6 +23,7 @@ import (
 	"github.com/popododo0720/vws-console-api/internal/admin/store"
 	"github.com/popododo0720/vws-console-api/internal/admin/store/etcdstore/etcdtest"
 	"github.com/popododo0720/vws-console-api/internal/backend"
+	"github.com/popododo0720/vws-console-api/internal/backend/grpcclient/iamclient"
 	"github.com/popododo0720/vws-console-api/internal/backend/proxmox"
 	"github.com/popododo0720/vws-console-api/internal/backend/proxmox/proxmoxtest"
 	"github.com/popododo0720/vws-console-api/internal/cloud"
@@ -349,10 +350,11 @@ func TestRegisteredRegionTransportDeadline(t *testing.T) {
 	region.StartTLS()
 	defer region.Close()
 	defer close(release)
-	connect, err := regionConnection(bootstrapRegion(t, region))
+	files, err := regionMTLSFiles(bootstrapRegion(t, region), iamclient.TLSFiles{})
 	if err != nil {
 		t.Fatal(err)
 	}
+	connect := regionConnection(files)
 	catalog := backend.NewStaticRegions([]backend.ProxmoxRegion{{Name: "pve-test-1", Endpoint: region.URL}}, nil)
 	regional, closeBackends, err := registeredBackends(catalog, connect, "")
 	if err != nil {
@@ -379,5 +381,100 @@ func TestRegionsRefusesDefaultCredentials(t *testing.T) {
 	err := run(t.Context(), []string{"-backend=regions"})
 	if err == nil || !strings.Contains(err.Error(), "-backend=regions needs") {
 		t.Fatalf("regions accepted public development credentials: %v", err)
+	}
+}
+
+func TestRegionsMemoryProcessMTLSAndRestart(t *testing.T) {
+	var pushes atomic.Int32
+	b := proxmoxtest.New(t)
+	inventory, err := regionapi.New(regionapi.Config{
+		Backend: b.Set(), Capabilities: b, Region: "pve-test-1",
+		Version: regionapi.Version{ReleaseLine: "1.0", ClusterName: "test"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	region := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/internal/v1/registration":
+			pushes.Add(1)
+			w.Write([]byte(`{}`))
+		case "/internal/v1/status":
+			w.Write([]byte(`{"quorate":true,"leader":null,"nodes":[],"lastError":null}`))
+		default:
+			inventory.ServeHTTP(w, r)
+		}
+	}))
+	region.TLS = &tls.Config{MinVersion: tls.VersionTLS13, ClientAuth: tls.RequireAnyClientCert}
+	region.StartTLS()
+	defer region.Close()
+	files := regionTLSFiles(t, region)
+	kek := writeFile(t, "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
+	for attempt := range 2 {
+		t.Run(fmt.Sprintf("start%d", attempt), func(t *testing.T) {
+			p := startFakeProcess(t, "-backend=regions", "-admin-store=memory", "-admin-kek-file="+kek,
+				"-region-mtls-ca-file="+files.CAFile, "-region-mtls-cert-file="+files.CertFile,
+				"-region-mtls-key-file="+files.KeyFile,
+				"-console-token=dev-token", "-access-key=AKIDEXAMPLE", "-secret=secret")
+			var etag string
+			call := func(method, path, body string) string {
+				t.Helper()
+				req, err := http.NewRequestWithContext(t.Context(), method, "http://"+p.console+path, strings.NewReader(body))
+				if err != nil {
+					t.Fatal(err)
+				}
+				req.Header.Set("Authorization", "Bearer dev-token")
+				req.Header.Set("Content-Type", "application/json")
+				if path == "/api/v1/instances" {
+					req.Header.Set("X-Vws-Region", "pve-test-1")
+				}
+				if method == http.MethodPatch {
+					req.Header.Set("If-Match", etag)
+				}
+				resp, err := http.DefaultClient.Do(req)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer resp.Body.Close()
+				if value := resp.Header.Get("ETag"); value != "" {
+					etag = value
+				}
+				data, err := io.ReadAll(resp.Body)
+				want := http.StatusOK
+				if method == http.MethodPost {
+					want = http.StatusCreated
+				}
+				if err != nil || resp.StatusCode != want {
+					t.Fatalf("%s %s: %d %s %v", method, path, resp.StatusCode, data, err)
+				}
+				return string(data)
+			}
+			const path = "/api/v1/admin/regions"
+			if body := call(http.MethodGet, path, ""); strings.TrimSpace(body) != `{"items":[]}` {
+				t.Fatalf("new memory registry retained registrations: %s", body)
+			}
+			body := fmt.Sprintf(`{"name":"pve-test-1","clusterName":"test","pveApiUrl":"https://pve.example:8006",
+				"tokenId":"vws@pve!inventory","tokenSecret":"memory-region-token","regionEndpoint":%q,"zones":[]}`, region.URL)
+			call(http.MethodPost, path, body)
+			if body := call(http.MethodGet, "/api/v1/instances", ""); !strings.Contains(body, `"i-`) {
+				t.Fatalf("registered mTLS inventory is empty: %s", body)
+			}
+			for range 2 {
+				body := call(http.MethodGet, path+"/pve-test-1/health", "")
+				if !strings.Contains(body, `"quorate":true`) {
+					t.Fatalf("mTLS health: %s", body)
+				}
+			}
+			body = call(http.MethodPatch, path+"/pve-test-1", `{}`)
+			if strings.Contains(body, `"lastError":"`) {
+				t.Fatalf("registration retry failed: %s", body)
+			}
+			if body := call(http.MethodGet, path, ""); strings.Count(body, `"name":"pve-test-1"`) != 1 {
+				t.Fatalf("retry duplicated registration: %s", body)
+			}
+		})
+	}
+	if pushes.Load() != 4 {
+		t.Fatalf("mTLS registration and retry pushes: %d, want 4", pushes.Load())
 	}
 }

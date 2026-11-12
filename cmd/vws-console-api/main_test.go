@@ -23,12 +23,14 @@ func TestAdminAuditFileIsSeparate(t *testing.T) {
 	t.Cleanup(func() { slog.SetDefault(previous) })
 	t.Cleanup(func() {
 		data, err := os.ReadFile(path)
+		const warning = `"level":"WARN","msg":"in-memory admin registry: registrations are lost on restart"`
 		if err != nil || strings.Count(string(data), `"action":"AdminRegisterAwsAccount"`) != 1 ||
-			app.String() == "" || strings.Contains(app.String(), "AdminRegisterAwsAccount") {
+			!strings.Contains(app.String(), warning) ||
+			strings.Contains(app.String(), "AdminRegisterAwsAccount") {
 			t.Errorf("audit stream separation failed: %v", err)
 		}
 	})
-	p := startFakeProcess(t, "-audit-log="+path)
+	p := startFakeProcess(t, "-audit-log="+path, "-admin-store=memory")
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost,
 		"http://"+p.console+"/api/v1/admin/aws-accounts", nil)
 	if err != nil {
@@ -91,6 +93,73 @@ func TestRegistryConfiguration(t *testing.T) {
 	}
 	if _, _, _, err := openRegistry(t.Context(), path, "fake"); err == nil {
 		t.Fatal("invalid bootstrap accepted")
+	}
+}
+
+func TestAdminBootstrapRejectsInvalidFlags(t *testing.T) {
+	invalidKEK := writeFile(t, "invalid")
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"-admin-store=disk"}, `unknown -admin-store "disk"`},
+		{[]string{"-admin-store=memory", "-global-config=x"}, "-admin-store memory conflicts with -global-config"},
+		{[]string{"-admin-kek-file=x"}, "-admin-kek-file requires -admin-store memory"},
+		{[]string{"-global-config=x", "-admin-kek-file=x"}, "-admin-kek-file requires -admin-store memory"},
+		{[]string{"-admin-store=memory", "-admin-kek-file=/missing/kek"}, "load -admin-kek-file"},
+		{[]string{"-admin-store=memory", "-admin-kek-file=" + invalidKEK}, "load -admin-kek-file"},
+		{[]string{"-region-mtls-ca-file=x"}, "require all three files"},
+		{[]string{"-region-mtls-cert-file=x"}, "require all three files"},
+		{[]string{"-region-mtls-key-file=x"}, "require all three files"},
+		{[]string{"-region-mtls-ca-file=x", "-region-mtls-cert-file=x"}, "require all three files"},
+		{[]string{"-region-mtls-ca-file=x", "-region-mtls-key-file=x"}, "require all three files"},
+		{[]string{"-region-mtls-cert-file=x", "-region-mtls-key-file=x"}, "require all three files"},
+		{
+			[]string{"-global-config=x", "-region-mtls-ca-file=x", "-region-mtls-cert-file=x", "-region-mtls-key-file=x"},
+			"-region-mtls-* conflicts with -global-config",
+		},
+	} {
+		t.Run(strings.Join(tc.args, " "), func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			cancel()
+			err := run(ctx, tc.args)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err %v, want %q", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestAdminMemoryRegistryForEveryBackend(t *testing.T) {
+	for _, kind := range []string{"fake", "proxmox", "grpc", "regions"} {
+		t.Run(kind, func(t *testing.T) {
+			g, key, closeRegistry, err := (adminBootstrap{store: "memory"}).open(t.Context(), "", kind)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() {
+				if err := closeRegistry(); err != nil {
+					t.Error(err)
+				}
+			}()
+			items, _, err := g.Regions().List(t.Context())
+			if err != nil || len(items) != 0 || key != nil {
+				t.Fatalf("memory registry without KEK: %v %v %v", items, key, err)
+			}
+		})
+	}
+}
+
+func TestRegionsDefaultStillRequiresGlobalConfig(t *testing.T) {
+	clearCredentialEnv(t)
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	err := run(ctx, []string{
+		"-backend=regions", "-console-token=token", "-access-key=key", "-secret=value",
+	})
+	const want = "-global-config is required for the admin registry with -backend=regions"
+	if err == nil || err.Error() != want {
+		t.Fatalf("default registry error: %v, want %q", err, want)
 	}
 }
 

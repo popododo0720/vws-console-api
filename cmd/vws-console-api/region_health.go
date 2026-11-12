@@ -15,11 +15,8 @@ import (
 	"github.com/popododo0720/vws-console-api/internal/surface/regionapi"
 )
 
-func regionHealth(path string) (func(context.Context, string) (resource.RegionStatus, error), error) {
-	connect, err := regionConnection(path)
-	if err != nil {
-		return nil, err
-	}
+func regionHealth(files iamclient.TLSFiles) func(context.Context, string) (resource.RegionStatus, error) {
+	connect := regionConnection(files)
 	return func(ctx context.Context, endpoint string) (resource.RegionStatus, error) {
 		client, err := connect(endpoint)
 		if err != nil {
@@ -27,14 +24,11 @@ func regionHealth(path string) (func(context.Context, string) (resource.RegionSt
 		}
 		defer client.Close()
 		return client.Status(ctx)
-	}, nil
+	}
 }
 
-func regionRegistration(path string) (func(context.Context, string, json.RawMessage) error, error) {
-	connect, err := regionConnection(path)
-	if err != nil {
-		return nil, err
-	}
+func regionRegistration(files iamclient.TLSFiles) func(context.Context, string, json.RawMessage) error {
+	connect := regionConnection(files)
 	return func(ctx context.Context, endpoint string, data json.RawMessage) error {
 		client, err := connect(endpoint)
 		if err != nil {
@@ -42,14 +36,11 @@ func regionRegistration(path string) (func(context.Context, string, json.RawMess
 		}
 		defer client.Close()
 		return client.Register(ctx, data)
-	}, nil
+	}
 }
 
-func regionPool(path string) (func(context.Context, string, string) (bool, error), error) {
-	connect, err := regionConnection(path)
-	if err != nil {
-		return nil, err
-	}
+func regionPool(files iamclient.TLSFiles) func(context.Context, string, string) (bool, error) {
+	connect := regionConnection(files)
 	return func(ctx context.Context, endpoint, pool string) (bool, error) {
 		client, err := connect(endpoint)
 		if err != nil {
@@ -57,28 +48,34 @@ func regionPool(path string) (func(context.Context, string, string) (bool, error
 		}
 		defer client.Close()
 		return client.PoolExists(ctx, pool)
-	}, nil
+	}
 }
 
-func regionConnection(path string) (func(string) (*regionapi.Client, error), error) {
+func regionMTLSFiles(path string, files iamclient.TLSFiles) (iamclient.TLSFiles, error) {
 	if path == "" {
-		return func(string) (*regionapi.Client, error) {
-			return nil, &console.RegionMTLSConfigError{Err: errors.New("mTLS is not configured")}
-		}, nil
+		return files, nil
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("read region mTLS bootstrap: %w", err)
+		return iamclient.TLSFiles{}, fmt.Errorf("read region mTLS bootstrap: %w", err)
 	}
 	cfg, err := globalconfig.Parse(data)
 	if err != nil {
-		return nil, fmt.Errorf("parse region mTLS bootstrap: %w", err)
+		return iamclient.TLSFiles{}, fmt.Errorf("parse region mTLS bootstrap: %w", err)
 	}
-	files := cfg.Credentials.MTLS
+	return iamclient.TLSFiles{
+		CAFile: cfg.Credentials.MTLS.CAFile, CertFile: cfg.Credentials.MTLS.CertFile, KeyFile: cfg.Credentials.MTLS.KeyFile,
+	}, nil
+}
+
+func regionConnection(files iamclient.TLSFiles) func(string) (*regionapi.Client, error) {
+	if !files.Enabled() {
+		return func(string) (*regionapi.Client, error) {
+			return nil, &console.RegionMTLSConfigError{Err: errors.New("mTLS is not configured")}
+		}
+	}
 	return func(endpoint string) (*regionapi.Client, error) {
-		config, err := (iamclient.TLSFiles{
-			CAFile: files.CAFile, CertFile: files.CertFile, KeyFile: files.KeyFile,
-		}).Config()
+		config, err := files.Config()
 		if err != nil {
 			return nil, &console.RegionMTLSConfigError{Err: err}
 		}
@@ -88,5 +85,5 @@ func regionConnection(path string) (func(string) (*regionapi.Client, error), err
 		}
 		config.Certificates = []tls.Certificate{cert}
 		return regionapi.NewClient(endpoint, config)
-	}, nil
+	}
 }
