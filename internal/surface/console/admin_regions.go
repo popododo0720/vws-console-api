@@ -6,13 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"maps"
 	"net/http"
 	"net/url"
 	"regexp"
-	"slices"
 	"strconv"
-	"sync"
 	"time"
 
 	"github.com/popododo0720/vws-console-api/internal/admin/store"
@@ -39,39 +36,13 @@ func (h *handler) listRegions(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	kinds, err := h.svc.RegionKinds(r.Context(), c)
+	items, err := h.svc.Regions(r.Context(), c)
 	if err != nil {
 		writeErr(w, r, err)
 		return
 	}
-	type summary struct {
-		Name  string `json:"name"`
-		Kind  string `json:"kind"`
-		State string `json:"state"`
-	}
-	items := make([]summary, len(kinds))
-	var reads sync.WaitGroup
-	ctx := r.Context()
-	for i, name := range slices.Sorted(maps.Keys(kinds)) {
-		kind := "pve"
-		if kinds[name] == resource.RegionKindAWS {
-			kind = "aws"
-		}
-		items[i] = summary{Name: name, Kind: kind, State: "unavailable"}
-		reads.Go(func() {
-			doc, err := h.svc.RegionCapabilities(ctx, c, name)
-			if err != nil {
-				return
-			}
-			items[i].State = "available"
-			if doc.Cluster != nil && (!doc.Cluster.Quorate || doc.Cluster.Leader == "") {
-				items[i].State = "degraded"
-			}
-		})
-	}
-	reads.Wait()
 	writeJSON(w, http.StatusOK, struct {
-		Items []summary `json:"items"`
+		Items []resource.RegionSummary `json:"items"`
 	}{Items: items})
 }
 

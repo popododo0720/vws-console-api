@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"sync"
 	"time"
 
 	"github.com/popododo0720/vws-console-api/internal/backend"
@@ -28,15 +29,16 @@ func (s *Service) AvailabilityZones(ctx context.Context, c resource.Caller) ([]r
 
 // RegionNames reads registrations without contacting a region backend.
 func (s *Service) RegionNames(ctx context.Context, c resource.Caller) ([]string, error) {
-	kinds, err := s.RegionKinds(ctx, c)
+	regions, err := s.registeredRegions(ctx, c)
 	if err != nil {
 		return nil, err
 	}
-	return slices.Sorted(maps.Keys(kinds)), nil
+	return slices.Sorted(maps.Keys(regions)), nil
 }
 
-// RegionKinds reads registered names and kinds without contacting a region.
-func (s *Service) RegionKinds(ctx context.Context, c resource.Caller) (map[string]resource.RegionKind, error) {
+func (s *Service) registeredRegions(
+	ctx context.Context, c resource.Caller,
+) (map[string]backend.ProxmoxRegion, error) {
 	if err := requireCaller(c); err != nil {
 		return nil, err
 	}
@@ -48,16 +50,55 @@ func (s *Service) RegionKinds(ctx context.Context, c resource.Caller) (map[strin
 	if err != nil {
 		return nil, &resource.Error{Code: resource.CodeUnavailable, Message: "region catalog unavailable"}
 	}
-	kinds := map[string]resource.RegionKind{}
+	registered := map[string]backend.ProxmoxRegion{}
 	for _, region := range regions {
-		kinds[region.Name] = resource.RegionKindProxmox
+		region.Kind = resource.RegionKindProxmox
+		registered[region.Name] = region
 	}
 	for _, account := range accounts {
 		for _, name := range account.AllowedRegions {
-			kinds[name] = resource.RegionKindAWS
+			registered[name] = backend.ProxmoxRegion{Name: name, Kind: resource.RegionKindAWS}
 		}
 	}
-	return kinds, nil
+	return registered, nil
+}
+
+// Regions reads a catalog snapshot with at most eight simultaneous region reads.
+func (s *Service) Regions(ctx context.Context, c resource.Caller) ([]resource.RegionSummary, error) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	regions, err := s.registeredRegions(ctx, c)
+	if err != nil {
+		return nil, err
+	}
+	items := make([]resource.RegionSummary, len(regions))
+	jobs := make(chan int, len(regions))
+	for i, name := range slices.Sorted(maps.Keys(regions)) {
+		kind := "pve"
+		if regions[name].Kind == resource.RegionKindAWS {
+			kind = "aws"
+		}
+		items[i] = resource.RegionSummary{Name: name, Kind: kind, State: "unavailable"}
+		jobs <- i
+	}
+	close(jobs)
+	var reads sync.WaitGroup
+	for range min(8, len(regions)) {
+		reads.Go(func() {
+			for i := range jobs {
+				doc, err := s.regionCapabilities(ctx, regions[items[i].Name])
+				if err != nil {
+					continue
+				}
+				items[i].State = "available"
+				if doc.Cluster != nil && (!doc.Cluster.Quorate || doc.Cluster.Leader == "") {
+					items[i].State = "degraded"
+				}
+			}
+		})
+	}
+	reads.Wait()
+	return items, nil
 }
 
 // RegionCapabilities reads one registered region within the regional read bound.
@@ -75,13 +116,26 @@ func (s *Service) RegionCapabilities(
 	if name == "" || name == "all" {
 		return resource.RegionCapabilities{}, resource.Invalid("region", "a registered region is required")
 	}
+	regions, err := s.registeredRegions(ctx, c)
+	if err != nil {
+		return resource.RegionCapabilities{}, err
+	}
+	return s.regionCapabilities(ctx, regions[name])
+}
+
+func (s *Service) regionCapabilities(
+	ctx context.Context, region backend.ProxmoxRegion,
+) (resource.RegionCapabilities, error) {
+	if ctx.Err() != nil {
+		return resource.RegionCapabilities{}, &resource.Error{Code: resource.CodeUnavailable, Message: "region unavailable"}
+	}
 	type result struct {
 		doc resource.RegionCapabilities
 		err error
 	}
 	done := make(chan result, 1)
 	go func() {
-		doc, err := s.discovery.RegionCapabilities(ctx, name)
+		doc, err := s.discovery(ctx, region)
 		done <- result{doc, err}
 	}()
 	select {

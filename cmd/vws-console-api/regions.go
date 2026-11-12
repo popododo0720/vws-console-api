@@ -9,54 +9,37 @@ import (
 	"github.com/popododo0720/vws-console-api/internal/backend/awssdk"
 	"github.com/popododo0720/vws-console-api/internal/backend/regionclient"
 	"github.com/popododo0720/vws-console-api/internal/backend/regionset"
+	"github.com/popododo0720/vws-console-api/internal/cloud"
 	"github.com/popododo0720/vws-console-api/internal/resource"
 	"github.com/popododo0720/vws-console-api/internal/surface/regionapi"
 )
 
-type inventoryCatalog struct {
-	backend.RegionCatalog
-	connect func(string) (*regionapi.Client, error)
-}
+type inventoryCatalog struct{ backend.RegionCatalog }
 
 func (c inventoryCatalog) RegionCapabilities(ctx context.Context, region string) (resource.RegionCapabilities, error) {
-	if c.connect != nil {
-		regions, err := c.RegionCatalog.ProxmoxRegions(ctx)
-		if err != nil {
-			return resource.RegionCapabilities{}, &resource.Error{
-				Code: resource.CodeUnavailable, Message: "region catalog unavailable",
-			}
-		}
-		for _, registered := range regions {
-			if registered.Name == region {
-				client, err := c.connect(registered.Endpoint)
-				if err != nil {
-					return resource.RegionCapabilities{}, &resource.Error{
-						Code: resource.CodeUnavailable, Message: "region unavailable",
-					}
-				}
-				defer client.Close()
-				doc, err := client.Capabilities(ctx)
-				if err != nil {
-					return resource.RegionCapabilities{}, &resource.Error{
-						Code: resource.CodeUnavailable, Message: "region unavailable",
-					}
-				}
-				return doc, nil
-			}
-		}
-	}
-	doc, err := (backend.AllSupported{Kind: resource.RegionKindProxmox}).RegionCapabilities(ctx, region)
-	if err != nil {
-		return doc, err
-	}
 	accounts, catalogErr := c.AWSAccounts(ctx)
 	if catalogErr != nil {
-		return doc, &resource.Error{Code: resource.CodeUnavailable, Message: "region catalog unavailable"}
+		return resource.RegionCapabilities{}, &resource.Error{
+			Code: resource.CodeUnavailable, Message: "region catalog unavailable",
+		}
 	}
+	kind := resource.RegionKindProxmox
 	if region != "all" && slices.ContainsFunc(accounts, func(account backend.AWSAccount) bool {
 		return slices.Contains(account.AllowedRegions, region)
 	}) {
-		doc.Kind = resource.RegionKindAWS
+		kind = resource.RegionKindAWS
+	}
+	return inventoryCapabilities(ctx, region, kind)
+}
+
+func inventoryCapabilities(
+	ctx context.Context, region string, kind resource.RegionKind,
+) (resource.RegionCapabilities, error) {
+	doc, err := (backend.AllSupported{Kind: kind}).RegionCapabilities(ctx, region)
+	if err != nil {
+		return doc, err
+	}
+	if kind == resource.RegionKindAWS {
 		for _, read := range resource.ReadActions() {
 			if read != resource.ReadDescribeInstances {
 				doc.Actions[read.CapabilityKey()] = resource.ActionCapability{
@@ -89,28 +72,44 @@ func (c inventoryCatalog) ProxmoxRegions(ctx context.Context) ([]backend.Proxmox
 
 func registeredBackends(catalog backend.RegionCatalog, connect func(string) (*regionapi.Client, error),
 	socket string,
-) (backend.Set, func(), error) {
+) (cloud.Config, func(), error) {
 	var mu sync.Mutex
 	clients := map[string]*regionapi.Client{}
+	clientFor := func(endpoint string) (*regionapi.Client, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		if client := clients[endpoint]; client != nil {
+			return client, nil
+		}
+		client, err := connect(endpoint)
+		if err != nil {
+			return nil, err
+		}
+		clients[endpoint] = client
+		return client, nil
+	}
 	set, err := regionset.New(inventoryCatalog{RegionCatalog: catalog}, func(
 		_ context.Context, region backend.ProxmoxRegion,
 	) (regionclient.Transport, error) {
 		if region.Endpoint == "" {
 			return awsInventory{catalog: catalog, socket: socket}, nil
 		}
-		mu.Lock()
-		defer mu.Unlock()
-		if client := clients[region.Endpoint]; client != nil {
-			return client, nil
-		}
-		client, err := connect(region.Endpoint)
-		if err != nil {
-			return nil, err
-		}
-		clients[region.Endpoint] = client
-		return client, nil
+		return clientFor(region.Endpoint)
 	})
-	return set, func() {
+	cfg := cloud.Config{
+		Backends: set, Regions: catalog,
+		Discovery: func(ctx context.Context, region backend.ProxmoxRegion) (resource.RegionCapabilities, error) {
+			if region.Kind == resource.RegionKindAWS {
+				return inventoryCapabilities(ctx, region.Name, region.Kind)
+			}
+			client, err := clientFor(region.Endpoint)
+			if err != nil {
+				return resource.RegionCapabilities{}, err
+			}
+			return client.Capabilities(ctx)
+		},
+	}
+	return cfg, func() {
 		mu.Lock()
 		defer mu.Unlock()
 		for _, client := range clients {

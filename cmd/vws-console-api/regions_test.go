@@ -82,11 +82,16 @@ func TestRegionsProcessInventoryAndRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var pveCalls, awsCalls atomic.Int32
+	var pveCalls, awsCalls, connections atomic.Int32
 	region := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		pveCalls.Add(1)
 		handler.ServeHTTP(w, r)
 	}))
+	region.Config.ConnState = func(_ net.Conn, state http.ConnState) {
+		if state == http.StateNew {
+			connections.Add(1)
+		}
+	}
 	region.TLS = &tls.Config{MinVersion: tls.VersionTLS13, ClientAuth: tls.RequireAnyClientCert}
 	region.StartTLS()
 	defer region.Close()
@@ -211,6 +216,9 @@ func TestRegionsProcessInventoryAndRestart(t *testing.T) {
 				t.Fatalf("mTLS capability document changed: %s; %v", body, err)
 			}
 		}
+		if connections.Load() != int32(attempt+1) {
+			t.Fatalf("discovery did not reuse the mTLS connection: %d", connections.Load())
+		}
 		beforePVE, beforeAWS := pveCalls.Load(), awsCalls.Load()
 		call("/api/v1/instances", "", 200)
 		call("/api/v1/instances", "pve-test-1", 200)
@@ -266,7 +274,7 @@ func TestRegionHeaderBoundariesAndUnavailable(t *testing.T) {
 	}
 	catalog := backend.NewStaticRegions([]backend.ProxmoxRegion{{Name: "pve-test-1", Endpoint: "https://unused"}}, nil)
 	var calls atomic.Int32
-	set, closeBackends, err := registeredBackends(catalog, func(string) (*regionapi.Client, error) {
+	regional, closeBackends, err := registeredBackends(catalog, func(string) (*regionapi.Client, error) {
 		calls.Add(1)
 		return nil, context.DeadlineExceeded
 	}, "")
@@ -276,7 +284,7 @@ func TestRegionHeaderBoundariesAndUnavailable(t *testing.T) {
 	defer closeBackends()
 	auth := iam.NewStatic("key", "secret", account)
 	h := console.New(console.Config{
-		Service: cloud.New(cloud.Config{Backends: set, Regions: catalog}),
+		Service: cloud.New(regional),
 		Auth: console.BearerTokens{"token": {
 			Account: account, Principal: iam.RootARN(account), Root: true, Region: "pve-test-1",
 		}},
@@ -346,13 +354,15 @@ func TestRegisteredRegionTransportDeadline(t *testing.T) {
 		t.Fatal(err)
 	}
 	catalog := backend.NewStaticRegions([]backend.ProxmoxRegion{{Name: "pve-test-1", Endpoint: region.URL}}, nil)
-	set, closeBackends, err := registeredBackends(catalog, connect, "")
+	regional, closeBackends, err := registeredBackends(catalog, connect, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer closeBackends()
 	start := time.Now()
-	page, err := set.Compute.DescribeInstances(t.Context(), backend.Scope{Region: "all"}, resource.InstanceQuery{})
+	page, err := regional.Backends.Compute.DescribeInstances(
+		t.Context(), backend.Scope{Region: "all"}, resource.InstanceQuery{},
+	)
 	if err != nil || len(page.Partial) != 1 || time.Since(start) >= 8*time.Second {
 		t.Fatalf("stalled mTLS region: %+v %v after %s", page, err, time.Since(start))
 	}

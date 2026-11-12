@@ -1,6 +1,7 @@
 package cloud
 
 import (
+	"context"
 	"log/slog"
 
 	"github.com/popododo0720/vws-console-api/internal/backend"
@@ -19,7 +20,7 @@ type Config struct {
 	Capabilities backend.Capabilities
 	// Discovery supplies the public document without the backend-set policy.
 	// Nil uses Capabilities.
-	Discovery backend.Capabilities
+	Discovery func(context.Context, backend.ProxmoxRegion) (resource.RegionCapabilities, error)
 	Regions   backend.RegionCatalog
 	Region    string
 }
@@ -30,7 +31,7 @@ type Service struct {
 	audit     *slog.Logger
 	launches  *throttle.Launches
 	caps      backend.Capabilities
-	discovery backend.Capabilities
+	discovery func(context.Context, backend.ProxmoxRegion) (resource.RegionCapabilities, error)
 	regions   backend.RegionCatalog
 	region    string
 }
@@ -44,7 +45,9 @@ func New(cfg Config) *Service {
 		cfg.Capabilities = backend.AllSupported{Kind: resource.RegionKindProxmox}
 	}
 	if cfg.Discovery == nil {
-		cfg.Discovery = cfg.Capabilities
+		cfg.Discovery = func(ctx context.Context, region backend.ProxmoxRegion) (resource.RegionCapabilities, error) {
+			return cfg.Capabilities.RegionCapabilities(ctx, region.Name)
+		}
 	}
 	if cfg.Regions == nil {
 		cfg.Regions = backend.DefaultRegions()
