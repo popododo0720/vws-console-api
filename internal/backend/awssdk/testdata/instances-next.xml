@@ -1,0 +1,9 @@
+<DescribeInstancesResponse xmlns="http://ec2.amazonaws.com/doc/2016-11-15/">
+  <reservationSet><item>
+    <reservationId>r-1123456789abcdef0</reservationId><ownerId>123456789012</ownerId>
+    <instancesSet><item>
+      <instanceId>i-1123456789abcdef0</instanceId><imageId>ami-0123456789abcdef0</imageId>
+      <instanceState><code>80</code><name>stopped</name></instanceState><instanceType>t3.small</instanceType>
+    </item></instancesSet>
+  </item></reservationSet>
+</DescribeInstancesResponse>
