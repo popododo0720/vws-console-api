@@ -91,17 +91,17 @@ linters:
               desc: the kernel does not know which surface called it
             - pkg: github.com/popododo0720/vws-console-api/internal/sigv4
               desc: authentication happens before the kernel
-        grpc-stays-in-grpcclient:
+        grpc-stays-in-iamclient:
           files:
             - "$all"
-            - "!**/internal/backend/grpcclient/**"
+            - "!**/internal/backend/grpcclient/iamclient/**"
           deny:
             - pkg: google.golang.org/grpc
-              desc: only internal/backend/grpcclient speaks gRPC
+              desc: only internal/backend/grpcclient/iamclient speaks gRPC
             - pkg: google.golang.org/protobuf
-              desc: only internal/backend/grpcclient sees protobuf types
+              desc: only internal/backend/grpcclient/iamclient sees protobuf types
             - pkg: github.com/popododo0720/vws-proto
-              desc: the resource API stays inside the gRPC client
+              desc: the IAM API stays inside iamclient
             - pkg: cloud.google.com/go/longrunning
               desc: long-running types stay inside the gRPC client
             - pkg: google.golang.org/genproto
@@ -114,6 +114,16 @@ linters:
               desc: Kubernetes imports are forbidden
             - pkg: sigs.k8s.io
               desc: Kubernetes imports are forbidden
+        no-retired-services:
+          files:
+            - "$all"
+          deny:
+            - pkg: github.com/popododo0720/vws-proto/gen/go/vws/compute
+              desc: the compute gRPC service is retired
+            - pkg: github.com/popododo0720/vws-proto/gen/go/vws/storage
+              desc: the storage gRPC service is retired
+            - pkg: github.com/popododo0720/vws-proto/gen/go/vws/network
+              desc: the network gRPC service is retired
         pve-stays-in-proxmox:
           files:
             - "$all"
@@ -159,12 +169,6 @@ linters:
           - errcheck
           - gochecknoglobals
           - wrapcheck
-      # vws-proto v0.23.0 deprecates these services for the Proxmox backend
-      # (vws-proto#255). The retired grpc backend keeps them until it is removed.
-      - path: internal/backend/grpcclient/
-        linters:
-          - staticcheck
-        text: "SA1019: github.com/popododo0720/vws-proto/gen/go/vws/(compute|network|storage)/v1"
     paths:
       - third_party
 

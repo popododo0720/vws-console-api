@@ -139,20 +139,20 @@ func TestCredentialFileErrors(t *testing.T) {
 	}
 }
 
-func TestGRPCAcceptsCredentialsFromEnvAndFile(t *testing.T) {
+func TestRegionsAcceptsCredentialsFromEnvAndFile(t *testing.T) {
 	clearCredentialEnv(t)
 	t.Setenv("VWS_CONSOLE_TOKEN", "tok-env-value")
 	t.Setenv("VWS_ACCESS_KEY", "AKIDREAL")
 	t.Setenv("VWS_SECRET_KEY_FILE", writeFile(t, "sk-file-value\n"))
 	// The credential check passes, so run fails later on the next missing piece, not on credentials.
-	err := run(t.Context(), []string{"-backend=grpc", "-iam=bogus", "-ops-addr="})
-	if err == nil || strings.Contains(err.Error(), "development credentials") {
+	err := run(t.Context(), []string{"-backend=regions", "-ops-addr="})
+	if err == nil || !strings.Contains(err.Error(), "-global-config is required") {
 		t.Fatalf("err %v", err)
 	}
 }
 
-func TestKubernetesFlagsAreRejected(t *testing.T) {
-	for _, name := range []string{"launch-namespace", "kubeconfig"} {
+func TestRetiredBackendFlagsAreRejected(t *testing.T) {
+	for _, name := range []string{"launch-namespace", "kubeconfig", "compute-addr", "storage-addr", "network-addr"} {
 		err := run(t.Context(), []string{"-" + name + "=retired"})
 		if err == nil || !strings.Contains(err.Error(), "flag provided but not defined: -"+name) {
 			t.Fatalf("%s: %v", name, err)

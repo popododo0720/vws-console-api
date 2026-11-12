@@ -19,7 +19,6 @@ import (
 	iamv1 "github.com/popododo0720/vws-proto/gen/go/vws/iam/v1"
 
 	"github.com/popododo0720/vws-console-api/internal/backend"
-	"github.com/popododo0720/vws-console-api/internal/backend/grpcclient"
 	"github.com/popododo0720/vws-console-api/internal/resource"
 	"github.com/popododo0720/vws-console-api/internal/sshkey"
 )
@@ -76,7 +75,7 @@ func keyPairModel(s backend.Scope, in *iamv1.KeyPair) (resource.KeyPair, error) 
 	if in.GetCreateTime() != nil {
 		created = in.GetCreateTime().AsTime().UTC()
 	}
-	tags, err := grpcclient.DecodeTagLabels(in.GetLabels())
+	tags, err := userTags(in.GetLabels())
 	if err != nil {
 		return resource.KeyPair{}, err
 	}
@@ -188,7 +187,7 @@ func (c *Client) CreateKeyPair(
 		return resource.Accepted[resource.KeyPair]{}, err
 	}
 	var pair sshkey.Pair
-	labels, err := grpcclient.EncodeTagLabels(req.Tags, nil)
+	labels, err := withInternalLabels(req.Tags, nil)
 	if err != nil {
 		return resource.Accepted[resource.KeyPair]{}, err
 	}

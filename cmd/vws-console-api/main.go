@@ -22,7 +22,6 @@ import (
 	"github.com/popododo0720/vws-console-api/internal/backend"
 	"github.com/popododo0720/vws-console-api/internal/backend/awssdk"
 	"github.com/popododo0720/vws-console-api/internal/backend/fake"
-	"github.com/popododo0720/vws-console-api/internal/backend/grpcclient"
 	"github.com/popododo0720/vws-console-api/internal/backend/grpcclient/iamclient"
 	"github.com/popododo0720/vws-console-api/internal/backend/proxmox"
 	"github.com/popododo0720/vws-console-api/internal/cloud"
@@ -68,7 +67,7 @@ func serve(ctx context.Context, args []string) (err error) {
 func run(ctx context.Context, args []string) (err error) {
 	fs := flag.NewFlagSet("vws-console-api", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
-	backendKind := fs.String("backend", "fake", "fake, grpc, regions or proxmox")
+	backendKind := fs.String("backend", "fake", "fake, regions or proxmox")
 	defaultRegion := fs.String("default-region", resource.RegionName, "default console region")
 	regionConfig := fs.String("region-config", "/etc/vws/region.yaml", "node-local Proxmox configuration")
 	registrationFile := fs.String("registration-file", "/etc/pve/vws/registration.json", "public Proxmox registration")
@@ -89,9 +88,6 @@ func run(ctx context.Context, args []string) (err error) {
 	consoleToken := fs.String("console-token", "dev-token", "deprecated: bearer token accepted on the console; use VWS_CONSOLE_TOKEN or VWS_CONSOLE_TOKEN_FILE")
 	accessKey := fs.String("access-key", "AKIDEXAMPLE", "deprecated: access key accepted by the signature check; use VWS_ACCESS_KEY or VWS_ACCESS_KEY_FILE")
 	secret := fs.String("secret", "secret", "deprecated: secret for the access key; use VWS_SECRET_KEY or VWS_SECRET_KEY_FILE")
-	computeAddr := fs.String("compute-addr", "127.0.0.1:19001", "compute gRPC address")
-	storageAddr := fs.String("storage-addr", "127.0.0.1:19002", "storage gRPC address")
-	networkAddr := fs.String("network-addr", "127.0.0.1:19003", "network gRPC address")
 	iamMode := fs.String("iam", "static", "static: only the -access-key root key, no IAM/STS management; "+
 		"fake: in-memory IAM users, groups, roles, policies and STS sessions, lost on restart; "+
 		"grpc: vws-iam at -iam-endpoint authenticates keys, authorizes requests and serves console sign-in and STS AssumeRole")
@@ -148,6 +144,11 @@ func run(ctx context.Context, args []string) (err error) {
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("flags: %w", err)
 	}
+	switch *backendKind {
+	case "fake", "regions", "proxmox":
+	default:
+		return fmt.Errorf("unknown -backend %q: valid values are fake|regions|proxmox", *backendKind)
+	}
 	if err := bootstrap.validate(*globalConfig); err != nil {
 		return err
 	}
@@ -156,11 +157,6 @@ func run(ctx context.Context, args []string) (err error) {
 	creds, err := resolveCredentials(ctx, fs, osCredentialEnv(), logger, consoleToken, accessKey, secret)
 	if err != nil {
 		return err
-	}
-	if *backendKind == "grpc" {
-		if err := requireExplicit(creds, *backendKind); err != nil {
-			return err
-		}
 	}
 
 	if err := limits.Validate(); err != nil {
@@ -194,18 +190,6 @@ func run(ctx context.Context, args []string) (err error) {
 			return parseErr
 		}
 		set = fake.New(fake.Options{Direct: []fake.DirectNetwork{{ID: direct, Cidr: "192.168.200.0/24"}}}).Set()
-	case "grpc":
-		client, dialErr := grpcclient.Dial(ctx, grpcclient.Addrs{
-			Compute: *computeAddr,
-			Storage: *storageAddr,
-			Network: *networkAddr,
-		})
-		if dialErr != nil {
-			return dialErr
-		}
-		defer func() { err = errors.Join(err, client.Close()) }()
-		client.SetLogger(logger)
-		set = client.Set()
 	case "regions":
 	case "proxmox":
 		b, closeBackend, openErr := standaloneBackend(
@@ -219,8 +203,6 @@ func run(ctx context.Context, args []string) (err error) {
 		identity := proxmox.Identity(b)
 		localRegions = backend.NewStaticRegions([]backend.ProxmoxRegion{identity.Region}, nil)
 		caller.Region = identity.Region.Name
-	default:
-		return fmt.Errorf("unknown -backend %q", *backendKind)
 	}
 	if *backendKind == "regions" || *backendKind == "proxmox" {
 		if err := requireExplicit(creds, *backendKind); err != nil {
