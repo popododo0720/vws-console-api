@@ -80,6 +80,11 @@ func (b *Backend) RegionCapabilities(ctx context.Context, region string) (resour
 			Reason: "blank volumes only; volume tags must encode within 128 bytes",
 		}
 		doc.Actions["ec2:DeleteVolume"] = resource.ActionCapability{State: resource.ActionSupported}
+		doc.Actions["ec2:AttachVolume"] = resource.ActionCapability{State: resource.ActionSupported}
+		doc.Actions["ec2:DetachVolume"] = resource.ActionCapability{
+			State: resource.ActionPartial, ReasonCode: "StoppedInstance",
+			Reason: "detach requires a stopped instance; config hot-unplug to unused disks is not supported",
+		}
 		for _, key := range []string{
 			"ec2:StartInstances", "ec2:StopInstances", "ec2:RebootInstances", "ec2:TerminateInstances",
 		} {
@@ -107,20 +112,6 @@ func (b *Backend) RunInstances(
 	ctx context.Context, m backend.Mutation, req resource.RunInstancesRequest,
 ) (resource.Accepted[resource.Instance], error) {
 	return resource.Accepted[resource.Instance]{}, resource.Unsupported("RunInstances", "read-only")
-}
-
-// AttachVolume is unavailable in the phase-one backend.
-func (b *Backend) AttachVolume(
-	ctx context.Context, m backend.Mutation, req resource.AttachVolumeRequest,
-) (resource.Accepted[resource.Volume], error) {
-	return resource.Accepted[resource.Volume]{}, resource.Unsupported("AttachVolume", "read-only")
-}
-
-// DetachVolume is unavailable in the phase-one backend.
-func (b *Backend) DetachVolume(
-	ctx context.Context, m backend.Mutation, req resource.DetachVolumeRequest,
-) (resource.Accepted[resource.VolumeAttachment], error) {
-	return resource.Accepted[resource.VolumeAttachment]{}, resource.Unsupported("DetachVolume", "read-only")
 }
 
 // ModifyVolume is unavailable in the phase-one backend.
