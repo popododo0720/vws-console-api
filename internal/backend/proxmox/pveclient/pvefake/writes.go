@@ -29,6 +29,10 @@ func (f *Fake) writeRoutes() {
 	f.handleMethod(http.MethodPost, "/nodes/{node}/storage/{storage}/content", f.allocateVolume)
 	f.handleMethod(http.MethodPost, "/nodes/{node}/qemu/{vmid}/snapshot", f.writeSnapshot)
 	f.handleMethod(http.MethodDelete, "/nodes/{node}/qemu/{vmid}/snapshot/{snapname}", f.writeSnapshot)
+	f.handleMethod(http.MethodPost, "/nodes/{node}/qemu/{vmid}/snapshot/{snapname}/rollback",
+		func(*Token, *http.Request) (any, *failure) {
+			return nil, &failure{http.StatusForbidden, "snapshot rollback is forbidden"}
+		})
 	f.handleMethod(http.MethodPut, "/nodes/{node}/qemu/{vmid}/resize", f.resizeDisk)
 	f.handleMethod(http.MethodPut, "/nodes/{node}/qemu/{vmid}/unlink", f.unlinkDisk)
 	f.handle("/cluster/nextid", f.nextID)
