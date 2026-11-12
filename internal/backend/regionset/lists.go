@@ -9,7 +9,8 @@ import (
 
 type compute struct {
 	backend.Compute
-	r *router
+	r    *router
+	keys keyPairClient
 }
 
 type network struct {
@@ -65,6 +66,9 @@ func (c compute) DescribeImages(ctx context.Context, s backend.Scope,
 func (c compute) DescribeKeyPairs(ctx context.Context, s backend.Scope,
 	q resource.KeyPairQuery,
 ) (resource.Page[resource.KeyPair], error) {
+	if c.keys != nil {
+		return c.keys.DescribeKeyPairs(ctx, s, q)
+	}
 	return list[resource.KeyPair](ctx, c.r, s, q.Page, func(p resource.PageRequest) any {
 		req := q
 		req.Page = p

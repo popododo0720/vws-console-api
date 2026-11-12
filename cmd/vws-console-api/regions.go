@@ -7,6 +7,7 @@ import (
 
 	"github.com/popododo0720/vws-console-api/internal/backend"
 	"github.com/popododo0720/vws-console-api/internal/backend/awssdk"
+	"github.com/popododo0720/vws-console-api/internal/backend/grpcclient/iamclient"
 	"github.com/popododo0720/vws-console-api/internal/backend/regionclient"
 	"github.com/popododo0720/vws-console-api/internal/backend/regionset"
 	"github.com/popododo0720/vws-console-api/internal/cloud"
@@ -71,7 +72,7 @@ func (c inventoryCatalog) ProxmoxRegions(ctx context.Context) ([]backend.Proxmox
 }
 
 func registeredBackends(catalog backend.RegionCatalog, connect func(string) (*regionapi.Client, error),
-	socket string,
+	socket string, keys ...*iamclient.Client,
 ) (cloud.Config, func(), error) {
 	var mu sync.Mutex
 	clients := map[string]*regionapi.Client{}
@@ -88,14 +89,18 @@ func registeredBackends(catalog backend.RegionCatalog, connect func(string) (*re
 		clients[endpoint] = client
 		return client, nil
 	}
-	set, err := regionset.New(inventoryCatalog{RegionCatalog: catalog}, func(
+	resolve := func(
 		_ context.Context, region backend.ProxmoxRegion,
 	) (regionclient.Transport, error) {
 		if region.Endpoint == "" {
 			return awsInventory{catalog: catalog, socket: socket}, nil
 		}
 		return clientFor(region.Endpoint)
-	})
+	}
+	set, err := regionset.New(inventoryCatalog{RegionCatalog: catalog}, resolve)
+	if len(keys) != 0 && keys[0] != nil {
+		set, err = regionset.New(inventoryCatalog{RegionCatalog: catalog}, resolve, keys[0])
+	}
 	cfg := cloud.Config{
 		Backends: set, Regions: catalog,
 		Discovery: func(ctx context.Context, region backend.ProxmoxRegion) (resource.RegionCapabilities, error) {

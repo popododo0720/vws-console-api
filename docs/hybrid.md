@@ -81,6 +81,15 @@ its own process and the only one that reads the source AWS credentials.
 | `regions` | The global layer: picks a region per request and sends it to that region layer or to AWS. |
 | `proxmox` | The region layer: one Proxmox cluster through its API. |
 
+With `-backend=regions -iam=grpc`, key pair create, import, delete and
+describe actions use vws-iam in the caller's region, with no regionapi call.
+The global layer generates private keys locally and imports only public
+material, preserving EC2 PEM/PPK formats and fingerprints. A missing launch
+key returns `InvalidKeyPair.NotFound` before contacting a region. Inline
+public keys and Proxmox cloud-init `sshkeys` still await #771 and the rest
+of #779. Without gRPC IAM, key mutations and keyed launches are unsupported;
+key pair inventory keeps the regional read path.
+
 `grpc` (vws-compute, vws-network and vws-storage on Kubernetes) is the old
 path. It stays only until `regions` and `proxmox` replace it (#755) and is not
 the production path.

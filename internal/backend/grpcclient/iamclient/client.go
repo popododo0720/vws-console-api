@@ -70,6 +70,7 @@ type Client struct {
 	mfaDevices iamv1.MfaDeviceServiceClient
 	roles      iamv1.RoleServiceClient
 	groups     iamv1.GroupServiceClient
+	keyPairs   iamv1.KeyPairServiceClient
 	backoff    time.Duration
 	// undoTimeout is Options.UndoTimeout.
 	undoTimeout time.Duration
@@ -133,7 +134,8 @@ func New(conn grpc.ClientConnInterface, o Options) *Client {
 		users: iamv1.NewUserServiceClient(conn), accessKeys: iamv1.NewAccessKeyServiceClient(conn),
 		policies: iamv1.NewPolicyServiceClient(conn), mfaDevices: iamv1.NewMfaDeviceServiceClient(conn),
 		roles: iamv1.NewRoleServiceClient(conn), groups: iamv1.NewGroupServiceClient(conn),
-		backoff: o.Backoff, undoTimeout: o.UndoTimeout, close: func() error { return nil },
+		keyPairs: iamv1.NewKeyPairServiceClient(conn),
+		backoff:  o.Backoff, undoTimeout: o.UndoTimeout, close: func() error { return nil },
 	}
 }
 
