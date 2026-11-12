@@ -35,6 +35,7 @@ type keyPairServer struct {
 	lost       bool
 	bad        bool
 	deleteLost int
+	listErr    error
 }
 
 func (s *keyPairServer) ImportKeyPair(
@@ -75,6 +76,9 @@ func (s *keyPairServer) ListKeyPairs(
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.lists = append(s.lists, req)
+	if s.listErr != nil {
+		return nil, s.listErr
+	}
 	if s.bad {
 		return &iamv1.ListKeyPairsResponse{KeyPairs: []*iamv1.KeyPair{{
 			Name: "projects/999999999999/keyPairs/key-00000000000000001",
@@ -251,6 +255,36 @@ func TestIAMKeyPairDeleteLostResponse(t *testing.T) {
 		if sent.GetRequestId() != s.deletes[0].GetRequestId() {
 			t.Fatal("delete retry changed request ID")
 		}
+	}
+}
+
+func TestIAMKeyPairDeleteSelectionErrors(t *testing.T) {
+	id, err := resource.Parse[resource.KeyPairID]("key-00000000000000001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name    string
+		req     resource.DeleteKeyPairRequest
+		listErr error
+		want    resource.Code
+	}{
+		{
+			"missing project",
+			resource.DeleteKeyPairRequest{Name: "login"},
+			status.Error(codes.NotFound, "project missing"),
+			resource.CodeNotFound,
+		},
+		{"two selectors", resource.DeleteKeyPairRequest{Name: "login", ID: id}, nil, resource.CodeInvalidArgument},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := &keyPairServer{listErr: tc.listErr}
+			client := New(keyPairConnection(t, s), Options{})
+			_, err := client.DeleteKeyPair(t.Context(), keyPairMutation(t), tc.req)
+			if resource.CodeOf(err) != tc.want || len(s.deletes) != 0 {
+				t.Fatalf("delete selection error = %v, deletes = %d", err, len(s.deletes))
+			}
+		})
 	}
 }
 

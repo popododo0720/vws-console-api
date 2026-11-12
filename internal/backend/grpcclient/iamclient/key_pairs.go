@@ -80,49 +80,13 @@ func keyPairModel(s backend.Scope, in *iamv1.KeyPair) (resource.KeyPair, error) 
 func (c *Client) DescribeKeyPairs(
 	ctx context.Context, s backend.Scope, q resource.KeyPairQuery,
 ) (resource.Page[resource.KeyPair], error) {
-	ctx, cancel := context.WithTimeout(ctx, CallTimeout)
-	defer cancel()
 	q, err := q.Normalize()
 	if err != nil {
 		return resource.Page[resource.KeyPair]{}, err
 	}
-	if len(q.Names) > 200 {
-		return resource.Page[resource.KeyPair]{}, resource.Invalid("keyNames", "at most 200 names")
-	}
-	region := s.Region
-	if region == "all" {
-		region = ""
-	}
-	var items []resource.KeyPair
-	token := ""
-	for {
-		resp, err := retry(ctx, c.backoff, c.keyPairs.ListKeyPairs, &iamv1.ListKeyPairsRequest{
-			Parent: projectName(s.Account), Region: region, KeyNames: q.Names, PageSize: 100, PageToken: token,
-		})
-		if err != nil {
-			return resource.Page[resource.KeyPair]{}, keyPairError(err, "")
-		}
-		for _, raw := range resp.GetKeyPairs() {
-			key, err := keyPairModel(s, raw)
-			if err != nil {
-				if len(q.IDs) == 0 && len(q.Names) == 0 {
-					c.logger().WarnContext(ctx, "skipping invalid IAM key pair", slog.String("reason", "invalid record"))
-					continue
-				}
-				return resource.Page[resource.KeyPair]{}, err
-			}
-			if len(q.IDs) == 0 || slices.Contains(q.IDs, key.ID) {
-				items = append(items, key)
-			}
-		}
-		next := resp.GetNextPageToken()
-		if next == "" {
-			break
-		}
-		if next == token {
-			return resource.Page[resource.KeyPair]{}, resource.Internal(errors.New("vws-iam repeated a key pair cursor"))
-		}
-		token = next
+	items, err := c.listKeyPairs(ctx, s, q)
+	if err != nil {
+		return resource.Page[resource.KeyPair]{}, err
 	}
 	for _, name := range q.Names {
 		if !slices.ContainsFunc(items, func(k resource.KeyPair) bool { return k.Name == name }) {
@@ -148,6 +112,52 @@ func (c *Client) DescribeKeyPairs(
 		out.NextToken = out.Items[len(out.Items)-1].ID.String()
 	}
 	return out, nil
+}
+
+func (c *Client) listKeyPairs(
+	ctx context.Context, s backend.Scope, q resource.KeyPairQuery,
+) ([]resource.KeyPair, error) {
+	ctx, cancel := context.WithTimeout(ctx, CallTimeout)
+	defer cancel()
+	if len(q.Names) > 200 {
+		return nil, resource.Invalid("keyNames", "at most 200 names")
+	}
+	region := s.Region
+	if region == "all" {
+		region = ""
+	}
+	var items []resource.KeyPair
+	token := ""
+	for {
+		resp, err := retry(ctx, c.backoff, c.keyPairs.ListKeyPairs, &iamv1.ListKeyPairsRequest{
+			Parent: projectName(s.Account), Region: region, KeyNames: q.Names, PageSize: 100, PageToken: token,
+		})
+		if err != nil {
+			return nil, keyPairError(err, "")
+		}
+		for _, raw := range resp.GetKeyPairs() {
+			key, err := keyPairModel(s, raw)
+			if err != nil {
+				if len(q.IDs) == 0 && len(q.Names) == 0 {
+					c.logger().WarnContext(ctx, "skipping invalid IAM key pair", slog.String("reason", "invalid record"))
+					continue
+				}
+				return nil, err
+			}
+			if len(q.IDs) == 0 || slices.Contains(q.IDs, key.ID) {
+				items = append(items, key)
+			}
+		}
+		next := resp.GetNextPageToken()
+		if next == "" {
+			break
+		}
+		if next == token {
+			return nil, resource.Internal(errors.New("vws-iam repeated a key pair cursor"))
+		}
+		token = next
+	}
+	return items, nil
 }
 
 // CreateKeyPair keeps private material local, preserving EC2 PEM/PPK formats.
@@ -211,6 +221,9 @@ func (c *Client) CreateKeyPair(
 func (c *Client) DeleteKeyPair(
 	ctx context.Context, m backend.Mutation, req resource.DeleteKeyPairRequest,
 ) (resource.Accepted[resource.KeyPair], error) {
+	if !req.ID.IsZero() && req.Name != "" {
+		return resource.Accepted[resource.KeyPair]{}, resource.InvalidCombination("keyName", "specify either name or ID")
+	}
 	q := resource.KeyPairQuery{}
 	if !req.ID.IsZero() {
 		q.IDs = []resource.KeyPairID{req.ID}
@@ -221,14 +234,14 @@ func (c *Client) DeleteKeyPair(
 	if _, err := req.Normalize(); err != nil {
 		return resource.Accepted[resource.KeyPair]{}, err
 	}
-	page, err := c.DescribeKeyPairs(ctx, m.Scope, q)
-	if resource.CodeOf(err) == resource.CodeNotFound {
-		return acceptedKeyPair(m, resource.ActionDeleteKeyPair)
-	}
+	items, err := c.listKeyPairs(ctx, m.Scope, q)
 	if err != nil {
 		return resource.Accepted[resource.KeyPair]{}, err
 	}
-	key := page.Items[0]
+	if len(items) == 0 {
+		return acceptedKeyPair(m, resource.ActionDeleteKeyPair)
+	}
+	key := items[0]
 	op, err := retry(ctx, c.backoff, c.keyPairs.DeleteKeyPair, &iamv1.DeleteKeyPairRequest{
 		Name:      projectName(m.Account) + "/keyPairs/" + key.ID.String(),
 		RequestId: keyPairRequestID(m, "DeleteKeyPair"), AllowMissing: true,
