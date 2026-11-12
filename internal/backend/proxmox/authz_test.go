@@ -176,6 +176,39 @@ func TestMutationGuardsReadFailures(t *testing.T) {
 	}
 }
 
+func TestMutationGuardSkipsUnreadableAndInvalidPoolVMs(t *testing.T) {
+	s := mutationScenario()
+	s.Tokens[0].Secret = "test-secret"
+	target := s.VMs[0]
+	target.VMID = 102
+	unreadable := pvefake.VM{
+		VMID: 100, Node: "pve1", Name: "offline", Pool: target.Pool, Status: "running",
+		Config: map[string]string{"smbios1": "uuid=0b8f0c52-6a43-4d7e-9f0b-5f1c2d3e4a50"},
+	}
+	malformed := pvefake.VM{
+		VMID: 101, Node: "pve1", Name: "malformed", Pool: target.Pool, Status: "running",
+		Config: map[string]string{"smbios1": "uuid=not-a-uuid"},
+	}
+	s.VMs = []pvefake.VM{unreadable, malformed, target}
+	_, f := serve(t, s)
+	c := startupClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/qemu/100/config") {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		f.ServeHTTP(w, r)
+	})
+	b, err := New(t.Context(), c, registration(), RegionConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids, _ := NewIDs("test")
+	id, _, _ := ids.Instance(VM{UUID: option(target.Config["smbios1"], "uuid")})
+	if vm, err := b.vmForMutation(t.Context(), inventoryScope(), id); err != nil || vm.VMID != 102 {
+		t.Fatalf("one bad pool VM blocked the guard: VM=%+v error=%v", vm, err)
+	}
+}
+
 func TestMutationGuardDefaultProjectPoolVisibility(t *testing.T) {
 	s := inventoryScenario()
 	s.VMs[0].Pool = ""

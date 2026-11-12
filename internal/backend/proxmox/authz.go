@@ -2,7 +2,9 @@ package proxmox
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"log/slog"
 	"slices"
 	"strings"
 
@@ -25,12 +27,20 @@ func (b *Backend) vmForMutation(
 	for _, vm := range vms {
 		cfg, err := b.client.VMConfig(ctx, pveclient.VM{Node: vm.Node, VMID: vm.VMID})
 		if err != nil {
-			return inventoryVM{}, fmt.Errorf("proxmox: check mutation VM config: %w", err)
+			if ctx.Err() != nil {
+				return inventoryVM{}, fmt.Errorf("proxmox: check mutation VM config: %w", err)
+			}
+			slog.WarnContext(ctx, "skipping unreadable mutation VM config", slog.Int("vmid", vm.VMID), slog.Any("error", err))
+			continue
 		}
 		if cfg.Template == 1 || slices.Contains(strings.Split(cfg.Tags, ";"), "vws.holder") {
 			continue
 		}
 		found, _, err := ids.Instance(VM{UUID: configUUID(cfg), VMID: vm.VMID, Ctime: option(cfg.Meta, "ctime")})
+		if errors.Is(err, ErrInput) {
+			slog.WarnContext(ctx, "skipping invalid mutation VM", slog.Int("vmid", vm.VMID), slog.Any("error", err))
+			continue
+		}
 		if err != nil {
 			return inventoryVM{}, err
 		}
@@ -47,6 +57,9 @@ func (b *Backend) volumeForMutation(
 	page, err := b.DescribeVolumes(ctx, s, resource.VolumeQuery{IDs: []resource.VolumeID{id}})
 	if err != nil {
 		return resource.Volume{}, err
+	}
+	if len(page.Items) == 0 {
+		return resource.Volume{}, resource.NotFound(resource.KindVolume, id.String())
 	}
 	volume := page.Items[0]
 	if !volume.InstanceID.IsZero() {
@@ -66,6 +79,9 @@ func (b *Backend) snapshotForMutation(
 	page, err := b.DescribeSnapshots(ctx, s, resource.SnapshotQuery{IDs: []resource.SnapshotID{id}})
 	if err != nil {
 		return resource.Snapshot{}, err
+	}
+	if len(page.Items) == 0 {
+		return resource.Snapshot{}, resource.NotFound(resource.KindSnapshot, id.String())
 	}
 	return page.Items[0], nil
 }
