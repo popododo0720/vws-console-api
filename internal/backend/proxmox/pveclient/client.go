@@ -67,6 +67,7 @@ type Client struct {
 	log     *slog.Logger
 	backoff time.Duration
 	poll    time.Duration
+	clock   clock
 }
 
 // Redact removes this client's credentials from a diagnostic before publication.
@@ -94,6 +95,7 @@ func New(cfg Config) (*Client, error) {
 	c := &Client{
 		base: base, auth: Secret("PVEAPIToken=" + cfg.TokenID + "=" + string(cfg.Secret)),
 		http: cfg.HTTPClient, log: cfg.Log, backoff: cfg.Backoff, poll: cfg.PollInterval,
+		clock: realClock{},
 	}
 	if c.http == nil {
 		c.http = http.DefaultClient
