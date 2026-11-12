@@ -61,8 +61,10 @@ Sessions are held only in memory until five minutes before expiry. Cache keys
 include the selected AWS account, role, ExternalId and principal, isolated by
 project and mapping revision. Observing a changed mapping drops that project's
 older sessions, including when unmapped; mapping away and back cannot revive
-a prior session. Each STS session name records the VWS project and principal
-hash. The cache is bounded to 1024 entries; restart drops it.
+a prior session. An unreadable project mapping denies forwarding while retaining
+cached sessions until its revision can be read again. Each STS session name
+records the VWS project and principal hash. The cache is bounded to 1024 entries;
+restart drops it.
 All outbound errors exposed to callers are fixed messages, never response bodies,
 credential fields or transport error strings. The command uses vws-lib telemetry
 and HTTP server spans/metrics; sanitized STS decoding failures use `report.Error`.

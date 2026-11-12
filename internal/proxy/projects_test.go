@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"os"
@@ -11,6 +12,12 @@ import (
 
 	"github.com/popododo0720/vws-console-api/internal/admin/store"
 )
+
+type unavailableAccounts struct{}
+
+func (unavailableAccounts) Account(context.Context, string, string) (Account, error) {
+	return Account{}, errors.New("registry temporarily unavailable")
+}
 
 func (f *fixture) mapProject(t *testing.T, project string, accounts ...string) {
 	t.Helper()
@@ -195,5 +202,35 @@ func TestProjectRoleAndExternalIDRotation(t *testing.T) {
 	if w := f.request("Action=DescribeInstances"); w.Code != 200 || f.stsCalls != 3 ||
 		f.stsForms[2].Get("ExternalId") != "rotated-external" {
 		t.Fatal("changed external ID reused credentials")
+	}
+}
+
+func TestUnreadableMappingKeepsCacheButStillDenies(t *testing.T) {
+	f := setup(t)
+	if w := f.request("Action=DescribeInstances"); w.Code != 200 {
+		t.Fatal(w.Body)
+	}
+	accounts := f.p.accounts
+	f.p.accounts = unavailableAccounts{}
+	w := f.request("Action=DescribeInstances")
+	if w.Code != 403 || !strings.Contains(w.Body.String(), "<Code>AccessDenied</Code>") ||
+		len(f.p.cache) != 1 || f.stsCalls != 1 || f.originCalls != 1 {
+		t.Fatal("unreadable mapping purged the cache or allowed forwarding")
+	}
+	f.p.accounts = accounts
+	if w := f.request("Action=DescribeInstances"); w.Code != 200 || f.stsCalls != 1 {
+		t.Fatal("registry recovery did not retain the valid session")
+	}
+	f.p.accounts = RegistryAccounts{Registry: store.New(store.NewMemory()), CredentialDirectory: f.dir}
+	if w := f.request("Action=DescribeInstances"); w.Code != 403 || len(f.p.cache) != 0 || f.stsCalls != 1 {
+		t.Fatal("a known absent mapping did not discard the session")
+	}
+	f.p.accounts = accounts
+	if w := f.request("Action=DescribeInstances"); w.Code != 200 || f.stsCalls != 2 {
+		t.Fatal("a session survived the known absent mapping")
+	}
+	f.mapProject(t, "123456789012", "000000000000")
+	if w := f.request("Action=DescribeInstances"); w.Code != 403 || len(f.p.cache) != 0 || f.stsCalls != 2 {
+		t.Fatal("a known remap to an unreadable account did not discard the session")
 	}
 }

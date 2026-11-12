@@ -20,6 +20,7 @@ import (
 
 	"github.com/popododo0720/vws-lib/obs/report"
 
+	"github.com/popododo0720/vws-console-api/internal/admin/store"
 	"github.com/popododo0720/vws-console-api/internal/sigv4"
 )
 
@@ -123,13 +124,15 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	a, err := p.accounts.Account(ctx, account, region)
-	p.mu.Lock()
-	for key := range p.cache {
-		if key.project == account && key.mappingVersion != a.MappingVersion {
-			delete(p.cache, key)
+	if err == nil || a.MappingVersion != 0 || errors.Is(err, store.ErrNotFound) {
+		p.mu.Lock()
+		for key := range p.cache {
+			if key.project == account && key.mappingVersion != a.MappingVersion {
+				delete(p.cache, key)
+			}
 		}
+		p.mu.Unlock()
 	}
-	p.mu.Unlock()
 	allowed := false
 	for _, v := range a.Regions {
 		allowed = allowed || v == region

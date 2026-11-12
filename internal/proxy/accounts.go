@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -27,6 +28,9 @@ func (a RegistryAccounts) Account(ctx context.Context, project, region string) (
 	}
 	mapping, err := a.Registry.Projects().Get(ctx, project)
 	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return Account{}, fmt.Errorf("proxy: project unavailable: %w", store.ErrNotFound)
+		}
 		return Account{}, errors.New("proxy: account unavailable")
 	}
 	out := Account{MappingVersion: int64(mapping.Version)}
