@@ -82,6 +82,7 @@ type VMConfig struct {
 	Memory      int    `json:"memory"`
 	Description string `json:"description"`
 	QMPStatus   string `json:"qmpstatus"`
+	Protection  int    `json:"protection"`
 
 	Drives map[string]string `json:"-"`
 }

@@ -24,6 +24,7 @@ type RegionConfig struct {
 	Scheduler       SchedulerConfig               `yaml:"scheduler"`
 	LinkedClones    bool                          `yaml:"linked_clones"`
 	LiveTests       bool                          `yaml:"live_tests"`
+	ShutdownTimeout int                           `yaml:"shutdown_timeout"`
 }
 
 // TemplateConfig selects the templates exposed as images.

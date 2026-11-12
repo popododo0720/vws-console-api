@@ -571,7 +571,8 @@ func (r RunInstancesRequest) checkRootShape() error {
 
 // StopInstancesRequest stops instances that are running.
 type StopInstancesRequest struct {
-	IDs []InstanceID `json:"instanceIds"`
+	IDs   []InstanceID `json:"instanceIds"`
+	Force bool         `json:"force,omitempty"`
 }
 
 // Action returns StopInstances.

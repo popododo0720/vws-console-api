@@ -232,7 +232,7 @@ func TestCreateDeleteProtectionAndFailures(t *testing.T) {
 	w.write(t, "PUT", "/nodes/pve1/qemu/102/config", "protection=0", "writer@pve!one", 200)
 	w.f.FailNext("qmdestroy", "busy")
 	id = w.write(t, "DELETE", "/nodes/pve1/qemu/102", "", "writer@pve!one", 200).(string)
-	if w.status(t, id).ExitStatus != "busy" || w.config(t, "pve1", 102)["protection"] != "0" {
+	if w.status(t, id).ExitStatus != "busy" || w.config(t, "pve1", 102)["protection"] != float64(0) {
 		t.Fatal("failed deletion changed VM")
 	}
 	id = w.write(t, "DELETE", "/nodes/pve1/qemu/102", "purge=1&destroy-unreferenced-disks=1",

@@ -16,6 +16,9 @@ import (
 func (b *Backend) vmForMutation(
 	ctx context.Context, s backend.Scope, id resource.InstanceID,
 ) (inventoryVM, error) {
+	if b.cfg.ReadOnly {
+		return inventoryVM{}, resource.Unsupported("mutation", "read-only")
+	}
 	vms, err := b.poolVMs(ctx, s)
 	if err != nil {
 		return inventoryVM{}, err
@@ -24,7 +27,12 @@ func (b *Backend) vmForMutation(
 	if err != nil {
 		return inventoryVM{}, err
 	}
+	var offline error
 	for _, vm := range vms {
+		if vm.Status == "unknown" {
+			offline = &resource.Error{Code: resource.CodeUnavailable, Message: "Proxmox node is offline"}
+			continue
+		}
 		cfg, err := b.client.VMConfig(ctx, pveclient.VM{Node: vm.Node, VMID: vm.VMID})
 		if err != nil {
 			if ctx.Err() != nil {
@@ -47,6 +55,9 @@ func (b *Backend) vmForMutation(
 		if found == id {
 			return vm, nil
 		}
+	}
+	if offline != nil {
+		return inventoryVM{}, offline
 	}
 	return inventoryVM{}, resource.NotFound(resource.KindInstance, id.String())
 }

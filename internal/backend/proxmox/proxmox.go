@@ -74,15 +74,18 @@ func (b *Backend) RegionCapabilities(ctx context.Context, region string) (resour
 	}
 	if !b.cfg.ReadOnly {
 		doc.Actions["vws:OpenConsole"] = resource.ActionCapability{State: resource.ActionSupported}
+		for _, key := range []string{
+			"ec2:StartInstances", "ec2:StopInstances", "ec2:RebootInstances", "ec2:TerminateInstances",
+		} {
+			doc.Actions[key] = resource.ActionCapability{State: resource.ActionSupported}
+		}
+		doc.Features.OperationScope = "first-task"
+		doc.Actions["ec2:TerminateInstances"] = resource.ActionCapability{
+			State: resource.ActionPartial, ReasonCode: "RetainedDisks",
+			Reason: "retained disks require holder support",
+		}
 	}
 	return doc, nil
-}
-
-// GetOperation reports a missing resource in the empty inventory.
-func (b *Backend) GetOperation(
-	ctx context.Context, s backend.Scope, id resource.OperationID,
-) (resource.Operation, error) {
-	return resource.Operation{}, resource.NotFound(resource.KindOperation, id.String())
 }
 
 // RunInstances is unavailable in the phase-one backend.
@@ -90,34 +93,6 @@ func (b *Backend) RunInstances(
 	ctx context.Context, m backend.Mutation, req resource.RunInstancesRequest,
 ) (resource.Accepted[resource.Instance], error) {
 	return resource.Accepted[resource.Instance]{}, resource.Unsupported("RunInstances", "read-only")
-}
-
-// StopInstances is unavailable in the phase-one backend.
-func (b *Backend) StopInstances(
-	ctx context.Context, m backend.Mutation, req resource.StopInstancesRequest,
-) (resource.Accepted[resource.InstanceStateChange], error) {
-	return resource.Accepted[resource.InstanceStateChange]{}, resource.Unsupported("StopInstances", "read-only")
-}
-
-// RebootInstances is unavailable in the phase-one backend.
-func (b *Backend) RebootInstances(
-	ctx context.Context, m backend.Mutation, req resource.RebootInstancesRequest,
-) (resource.Accepted[resource.InstanceStateChange], error) {
-	return resource.Accepted[resource.InstanceStateChange]{}, resource.Unsupported("RebootInstances", "read-only")
-}
-
-// StartInstances is unavailable in the phase-one backend.
-func (b *Backend) StartInstances(
-	ctx context.Context, m backend.Mutation, req resource.StartInstancesRequest,
-) (resource.Accepted[resource.InstanceStateChange], error) {
-	return resource.Accepted[resource.InstanceStateChange]{}, resource.Unsupported("StartInstances", "read-only")
-}
-
-// TerminateInstances is unavailable in the phase-one backend.
-func (b *Backend) TerminateInstances(
-	ctx context.Context, m backend.Mutation, req resource.TerminateInstancesRequest,
-) (resource.Accepted[resource.InstanceStateChange], error) {
-	return resource.Accepted[resource.InstanceStateChange]{}, resource.Unsupported("TerminateInstances", "read-only")
 }
 
 // CreateTags is unavailable in the phase-one backend.

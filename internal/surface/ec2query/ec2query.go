@@ -273,7 +273,12 @@ func (h *handler) stopInstances(w http.ResponseWriter, r *http.Request, c resour
 		writeErr(w, r, err)
 		return
 	}
-	acc, err := h.svc.StopInstances(r.Context(), c, token, resource.StopInstancesRequest{IDs: ids})
+	force, err := parseOptionalBool(r.Form.Get("Force"))
+	if err != nil {
+		writeErr(w, r, err)
+		return
+	}
+	acc, err := h.svc.StopInstances(r.Context(), c, token, resource.StopInstancesRequest{IDs: ids, Force: force})
 	if err != nil {
 		writeErr(w, r, err)
 		return
@@ -1642,6 +1647,9 @@ func ec2Refinement(e *resource.Error) (errs.AWSEntry, bool) {
 			return badRequest("InvalidPermission.Duplicate")
 		}
 	case resource.CodeConflict:
+		if e.Field == "protection" {
+			return badRequest("OperationNotPermitted")
+		}
 		// EC2 refuses DeleteVolume on an attached volume with VolumeInUse.
 		if resource.IsVolumeAttached(e) {
 			return badRequest("VolumeInUse")

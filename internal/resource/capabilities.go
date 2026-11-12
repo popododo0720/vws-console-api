@@ -52,10 +52,12 @@ type RegionLimits struct {
 
 // RegionFeatures are the region's behaviors that are not one action.
 type RegionFeatures struct {
-	UserData      bool   `json:"userData"`
-	LinkedClones  bool   `json:"linkedClones"`
-	SnapshotScope string `json:"snapshotScope"`
-	PrivateIPMode string `json:"privateIpMode"`
+	UserData          bool   `json:"userData"`
+	LinkedClones      bool   `json:"linkedClones"`
+	SnapshotScope     string `json:"snapshotScope"`
+	PrivateIPMode     string `json:"privateIpMode"`
+	OperationScope    string `json:"operationScope,omitempty"`
+	TerminatedVisible bool   `json:"terminatedVisible"`
 	// LiveTests is region.yaml live_tests; the live runner refuses a region without it.
 	LiveTests bool `json:"liveTests"`
 }
