@@ -329,8 +329,18 @@ func TestSnapshotWritesTokenCannotMoveToAnotherVM(t *testing.T) {
 	b, f := snapshotWriteBackend(t, s, RegionConfig{})
 	id, _ := resource.Parse[resource.VolumeID]("vol-0123456789abcdef0")
 	m := backend.Mutation{Scope: inventoryScope(), Key: "same-token", Fingerprint: strings.Repeat("a", 64)}
+	beforeCreate := len(f.Requests())
 	if _, err := b.CreateSnapshot(t.Context(), m, resource.CreateSnapshotRequest{VolumeID: id}); err != nil {
 		t.Fatal(err)
+	}
+	reads := 0
+	for _, request := range f.Requests()[beforeCreate:] {
+		if strings.Contains(request, "/storage/local/content") {
+			reads++
+		}
+	}
+	if reads != 2 {
+		t.Fatalf("storage listings=%d; want one for the guard and one for owner lookup", reads)
 	}
 	before := len(f.Requests())
 	id, _ = resource.Parse[resource.VolumeID]("vol-1123456789abcdef0")

@@ -115,6 +115,7 @@ func (b *Backend) snapshotVolumeOwner(
 	}
 	var owner pveclient.VM
 	var ownerConfig pveclient.VMConfig
+	content := map[string][]pveclient.StorageContent{}
 	for _, vm := range vms {
 		target := pveclient.VM{Node: vm.Node, VMID: vm.VMID}
 		cfg, err := b.client.VMConfig(ctx, target)
@@ -137,7 +138,7 @@ func (b *Backend) snapshotVolumeOwner(
 				return target, cfg, nil
 			}
 		}
-		volumes, err := b.vmVolumes(ctx, s, ids, vm, cfg, map[string][]pveclient.StorageContent{})
+		volumes, err := b.vmVolumes(ctx, s, ids, vm, cfg, content)
 		if err != nil {
 			return pveclient.VM{}, pveclient.VMConfig{}, err
 		}
