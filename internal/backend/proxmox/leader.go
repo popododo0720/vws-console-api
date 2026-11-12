@@ -155,6 +155,14 @@ func (l *Leader) updateLease(ctx context.Context, release bool) (err error) {
 	if release && l.ownedTerm == 0 {
 		return nil
 	}
+	// A release spends half of its budget on the lock and write so the unlock
+	// still has time left after a write that runs out its own.
+	opCtx := ctx
+	if release {
+		var cancel context.CancelFunc
+		opCtx, cancel = context.WithTimeout(ctx, time.Second)
+		defer cancel()
+	}
 	lease, err := l.readLease()
 	if err != nil {
 		l.lease, l.ownedTerm = leaderLease{}, 0
@@ -164,7 +172,7 @@ func (l *Leader) updateLease(ctx context.Context, release bool) (err error) {
 	if !release && !l.hasQuorum() {
 		return nil
 	}
-	if err := l.helper.Lock(ctx, "leader"); err != nil {
+	if err := l.helper.Lock(opCtx, "leader"); err != nil {
 		return fmt.Errorf("lock leader lease: %w", err)
 	}
 	defer func() {
@@ -209,7 +217,7 @@ func (l *Leader) updateLease(ctx context.Context, release bool) (err error) {
 	if err != nil {
 		return fmt.Errorf("encode leader lease: %w", err)
 	}
-	if err := l.helper.WriteLease(ctx, data); err != nil {
+	if err := l.helper.WriteLease(opCtx, data); err != nil {
 		return fmt.Errorf("write leader lease: %w", err)
 	}
 	l.lease, l.ownedTerm = lease, lease.Term

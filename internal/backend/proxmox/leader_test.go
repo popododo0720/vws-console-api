@@ -529,8 +529,11 @@ func TestLeaderShutdownReleaseFailureIsBoundedAndLogged(t *testing.T) {
 		}
 		return helper.WriteLease(ctx, data)
 	}, unlock: func(ctx context.Context, name string) error {
-		if releaseCtx != nil && ctx != releaseCtx {
-			t.Error("unlock extended the release deadline")
+		if releaseCtx != nil {
+			deadline, ok := ctx.Deadline()
+			if ctx == releaseCtx || ctx.Err() != nil || !ok || time.Until(deadline) > 2*time.Second {
+				t.Error("release unlock lacks its own share of the two-second budget")
+			}
 		}
 		return helper.Unlock(ctx, name)
 	}}
@@ -553,6 +556,39 @@ func TestLeaderShutdownReleaseFailureIsBoundedAndLogged(t *testing.T) {
 	if !strings.Contains(logs.data.String(), "leader lease release failed") ||
 		!strings.Contains(logs.data.String(), "injected lease write failure") {
 		t.Fatalf("release failure not logged: %s", logs.data.String())
+	}
+}
+
+// A release write that runs out its deadline must still leave the lock
+// free: the helper treats a left-over lock directory as held for good.
+func TestLeaderReleaseUnlocksAfterWriteDeadline(t *testing.T) {
+	leader, _, clock := testLeader(t, scenario())
+	helper := leader.helper
+	var unlockErr error
+	unlocked := false
+	leader.helper = releaseLeaseHelper{LeaseWriter: helper, write: func(ctx context.Context, data []byte) error {
+		var lease leaderLease
+		if err := json.Unmarshal(data, &lease); err != nil {
+			t.Fatal(err)
+		}
+		if !lease.Until.Equal(clock.now()) {
+			return helper.WriteLease(ctx, data)
+		}
+		<-ctx.Done()
+		return ctx.Err()
+	}, unlock: func(ctx context.Context, name string) error {
+		unlocked, unlockErr = true, ctx.Err()
+		return helper.Unlock(ctx, name)
+	}}
+	stopLeader(t, leader)
+	if !unlocked || unlockErr != nil {
+		t.Fatalf("release unlock ran=%v with context error %v", unlocked, unlockErr)
+	}
+	if err := helper.Lock(t.Context(), "leader"); err != nil {
+		t.Fatal("expired release write left the leader lock behind", err)
+	}
+	if err := helper.Unlock(t.Context(), "leader"); err != nil {
+		t.Fatal(err)
 	}
 }
 
