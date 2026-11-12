@@ -40,7 +40,7 @@ type instanceItem struct {
 	ImageID      string          `xml:"imageId"`
 	InstanceType string          `xml:"instanceType"`
 	KeyName      string          `xml:"keyName,omitempty"`
-	SubnetID     string          `xml:"subnetId"`
+	SubnetID     string          `xml:"subnetId,omitempty"`
 	VpcID        string          `xml:"vpcId,omitempty"`
 	LaunchTime   string          `xml:"launchTime,omitempty"`
 	PublicIP     string          `xml:"ipAddress,omitempty"`

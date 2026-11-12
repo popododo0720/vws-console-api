@@ -128,7 +128,7 @@ type Instance struct {
 	InstanceType  string        `json:"instanceType"`
 	// SubnetID, VpcID and PrivateIP are those of the primary interface,
 	// device index 0, as in EC2. SetInterfaces keeps them so.
-	SubnetID   SubnetID  `json:"subnetId"`
+	SubnetID   SubnetID  `json:"subnetId,omitzero"`
 	VpcID      VpcID     `json:"vpcId,omitzero"`
 	Zone       string    `json:"availabilityZone"`
 	LaunchTime time.Time `json:"launchTime,omitzero"`
