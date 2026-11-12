@@ -14,21 +14,22 @@ import (
 
 // Fake answers the PVE API from one Scenario.
 type Fake struct {
-	mu       sync.RWMutex
-	s        Scenario
-	roles    map[string][]string
-	quorate  bool
-	online   map[string]bool
-	mux      *http.ServeMux
-	methods  []string
-	requests []string
-	clock    func() time.Time
-	delay    time.Duration
-	tasks    []*task
-	archive  []*task
-	failNext map[string][]string
-	tickets  map[string]consoleTicket
-	files    map[string]pmxcfsEntry
+	mu         sync.RWMutex
+	s          Scenario
+	roles      map[string][]string
+	quorate    bool
+	online     map[string]bool
+	mux        *http.ServeMux
+	methods    []string
+	requests   []string
+	poolWrites []string
+	clock      func() time.Time
+	delay      time.Duration
+	tasks      []*task
+	archive    []*task
+	failNext   map[string][]string
+	tickets    map[string]consoleTicket
+	files      map[string]pmxcfsEntry
 }
 
 // failure is a PVE error answer: the status and PVE's message.
@@ -91,8 +92,23 @@ func (f *Fake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	f.methods = append(f.methods, r.Method)
 	f.requests = append(f.requests, r.Method+" "+r.URL.RequestURI())
+	pools := r.URL.Path == "/api2/json/pools" || strings.HasPrefix(r.URL.Path, "/api2/json/pools/")
+	write := r.Method == http.MethodPut || r.Method == http.MethodPost || r.Method == http.MethodDelete
+	if pools && write {
+		f.poolWrites = append(f.poolWrites, r.Method+" "+r.URL.RequestURI())
+		f.mu.Unlock()
+		reply(w, nil, &failure{http.StatusNotImplemented, "pool membership writes are forbidden"})
+		return
+	}
 	f.mu.Unlock()
 	f.mux.ServeHTTP(w, r)
+}
+
+// PoolWriteViolations returns every attempted pool write, including rejected ones.
+func (f *Fake) PoolWriteViolations() []string {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	return append([]string(nil), f.poolWrites...)
 }
 
 // Requests returns method and path for every request, including rejected ones.
