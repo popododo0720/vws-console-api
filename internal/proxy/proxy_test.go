@@ -299,6 +299,38 @@ func TestMisleadingSuccessAndOriginErrors(t *testing.T) {
 	}
 }
 
+func TestAmbiguousWriteRetries(t *testing.T) {
+	for _, action := range []string{
+		"CreateSnapshot", "RebootInstances", "DescribeInstances", "RunInstances", "RunInstances&ClientToken=stable",
+		"StartInstances", "StopInstances", "TerminateInstances", "CreateTags", "DeleteTags", "DeleteSnapshot",
+	} {
+		for _, status := range []int{0, 500, 429} {
+			t.Run(fmt.Sprintf("%s/%d", action, status), func(t *testing.T) {
+				f := setup(t)
+				f.status = status
+				base, attempts := f.p.transport, 0
+				f.p.transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+					if r.URL.Host != f.stsHost {
+						attempts++
+						if status == 0 {
+							return nil, fmt.Errorf("ambiguous transport failure")
+						}
+					}
+					return base.RoundTrip(r)
+				})
+				w := f.request("Action=" + action)
+				want := 3
+				if status != 429 && (action == "CreateSnapshot" || action == "RebootInstances" || action == "RunInstances") {
+					want = 1
+				}
+				if attempts != want || status != 0 && w.Code != status || status == 0 && w.Code != 502 {
+					t.Fatalf("attempts=%d want=%d status=%d", attempts, want, w.Code)
+				}
+			})
+		}
+	}
+}
+
 func TestCredentialsNeverLogged(t *testing.T) {
 	f := setup(t)
 	var logs bytes.Buffer

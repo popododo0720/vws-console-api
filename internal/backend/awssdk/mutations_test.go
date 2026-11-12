@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -295,6 +296,64 @@ func TestMutationAWSErrorCode(t *testing.T) {
 		api.ErrorCode() != "InvalidInstanceID.NotFound" ||
 		!strings.Contains(domain.Message, api.ErrorCode()) || calls.Load() != 1 {
 		t.Fatalf("AWS code lost: %v calls=%d", err, calls.Load())
+	}
+}
+
+func TestNonIdempotentWrites(t *testing.T) {
+	for _, scenario := range []string{"CreateSnapshot", "RebootInstances", "RebootRefresh"} {
+		t.Run(scenario, func(t *testing.T) {
+			var writes, reads atomic.Int32
+			b := setupOrigin(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if err := r.ParseForm(); err != nil {
+					t.Error(err)
+				}
+				if r.Form.Get("Action") == "DescribeInstances" {
+					reads.Add(1)
+				} else {
+					writes.Add(1)
+					if scenario == "RebootRefresh" {
+						fmt.Fprint(w, `<RebootInstancesResponse><return>true</return></RebootInstancesResponse>`)
+						return
+					}
+				}
+				w.WriteHeader(http.StatusInternalServerError)
+				fmt.Fprint(w, `<Response><Errors><Error><Code>InternalError</Code></Error></Errors></Response>`)
+			}))
+			m := backend.Mutation{Scope: backend.Scope{
+				Account: mustParse[resource.AccountID](t, "123456789012"), Region: "us-east-1",
+			}}
+			ids := []resource.InstanceID{
+				mustParse[resource.InstanceID](t, "i-0123456789abcdef0"),
+				mustParse[resource.InstanceID](t, "i-1123456789abcdef0"),
+			}
+			var err error
+			if scenario == "CreateSnapshot" {
+				_, err = b.CreateSnapshot(t.Context(), m, resource.CreateSnapshotRequest{
+					VolumeID: mustParse[resource.VolumeID](t, "vol-0123456789abcdef0"),
+				})
+			} else {
+				var got resource.Accepted[resource.InstanceStateChange]
+				got, err = b.RebootInstances(t.Context(), m, resource.RebootInstancesRequest{IDs: ids})
+				if scenario == "RebootRefresh" {
+					if err != nil || got.Operation.ID.IsZero() || len(got.Items) != len(ids) || reads.Load() == 0 {
+						t.Fatalf("accepted reboot lost: %+v error=%v reads=%d", got, err, reads.Load())
+					}
+					for i, item := range got.Items {
+						if item.ID != ids[i] || item.OwnerID != m.Account || item.Previous != 0 || item.Current != 0 {
+							t.Fatalf("invented state or lost target: %+v", item)
+						}
+					}
+					body, marshalErr := json.Marshal(got)
+					if marshalErr != nil || strings.Contains(string(body), "previousState") ||
+						strings.Contains(string(body), "currentState") {
+						t.Fatalf("unknown state serialization: %s error=%v", body, marshalErr)
+					}
+				}
+			}
+			if writes.Load() != 1 || scenario != "RebootRefresh" && err == nil {
+				t.Fatalf("writes=%d error=%v", writes.Load(), err)
+			}
+		})
 	}
 }
 

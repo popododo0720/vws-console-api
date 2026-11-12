@@ -209,12 +209,13 @@ func (i Instance) Owner() AccountID { return i.OwnerID }
 // Identity returns the instance id.
 func (i Instance) Identity() string { return i.ID.String() }
 
-// InstanceStateChange is the accept-time result of StopInstances.
+// InstanceStateChange is the accept-time result of an instance mutation.
+// Unknown states are omitted when a successful reboot cannot refresh inventory.
 type InstanceStateChange struct {
 	ID       InstanceID    `json:"instanceId"`
 	OwnerID  AccountID     `json:"ownerId"`
-	Previous InstanceState `json:"previousState"`
-	Current  InstanceState `json:"currentState"`
+	Previous InstanceState `json:"previousState,omitempty"`
+	Current  InstanceState `json:"currentState,omitempty"`
 }
 
 // Owner returns the account that owns the instance.

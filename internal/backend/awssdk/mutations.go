@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sort"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -241,12 +242,16 @@ func (b *Backend) RebootInstances(
 	}
 	ctx, cancel := context.WithTimeout(ctx, callTimeout)
 	defer cancel()
-	if _, err := b.client.RebootInstances(ctx, &ec2.RebootInstancesInput{InstanceIds: instanceIDs(req.IDs)}); err != nil {
+	input := &ec2.RebootInstancesInput{InstanceIds: instanceIDs(req.IDs)}
+	if _, err := b.client.RebootInstances(ctx, input, func(o *ec2.Options) { o.RetryMaxAttempts = 1 }); err != nil {
 		return resource.Accepted[resource.InstanceStateChange]{}, awsError(err)
 	}
 	page, err := b.DescribeInstances(ctx, m.Scope, resource.InstanceQuery{IDs: req.IDs})
 	if err != nil {
-		return resource.Accepted[resource.InstanceStateChange]{}, err
+		slog.WarnContext(ctx, "AWS reboot accepted but instance refresh failed", slog.Any("error", err))
+		for _, id := range req.IDs {
+			page.Items = append(page.Items, resource.Instance{ID: id, OwnerID: m.Account})
+		}
 	}
 	items := make([]resource.InstanceStateChange, 0, len(page.Items))
 	for _, item := range page.Items {
@@ -317,7 +322,7 @@ func (b *Backend) CreateSnapshot(
 			{ResourceType: types.ResourceTypeSnapshot, Tags: awsTags(req.Tags)},
 		}
 	}
-	out, err := b.client.CreateSnapshot(ctx, input)
+	out, err := b.client.CreateSnapshot(ctx, input, func(o *ec2.Options) { o.RetryMaxAttempts = 1 })
 	if err != nil {
 		return resource.Accepted[resource.Snapshot]{}, awsError(err)
 	}
