@@ -19,6 +19,7 @@ import (
 
 	"github.com/popododo0720/vws-console-api/internal/backend/launch"
 	"github.com/popododo0720/vws-console-api/internal/backend/launch/kubestore"
+	"github.com/popododo0720/vws-console-api/internal/backend/launch/storetest"
 	"github.com/popododo0720/vws-console-api/internal/resource"
 )
 
@@ -82,36 +83,10 @@ func account(t *testing.T) resource.AccountID {
 const key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
 func TestRecordRoundTripsAndWritesAreCompareAndSwap(t *testing.T) {
-	ctx := context.Background()
-	s, _, _ := open(t)
-	rec := launch.Record{
-		Key: key, Account: account(t), Fingerprint: "fp", Count: 1, Phase: launch.Running, Steps: []launch.Step{},
-	}
-	v1, err := s.Create(ctx, rec)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := s.Create(ctx, rec); !errors.Is(err, launch.ErrExists) {
-		t.Fatalf("second create: %v", err)
-	}
-	rec.Steps = append(rec.Steps, launch.Step{Kind: launch.StepVolume, Resource: "v"})
-	v2, err := s.Update(ctx, rec, v1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := s.Update(ctx, rec, v1); !errors.Is(err, launch.ErrConflict) {
-		t.Fatalf("stale update: %v", err)
-	}
-	if _, err := s.Update(ctx, rec, ""); err == nil {
-		t.Fatal("update without a resourceVersion overwrote the record")
-	}
-	got, version, found, err := s.Load(ctx, key)
-	if err != nil || !found || version != v2 || len(got.Steps) != 1 || got.Account != rec.Account {
-		t.Fatalf("load %+v %q %v %v", got, version, found, err)
-	}
-	if _, _, found, err := s.Load(ctx, strings.Repeat("f", 64)); found || err != nil {
-		t.Fatalf("absent key: found %v err %v", found, err)
-	}
+	storetest.Run(t, func(t *testing.T) launch.Store {
+		s, _, _ := open(t)
+		return s
+	})
 }
 
 // TestNoOpRetryLeavesResourceVersion is the vws-deploy#478 zero-writes check:
