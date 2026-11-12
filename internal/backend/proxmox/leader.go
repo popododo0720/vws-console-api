@@ -96,10 +96,11 @@ func (l *Leader) Run(ctx context.Context) {
 	defer stopQuorum()
 	defer stopLease()
 	defer func() {
-		l.mu.Lock()
-		defer l.mu.Unlock()
-		l.quorate, l.ownedTerm = false, 0
-		l.announce(ctx)
+		releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
+		defer cancel()
+		if err := l.updateLease(releaseCtx, true); err != nil {
+			slog.Default().WarnContext(releaseCtx, "leader lease release failed", slog.String("reason", err.Error()))
+		}
 	}()
 	l.checkQuorum(ctx)
 	if err := l.renew(ctx); err != nil && ctx.Err() == nil {
@@ -121,9 +122,12 @@ func (l *Leader) Run(ctx context.Context) {
 
 func (l *Leader) checkQuorum(ctx context.Context) {
 	at := l.now()
-	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	checkCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
-	status, err := l.backend.Status(ctx)
+	status, err := l.backend.Status(checkCtx)
+	if ctx.Err() != nil {
+		return
+	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.quorate, l.checked = err == nil && status.Quorate, at
@@ -133,28 +137,51 @@ func (l *Leader) checkQuorum(ctx context.Context) {
 	l.announce(ctx)
 }
 
-func (l *Leader) renew(ctx context.Context) (err error) {
+func (l *Leader) renew(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
+	return l.updateLease(ctx, false)
+}
+
+func (l *Leader) updateLease(ctx context.Context, release bool) (err error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	defer func() {
+		if release {
+			l.quorate, l.ownedTerm = false, 0
+		}
+		l.announce(ctx)
+	}()
+	if release && l.ownedTerm == 0 {
+		return nil
+	}
+	// A release spends half of its budget on the lock and write so the unlock
+	// still has time left after a write that runs out its own.
+	opCtx := ctx
+	if release {
+		var cancel context.CancelFunc
+		opCtx, cancel = context.WithTimeout(ctx, time.Second)
+		defer cancel()
+	}
 	lease, err := l.readLease()
 	if err != nil {
 		l.lease, l.ownedTerm = leaderLease{}, 0
-		l.announce(ctx)
 		return err
 	}
 	l.lease = lease
-	defer l.announce(ctx)
-	if !l.hasQuorum() {
+	if !release && !l.hasQuorum() {
 		return nil
 	}
-	if err := l.helper.Lock(ctx, "leader"); err != nil {
+	if err := l.helper.Lock(opCtx, "leader"); err != nil {
 		return fmt.Errorf("lock leader lease: %w", err)
 	}
 	defer func() {
-		unlockCtx, unlockCancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
-		defer unlockCancel()
+		unlockCtx := ctx
+		if !release {
+			var unlockCancel context.CancelFunc
+			unlockCtx, unlockCancel = context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
+			defer unlockCancel()
+		}
 		err = errors.Join(err, l.helper.Unlock(unlockCtx, "leader"))
 	}()
 	lease, err = l.readLease()
@@ -164,25 +191,33 @@ func (l *Leader) renew(ctx context.Context) (err error) {
 	}
 	l.lease = lease
 	now := l.now()
-	own := lease.Node == l.node && lease.Term == l.ownedTerm && now.Before(lease.Until)
-	if !own && !now.After(lease.Until) {
-		return nil
-	}
-	if !l.hasQuorum() {
-		return nil
-	}
-	if !own {
-		if lease.Term == math.MaxUint64 {
-			return errors.New("leader term exhausted")
+	own := lease.Node == l.node && lease.Term == l.ownedTerm
+	if release {
+		if !own {
+			return nil
 		}
-		lease.Term++
+		lease.Until = now
+	} else {
+		own = own && now.Before(lease.Until)
+		if !own && !now.After(lease.Until) {
+			return nil
+		}
+		if !l.hasQuorum() {
+			return nil
+		}
+		if !own {
+			if lease.Term == math.MaxUint64 {
+				return errors.New("leader term exhausted")
+			}
+			lease.Term++
+		}
+		lease.Node, lease.Until = l.node, now.Add(20*time.Second)
 	}
-	lease.Node, lease.Until = l.node, now.Add(20*time.Second)
 	data, err := json.Marshal(lease)
 	if err != nil {
 		return fmt.Errorf("encode leader lease: %w", err)
 	}
-	if err := l.helper.WriteLease(ctx, data); err != nil {
+	if err := l.helper.WriteLease(opCtx, data); err != nil {
 		return fmt.Errorf("write leader lease: %w", err)
 	}
 	l.lease, l.ownedTerm = lease, lease.Term
