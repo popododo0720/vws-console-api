@@ -112,6 +112,9 @@ func (f *Fake) power(t *Token, r *http.Request) (any, *failure) {
 		}
 	}
 	action := r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:]
+	if !f.quorate {
+		return nil, &failure{http.StatusInternalServerError, "cluster not ready - no quorum?"}
+	}
 	return f.submit(t, node, "qm"+action, strconv.Itoa(vmid), func() string {
 		vm := f.vm(vmid)
 		if lock := vm.Config["lock"]; lock != "" {

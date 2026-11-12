@@ -136,7 +136,7 @@ change both files together.
 | vws-proto comes from a release tag; no local proto tree. | `TestProtoModuleRules` |
 | Google Go style. | CI job `lint` |
 | Tests pass under the race detector. | CI job `test` |
-| pvefake power tasks use an injectable clock, scoped failure injection and PVE task filters; a token sees only its own tasks unless it holds Sys.Audit. | `TestTaskDelayFailureAndStatus`, `TestTaskFiltersAndOrdering`, `TestPowerPathsRequirePowerPrivilege`, `TestConcurrentTasksHaveDistinctUPIDs` |
+| pvefake power tasks use an injectable clock, scoped failure injection and PVE task filters; a token sees only its own tasks unless it holds Sys.Audit. Console tickets require VM.Console and open one websocket for their VM, node and port. Refused handshakes preserve tickets; upgrades require GET over HTTP/1.1 or higher and read all Connection fields. Quorum loss refuses power submissions and makes pmxcfs read-only, but leaves consoles available. | `TestTaskDelayFailureAndStatus`, `TestTaskFiltersAndOrdering`, `TestPowerPathsRequirePowerPrivilege`, `TestConcurrentTasksHaveDistinctUPIDs`, `TestConsoleTicketsOpenOneWebsocket`, `TestConsolePathsRequireConsolePrivilege`, `TestConsoleHandshakePreservesTicketsOnRefusal`, `TestPowerRefusesWithoutQuorum`, `TestPMXCFSIsReadOnlyWithoutQuorum` |
 | `//nolint` names one linter and a reason. | `nolintlint` |
 | No swallowed errors. | `errcheck`, `wrapcheck`, `errorlint` |
 | Every `resource.Code` has a status and wire code on each surface. | `TestEveryCodeHasAnEC2Error` |

@@ -27,6 +27,8 @@ type Fake struct {
 	tasks    []*task
 	archive  []*task
 	failNext map[string][]string
+	tickets  map[string]consoleTicket
+	files    map[string]pmxcfsEntry
 }
 
 // failure is a PVE error answer: the status and PVE's message.
@@ -53,6 +55,8 @@ func NewWithClock(s Scenario, clock func() time.Time) (*Fake, error) {
 	s = s.clone()
 	f := &Fake{s: s, roles: map[string][]string{}, quorate: true, online: map[string]bool{}, mux: http.NewServeMux()}
 	f.clock, f.failNext = clock, map[string][]string{}
+	f.tickets = map[string]consoleTicket{}
+	f.files = map[string]pmxcfsEntry{"/etc/pve": {dir: true}}
 	for _, r := range s.Roles {
 		f.roles[r.ID] = r.Privs
 	}
@@ -96,18 +100,6 @@ func (f *Fake) Requests() []string {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
 	return append([]string(nil), f.requests...)
-}
-
-// MoveVM changes pool membership between inventory calls.
-func (f *Fake) MoveVM(vmid int, pool string) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	vm := f.vm(vmid)
-	if vm == nil {
-		return fmt.Errorf("pvefake: unknown VM %d", vmid)
-	}
-	vm.Pool = pool
-	return nil
 }
 
 // RequestMethods returns every request method, including rejected requests.

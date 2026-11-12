@@ -11,6 +11,18 @@ import (
 	"strings"
 )
 
+// MoveVM changes pool membership between inventory calls.
+func (f *Fake) MoveVM(vmid int, pool string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	vm := f.vm(vmid)
+	if vm == nil {
+		return fmt.Errorf("pvefake: unknown VM %d", vmid)
+	}
+	vm.Pool = pool
+	return nil
+}
+
 // routes registers the cluster, node, VM config and permission read paths of
 // pveclient. Permissions follow the
 // api-viewer: a "check" is a 403 without the privilege, "user: all" lists
@@ -30,6 +42,7 @@ func (f *Fake) routes() {
 	f.handle("/nodes/{node}/storage/{storage}/content", f.storageContent)
 	f.handle("/access/permissions", f.permissions)
 	f.taskRoutes()
+	f.consoleRoutes()
 	f.mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		msg := fmt.Sprintf("Method '%s %s' not implemented", r.Method, r.URL.Path)
 		reply(w, nil, &failure{http.StatusNotImplemented, msg})
