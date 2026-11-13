@@ -7,6 +7,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -22,31 +23,32 @@ import (
 )
 
 func TestPVEFakeCommandRegionInventoryAndRestart(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("loopback stack requires a non-root user")
+	}
 	dir := t.TempDir()
 	for _, target := range []struct{ name, path string }{
 		{"pvefake", "./cmd/pvefake"},
 		{"vws-region", "./cmd/vws-region"},
-		{"helper", "./internal/regionhelper"},
+		{"helper", "./cmd/vws-region-helper"},
+		{"vws-console-api", "./cmd/vws-console-api"},
 	} {
 		args := []string{"build", "-race", "-o", filepath.Join(dir, target.name), target.path}
-		if target.name == "helper" {
-			args = []string{"test", "-c", "-o", filepath.Join(dir, target.name), target.path}
-		}
 		build := exec.CommandContext(t.Context(), "go", args...)
 		build.Dir = "../../.."
 		if out, err := build.CombinedOutput(); err != nil {
 			t.Fatalf("build %s: %v\n%s", target.name, err, out)
 		}
 	}
-	for _, name := range []string{"public", "private", "locks"} {
-		if err := os.Mkdir(filepath.Join(dir, name), 0o700); err != nil {
+	for _, name := range []string{"etc/pve/vws", "etc/pve/priv/vws", "etc/pve/priv/lock/vws-region"} {
+		if err := os.MkdirAll(filepath.Join(dir, name), 0o700); err != nil {
 			t.Fatal(err)
 		}
 	}
 	writeFixture(t, filepath.Join(dir, "region-kek"), bytes.Repeat([]byte{42}, 32))
+	writeFixture(t, filepath.Join(dir, "admin-kek"), []byte("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="))
 	writeFixture(t, filepath.Join(dir, "region.yaml"), []byte("read_only: true\npools:\n  project: '123456789012'\n"))
 	t.Setenv("CREDENTIALS_DIRECTORY", dir)
-	t.Setenv("VWS_HELPER_TEST_ROOT", dir)
 	tlsConfig := daemonCertificates(t, dir)
 	transport := &http.Transport{TLSClientConfig: tlsConfig}
 	defer transport.CloseIdleConnections()
@@ -160,8 +162,8 @@ func TestPVEFakeCommandRegionInventoryAndRestart(t *testing.T) {
 		addr, ops := unusedAddress(t), unusedAddress(t)
 		region := exec.CommandContext(ctx, filepath.Join(dir, "vws-region"),
 			"-backend", "proxmox", "-config", filepath.Join(dir, "region.yaml"),
-			"-registration-file", filepath.Join(dir, "public", "registration.json"),
-			"-helper-path", filepath.Join(dir, "helper"), "-pve-endpoint", endpoint,
+			"-registration-file", filepath.Join(dir, "etc/pve/vws", "registration.json"),
+			"-helper-path", filepath.Join(dir, "helper"), "-helper-root", dir, "-pve-endpoint", endpoint,
 			"-pve-ca-file", filepath.Join(dir, "pve-ca.pem"),
 			"-tls-cert-file", filepath.Join(dir, "cert.pem"), "-tls-key-file", filepath.Join(dir, "key.pem"),
 			"-tls-ca-file", filepath.Join(dir, "ca.pem"), "-region-addr", addr, "-ops-addr", ops)
@@ -172,16 +174,93 @@ func TestPVEFakeCommandRegionInventoryAndRestart(t *testing.T) {
 			t.Fatal(err)
 		}
 		stopRegion := stopCommand(t, region, &regionLog)
+		consoleAddr, consoleOps := unusedAddress(t), unusedAddress(t)
+		global := exec.CommandContext(ctx, filepath.Join(dir, "vws-console-api"),
+			"-backend", "regions", "-admin-store", "memory", "-admin-kek-file", filepath.Join(dir, "admin-kek"),
+			"-region-mtls-ca-file", filepath.Join(dir, "ca.pem"),
+			"-region-mtls-cert-file", filepath.Join(dir, "cert.pem"), "-region-mtls-key-file", filepath.Join(dir, "key.pem"),
+			"-console-token", "loopback-token", "-access-key", "loopback-key", "-secret", "loopback-secret",
+			"-console-addr", consoleAddr, "-ops-addr", consoleOps,
+			"-ec2-addr", unusedAddress(t), "-s3-addr", unusedAddress(t), "-iam-addr", unusedAddress(t))
+		var globalLog bytes.Buffer
+		global.Stdout, global.Stderr = &globalLog, &globalLog
+		global.Env = append(os.Environ(), "OTEL_EXPORTER_OTLP_ENDPOINT=")
+		if err := global.Start(); err != nil {
+			t.Fatal(err)
+		}
+		stopGlobal := stopCommand(t, global, &globalLog)
+		awaitStatus(t, "http://"+consoleOps+"/readyz", http.StatusOK)
+		var etag string
+		admin := func(method, path, body string, want int) []byte {
+			t.Helper()
+			req, err := http.NewRequestWithContext(ctx, method, "http://"+consoleAddr+path, strings.NewReader(body))
+			if err != nil {
+				t.Fatal(err)
+			}
+			req.Header.Set("Authorization", "Bearer loopback-token")
+			req.Header.Set("Content-Type", "application/json")
+			if method == http.MethodPatch || method == http.MethodDelete {
+				req.Header.Set("If-Match", etag)
+			}
+			resp, err := client.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+			if value := resp.Header.Get("ETag"); value != "" {
+				etag = value
+			}
+			data, err := io.ReadAll(resp.Body)
+			if err != nil || resp.StatusCode != want || bytes.Contains(data, []byte("fake-secret")) {
+				t.Fatalf("%s %s: status=%d body=%s err=%v", method, path, resp.StatusCode, data, err)
+			}
+			return data
+		}
+		const regionsPath = "/api/v1/admin/regions"
+		const regionPath = regionsPath + "/pve-test-1"
+		if data := admin(http.MethodGet, regionsPath, "", http.StatusOK); strings.TrimSpace(string(data)) != `{"items":[]}` {
+			t.Fatalf("new memory registry retained registrations: %s", data)
+		}
 		if attempt == 0 {
 			awaitStatus(t, "http://"+ops+"/readyz", http.StatusServiceUnavailable)
 			awaitClientStatus(t, client, "https://"+addr+"/internal/v1/status", http.StatusServiceUnavailable)
-			for range 2 {
-				call(http.MethodPut, "https://"+addr+"/internal/v1/registration",
-					`{"region":"pve-test-1","cluster_name":"test","tokenId":"vws@pve!inventory",`+
-						`"token":"fake-secret","zones":[{"letter":"a","nodes":["pve1"]}]}`)
-			}
+		}
+		input := fmt.Sprintf(`{"name":"pve-test-1","clusterName":"test","pveApiUrl":%q,"caPem":%q,
+			"tokenId":"vws@pve!inventory","tokenSecret":"fake-secret","regionEndpoint":%q,
+			"zones":[{"letter":"a","nodes":["pve1"]}]}`, endpoint, pem, "https://"+addr)
+		data := admin(http.MethodPost, regionsPath, input, http.StatusCreated)
+		if bytes.Contains(data, []byte(`"lastError":{`)) {
+			t.Fatalf("registration push failed: %s", data)
 		}
 		awaitStatus(t, "http://"+ops+"/readyz", http.StatusOK)
+		data = admin(http.MethodPost, regionPath+"/test", `{"tokenSecret":"fake-secret"}`, http.StatusOK)
+		var diagnostic struct {
+			Steps []struct {
+				Result string `json:"result"`
+			} `json:"steps"`
+		}
+		if err := json.Unmarshal(data, &diagnostic); err != nil || len(diagnostic.Steps) != 5 {
+			t.Fatalf("connection diagnostic: %s %v", data, err)
+		}
+		for _, step := range diagnostic.Steps {
+			if step.Result != "PASS" {
+				t.Fatalf("connection test failed: %s", data)
+			}
+		}
+		for range 2 {
+			data := admin(http.MethodGet, regionPath+"/health", "", http.StatusOK)
+			if !bytes.Contains(data, []byte(`"quorate":true`)) || !bytes.Contains(data, []byte(`"name":"pve1"`)) {
+				t.Fatalf("region health: %s", data)
+			}
+			data = admin(http.MethodPatch, regionPath, `{"zones":[{"letter":"b","nodes":["pve1"]}]}`, http.StatusOK)
+			if !bytes.Contains(data, []byte(`"letter":"b"`)) || bytes.Contains(data, []byte(`"lastError":{`)) {
+				t.Fatalf("zone update: %s", data)
+			}
+			identity, err := os.ReadFile(filepath.Join(dir, "etc/pve/vws/registration.json"))
+			if err != nil || !bytes.Contains(identity, []byte(`"letter":"b"`)) {
+				t.Fatalf("daemon did not persist zones: %s %v", identity, err)
+			}
+		}
 		for range 2 {
 			body := call(http.MethodPost, "https://"+addr+"/internal/v1/Compute/DescribeInstances",
 				`{"scope":{"account":"123456789012","pool":"123456789012"},"req":{}}`)
@@ -198,9 +277,17 @@ func TestPVEFakeCommandRegionInventoryAndRestart(t *testing.T) {
 			}
 			previous = page
 		}
+		admin(http.MethodDelete, regionPath, "", http.StatusNoContent)
+		if data := admin(http.MethodGet, regionsPath, "", http.StatusOK); strings.TrimSpace(string(data)) != `{"items":[]}` {
+			t.Fatalf("deleted region retained: %s", data)
+		}
+		stopGlobal()
 		stopRegion()
 		stopPVE()
 		cancel()
+		if strings.Contains(regionLog.String()+globalLog.String(), "fake-secret") {
+			t.Fatal("token in process logs")
+		}
 		if line, ok := <-lines; ok {
 			t.Fatalf("printed more than one ready line: %q", line)
 		}

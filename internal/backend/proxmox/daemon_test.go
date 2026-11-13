@@ -153,8 +153,8 @@ func TestRegionDaemonReadsRestartAndReadiness(t *testing.T) {
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("helper build: %v\n%s", err, out)
 	}
-	for _, name := range []string{"public", "private", "locks"} {
-		if err := os.Mkdir(filepath.Join(dir, name), 0o700); err != nil {
+	for _, name := range []string{"etc/pve/vws", "etc/pve/priv/vws", "etc/pve/priv/lock/vws-region"} {
+		if err := os.MkdirAll(filepath.Join(dir, name), 0o700); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -188,7 +188,7 @@ func TestRegionDaemonReadsRestartAndReadiness(t *testing.T) {
 	pve.StartTLS()
 	defer pve.Close()
 	writeFixture(t, filepath.Join(dir, "region.yaml"), []byte("read_only: true\npools:\n  project: '123456789012'\n"))
-	reg := filepath.Join(dir, "public", "registration.json")
+	reg := filepath.Join(dir, "etc/pve/vws", "registration.json")
 	const canary = "fake-secret"
 	transport := &http.Transport{TLSClientConfig: tlsConfig}
 	defer transport.CloseIdleConnections()
@@ -286,7 +286,7 @@ func TestRegionDaemonReadsRestartAndReadiness(t *testing.T) {
 		request(t, http.MethodPut, first+"/internal/v1/registration", data, want)
 	}
 	put(t, "wrong", tokenID, token, http.StatusConflict)
-	for _, name := range []string{"public", "private", "locks"} {
+	for _, name := range []string{"etc/pve/vws", "etc/pve/priv/vws", "etc/pve/priv/lock/vws-region"} {
 		files, err := os.ReadDir(filepath.Join(dir, name))
 		if err != nil || len(files) != 0 {
 			t.Fatalf("mismatch wrote %s: %v", name, err)
@@ -329,7 +329,7 @@ func TestRegionDaemonReadsRestartAndReadiness(t *testing.T) {
 		if err := conn.Register(t.Context(), data); resource.CodeOf(err) != resource.CodeInvalidArgument {
 			t.Fatalf("oversized identity error=%v, want InvalidArgument", err)
 		}
-		for _, name := range []string{"public", "private", "locks"} {
+		for _, name := range []string{"etc/pve/vws", "etc/pve/priv/vws", "etc/pve/priv/lock/vws-region"} {
 			files, err := os.ReadDir(filepath.Join(dir, name))
 			if err != nil || len(files) != 0 {
 				t.Fatalf("oversized identity wrote %s: %v", name, err)
@@ -339,7 +339,7 @@ func TestRegionDaemonReadsRestartAndReadiness(t *testing.T) {
 	put(t, "test", tokenID, token, http.StatusOK)
 	put(t, "test", tokenID, token, http.StatusOK)
 	t.Run("omitted_token_reuses_without_write", func(t *testing.T) {
-		path := filepath.Join(dir, "private", "pve-token."+tokenFingerprint(pveclient.Secret(token)))
+		path := filepath.Join(dir, "etc/pve/priv/vws", "pve-token."+tokenFingerprint(pveclient.Secret(token)))
 		before, err := os.ReadFile(path)
 		if err != nil {
 			t.Fatal(err)
@@ -356,7 +356,7 @@ func TestRegionDaemonReadsRestartAndReadiness(t *testing.T) {
 		}
 	})
 	t.Run("omitted_token_rejects_mismatch", func(t *testing.T) {
-		path := filepath.Join(dir, "private", "pve-token."+tokenFingerprint(pveclient.Secret(token)))
+		path := filepath.Join(dir, "etc/pve/priv/vws", "pve-token."+tokenFingerprint(pveclient.Secret(token)))
 		before, err := os.ReadFile(path)
 		if err != nil {
 			t.Fatal(err)
@@ -365,7 +365,7 @@ func TestRegionDaemonReadsRestartAndReadiness(t *testing.T) {
 		if err := conn.Helper.WriteToken(t.Context(), fp, []byte(next.Secret)); err != nil {
 			t.Fatal(err)
 		}
-		data, err := os.ReadFile(filepath.Join(dir, "private", "pve-token."+fp))
+		data, err := os.ReadFile(filepath.Join(dir, "etc/pve/priv/vws", "pve-token."+fp))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -471,7 +471,7 @@ func TestRegionDaemonReadsRestartAndReadiness(t *testing.T) {
 		if err != nil || json.Unmarshal(data, &stored) != nil || stored.Fingerprint != fp {
 			t.Fatal("disk does not name the committed new token")
 		}
-		oldToken := filepath.Join(dir, "private", "pve-token."+tokenFingerprint(pveclient.Secret(token)))
+		oldToken := filepath.Join(dir, "etc/pve/priv/vws", "pve-token."+tokenFingerprint(pveclient.Secret(token)))
 		if _, err := os.Stat(oldToken); !os.IsNotExist(err) {
 			t.Fatal("committed registration with helper error left the previous token file:", err)
 		}
@@ -496,7 +496,8 @@ func TestRegionDaemonReadsRestartAndReadiness(t *testing.T) {
 			if after <= before {
 				t.Fatal("rotation did not repeat the permission self-check")
 			}
-			if _, err := os.Stat(filepath.Join(dir, "private", "pve-token."+previous.Fingerprint)); !os.IsNotExist(err) {
+			path := filepath.Join(dir, "etc/pve/priv/vws", "pve-token."+previous.Fingerprint)
+			if _, err := os.Stat(path); !os.IsNotExist(err) {
 				t.Fatal("rotation left the previous token file")
 			}
 			awaitStatus(t, ops+"/readyz", http.StatusOK)
@@ -515,7 +516,7 @@ func TestRegionDaemonReadsRestartAndReadiness(t *testing.T) {
 		if err != nil || !bytes.Equal(before, after) {
 			t.Fatal("failed candidate changed identity")
 		}
-		refused := filepath.Join(dir, "private", "pve-token."+tokenFingerprint("refused-candidate"))
+		refused := filepath.Join(dir, "etc/pve/priv/vws", "pve-token."+tokenFingerprint("refused-candidate"))
 		if _, err := os.Stat(refused); !os.IsNotExist(err) {
 			t.Fatal("failed candidate wrote a token")
 		}
@@ -529,7 +530,7 @@ func TestRegionDaemonReadsRestartAndReadiness(t *testing.T) {
 		writeFixture(t, filepath.Join(dir, "fail"), []byte("token-delete"))
 		put(t, "test", tokenID, token, http.StatusOK)
 		fp := tokenFingerprint(pveclient.Secret(next.Secret))
-		if _, err := os.Stat(filepath.Join(dir, "private", "pve-token."+fp)); err != nil {
+		if _, err := os.Stat(filepath.Join(dir, "etc/pve/priv/vws", "pve-token."+fp)); err != nil {
 			t.Fatal("cleanup fault did not retain the inactive token:", err)
 		}
 		if _, err := conn.Check(t.Context()); err != nil {
@@ -588,7 +589,7 @@ func TestRegionDaemonReadsRestartAndReadiness(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		path := filepath.Join(dir, "private", "pve-token."+tokenFingerprint(pveclient.Secret(token)))
+		path := filepath.Join(dir, "etc/pve/priv/vws", "pve-token."+tokenFingerprint(pveclient.Secret(token)))
 		original, err := os.ReadFile(path)
 		if err != nil {
 			t.Fatal(err)
@@ -597,7 +598,7 @@ func TestRegionDaemonReadsRestartAndReadiness(t *testing.T) {
 		if err := conn.Helper.WriteToken(t.Context(), fp, []byte(next.Secret)); err != nil {
 			t.Fatal(err)
 		}
-		wrong, err := os.ReadFile(filepath.Join(dir, "private", "pve-token."+fp))
+		wrong, err := os.ReadFile(filepath.Join(dir, "etc/pve/priv/vws", "pve-token."+fp))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -647,7 +648,7 @@ func TestRegionDaemonReadsRestartAndReadiness(t *testing.T) {
 			t.Fatalf("PVE mutation: %s", method)
 		}
 	}
-	for _, name := range []string{"public", "private", "locks"} {
+	for _, name := range []string{"etc/pve/vws", "etc/pve/priv/vws", "etc/pve/priv/lock/vws-region"} {
 		if err := filepath.WalkDir(filepath.Join(dir, name), func(path string, entry os.DirEntry, err error) error {
 			if err != nil || entry.IsDir() {
 				return err

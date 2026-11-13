@@ -280,27 +280,30 @@ func TestMain(m *testing.M) {
 				os.Exit(1)
 			}
 		}
-		h := helper{
-			public: root + "/public", private: root + "/private", locks: root + "/locks",
-			kek: root + "/region-kek", owner: uint32(os.Geteuid()),
+		h, err := configuredHelper(root, true, os.Getenv("CREDENTIALS_DIRECTORY"), os.Geteuid())
+		if err != nil {
+			os.Exit(1)
 		}
 		if os.Getenv("VWS_HELPER_TEST_ROTATE") == os.Args[1] {
 			if _, err := os.Stat(root + "/next-registration"); err == nil {
-				data, err := os.ReadFile(root + "/public/registration.json")
+				data, err := os.ReadFile(h.public + "/registration.json")
 				var identity struct {
 					Fingerprint string `json:"fingerprint"`
 				}
 				if err != nil || json.Unmarshal(data, &identity) != nil {
 					os.Exit(2)
 				}
-				if os.Rename(root+"/next-registration", root+"/public/registration.json") != nil ||
-					os.Remove(root+"/private/pve-token."+identity.Fingerprint) != nil {
+				if os.Rename(root+"/next-registration", h.public+"/registration.json") != nil ||
+					os.Remove(h.private+"/pve-token."+identity.Fingerprint) != nil {
 					os.Exit(2)
 				}
 			}
 		}
-		if err := h.execute(os.Args[1:], os.Stdin, os.Stdout); err != nil {
-			os.Exit(1)
+		if os.Setenv("VWS_REGION_HELPER_ROOT", root) != nil {
+			os.Exit(2)
+		}
+		if code := Main(os.Args[1:], os.Stdin, os.Stdout, os.Stderr); code != 0 {
+			os.Exit(code)
 		}
 		if string(fail) == "after:"+os.Args[1] {
 			os.Exit(1)
@@ -312,11 +315,17 @@ func TestMain(m *testing.M) {
 		if err != nil {
 			os.Exit(2)
 		}
-		record, err := json.Marshal([]string{strings.Join(os.Args[1:], "|"), string(data)})
+		record, err := json.Marshal([]string{
+			strings.Join(os.Args[1:], "|"), string(data), os.Getenv("VWS_REGION_HELPER_ROOT"),
+		})
 		if err != nil || os.WriteFile(path, record, 0o600) != nil {
 			os.Exit(2)
 		}
 		os.Exit(0)
+	}
+	if _, set := os.LookupEnv("VWS_REGION_HELPER_ROOT"); set && len(os.Args) > 1 &&
+		!strings.HasPrefix(os.Args[1], "-test.") {
+		os.Exit(Main(os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
 	}
 	os.Exit(m.Run())
 }
@@ -346,6 +355,143 @@ func TestTokenReadAndCredentialFallback(t *testing.T) {
 	if credentialPath("") != "/etc/vws/credentials/region-kek" ||
 		credentialPath("/run/credentials/vws-region.service") != "/run/credentials/vws-region.service/region-kek" {
 		t.Fatal("incorrect KEK fallback or systemd credential path")
+	}
+}
+
+func TestHelperRootConfiguration(t *testing.T) {
+	for _, tc := range []struct {
+		root string
+		set  bool
+		euid int
+		ok   bool
+	}{
+		{"", false, 1000, true},
+		{"/fixture", true, 1000, true},
+		{"/fixture", true, 0, false},
+		{"relative", true, 1000, false},
+		{"", true, 1000, false},
+		{".", true, 1000, false},
+		{"/fixture/../escape", true, 1000, false},
+	} {
+		h, err := configuredHelper(tc.root, tc.set, "", tc.euid)
+		if (err == nil) != tc.ok {
+			t.Fatalf("%+v: %v", tc, err)
+		}
+		if !tc.ok {
+			continue
+		}
+		prefix, owner := "", uint32(0)
+		if tc.set {
+			prefix, owner = tc.root, uint32(tc.euid)
+		}
+		if h.public != prefix+publicRoot || h.private != prefix+privateRoot ||
+			h.locks != prefix+lockRoot || h.snippetConfig != prefix+snippetFile ||
+			h.kek != prefix+"/etc/vws/credentials/region-kek" || h.owner != owner {
+			t.Fatalf("unexpected helper configuration: %+v", h)
+		}
+	}
+	h, err := configuredHelper("/fixture", true, "/credentials", 1000)
+	if err != nil || h.kek != "/credentials/region-kek" {
+		t.Fatalf("systemd credential override: %+v %v", h, err)
+	}
+}
+
+func TestMainWithHelperRoot(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("test root requires a non-root uid; root refusal is covered by TestHelperRootConfiguration")
+	}
+	root := t.TempDir()
+	t.Setenv("VWS_REGION_HELPER_ROOT", root)
+	t.Setenv("CREDENTIALS_DIRECTORY", "")
+	for _, name := range []string{
+		"etc/pve/vws", "etc/pve/priv/vws", "etc/pve/priv/lock/vws-region", "etc/vws/credentials", "snippets",
+	} {
+		if err := os.MkdirAll(filepath.Join(root, name), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	key := bytes.Repeat([]byte{42}, 32)
+	if err := os.WriteFile(filepath.Join(root, "etc/vws/credentials/region-kek"), key, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	config := filepath.Join(root, "etc/vws/region-helper-snippets")
+	if err := os.WriteFile(config, []byte(root+"/snippets"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	plain := []byte("rooted-token")
+	fp := fmt.Sprintf("%x", sha256.Sum256(plain))
+	const snippet = "vws-123e4567-e89b-12d3-a456-426614174000-user.yaml"
+	for range 2 {
+		for _, args := range [][]string{
+			{"registration-write"},
+			{"token-write", fp},
+			{"lock", "leader"},
+			{"unlock", "leader"},
+			{"snippet-write", snippet},
+			{"snippet-delete", snippet},
+		} {
+			var stderr bytes.Buffer
+			if rc := Main(args, bytes.NewReader(plain), &bytes.Buffer{}, &stderr); rc != 0 {
+				t.Fatalf("%v: rc=%d stderr=%s", args, rc, &stderr)
+			}
+		}
+		got, err := os.ReadFile(filepath.Join(root, "etc/pve/vws/registration.json"))
+		if err != nil || !bytes.Equal(got, plain) {
+			t.Fatalf("registration read: %q %v", got, err)
+		}
+		var out bytes.Buffer
+		if rc := Main([]string{"token-read", fp}, nil, &out, &bytes.Buffer{}); rc != 0 {
+			t.Fatalf("token read rc=%d", rc)
+		}
+		got, err = Open(key, out.Bytes())
+		if err != nil || !bytes.Equal(got, plain) {
+			t.Fatalf("token read: %q %v", got, err)
+		}
+	}
+	binary, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := Client{Path: binary, Root: root}
+	got, err := client.ReadToken(t.Context(), fp)
+	if err != nil || !bytes.Equal(got, plain) {
+		t.Fatalf("client root KEK fallback: %q %v", got, err)
+	}
+	for _, tc := range []struct {
+		dir  string
+		args []string
+	}{
+		{"etc/pve/vws", []string{"registration-write"}},
+		{"etc/pve/priv/vws", []string{"token-read", fp}},
+		{"etc/pve/priv/lock/vws-region", []string{"lock", "leader"}},
+		{"etc/vws/credentials", []string{"token-write", fp}},
+		{"snippets", []string{"snippet-write", snippet}},
+		{"etc/vws", []string{"snippet-write", snippet}},
+	} {
+		path := filepath.Join(root, tc.dir)
+		if err := os.Rename(path, path+"-real"); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(path+"-real", path); err != nil {
+			t.Fatal(err)
+		}
+		if Main(tc.args, bytes.NewReader(plain), &bytes.Buffer{}, &bytes.Buffer{}) != 1 {
+			t.Fatalf("accepted symlinked %s directory", tc.dir)
+		}
+		if err := os.Remove(path); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Rename(path+"-real", path); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, invalid := range []string{"relative", "", ".", root + "/../escape"} {
+		t.Setenv("VWS_REGION_HELPER_ROOT", invalid)
+		var stderr bytes.Buffer
+		if Main([]string{"registration-write"}, strings.NewReader("{}"), &bytes.Buffer{}, &stderr) != 1 ||
+			stderr.String() != "vws-region-helper: operation refused\n" {
+			t.Fatalf("invalid root %q: stderr=%q", invalid, &stderr)
+		}
 	}
 }
 
@@ -381,11 +527,51 @@ func TestClientUsesFixedArgvAndStdin(t *testing.T) {
 		}
 		data, err := os.ReadFile(path)
 		var record []string
-		if err != nil || json.Unmarshal(data, &record) != nil || len(record) != 2 {
+		if err != nil || json.Unmarshal(data, &record) != nil || len(record) != 3 {
 			t.Fatal("missing subprocess capture")
 		}
 		if record[0] != tc.argv || (strings.Contains(tc.argv, "write") && record[1] != secret) {
 			t.Fatalf("unexpected subprocess input: %q", record)
+		}
+	}
+}
+
+func TestClientHelperRootEnvironment(t *testing.T) {
+	binary, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	capture := filepath.Join(t.TempDir(), "capture")
+	t.Setenv("VWS_HELPER_TEST_CAPTURE", capture)
+	t.Setenv("VWS_REGION_HELPER_ROOT", "/ambient-root")
+	for _, root := range []string{"", "/explicit-root"} {
+		c := Client{Path: binary, Root: root}
+		err := c.WriteRegistration(t.Context(), []byte("{}"))
+		if root != "" && os.Geteuid() == 0 {
+			if err == nil {
+				t.Fatal("root process accepted helper root")
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		data, err := os.ReadFile(capture)
+		var record []string
+		if err != nil || json.Unmarshal(data, &record) != nil || len(record) != 3 || record[2] != root {
+			t.Fatalf("child root: %q %v", data, err)
+		}
+		if os.Getenv("VWS_REGION_HELPER_ROOT") != "/ambient-root" {
+			t.Fatal("client changed parent environment")
+		}
+	}
+	for _, c := range []Client{
+		{Root: "/fixture"},
+		{Path: binary, Root: "relative"},
+		{Path: binary, Root: "/fixture/../escape"},
+	} {
+		if err := c.WriteRegistration(t.Context(), nil); err == nil {
+			t.Fatalf("accepted invalid client %+v", c)
 		}
 	}
 }

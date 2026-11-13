@@ -54,6 +54,7 @@ func run(ctx context.Context, args []string) (err error) {
 	kind := fs.String("backend", "proxmox", "proxmox")
 	registration := fs.String("registration-file", "/etc/pve/vws/registration.json", "public registration identity")
 	helperPath := fs.String("helper-path", "", "helper executable override; default uses sudo with the installed helper")
+	helperRoot := fs.String("helper-root", "", "non-root helper test root; requires -helper-path")
 	endpoint := fs.String("pve-endpoint", "https://127.0.0.1:8006", "local pveproxy HTTPS origin")
 	pveCA := fs.String("pve-ca-file", "/etc/pve/pve-root-ca.pem", "node CA bundle")
 	certFile := fs.String("tls-cert-file", "/etc/vws/region.crt", "region server certificate")
@@ -66,6 +67,16 @@ func run(ctx context.Context, args []string) (err error) {
 	}
 	if fs.NArg() != 0 || *kind != "proxmox" {
 		return errors.New("expected -backend proxmox and no positional arguments")
+	}
+	helperRootSet := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "helper-root" {
+			helperRootSet = true
+		}
+	})
+	if helperRootSet && (*helperPath == "" || !filepath.IsAbs(*helperRoot) ||
+		filepath.Clean(*helperRoot) != *helperRoot || os.Geteuid() == 0) {
+		return errors.New("helper-root requires an absolute root, -helper-path and non-root uid")
 	}
 	for _, entry := range os.Environ() {
 		name, _, _ := strings.Cut(entry, "=")
@@ -93,6 +104,7 @@ func run(ctx context.Context, args []string) (err error) {
 		return err
 	}
 	conn.Helper.Path = *helperPath
+	conn.Helper.Root = *helperRoot
 	cert, err := tls.LoadX509KeyPair(*certFile, *keyFile)
 	if err != nil {
 		return fmt.Errorf("region certificate: %w", err)
