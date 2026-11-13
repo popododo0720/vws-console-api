@@ -201,6 +201,11 @@ func TestReadOnlyBackendEveryMethod(t *testing.T) {
 					if last.IsNil() || out[0].Bool() || resource.CodeOf(last.Interface().(error)) != resource.CodeUnavailable {
 						t.Fatalf("%s with an empty pool: %v", name, out)
 					}
+				case name == "GetAllocation":
+					if last.IsNil() || !out[0].IsZero() ||
+						resource.CodeOf(last.Interface().(error)) != resource.CodePermissionDenied {
+						t.Fatalf("%s without pool visibility: %v", name, out)
+					}
 				case strings.HasPrefix(name, "Describe"), strings.HasPrefix(name, "List"):
 					if !last.IsNil() || !out[0].IsZero() {
 						t.Fatalf("%s: %v", name, out)

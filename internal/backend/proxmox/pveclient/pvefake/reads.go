@@ -168,7 +168,7 @@ func (f *Fake) clusterResources(t *Token, r *http.Request) (any, *failure) {
 			row := map[string]any{
 				"id": "qemu/" + strconv.Itoa(vm.VMID), "type": "qemu", "node": vm.Node, "vmid": vm.VMID,
 				"name": vm.Name, "status": vm.Status, "template": b2i(vm.Template),
-				"maxcpu": vm.MaxCPU, "maxmem": vm.MaxMem, "mem": 0, "cpu": 0, "uptime": 0,
+				"maxcpu": vm.MaxCPU, "maxmem": vm.MaxMem, "maxdisk": vm.MaxDisk, "mem": 0, "cpu": 0, "uptime": 0,
 			}
 			if !f.online[vm.Node] {
 				row["status"] = "unknown"

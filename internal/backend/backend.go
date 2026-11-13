@@ -198,6 +198,12 @@ type Set struct {
 	Storage Storage
 	Network Network
 	Console Console
+	Usage   Usage
+}
+
+// Usage reads current allocation without retaining snapshots or writing state.
+type Usage interface {
+	GetAllocation(context.Context, Scope, struct{}) (resource.Allocation, error)
 }
 
 // WithoutRules returns have without every rule in drop, and false when any

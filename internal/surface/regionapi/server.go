@@ -88,6 +88,9 @@ func New(cfg Config) (http.Handler, error) {
 	mux := http.NewServeMux()
 	registerConsole(mux, cfg)
 	c, s, n := cfg.Backend.Compute, cfg.Backend.Storage, cfg.Backend.Network
+	if cfg.Backend.Usage != nil {
+		register(mux, cfg, "Usage", "GetAllocation", cfg.Backend.Usage.GetAllocation)
+	}
 	register(mux, cfg, "Compute", "RunInstances", c.RunInstances)
 	register(mux, cfg, "Compute", "StopInstances", c.StopInstances)
 	register(mux, cfg, "Compute", "StartInstances", c.StartInstances)
