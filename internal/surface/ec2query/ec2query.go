@@ -99,6 +99,7 @@ func (h *handler) serve(w http.ResponseWriter, r *http.Request) {
 	// Resource-level ARNs (arn:vws:ec2:<region>:<account>:instance/<id>) are a
 	// follow-up; every action is authorized on "*" for now.
 	if err := iam.Check(r.Context(), h.authz, caller, "ec2:"+action, "*"); err != nil {
+		h.svc.AuditDenied(r.Context(), caller, "ec2:"+action, err)
 		writeErr(w, r, err)
 		return
 	}

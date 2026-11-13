@@ -22,6 +22,36 @@ import (
 
 const auditCanary = "secret-token-key-material-body-canary"
 
+func TestAuthorizationAuditBoundaries(t *testing.T) {
+	var buf bytes.Buffer
+	svc := New(Config{Audit: audit.New(&buf)})
+	for _, result := range []error{
+		nil, resource.Invalid("input", auditCanary),
+		&resource.Error{Code: resource.CodeUnavailable, Message: auditCanary},
+	} {
+		svc.AuditDenied(t.Context(), caller(t), "ec2:RunInstances", result)
+		if buf.Len() != 0 {
+			t.Fatalf("non-denial audited: %s", &buf)
+		}
+	}
+	c := caller(t)
+	c.Region, c.Principal = "unregistered", "arn:vws:iam::123456789012:user/reader"
+	traceID, _ := trace.TraceIDFromHex("0123456789abcdef0123456789abcdef")
+	spanID, _ := trace.SpanIDFromHex("0123456789abcdef")
+	ctx := trace.ContextWithSpanContext(t.Context(), trace.NewSpanContext(trace.SpanContextConfig{
+		TraceID: traceID, SpanID: spanID,
+	}))
+	svc.AuditDenied(ctx, c, "ec2:DescribeInstances", resource.Denied(auditCanary))
+	line := oneAuditLine(t, &buf)
+	if line["destination"] != "unknown" || line["trace_id"] != traceID.String() || line["result"] != "denied" ||
+		strings.Contains(buf.String(), auditCanary) {
+		t.Fatalf("unknown destination or secret material: %s", &buf)
+	}
+	New(Config{}).AuditDenied(ctx, c, "ec2:RunInstances", resource.Denied(auditCanary))
+	failing := New(Config{Audit: audit.New(auditWriteFailure{})})
+	failing.AuditDenied(ctx, c, "ec2:RunInstances", resource.Denied(auditCanary))
+}
+
 func TestEveryKernelMutationAudited(t *testing.T) {
 	seen := map[string]bool{}
 	for _, typ := range []reflect.Type{

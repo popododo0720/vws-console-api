@@ -199,6 +199,7 @@ func (h *handler) gate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	c.SourceIP = h.clientIP(r)
 	if authz != nil {
 		action, arn := authz(r)
 		if wait, err := h.requests.Take(c.Account, action); err != nil {
@@ -207,10 +208,10 @@ func (h *handler) gate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := iam.Check(r.Context(), h.iam, c, action, arn); err != nil {
+			h.svc.AuditDenied(r.Context(), c, action, err)
 			writeErr(w, r, err)
 			return
 		}
 	}
-	c.SourceIP = h.clientIP(r)
 	h.mux.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), callerKey{}, c)))
 }
