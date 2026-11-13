@@ -9,8 +9,10 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"testing/cryptotest"
+	"time"
 
 	"github.com/popododo0720/vws-console-api/internal/backend"
 	"github.com/popododo0720/vws-console-api/internal/backend/proxmox/pveclient"
@@ -25,6 +27,8 @@ type launchWorld struct {
 	failAt int
 	// failConfig is a path suffix whose config reads answer 500.
 	failConfig string
+	elapsed    atomic.Int64
+	intercept  func(http.ResponseWriter, *http.Request) bool
 }
 
 func launchBackend(
@@ -56,12 +60,18 @@ func launchBackend(
 	for _, edit := range edits {
 		edit(&s)
 	}
-	f, err := pvefake.New(s)
+	w := &launchWorld{}
+	f, err := pvefake.NewWithClock(s, func() time.Time {
+		return time.Unix(1700000000, w.elapsed.Load())
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	w := &launchWorld{f: f}
+	w.f = f
 	srv := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		if w.intercept != nil && w.intercept(rw, r) {
+			return
+		}
 		if w.failConfig != "" && r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, w.failConfig) {
 			rw.WriteHeader(http.StatusInternalServerError)
 			_, _ = rw.Write([]byte(`{"message":"node unreachable"}`))
