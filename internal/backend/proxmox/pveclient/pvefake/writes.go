@@ -350,6 +350,7 @@ func (f *Fake) writeConfig(t *Token, r *http.Request) (any, *failure) {
 	allowed := []string{
 		"digest", "delete", "name", "tags", "description", "protection",
 		"cores", "sockets", "cpu", "memory", "balloon", "smbios1", "ciuser", "sshkeys", "ipconfig0",
+		"net0", "serial0", "agent",
 	}
 	for i := range 31 {
 		allowed = append(allowed, fmt.Sprintf("scsi%d", i))
@@ -377,10 +378,13 @@ func (f *Fake) writeConfig(t *Token, r *http.Request) (any, *failure) {
 			return nil, fail
 		}
 		if strings.HasPrefix(key, "scsi") {
-			if !r.Form.Has(key) || vm.Config[key] != "" {
-				return nil, parameter(key, "only attachment to an empty slot is modeled")
+			if !r.Form.Has(key) {
+				return nil, parameter(key, "disk removal requires unlink")
 			}
 			volume, _, _ := strings.Cut(r.Form.Get(key), ",")
+			if previous, _, _ := strings.Cut(vm.Config[key], ","); previous != "" && previous != volume {
+				return nil, parameter(key, "replacing an occupied disk is not modeled")
+			}
 			storage, _, ok := strings.Cut(volume, ":")
 			disk := f.diskContent(vm.Node, volume)
 			if !ok || disk == nil || disk.VMID != vm.VMID {

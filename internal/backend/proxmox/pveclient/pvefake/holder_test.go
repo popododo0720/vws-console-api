@@ -20,6 +20,14 @@ func TestHolderDiskConfigCASAndOwnership(t *testing.T) {
 	form.Set("digest", digest)
 	w.write(t, "PUT", path, form.Encode(), auditor, 403)
 	w.write(t, "PUT", path, form.Encode(), "writer@pve!one", 200)
+	w.write(t, "PUT", path, form.Encode(), "writer@pve!one", 500)
+	form.Set("digest", w.config(t, "pve1", 100)["digest"].(string))
+	form.Set("scsi1", volid+",serial=0123456789abcdef1")
+	w.write(t, "PUT", path, form.Encode(), "writer@pve!one", 200)
+	if w.config(t, "pve1", 100)["scsi1"] != form.Get("scsi1") {
+		t.Fatal("owned disk options were not updated")
+	}
+	form.Set("scsi1", "ceph:vm-100-disk-0")
 	w.write(t, "PUT", path, form.Encode(), "writer@pve!one", 400)
 	w.write(t, "POST", "/nodes/pve1/qemu", "vmid=110&tags=vws.holder&start=0", "writer@pve!one", 200)
 	form = url.Values{"scsi0": {volid}}

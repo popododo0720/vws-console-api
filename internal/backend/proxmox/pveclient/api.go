@@ -83,6 +83,9 @@ type VMConfig struct {
 	Description string `json:"description"`
 	QMPStatus   string `json:"qmpstatus"`
 	Protection  int    `json:"protection"`
+	Net0        string `json:"net0"`
+	Serial0     string `json:"serial0"`
+	Agent       string `json:"agent"`
 
 	Drives map[string]string `json:"-"`
 }

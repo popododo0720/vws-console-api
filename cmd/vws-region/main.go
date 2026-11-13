@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/popododo0720/vws-lib/obs"
+	"github.com/popododo0720/vws-lib/obs/report"
 
 	"github.com/popododo0720/vws-console-api/internal/backend/proxmox"
 	"github.com/popododo0720/vws-console-api/internal/server"
@@ -139,7 +140,15 @@ func run(ctx context.Context, args []string) (err error) {
 			done := leaderDone
 			go func() {
 				defer close(done)
+				finalized := make(chan struct{})
+				go func() {
+					defer close(finalized)
+					ticker := time.NewTicker(5 * time.Second)
+					defer ticker.Stop()
+					finalizeLaunches(leaderCtx, leader.Admit, b.FinalizeLaunches, ticker.C)
+				}()
 				leader.Run(leaderCtx)
+				<-finalized
 			}()
 		}
 		h, err := regionapi.New(regionapi.Config{
@@ -228,6 +237,25 @@ func run(ctx context.Context, args []string) (err error) {
 		err = errors.Join(err, serveErr)
 	}
 	return err
+}
+
+func finalizeLaunches(
+	ctx context.Context, admit func(context.Context) (string, error),
+	finalize func(context.Context) error, ticks <-chan time.Time,
+) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticks:
+			if peer, err := admit(ctx); err != nil || peer != "" {
+				continue
+			}
+			if err := finalize(ctx); err != nil && ctx.Err() == nil {
+				_ = report.Error(ctx, fmt.Errorf("finalize launches: %w", err)) //nolint:errcheck // reported; next tick resumes
+			}
+		}
+	}
 }
 
 // readyTTL bounds how often unauthenticated /readyz probes reach pveproxy.

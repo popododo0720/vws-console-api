@@ -20,6 +20,7 @@ type Backend struct {
 	statusMu        sync.Mutex
 	volumeMu        sync.Mutex
 	launchMu        sync.Mutex
+	finalizeMu      sync.Mutex
 	instanceMu      sync.Mutex
 	lastInstances   map[int]instanceSnapshot
 	lastStatusError *resource.RegionStatusError
@@ -78,8 +79,8 @@ func (b *Backend) RegionCapabilities(ctx context.Context, region string) (resour
 	}
 	if !b.cfg.ReadOnly {
 		doc.Actions["ec2:RunInstances"] = resource.ActionCapability{
-			State: resource.ActionPartial, ReasonCode: "CloneAcceptOnly",
-			Reason: "pending clones only; finalize (#772), user data, extra disks and custom root sizes are not supported",
+			State: resource.ActionPartial, ReasonCode: "LaunchDefaults",
+			Reason: "user data, static IPs, extra disks and custom root sizes are not supported",
 		}
 		doc.Actions["vws:OpenConsole"] = resource.ActionCapability{State: resource.ActionSupported}
 		doc.Actions["ec2:CreateVolume"] = resource.ActionCapability{
