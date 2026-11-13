@@ -37,7 +37,30 @@ func (c inventoryCatalog) RegionCapabilities(ctx context.Context, region string)
 	}) {
 		kind = resource.RegionKindAWS
 	}
-	return inventoryCapabilities(ctx, region, kind)
+	doc, err := inventoryCapabilities(ctx, region, kind)
+	if err != nil || kind == resource.RegionKindAWS || region == "all" {
+		return doc, err
+	}
+	regions, err := c.RegionCatalog.ProxmoxRegions(ctx)
+	if err != nil {
+		return resource.RegionCapabilities{}, &resource.Error{
+			Code: resource.CodeUnavailable, Message: "region catalog unavailable",
+		}
+	}
+	for _, registered := range regions {
+		if registered.Name != region {
+			continue
+		}
+		doc.Zones = make([]resource.RegionZone, 0, len(registered.Zones))
+		for _, zone := range registered.Zones {
+			name := region + zone.Letter
+			doc.Zones = append(doc.Zones, resource.RegionZone{
+				ZoneName: name, ZoneID: name, State: "available",
+			})
+		}
+		return doc, nil
+	}
+	return resource.RegionCapabilities{}, resource.Invalid("region", "a registered region is required")
 }
 
 func inventoryCapabilities(

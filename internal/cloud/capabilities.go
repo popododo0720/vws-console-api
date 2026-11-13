@@ -21,7 +21,7 @@ func (s *Service) AvailabilityZones(ctx context.Context, c resource.Caller) ([]r
 	if err != nil {
 		return nil, fmt.Errorf("availability zones: %w", err)
 	}
-	if len(caps.Zones) == 0 {
+	if caps.Zones == nil {
 		return []resource.RegionZone{{ZoneName: resource.ZoneName, ZoneID: resource.ZoneName, State: "available"}}, nil
 	}
 	return caps.Zones, nil
