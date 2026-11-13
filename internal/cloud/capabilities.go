@@ -183,7 +183,7 @@ func (s *Service) InstanceTypes(ctx context.Context, c resource.Caller) ([]resou
 // admit refuses a mutation the region does not serve before the backend sees it.
 func (s *Service) admit(ctx context.Context, a resource.Action, region string) error {
 	region = s.capabilityRegion(region)
-	caps, err := s.caps.RegionCapabilities(ctx, region)
+	caps, err := s.mutationCapabilities(ctx, region)
 	if err != nil {
 		return fmt.Errorf("capabilities of %s: %w", region, err)
 	}

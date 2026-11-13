@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/popododo0720/vws-console-api/internal/audit"
 	"github.com/popododo0720/vws-console-api/internal/backend"
 	"github.com/popododo0720/vws-console-api/internal/backend/fake"
 	"github.com/popododo0720/vws-console-api/internal/resource"
@@ -380,15 +381,18 @@ func fixedRequest(t *testing.T) (resource.Caller, resource.ClientToken, resource
 }
 
 func TestAuditLogCarriesNoAccountID(t *testing.T) {
-	var buf bytes.Buffer
-	svc := New(Config{Backends: world(t).Set(), Audit: slog.New(slog.NewJSONHandler(&buf, nil))})
+	var buf, auditLog bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	svc := New(Config{Backends: world(t).Set(), Audit: audit.New(&auditLog)})
 	_, err := svc.CreateSubnet(context.Background(), caller(t), token(t, "subnet-audit-1"),
 		resource.CreateSubnetRequest{Cidr: "10.9.0.0/24"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(buf.String(), `"msg":"mutation accepted"`) {
-		t.Fatalf("no audit line: %s", buf.String())
+	if !strings.Contains(auditLog.String(), `"account":"123456789012"`) {
+		t.Fatalf("no separate audit line: %s", auditLog.String())
 	}
 	if strings.Contains(buf.String(), "123456789012") {
 		t.Fatalf("audit line carries the account id: %s", buf.String())
