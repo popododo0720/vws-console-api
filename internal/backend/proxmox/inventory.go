@@ -154,6 +154,9 @@ func (b *Backend) instance(
 		InstanceType: NearestInstanceType(cfg.Cores*cfg.Sockets, cfg.Memory),
 		Zone:         b.region + b.nodeLetter(ctx, vm.Node),
 	}
+	if ip := privateIP(cfg.IPConfig0); ip.IsValid() {
+		inst.PrivateIP = ip.String()
+	}
 	if ctime != "" {
 		seconds, err := strconv.ParseInt(ctime, 10, 64)
 		if err != nil || seconds < 0 {

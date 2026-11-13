@@ -159,6 +159,19 @@ func (b *Backend) allocateLaunch(
 	if _, err := b.DescribeSubnets(ctx, scope, resource.SubnetQuery{IDs: []resource.SubnetID{req.SubnetID}}); err != nil {
 		return err
 	}
+	r, err := b.staticSubnet(req.SubnetID)
+	if err != nil {
+		return err
+	}
+	if r.prefix.IsValid() {
+		used, pending, err := b.scanStaticIPs(ctx, req.SubnetID)
+		if err != nil {
+			return err
+		}
+		if _, err := r.free(used, pending+req.Count-len(recovered.Instances)); err != nil {
+			return err
+		}
+	}
 	storage := b.cfg.Storages[string(req.RootType())]
 	if storage == "" {
 		return resource.Unsupported("volumeType", "no configured storage for root volume type")
@@ -230,6 +243,9 @@ func (b *Backend) allocateLaunch(
 			UUID: uuid, Key: key, Fingerprint: fingerprint,
 			Index: index, Count: req.Count, Account: scope.Account, Image: req.ImageID,
 			Type: req.InstanceType, Subnet: req.SubnetID, KeyPair: req.KeyName, Attempt: 1,
+		}
+		if r.prefix.IsValid() {
+			marker.IPFence = fmt.Sprintf("%x", raw)
 		}
 		if !req.RootVolumeKept {
 			marker.DOT = []string{serial[:8]}

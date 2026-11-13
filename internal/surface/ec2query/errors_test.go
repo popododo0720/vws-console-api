@@ -52,6 +52,23 @@ func ec2Wire(t *testing.T, e *resource.Error) wireErr {
 	return wireErr{rec.Code, body.Code}
 }
 
+func TestInsufficientFreeAddressesInSubnetWire(t *testing.T) {
+	original := resource.InsufficientFreeAddressesInSubnet()
+	data, err := json.Marshal(original)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var transported resource.Error
+	if err := json.Unmarshal(data, &transported); err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range []*resource.Error{original, &transported} {
+		if got := ec2Wire(t, e); got != (wireErr{400, "InsufficientFreeAddressesInSubnet"}) {
+			t.Fatalf("subnet capacity: %+v", got)
+		}
+	}
+}
+
 func ec2ErrorXML(t *testing.T, body []byte) errorXML {
 	t.Helper()
 	var out errorXML

@@ -36,6 +36,9 @@ func (b *Backend) FinalizeLaunches(ctx context.Context, fence func(context.Conte
 		fenceErr = fence(ctx)
 		return fenceErr
 	}
+	if err := b.fenceStaticLaunches(ctx, checkFence); err != nil {
+		return err
+	}
 	for _, account := range slices.Sorted(maps.Keys(b.cfg.Pools)) {
 		s := backend.Scope{Pool: b.cfg.Pools[account]}
 		// Pool keys may be operator labels; those launches carry their account in the marker.
@@ -221,6 +224,21 @@ func (b *Backend) launchConfig(
 		"cores":   {strconv.Itoa(typ.VCPUs)}, "memory": {strconv.Itoa(typ.MemoryMiB)},
 		"net0": {net}, "serial0": {"socket"}, "agent": {"1"},
 		"scsi0": {launchOption(cfg.Drives["scsi0"], "serial", serial)},
+	}
+	r, err := b.staticSubnet(marker.Subnet)
+	if err != nil {
+		return nil, err
+	}
+	if r.prefix.IsValid() && (!privateIP(cfg.IPConfig0).IsValid() || configUUID(cfg) != marker.UUID) {
+		used, _, err := b.scanStaticIPs(ctx, marker.Subnet)
+		if err != nil {
+			return nil, err
+		}
+		ip, err := r.free(used, 1)
+		if err != nil {
+			return nil, err
+		}
+		fields.Set("ipconfig0", fmt.Sprintf("ip=%s/%d,gw=%s", ip, r.prefix.Bits(), r.gw))
 	}
 	current := map[string]string{
 		"smbios1": cfg.SMBIOS1, "cores": strconv.Itoa(cfg.Cores), "memory": strconv.Itoa(cfg.Memory),

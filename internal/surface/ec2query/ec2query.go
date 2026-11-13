@@ -1145,6 +1145,9 @@ func ec2Refinement(e *resource.Error) (errs.AWSEntry, bool) {
 			return badRequest("InvalidAttachment.NotFound")
 		}
 	case resource.CodeInvalidArgument:
+		if resource.IsInsufficientFreeAddressesInSubnet(e) {
+			return badRequest("InsufficientFreeAddressesInSubnet")
+		}
 		// EC2 answers a pagination token that names no row as InvalidNextToken.
 		if e.Field == "NextToken" {
 			return badRequest("InvalidNextToken")
