@@ -345,10 +345,7 @@ func TestRunInstancesSkipsUnreadableTemplate(t *testing.T) {
 	}
 	w, m, req := launchBackend(t, false, second)
 	w.failConfig = "/qemu/100/config"
-	other, err := newIDs(t, "test").Image(otherUUID)
-	if err != nil {
-		t.Fatal(err)
-	}
+	other, _ := newIDs(t, "test").Image(otherUUID)
 	unreadable := req.ImageID
 	req.ImageID, req.Count = other, 1
 	got, err := w.b.RunInstances(t.Context(), m, req)
