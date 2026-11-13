@@ -320,7 +320,10 @@ func run(ctx context.Context, args []string) (err error) {
 		if *backendKind != "regions" {
 			return local
 		}
-		return router.New(router.Config{Regions: regions, Local: local, AWS: aws, Error: writeError})
+		return router.New(router.Config{
+			Regions: regions, Local: local, AWS: aws, Error: writeError,
+			Forward: forward.Any(router.ForwardConfig{Verifier: verifier, Authorizer: auth, Error: writeError}),
+		})
 	}
 	return server.Serve(ctx, server.Options{Logger: logger, OpsAddr: *opsAddr, Surfaces: []server.Surface{
 		{Name: "console", Addr: *consoleAddr, Handler: console.New(console.Config{
@@ -351,11 +354,7 @@ func run(ctx context.Context, args []string) (err error) {
 			Forward: forward.Handler(sigv4.ServiceEC2, ec2query.WriteError),
 		}), ec2query.WriteError)},
 		{Name: "s3", Addr: *s3Addr, Handler: route(
-			s3rest.New(s3rest.Config{Service: svc, Verifier: s3, Authorizer: auth}),
-			s3rest.New(s3rest.Config{
-				Service: svc, Verifier: s3, Authorizer: auth,
-				Forward: forward.Handler(sigv4.ServiceS3, s3rest.WriteError),
-			}), s3rest.WriteError)},
+			s3rest.New(s3rest.Config{Service: svc, Verifier: s3, Authorizer: auth}), nil, s3rest.WriteError)},
 		{Name: "iam", Addr: *iamAddr, Handler: iamquery.New(iamquery.Config{
 			Admin: admin, Authorizer: auth, IAM: verifier(sigv4.ServiceIAM), STS: verifier(sigv4.ServiceSTS),
 		})},

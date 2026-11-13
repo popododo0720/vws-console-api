@@ -456,28 +456,35 @@ type authorization struct {
 	signature     string
 }
 
-// CredentialScope reads only Authorization. Its result is unverified routing input.
+// CredentialScope reads only Authorization. Its result is unverified routing
+// input. The service is any AWS signing name, so a request for a service this
+// process does not serve can still be forwarded to AWS.
 func CredentialScope(header string) (string, Service, error) {
 	auth, err := parseAuthorization(header)
 	if err != nil {
 		return "", "", err
 	}
 	parts := strings.Split(auth.credential, "/")
-	if len(parts) != 5 || parts[0] == "" || len(parts[1]) != 8 || parts[2] == "" ||
-		len(parts[2]) > 63 || parts[4] != "aws4_request" {
+	if len(parts) != 5 || parts[0] == "" || len(parts[1]) != 8 || parts[4] != "aws4_request" {
 		return "", "", Reject(FailureMalformed, resource.Unauthenticated("credential scope rejected"))
 	}
-	for _, c := range parts[2] {
+	if !scopeName(parts[2]) || !scopeName(parts[3]) {
+		return "", "", Reject(FailureMalformed, resource.Unauthenticated("credential scope rejected"))
+	}
+	return parts[2], Service(parts[3]), nil
+}
+
+// scopeName is a region or signing name: 1 to 63 of [a-z0-9-].
+func scopeName(s string) bool {
+	if s == "" || len(s) > 63 {
+		return false
+	}
+	for _, c := range s {
 		if c != '-' && (c < 'a' || c > 'z') && (c < '0' || c > '9') {
-			return "", "", Reject(FailureMalformed, resource.Unauthenticated("credential scope rejected"))
+			return false
 		}
 	}
-	switch service := Service(parts[3]); service {
-	case ServiceEC2, ServiceS3, ServiceIAM, ServiceSTS:
-		return parts[2], service, nil
-	default:
-		return "", "", Reject(FailureMalformed, resource.Unauthenticated("credential scope rejected"))
-	}
+	return true
 }
 
 func parseAuthorization(h string) (authorization, error) {
