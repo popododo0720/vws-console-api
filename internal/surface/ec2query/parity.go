@@ -973,9 +973,9 @@ func (h *handler) describeAvailabilityZones(w http.ResponseWriter, r *http.Reque
 	for _, z := range zones {
 		zone := availabilityZoneItem{
 			ZoneName: z.ZoneName, ZoneID: z.ZoneID, State: z.State,
-			RegionName: resource.RegionName, OptInStatus: "opt-in-not-required",
-			GroupName: resource.RegionName, GroupLongName: "VWS " + resource.RegionName,
-			NetworkBorderGroup: resource.RegionName, ZoneType: "availability-zone",
+			RegionName: c.Region, OptInStatus: "opt-in-not-required",
+			GroupName: c.Region, GroupLongName: "VWS " + c.Region,
+			NetworkBorderGroup: c.Region, ZoneType: "availability-zone",
 		}
 		if len(names) > 0 {
 			if _, ok := names[zone.ZoneName]; !ok {
