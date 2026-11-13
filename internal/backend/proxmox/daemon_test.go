@@ -153,13 +153,15 @@ func TestRegionDaemonReadsRestartAndReadiness(t *testing.T) {
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("helper build: %v\n%s", err, out)
 	}
-	for _, name := range []string{"etc/pve/vws", "etc/pve/priv/vws", "etc/pve/priv/lock/vws-region"} {
+	for _, name := range []string{
+		"etc/pve/vws", "etc/pve/priv/vws", "etc/pve/priv/lock/vws-region", "etc/vws/credentials",
+	} {
 		if err := os.MkdirAll(filepath.Join(dir, name), 0o700); err != nil {
 			t.Fatal(err)
 		}
 	}
-	writeFixture(t, filepath.Join(dir, "region-kek"), bytes.Repeat([]byte{42}, 32))
-	t.Setenv("CREDENTIALS_DIRECTORY", dir)
+	writeFixture(t, filepath.Join(dir, "etc/vws/credentials/region-kek"), bytes.Repeat([]byte{42}, 32))
+	t.Setenv("CREDENTIALS_DIRECTORY", "")
 	t.Setenv("VWS_HELPER_TEST_ROOT", dir)
 	tlsConfig := daemonCertificates(t, dir)
 	s := scenario()
@@ -218,7 +220,7 @@ func TestRegionDaemonReadsRestartAndReadiness(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.WithoutCancel(t.Context()), time.Minute)
 		cmd := exec.CommandContext(ctx, binary,
 			"-config", filepath.Join(dir, "region.yaml"), "-registration-file", reg,
-			"-helper-path", helper,
+			"-helper-path", helper, "-helper-root", dir,
 			"-pve-endpoint", pve.URL, "-pve-ca-file", filepath.Join(dir, "ca.pem"),
 			"-tls-cert-file", filepath.Join(dir, "cert.pem"), "-tls-key-file", filepath.Join(dir, "key.pem"),
 			"-tls-ca-file", filepath.Join(dir, "ca.pem"), "-region-addr", addr, "-ops-addr", ops)
@@ -297,6 +299,7 @@ func TestRegionDaemonReadsRestartAndReadiness(t *testing.T) {
 		t.Fatal(err)
 	}
 	conn.Helper.Path = helper
+	conn.Helper.Root = dir
 	t.Run("omitted_token_requires_registration", func(t *testing.T) {
 		input := []byte(`{"region":"pve-test-1","cluster_name":"test","tokenId":"vws@pve!inventory"}`)
 		err := conn.Register(t.Context(), input)

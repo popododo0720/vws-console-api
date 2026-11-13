@@ -272,6 +272,14 @@ func confined(root, target string) error {
 }
 
 func privateRead(path string, secret bool, uid uint32) (data []byte, err error) {
+	forbidden := os.FileMode(0o022)
+	if secret {
+		forbidden = 0o077
+	}
+	return readFile(path, uid, forbidden)
+}
+
+func readFile(path string, uid uint32, forbidden os.FileMode) (data []byte, err error) {
 	if !filepath.IsAbs(path) {
 		return nil, errors.New("credential or config path is not absolute")
 	}
@@ -290,8 +298,7 @@ func privateRead(path string, secret bool, uid uint32) (data []byte, err error) 
 		return nil, errors.New("cannot inspect credential or config")
 	}
 	owner, ok := st.Sys().(*syscall.Stat_t)
-	if !ok || owner.Uid != uid || !st.Mode().IsRegular() || st.Mode().Perm()&0o022 != 0 ||
-		(secret && st.Mode().Perm()&0o077 != 0) {
+	if !ok || owner.Uid != uid || !st.Mode().IsRegular() || st.Mode().Perm()&forbidden != 0 {
 		return nil, errors.New("unsafe credential or config permissions")
 	}
 	data, err = io.ReadAll(io.LimitReader(f, 4097))
