@@ -24,6 +24,25 @@ an endpoint whose DNS prefix differs from its signing name needs an appropriate
 operator-selected template. No endpoint is inferred from client headers.
 For S3, an inbound `bucket.s3.<suffix>` host retains the bucket prefix on the
 target host (including dotted bucket names); path-style paths stay unchanged.
+The router preserves the verified S3 Host over its fixed Unix socket and
+discards client-supplied `X-Vws-*` routing metadata. It derives virtual-host
+IAM actions from the same bucket and key that the proxy forwards.
+
+PutObject, CopyObject and CreateMultipartUpload additionally authorize upload
+ACL/grant headers as `s3:PutObjectAcl`, tagging headers as `s3:PutObjectTagging`,
+Object Lock mode/retain-until-date as `s3:PutObjectRetention`, and legal-hold
+as `s3:PutObjectLegalHold`. Empty, repeated or unknown grant/lock headers and
+permission headers on other operations are refused before forwarding.
+The mapping follows the S3 required permissions table:
+https://docs.aws.amazon.com/AmazonS3/latest/userguide/using-with-s3-policy-actions.html
+
+Proxy principals must contain 1 to 2048 ASCII characters from
+`A-Za-z0-9_+=,.@:/-`. This uses the STS RoleSessionName character set plus
+the colon and slash delimiters of IAM/STS principal ARNs; the principal is
+hashed into the generated session name, whose existing 64-character bound
+is unchanged. Invalid or repeated principals reach no STS call, including
+on the private account diagnostic route.
+https://docs.aws.amazon.com/STS/latest/APIReference/API_AssumeRole.html#API_AssumeRole_RequestParameters
 
 Use `-global-config /etc/vws/global.yaml` to read the live admin registry over
 the bootstrap's IAM etcd TLS connection. Project remaps and account changes

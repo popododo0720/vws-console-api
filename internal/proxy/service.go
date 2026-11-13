@@ -40,7 +40,8 @@ func (p *Proxy) serveService(w http.ResponseWriter, r *http.Request) {
 	account, principal := r.Header.Get("X-Vws-Account"), r.Header.Get("X-Vws-Principal")
 	region, service := r.Header.Get("X-Vws-Target-Region"), r.Header.Get("X-Vws-Target-Service")
 	if p.services == "" || !regexp.MustCompile(`^[a-z0-9-]{1,63}$`).MatchString(service) ||
-		!regexp.MustCompile(`^[0-9]{12}$`).MatchString(account) || principal == "" || len(principal) > 2048 ||
+		!regexp.MustCompile(`^[0-9]{12}$`).MatchString(account) || !validPrincipal(principal) ||
+		len(r.Header.Values("X-Vws-Principal")) != 1 ||
 		!regexp.MustCompile(`^[a-z]{2}(-[a-z]+)+-[0-9]+$`).MatchString(region) ||
 		!forwardedMethod(r.Method) {
 		refuse(w, http.StatusForbidden, "UnauthorizedOperation")
@@ -76,7 +77,7 @@ func (p *Proxy) serveService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if service == "s3" {
-		host := r.Host
+		host := strings.ToLower(r.Host)
 		if h, _, splitErr := net.SplitHostPort(host); splitErr == nil {
 			host = h
 		}

@@ -40,6 +40,12 @@ type sessionKey struct {
 	binding        [32]byte
 }
 
+var principalName = regexp.MustCompile(`^[A-Za-z0-9_+=,.@:/-]+$`)
+
+func validPrincipal(principal string) bool {
+	return len(principal) >= 1 && len(principal) <= 2048 && principalName.MatchString(principal)
+}
+
 // Proxy accepts forwarding metadata only from the trusted local API process.
 type Proxy struct {
 	accounts    Accounts
@@ -116,7 +122,8 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		(r.Method == http.MethodGet && len(body) != 0) || len(q["Action"]) != 1 ||
 		!allowedAction(q.Get("Action")) ||
 		!valid.MatchString(q.Get("Action")) || r.Header.Get("X-Vws-Target-Service") != "ec2" ||
-		!regexp.MustCompile(`^[0-9]{12}$`).MatchString(account) || principal == "" || len(principal) > 2048 ||
+		!regexp.MustCompile(`^[0-9]{12}$`).MatchString(account) || !validPrincipal(principal) ||
+		len(r.Header.Values("X-Vws-Principal")) != 1 ||
 		!regexp.MustCompile(`^[a-z]{2}(-[a-z]+)+-[0-9]+$`).MatchString(region) ||
 		r.Header.Get("X-Amz-Region-Set") != "" || r.Header.Get("X-Amz-Target") != "" {
 		refuse(w, http.StatusForbidden, "UnauthorizedOperation")

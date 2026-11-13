@@ -161,3 +161,45 @@ func request(t *testing.T, method, target, contentType, body string) *http.Reque
 	}
 	return r
 }
+
+func TestS3PermissionHeaderBoundaries(t *testing.T) {
+	for _, tc := range []struct{ method, path, header string }{
+		{"PUT", "/bucket/key", "X-Amz-Grant-Write"},
+		{"PUT", "/bucket/key", "X-Amz-Object-Lock-Unknown"},
+		{"GET", "/bucket/key", "X-Amz-Acl"},
+		{"PUT", "/bucket", "X-Amz-Acl"},
+		{"PUT", "/bucket/key?uploadId=u&partNumber=1", "X-Amz-Tagging"},
+		{"POST", "/bucket/key?uploadId=u", "X-Amz-Object-Lock-Mode"},
+	} {
+		r := request(t, tc.method, tc.path, "", "")
+		r.Header.Set(tc.header, "value")
+		if actions, err := router.Action(sigv4.ServiceS3, r); err == nil {
+			t.Errorf("%s %s %s accepted as %v", tc.method, tc.path, tc.header, actions)
+		}
+	}
+	for _, values := range [][]string{{""}, {"public-read", "private"}} {
+		r := request(t, "PUT", "/bucket/key", "", "")
+		r.Header["X-Amz-Acl"] = values
+		if actions, err := router.Action(sigv4.ServiceS3, r); err == nil {
+			t.Errorf("ambiguous ACL %v accepted as %v", values, actions)
+		}
+	}
+	for _, host := range []string{".s3.vws.test", "bad_bucket.s3.vws.test", strings.Repeat("b", 64) + ".s3.vws.test"} {
+		r, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://"+host+"/key", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if actions, err := router.Action(sigv4.ServiceS3, r); err == nil {
+			t.Errorf("malformed bucket host %q accepted as %v", host, actions)
+		}
+	}
+	r := request(t, "PUT", "/bucket/key", "", "")
+	r.Header.Set("X-Amz-Object-Lock-Mode", "GOVERNANCE")
+	r.Header.Set("X-Amz-Object-Lock-Retain-Until-Date", "2030-01-01T00:00:00Z")
+	r.Header.Set("X-Amz-Acl", "private")
+	r.Header.Set("X-Amz-Grant-Read", `id="owner"`)
+	actions, err := router.Action(sigv4.ServiceS3, r)
+	if err != nil || len(actions) != 3 {
+		t.Fatalf("dependent actions not deduplicated: %v %v", actions, err)
+	}
+}

@@ -3,6 +3,7 @@ package router
 import (
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -35,7 +36,25 @@ func Action(service sigv4.Service, r *http.Request) ([]string, error) {
 		return nil, resource.Invalid("query", "malformed")
 	}
 	if service == sigv4.ServiceS3 {
-		ops, err := s3Action(r.Method, r.URL.Path, query, r.Header.Get("X-Amz-Copy-Source"))
+		path := r.URL.Path
+		host := strings.ToLower(r.Host)
+		if h, _, err := net.SplitHostPort(host); err == nil {
+			host = h
+		}
+		if bucket, suffix, found := strings.Cut(host, ".s3."); found {
+			if !bucketName.MatchString(bucket) || suffix == "" {
+				return nil, resource.Invalid("host", "malformed S3 bucket")
+			}
+			if path == "/" {
+				path = ""
+			}
+			path = "/" + bucket + path
+		}
+		ops, err := s3Action(r.Method, path, query, r.Header.Get("X-Amz-Copy-Source"))
+		if err != nil {
+			return nil, err
+		}
+		ops, err = s3HeaderActions(r, query, ops)
 		if err != nil {
 			return nil, err
 		}
@@ -73,6 +92,37 @@ func Action(service sigv4.Service, r *http.Request) ([]string, error) {
 	default:
 		return nil, resource.Invalid("method", "unsupported")
 	}
+}
+
+func s3HeaderActions(r *http.Request, query url.Values, ops []string) ([]string, error) {
+	for name, values := range r.Header {
+		action := ""
+		low := strings.ToLower(name)
+		switch low {
+		case "x-amz-acl", "x-amz-grant-read", "x-amz-grant-read-acp", "x-amz-grant-write-acp", "x-amz-grant-full-control":
+			action = "PutObjectAcl"
+		case "x-amz-tagging", "x-amz-tagging-directive":
+			action = "PutObjectTagging"
+		case "x-amz-object-lock-mode", "x-amz-object-lock-retain-until-date":
+			action = "PutObjectRetention"
+		case "x-amz-object-lock-legal-hold":
+			action = "PutObjectLegalHold"
+		default:
+			if strings.HasPrefix(low, "x-amz-grant-") || strings.HasPrefix(low, "x-amz-object-lock-") {
+				return nil, resource.Invalid(name, "unsupported S3 permission header")
+			}
+			continue
+		}
+		_, part := query["uploadId"]
+		if ops[0] != "PutObject" || part || len(values) != 1 || strings.TrimSpace(values[0]) == "" {
+			return nil, resource.Invalid(name, "unsupported or ambiguous S3 permission header")
+		}
+		if !slices.Contains(ops, action) {
+			ops = append(ops, action)
+		}
+	}
+	slices.Sort(ops[1:])
+	return ops, nil
 }
 
 func queryForm(r *http.Request) (url.Values, error) {

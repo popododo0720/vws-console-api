@@ -11,7 +11,6 @@ import (
 	"net/url"
 	"strings"
 	"time"
-	"unicode"
 
 	"github.com/popododo0720/vws-lib/obs/report"
 
@@ -26,8 +25,7 @@ func (p *Proxy) serveTestConnection(w http.ResponseWriter, r *http.Request) {
 	valid := r.Method == http.MethodPost && r.URL.RawQuery == "" &&
 		r.Header.Get("Content-Type") == "application/json" &&
 		r.Header.Get("X-Vws-Target-Service") == "sts" &&
-		r.Header.Get("X-Vws-Target-Region") == "" && principal != "" && len(principal) <= 2048 &&
-		strings.IndexFunc(principal, unicode.IsControl) < 0
+		r.Header.Get("X-Vws-Target-Region") == "" && validPrincipal(principal)
 	for _, key := range []string{"Content-Type", "X-Vws-Principal", "X-Vws-Account", "X-Vws-Target-Service"} {
 		valid = valid && len(r.Header.Values(key)) == 1
 	}
