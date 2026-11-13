@@ -400,3 +400,63 @@ func TestAuditUsesAdmissionDestination(t *testing.T) {
 		}
 	}
 }
+
+type auditPanicNetwork struct{ backend.Network }
+
+func (auditPanicNetwork) CreateVpc(context.Context, backend.Mutation, resource.CreateVpcRequest,
+) (resource.Accepted[resource.Vpc], error) {
+	panic(auditCanary)
+}
+
+type auditPanicStorage struct{ backend.Storage }
+
+func (auditPanicStorage) CreateBucket(context.Context, backend.Scope, resource.BucketName) (resource.Bucket, error) {
+	panic(auditCanary)
+}
+
+func TestAuditPanicIsAnErrorAndPropagates(t *testing.T) {
+	var buf bytes.Buffer
+	set := world(t).Set()
+	set.Network, set.Storage = auditPanicNetwork{set.Network}, auditPanicStorage{set.Storage}
+	svc := New(Config{Backends: set, Audit: audit.New(&buf)})
+	bucket, err := resource.Parse[resource.BucketName]("audit-bucket")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, call := range []func(){
+		func() {
+			if _, err := svc.CreateVpc(t.Context(), caller(t), token(t, "panic"),
+				resource.CreateVpcRequest{Cidr: "10.0.0.0/16"}); err != nil {
+				t.Fatal(err)
+			}
+		},
+		func() {
+			if _, err := svc.CreateBucket(t.Context(), caller(t), bucket); err != nil {
+				t.Fatal(err)
+			}
+		},
+	} {
+		func() {
+			defer func() {
+				if got := recover(); got != auditCanary {
+					t.Fatalf("panic=%v, want original panic", got)
+				}
+			}()
+			call()
+		}()
+		if oneAuditLine(t, &buf)["result"] != "error:Internal" || strings.Contains(buf.String(), auditCanary) {
+			t.Fatalf("panic audit: %s", &buf)
+		}
+		buf.Reset()
+	}
+}
+
+func TestAuditDeleteSecurityGroupByValidatedName(t *testing.T) {
+	var buf bytes.Buffer
+	svc := New(Config{Backends: world(t).Set(), Audit: audit.New(&buf)})
+	_, err := svc.DeleteSecurityGroup(t.Context(), resource.Caller{}, token(t, "group-name"),
+		resource.DeleteSecurityGroupRequest{Name: "audit-group"})
+	if err == nil || !reflect.DeepEqual(oneAuditLine(t, &buf)["resource_ids"], []any{"audit-group"}) {
+		t.Fatalf("group name: err=%v audit=%s", err, &buf)
+	}
+}

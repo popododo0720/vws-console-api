@@ -30,7 +30,14 @@ func (s *Service) startMutation(ctx *context.Context, c resource.Caller, req any
 	state := &mutationAudit{destination: audit.Unknown}
 	*ctx = context.WithValue(*ctx, mutationAuditKey{}, state)
 	return func(ctx context.Context, op *resource.Operation, result *error) {
+		panicked := recover()
+		if panicked != nil {
+			*result = resource.Internal(errors.New("mutation panicked"))
+		}
 		s.recordMutation(ctx, state, c, req, start, op, result)
+		if panicked != nil {
+			panic(panicked)
+		}
 	}
 }
 
@@ -163,6 +170,10 @@ func mutationEntry(req any) audit.Entry {
 		entry.ResourceIDs = []string{r.VpcID.String()}
 	case resource.DeleteSecurityGroupRequest:
 		entry.ResourceIDs = []string{r.ID.String()}
+		if normalized, err := r.Normalize(); err == nil && len(normalized.Name) <= 255 &&
+			!strings.ContainsFunc(normalized.Name, unicode.IsControl) {
+			entry.ResourceIDs = append(entry.ResourceIDs, normalized.Name)
+		}
 	case resource.AuthorizeSecurityGroupIngressRequest:
 		entry.ResourceIDs = []string{r.ID.String()}
 	case resource.RevokeSecurityGroupIngressRequest:
