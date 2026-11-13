@@ -31,6 +31,9 @@ func TestContract(t *testing.T) {
 		{Node: "pve1", Iface: "vmbr0", Type: "bridge", CIDR: "192.0.2.1/24"},
 		{Node: "pve1", Iface: "vmbr1", Type: "bridge", CIDR: "198.51.100.1/24"},
 	}
+	template := imageScenario().VMs[0]
+	template.VMID, template.Pool = 102, "tenant-pool"
+	s.VMs = append(s.VMs, template)
 	c, _ := serve(t, s)
 	reopen := func() *Backend {
 		b, err := New(t.Context(), c, registration(), RegionConfig{

@@ -88,6 +88,8 @@ type VMConfig struct {
 	IPConfig0   string `json:"ipconfig0"`
 	Serial0     string `json:"serial0"`
 	Agent       string `json:"agent"`
+	Boot        string `json:"boot"`
+	BootDisk    string `json:"bootdisk"`
 
 	Drives map[string]string `json:"-"`
 }
