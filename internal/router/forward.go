@@ -16,6 +16,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/popododo0720/vws-console-api/internal/audit"
+	"github.com/popododo0720/vws-console-api/internal/iam"
 	"github.com/popododo0720/vws-console-api/internal/resource"
 	"github.com/popododo0720/vws-console-api/internal/server"
 	"github.com/popododo0720/vws-console-api/internal/sigv4"
@@ -54,30 +55,7 @@ func (f *Forwarder) Handler(service sigv4.Service, writeError func(http.Response
 		defer cancel()
 		requestID := obs.RequestID(ctx)
 		start, status := time.Now(), http.StatusServiceUnavailable
-		defer func() {
-			read := service == sigv4.ServiceEC2 && strings.HasPrefix(action, "Describe") ||
-				service == sigv4.ServiceS3 && (r.Method == http.MethodGet || r.Method == http.MethodHead)
-			if f.audit == nil || read {
-				return
-			}
-			result := audit.Accepted
-			if status == http.StatusForbidden || status == http.StatusUnauthorized {
-				result = audit.Denied
-			} else if status >= 400 {
-				result = audit.Error(strconv.Itoa(status))
-			}
-			entry := audit.Entry{
-				RequestID: obs.RequestID(ctx), PrincipalARN: caller.Principal, Account: caller.Account.String(),
-				Region: caller.Region, Destination: audit.AWS, Service: string(service), Action: action,
-				Result: result, SourceIP: caller.SourceIP, Latency: time.Since(start),
-			}
-			if span := trace.SpanContextFromContext(ctx); span.IsValid() {
-				entry.TraceID = span.TraceID().String()
-			}
-			if err := f.audit.Record(ctx, entry); err != nil {
-				server.RecordFailure(w, report.Error(ctx, err))
-			}
-		}()
+		defer func() { f.record(ctx, w, r, caller, service, action, status, start) }()
 		body, err := r.GetBody()
 		if err != nil {
 			writeError(w, r, resource.Internal(fmt.Errorf("replay verified body: %w", err)))
@@ -113,4 +91,74 @@ func (f *Forwarder) Handler(service sigv4.Service, writeError func(http.Response
 		}
 		p.ServeHTTP(w, r)
 	}
+}
+
+// record audits a forwarded change request; reads are not audited.
+func (f *Forwarder) record(
+	ctx context.Context, w http.ResponseWriter, r *http.Request, caller resource.Caller,
+	service sigv4.Service, action string, status int, start time.Time,
+) {
+	get := r.Method == http.MethodGet || r.Method == http.MethodHead
+	read := service == sigv4.ServiceEC2 && strings.HasPrefix(action, "Describe") || service != sigv4.ServiceEC2 && get
+	if f.audit == nil || read {
+		return
+	}
+	result := audit.Accepted
+	if status == http.StatusForbidden || status == http.StatusUnauthorized {
+		result = audit.Denied
+	} else if status >= 400 {
+		result = audit.Error(strconv.Itoa(status))
+	}
+	entry := audit.Entry{
+		RequestID: obs.RequestID(ctx), PrincipalARN: caller.Principal, Account: caller.Account.String(),
+		Region: caller.Region, Destination: audit.AWS, Service: string(service), Action: action,
+		Result: result, SourceIP: caller.SourceIP, Latency: time.Since(start),
+	}
+	if span := trace.SpanContextFromContext(ctx); span.IsValid() {
+		entry.TraceID = span.TraceID().String()
+	}
+	if err := f.audit.Record(ctx, entry); err != nil {
+		server.RecordFailure(w, report.Error(ctx, err))
+	}
+}
+
+// ForwardConfig checks requests for any AWS service before Any forwards them.
+type ForwardConfig struct {
+	Verifier   func(sigv4.Service) *sigv4.Verifier
+	Authorizer iam.Authorizer
+	Error      func(http.ResponseWriter, *http.Request, error)
+}
+
+// Any verifies the signature for the credential scope's service, authorizes
+// every action Action derives on "*", and forwards the verified bytes unchanged.
+func (f *Forwarder) Any(cfg ForwardConfig) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, service, err := sigv4.CredentialScope(r.Header.Get("Authorization"))
+		if err != nil {
+			cfg.Error(w, r, err)
+			return
+		}
+		caller, err := cfg.Verifier(service).Verify(r)
+		if err != nil {
+			cfg.Error(w, r, err)
+			return
+		}
+		actions, err := Action(service, r)
+		if err == nil && len(actions) == 0 {
+			err = resource.Invalid("Action", "cannot be derived")
+		}
+		if err != nil {
+			cfg.Error(w, r, err)
+			return
+		}
+		op := strings.TrimPrefix(actions[0], string(service)+":")
+		for _, action := range actions {
+			if err := iam.Check(r.Context(), cfg.Authorizer, caller, action, "*"); err != nil {
+				f.record(r.Context(), w, r, caller, service, op, http.StatusForbidden, time.Now())
+				cfg.Error(w, r, err)
+				return
+			}
+		}
+		f.Handler(service, cfg.Error)(w, r, caller, op)
+	})
 }

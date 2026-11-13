@@ -29,7 +29,7 @@ func scopeHeader(region, service string) string {
 func TestCredentialScopeRoutingNeverReadsBody(t *testing.T) {
 	catalog := backend.NewStaticRegions([]backend.ProxmoxRegion{{Name: "pve-test-1"}},
 		[]backend.AWSAccount{{ID: "123456789012", AllowedRegions: []string{"ap-northeast-2"}}})
-	for _, service := range []string{"ec2", "s3", "iam", "sts"} {
+	for _, service := range []string{"ec2", "s3", "iam", "sts", "dynamodb", "lambda"} {
 		for _, tc := range []struct{ region, want string }{
 			{"pve-test-1", "local"},
 			{"ap-northeast-2", "aws"},
@@ -38,14 +38,20 @@ func TestCredentialScopeRoutingNeverReadsBody(t *testing.T) {
 		} {
 			t.Run(service+"/"+tc.region, func(t *testing.T) {
 				want := tc.want
-				if service == "iam" || service == "sts" {
+				switch {
+				case service == "iam" || service == "sts":
 					want = "local"
+				case service != "ec2" && want == "aws":
+					want = "forward"
+				case service != "ec2" && service != "s3" && want == "local":
+					want = "rejected"
 				}
 				got := ""
 				handler := New(Config{
 					Regions: catalog,
 					Local:   http.HandlerFunc(func(http.ResponseWriter, *http.Request) { got = "local" }),
 					AWS:     http.HandlerFunc(func(http.ResponseWriter, *http.Request) { got = "aws" }),
+					Forward: http.HandlerFunc(func(http.ResponseWriter, *http.Request) { got = "forward" }),
 					Error: func(_ http.ResponseWriter, _ *http.Request, err error) {
 						got = "rejected"
 						rej, ok := sigv4.RejectionOf(err)
