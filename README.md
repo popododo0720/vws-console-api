@@ -31,7 +31,8 @@ go run ./cmd/vws-console-api -backend=fake \
 | `proxmox` | The region layer: one Proxmox cluster (#755). |
 
 `docs/proxmox-mapping.md` has the id, tag, pool and zone rules and
-`docs/proxmox-safety.md` the token and test safety rules. `-backend=grpc`,
+`docs/proxmox-safety.md` the token and test safety rules.
+`docs/region-layer.md` describes region layer operations. `-backend=grpc`,
 which dials `-compute-addr`, `-storage-addr`, and `-network-addr`, is the
 retired Kubernetes path. It stays until `regions` and `proxmox` land and is
 not the production path.
