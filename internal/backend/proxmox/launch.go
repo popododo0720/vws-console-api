@@ -121,6 +121,11 @@ func (b *Backend) validateLaunch(req resource.RunInstancesRequest) error {
 			return err
 		}
 	}
+	if b.cfg.LiveTests {
+		if _, err := liveRunTag(req.Tags); err != nil {
+			return err
+		}
+	}
 	for _, field := range []struct {
 		name string
 		set  bool
@@ -139,6 +144,18 @@ func (b *Backend) validateLaunch(req resource.RunInstancesRequest) error {
 		return resource.Invalid("volumeType", "unsupported")
 	}
 	return nil
+}
+
+func liveRunTag(tags map[string]string) (string, error) {
+	run, found := tags["vws-live-run"]
+	if !found {
+		return "", nil
+	}
+	if len(run) < 1 || len(run) > 40 || strings.Trim(run[:1], "abcdefghijklmnopqrstuvwxyz0123456789") != "" ||
+		strings.Trim(run, "abcdefghijklmnopqrstuvwxyz0123456789-") != "" {
+		return "", resource.Invalid("vws-live-run", "must match [a-z0-9][a-z0-9-]{0,39}")
+	}
+	return "vws.live." + run, nil
 }
 
 func (b *Backend) allocateLaunch(

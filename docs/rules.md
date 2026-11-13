@@ -34,6 +34,20 @@ by `TestStaticLaunchLowestFreeAndModes`, `TestStaticLaunchExhaustionAndPending`,
 `TestStaticLaunchRefusesIncompleteInventory`, and
 `TestInsufficientFreeAddressesInSubnetWire`.
 
+Only regions with `live_tests: true` interpret the RunInstances user tag
+`vws-live-run` as a live run ID. When present, its value must match
+`[a-z0-9][a-z0-9-]{0,39}`; invalid values return InvalidParameterValue before
+any clone. The clone description already persists the user tags, so a new
+backend can recover the run ID after a crash. Finalize adds exactly one
+`vws.live.<runid>` to the same digest-CAS config write as the launch replay
+tags, without a separate tag write. Same-token retries and resumed finalize
+preserve that tag. Regions without live tests treat the key as an ordinary
+user tag and write no system live tag. DescribeInstances retains
+`vws-live-run` as a user tag, while `vws.live.*` never decodes as one.
+Enforced by `TestLaunchLiveRunTags`,
+`TestLaunchLiveRunRejectsInvalidBeforeClone` and
+`TestLaunchLiveRunResumesFinalize`.
+
 Console usage requires `vws:GetUsage` on `*`, accepts only one `from` and
 `to` date with start before exclusive end and at most 366 days, and reads
 current allocation from live project pools without PVE or registry writes
