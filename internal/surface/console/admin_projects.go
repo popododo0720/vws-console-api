@@ -39,6 +39,23 @@ func (h *handler) adminProject(w http.ResponseWriter, r *http.Request) {
 	writeProject(w, v)
 }
 
+func (h *handler) adminProjects(w http.ResponseWriter, r *http.Request) {
+	if !h.adminReady(w, r) {
+		return
+	}
+	items, skipped, err := h.registry.Projects().List(r.Context())
+	if err != nil {
+		adminError(w, r, err)
+		return
+	}
+	if len(skipped) != 0 {
+		h.log.WarnContext(r.Context(), "admin registry skipped undecodable records", slog.Int("count", len(skipped)))
+	}
+	writeJSON(w, http.StatusOK, struct {
+		Projects []store.Project `json:"projects"`
+	}{Projects: items})
+}
+
 // projectMapping reads a project's mapping. A project without one has the
 // pool named after it in every registered region and no AWS accounts.
 func (h *handler) projectMapping(ctx context.Context, id string) (store.Project, error) {

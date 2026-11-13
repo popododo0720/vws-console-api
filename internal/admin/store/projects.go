@@ -43,6 +43,16 @@ func (p Projects) Get(ctx context.Context, project string) (Project, error) {
 	return p.records.Get(ctx, project)
 }
 
+// List reads stored mappings in project order and reports undecodable records.
+func (p Projects) List(ctx context.Context) ([]Project, []Undecodable, error) {
+	items, skipped, err := p.records.List(ctx)
+	for i := range items {
+		items[i].Pools = append([]ProjectPool{}, items[i].Pools...)
+		items[i].AWSAccounts = append([]string{}, items[i].AWSAccounts...)
+	}
+	return items, skipped, err
+}
+
 // PoolConflictError identifies a pool held by another project.
 type PoolConflictError struct{ Region, Pool string }
 

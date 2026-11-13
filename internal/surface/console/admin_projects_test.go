@@ -17,6 +17,89 @@ import (
 
 const projectPath = "/api/v1/admin/projects/123456789012"
 
+func TestAdminProjectsListsOnlyStoredMappings(t *testing.T) {
+	e, g, auditLog := projectFixture(t)
+	const path = "/api/v1/admin/projects"
+	empty := projectCall(t, e, "GET", path, nil, "", 200)
+	if strings.TrimSpace(empty.Body.String()) != `{"projects":[]}` {
+		t.Fatalf("empty list: %s", empty.Body)
+	}
+	projectCall(t, e, "GET", projectPath, nil, "", 200)
+	if got := projectCall(t, e, "GET", path, nil, "", 200); got.Body.String() != empty.Body.String() {
+		t.Fatal("detail default appeared in stored mappings")
+	}
+	for _, v := range []store.Project{
+		{
+			Project:     "222222222222",
+			Pools:       []store.ProjectPool{{Region: "pve-lab-1", Pool: "shared"}},
+			AWSAccounts: []string{"123456789012"},
+		},
+		{Project: "111111111111"},
+	} {
+		if _, err := g.Projects().Put(t.Context(), v); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want := `{"projects":[{"project":"111111111111","pools":[],"awsAccounts":[]},` +
+		`{"project":"222222222222","pools":[{"region":"pve-lab-1","pool":"shared"}],"awsAccounts":["123456789012"]}]}`
+	for range 2 {
+		h := e.h.(*handler)
+		e.h = New(Config{Registry: g, Auth: h.auth, IAM: h.iam})
+		if got := projectCall(t, e, "GET", path, nil, "", 200); strings.TrimSpace(got.Body.String()) != want {
+			t.Fatalf("sorted stored mappings after handler recreation: %s", got.Body)
+		}
+	}
+	projectCall(t, e, "GET", path+"?ignored=1", nil, "", 400)
+	e.h.(*handler).registry = nil
+	projectCall(t, e, "GET", path, nil, "", 503)
+	if auditLog.Len() != 0 {
+		t.Fatal("read wrote audit entries")
+	}
+}
+
+func TestAdminProjectsSkipsUndecodableRecords(t *testing.T) {
+	e, _, app, _ := accountFixture(t)
+	b := store.NewMemory()
+	for key, value := range map[string]string{
+		"projects/111111111111": `{"project":"111111111111","pools":null,"awsAccounts":null}`,
+		"projects/corrupt":      "private-undecodable-project-value",
+		"projects/bad-arrays":   `{"pools":42}`,
+	} {
+		if _, err := b.Create(t.Context(), key, []byte(value)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	e.h.(*handler).registry = store.New(b)
+	rec := projectCall(t, e, "GET", "/api/v1/admin/projects", nil, "", 200)
+	if strings.TrimSpace(rec.Body.String()) != `{"projects":[{"project":"111111111111","pools":[],"awsAccounts":[]}]}` {
+		t.Fatalf("list with corrupt records: %s", rec.Body)
+	}
+	var entry map[string]any
+	if err := json.Unmarshal(app.Bytes(), &entry); err != nil {
+		t.Fatal(err)
+	}
+	if entry["level"] != "WARN" || entry["msg"] != "admin registry skipped undecodable records" ||
+		entry["count"] != float64(2) || len(entry) != 4 {
+		t.Fatalf("warning must contain only time, level, message and count: %s", app)
+	}
+}
+
+type failedProjectListStore struct{ store.Backend }
+
+func (failedProjectListStore) List(context.Context, string) ([]store.Entry, error) {
+	return nil, errors.New("https://user:token@private.invalid/secret")
+}
+
+func TestAdminProjectsRegistryFailureIsSafe(t *testing.T) {
+	e, _, _ := projectFixture(t)
+	e.h.(*handler).registry = store.New(failedProjectListStore{Backend: store.NewMemory()})
+	rec := projectCall(t, e, "GET", "/api/v1/admin/projects", nil, "", 503)
+	if !strings.Contains(rec.Body.String(), "admin registry read failed") ||
+		strings.Contains(rec.Body.String(), "private.invalid") || strings.Contains(rec.Body.String(), "token") {
+		t.Fatalf("registry diagnostics escaped: %s", rec.Body)
+	}
+}
+
 func projectFixture(t *testing.T) (loginEnv, *store.Registry, *bytes.Buffer) {
 	t.Helper()
 	e, g, _, auditLog := accountFixture(t)
