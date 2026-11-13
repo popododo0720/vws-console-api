@@ -118,6 +118,18 @@ func TestActionRefusesWhatItCannotName(t *testing.T) {
 		{"X-Amz-Target on a GET", "dynamodb", "GET", "/", "", "", "X-Amz-Target", "DynamoDB_20120810.GetItem"},
 		{"copy source on a non-copy request", "s3", "PUT", "/bucket/key?acl", "", "", "X-Amz-Copy-Source", "/src/k"},
 		{"malformed copy source", "s3", "PUT", "/bucket/key", "", "", "X-Amz-Copy-Source", "/src"},
+		{"copy source bucket charset", "s3", "PUT", "/bucket/key", "", "", "X-Amz-Copy-Source", "/Src_1/k"},
+		{"copy source control character", "s3", "PUT", "/bucket/key", "", "", "X-Amz-Copy-Source", "/src/k%0Ax"},
+		{"copy source bad escape", "s3", "PUT", "/bucket/key", "", "", "X-Amz-Copy-Source", "/src/k%zz"},
+		{
+			"copy source key over 1024 bytes", "s3", "PUT", "/bucket/key", "", "",
+			"X-Amz-Copy-Source", "/src/" + strings.Repeat("k", 1025),
+		},
+		{"copy source other query", "s3", "PUT", "/bucket/key", "", "", "X-Amz-Copy-Source", "/src/k?acl"},
+		{
+			"copy source version charset", "s3", "PUT", "/bucket/key", "", "",
+			"X-Amz-Copy-Source", "/src/k?versionId=a&b=c",
+		},
 		{"unmapped S3 subresource", "s3", "GET", "/bucket?inventory", "", "", "", ""},
 		{"S3 subresource on the wrong method", "s3", "POST", "/bucket?policy", "", "", "", ""},
 		{"two S3 subresources", "s3", "GET", "/bucket/key?acl&tagging", "", "", "", ""},

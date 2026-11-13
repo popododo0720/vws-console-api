@@ -13,7 +13,11 @@ import (
 	"github.com/popododo0720/vws-console-api/internal/sigv4"
 )
 
-var actionName = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9]{0,127}$`)
+var (
+	actionName  = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9]{0,127}$`)
+	bucketName  = regexp.MustCompile(`^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$`)
+	copyVersion = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
+)
 
 // Action names the IAM actions a verified request to an AWS service needs,
 // from its headers, form or path only (design.md 3.2.5). The first is the
@@ -218,12 +222,34 @@ func s3Action(method, path string, query url.Values, copySource string) ([]strin
 	if op != "PutObject" || method != http.MethodPut {
 		return nil, resource.Invalid("x-amz-copy-source", "not a copy request")
 	}
-	source, version, _ := strings.Cut(strings.TrimPrefix(copySource, "/"), "?versionId=")
-	if b, k, ok := strings.Cut(source, "/"); !ok || b == "" || k == "" {
-		return nil, resource.Invalid("x-amz-copy-source", "malformed")
+	version, err := checkCopySource(copySource)
+	if err != nil {
+		return nil, err
 	}
 	if version != "" {
 		return []string{op, "GetObjectVersion"}, nil
 	}
 	return []string{op, "GetObject"}, nil
+}
+
+// checkCopySource bounds x-amz-copy-source as S3 does: an S3 bucket name,
+// a URL-encoded key of 1 to 1024 bytes without control characters, and an
+// optional versionId of up to 1024 URL-safe characters. It returns the version.
+func checkCopySource(raw string) (string, error) {
+	bad := resource.Invalid("x-amz-copy-source", "malformed")
+	if len(raw) > 4096 {
+		return "", bad
+	}
+	path, rawQuery, hasQuery := strings.Cut(strings.TrimPrefix(raw, "/"), "?")
+	version, isVersion := strings.CutPrefix(rawQuery, "versionId=")
+	if hasQuery && (!isVersion || len(version) > 1024 || !copyVersion.MatchString(version)) {
+		return "", bad
+	}
+	bucket, escaped, _ := strings.Cut(path, "/")
+	key, err := url.PathUnescape(escaped)
+	if err != nil || !bucketName.MatchString(bucket) || key == "" || len(key) > 1024 ||
+		strings.ContainsFunc(key, func(c rune) bool { return c < 0x20 || c == 0x7f }) {
+		return "", bad
+	}
+	return version, nil
 }

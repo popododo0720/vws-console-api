@@ -144,6 +144,9 @@ func (f *Forwarder) Any(cfg ForwardConfig) http.Handler {
 			return
 		}
 		actions, err := Action(service, r)
+		if err == nil && len(actions) == 0 {
+			err = resource.Invalid("Action", "cannot be derived")
+		}
 		if err != nil {
 			cfg.Error(w, r, err)
 			return
