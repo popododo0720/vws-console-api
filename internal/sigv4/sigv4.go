@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -409,6 +410,14 @@ func SignHeaders(
 	return sign(r, cred, service, region, now, true, extra)
 }
 
+// SignHeadersWithoutPayload signs a non-S3 request whose payload hash header
+// was absent. The body hash still participates in the canonical request.
+func SignHeadersWithoutPayload(
+	r *http.Request, cred Credential, service Service, region string, now time.Time, extra ...string,
+) error {
+	return sign(r, cred, service, region, now, false, extra)
+}
+
 func sign(
 	r *http.Request, cred Credential, service Service, region string, now time.Time, payloadHeader bool, extra []string,
 ) error {
@@ -591,6 +600,8 @@ func headerValue(r *http.Request, name string) string {
 	var vals []string
 	if name == "host" {
 		vals = []string{r.Host}
+	} else if name == "content-length" {
+		vals = []string{strconv.FormatInt(r.ContentLength, 10)}
 	} else {
 		vals = r.Header.Values(http.CanonicalHeaderKey(name))
 	}

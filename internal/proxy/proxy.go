@@ -1,8 +1,7 @@
-// Package proxy forwards authorized EC2 requests using isolated AWS credentials.
+// Package proxy forwards authorized AWS requests using isolated AWS credentials.
 package proxy
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/xml"
@@ -11,7 +10,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"net/http/httputil"
 	"net/url"
 	"regexp"
 	"strings"
@@ -47,6 +45,7 @@ type Proxy struct {
 	accounts    Accounts
 	source      sigv4.Credential
 	sts, origin string
+	services    string
 	stsRegion   string
 	transport   http.RoundTripper
 	mu          sync.Mutex
@@ -64,12 +63,9 @@ func New(accounts Accounts, source sigv4.Credential, sts, stsRegion, origin stri
 	if !regexp.MustCompile(`^[a-z]{2}(-[a-z]+)+-[0-9]+$`).MatchString(stsRegion) {
 		return nil, errors.New("proxy: invalid STS region")
 	}
-	for _, raw := range []string{sts, strings.ReplaceAll(origin, "{region}", "us-east-1")} {
-		u, err := url.Parse(raw)
-		if err != nil || u.User != nil || u.Host == "" || u.RawQuery != "" || u.Fragment != "" ||
-			(u.Path != "" && u.Path != "/") || (u.Scheme != "https" &&
-			(u.Scheme != "http" || !net.ParseIP(u.Hostname()).IsLoopback())) {
-			return nil, errors.New("proxy: invalid endpoint")
+	for _, raw := range []string{sts, origin} {
+		if err := checkEndpoint(raw); err != nil {
+			return nil, err
 		}
 	}
 	return &Proxy{
@@ -77,7 +73,8 @@ func New(accounts Accounts, source sigv4.Credential, sts, stsRegion, origin stri
 		transport: &http.Transport{
 			DialContext:         (&net.Dialer{Timeout: 3 * time.Second}).DialContext,
 			TLSHandshakeTimeout: 3 * time.Second, ResponseHeaderTimeout: 5 * time.Second,
-			IdleConnTimeout: 30 * time.Second,
+			IdleConnTimeout:    30 * time.Second,
+			DisableCompression: true,
 		},
 		cache: make(map[sessionKey]sigv4.Credential), now: time.Now,
 	}, nil
@@ -91,6 +88,14 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 	r = r.WithContext(ctx)
+	if refusedForm(r) {
+		refuse(w, http.StatusForbidden, "UnauthorizedOperation")
+		return
+	}
+	if r.Header.Get("X-Vws-Target-Service") != string(sigv4.ServiceEC2) {
+		p.serveService(w, r)
+		return
+	}
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
 	if err != nil {
 		refuse(w, http.StatusBadRequest, "InvalidParameterValue")
@@ -123,6 +128,28 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	cred, ok := p.session(ctx, w, account, principal, region)
+	if !ok {
+		return
+	}
+	target, err := url.Parse(strings.ReplaceAll(p.origin, "{region}", region))
+	if err != nil {
+		refuse(w, http.StatusBadGateway, "InternalError")
+		return
+	}
+	header := forwardedHeaders(r.Header)
+	if header.Get("Content-Type") == "" {
+		header.Set("Content-Type", "application/x-www-form-urlencoded")
+	}
+	p.forward(w, r, target, body, header, cred, "ec2", region,
+		repeatableAction(q.Get("Action"), q.Get("ClientToken")))
+}
+
+// session resolves the current account mapping and its AssumeRole session,
+// refusing the request when either is unusable.
+func (p *Proxy) session(
+	ctx context.Context, w http.ResponseWriter, account, principal, region string,
+) (sigv4.Credential, bool) {
 	a, err := p.accounts.Account(ctx, account, region)
 	if err == nil || a.MappingVersion != 0 || errors.Is(err, store.ErrNotFound) {
 		p.mu.Lock()
@@ -140,36 +167,14 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err != nil || !allowed || a.ExternalID == "" ||
 		!accountID(a.ID) || !strings.HasPrefix(a.RoleARN, "arn:aws:iam::"+a.ID+":role/") {
 		refuse(w, http.StatusForbidden, "AccessDenied")
-		return
+		return sigv4.Credential{}, false
 	}
 	cred, err := p.credentials(ctx, account, principal, a)
 	if err != nil {
 		refuse(w, http.StatusBadGateway, "InternalError")
-		return
+		return sigv4.Credential{}, false
 	}
-	target, err := url.Parse(strings.ReplaceAll(p.origin, "{region}", region))
-	if err != nil {
-		refuse(w, http.StatusBadGateway, "InternalError")
-		return
-	}
-	forward := &httputil.ReverseProxy{
-		Rewrite: func(pr *httputil.ProxyRequest) {
-			pr.SetURL(target)
-			pr.Out.Host = target.Host
-			pr.Out.Header = make(http.Header)
-			pr.Out.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-			pr.Out.Body = io.NopCloser(bytes.NewReader(body))
-			pr.Out.GetBody = func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(body)), nil }
-			pr.Out.ContentLength = int64(len(body))
-		},
-		Transport: signedTransport{
-			p: p, credential: cred, region: region, resend: repeatableAction(q.Get("Action"), q.Get("ClientToken")),
-		},
-		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, _ error) {
-			refuse(w, http.StatusBadGateway, "InternalError")
-		},
-	}
-	forward.ServeHTTP(w, r)
+	return cred, true
 }
 
 func allowedAction(action string) bool {
@@ -204,19 +209,25 @@ func refuse(w http.ResponseWriter, status int, code string) {
 type signedTransport struct {
 	p          *Proxy
 	credential sigv4.Credential
+	service    sigv4.Service
 	region     string
 	resend     bool
+	signed     []string
 }
 
 func (s signedTransport) RoundTrip(r *http.Request) (*http.Response, error) {
-	return s.p.send(r, s.credential, sigv4.ServiceEC2, s.region, s.resend)
+	return s.p.send(r, s.credential, s.service, s.region, s.resend, s.signed...)
 }
 
 func (p *Proxy) send(
-	r *http.Request, c sigv4.Credential, service sigv4.Service, region string, resend bool,
+	r *http.Request, c sigv4.Credential, service sigv4.Service, region string, resend bool, signed ...string,
 ) (*http.Response, error) {
 	for attempt := 0; attempt < 3; attempt++ {
-		if err := sigv4.Sign(r, c, service, region, p.now()); err != nil {
+		sign := sigv4.SignHeaders
+		if signed != nil && service != sigv4.ServiceS3 && r.Header.Get("X-Amz-Content-Sha256") == "" {
+			sign = sigv4.SignHeadersWithoutPayload
+		}
+		if err := sign(r, c, service, region, p.now(), signed...); err != nil {
 			return nil, errors.New("proxy: signing failed")
 		}
 		resp, err := p.transport.RoundTrip(r)
