@@ -53,6 +53,9 @@ func New(ctx context.Context, client *pveclient.Client, reg Registration, cfg Re
 	if err != nil {
 		return nil, &selfCheckError{check: "privileges", cause: fmt.Errorf("proxmox: check token permissions: %w", err)}
 	}
+	if err := checkSDN(ctx, client, cfg, permissions); err != nil {
+		return nil, err
+	}
 	if cfg.ReadOnly {
 		for path, privileges := range permissions {
 			for privilege := range privileges {
@@ -118,6 +121,63 @@ func New(ctx context.Context, client *pveclient.Client, reg Registration, cfg Re
 	return &Backend{
 		region: reg.Region.Name, cluster: reg.ClusterName, client: client, cfg: cfg, zones: reg.Region.Zones,
 	}, nil
+}
+
+func checkSDN(ctx context.Context, c *pveclient.Client, cfg RegionConfig, permissions pveclient.Permissions) error {
+	var zones []pveclient.SDNZone
+	if cfg.SDNZone != "" {
+		var err error
+		zones, err = c.SDNZones(ctx)
+		found := false
+		for _, zone := range zones {
+			found = found || zone.Zone == cfg.SDNZone
+		}
+		if err != nil {
+			return &selfCheckError{check: "sdn_zone", cause: fmt.Errorf("proxmox: read sdn_zone: %w", err)}
+		}
+		if !found {
+			return &selfCheckError{check: "sdn_zone", cause: fmt.Errorf("proxmox: unknown sdn_zone %q", cfg.SDNZone)}
+		}
+	}
+	if cfg.ReadOnly {
+		return nil
+	}
+	for path, privileges := range permissions {
+		if _, held := privileges["SDN.Allocate"]; !held {
+			continue
+		}
+		zonePath := "/sdn/zones/" + cfg.SDNZone
+		if cfg.SDNZone == "" || (path != "/sdn" && path != zonePath && !strings.HasPrefix(path, zonePath+"/")) {
+			return &selfCheckError{
+				check: "privileges", cause: fmt.Errorf("proxmox: mutation token holds SDN.Allocate on %s", path),
+			}
+		}
+		if path != "/sdn" {
+			continue
+		}
+		probes := []string{"vwsprobe"}
+		for _, zone := range zones {
+			if zone.Zone != cfg.SDNZone {
+				probes = append(probes, zone.Zone)
+			}
+		}
+		for _, zone := range probes {
+			probe := "/sdn/zones/" + zone
+			held, err := c.AccessPermissions(ctx, probe)
+			if err != nil {
+				return &selfCheckError{
+					check: "privileges", cause: fmt.Errorf("proxmox: unreadable SDN grant probe %s: %w", probe, err),
+				}
+			}
+			if held[probe] == nil {
+				return &selfCheckError{check: "privileges", cause: fmt.Errorf("proxmox: missing SDN grant probe %s", probe)}
+			}
+			if _, allocated := held[probe]["SDN.Allocate"]; allocated {
+				return &selfCheckError{check: "privileges", cause: fmt.Errorf("proxmox: propagated SDN.Allocate on %s", probe)}
+			}
+		}
+	}
+	return nil
 }
 
 func forbiddenPrivilege(p string) bool {

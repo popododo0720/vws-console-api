@@ -215,6 +215,31 @@ func TestEC2QueryProxmoxRegionalLifecycle(t *testing.T) {
 			t.Fatalf("%s must return %s: %s", action, want, body)
 		}
 	}
+	sdn, _ := sdnBackend(t, sdnScenario())
+	sdnHandler, err := regionapi.New(regionapi.Config{
+		Backend: sdn.Set(), Capabilities: sdn, Region: "pve-test-1", CheckScope: ScopeCheck(sdn),
+		Version: regionapi.Version{ReleaseLine: "1.0", ClusterName: "test"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handlerMu.Lock()
+	h = sdnHandler
+	handlerMu.Unlock()
+	vpc := queryXML(t, send("CreateVpc", url.Values{"CidrBlock": {"10.0.0.0/16"}}, http.StatusOK), "vpcId")
+	if body := send("DescribeVpcs", url.Values{"VpcId.1": {vpc}}, http.StatusOK); queryXML(t, body, "vpcId") != vpc {
+		t.Fatalf("SDN read after write: %s", body)
+	}
+	send("DescribeSubnets", nil, http.StatusOK)
+	body = send("CreateSubnet", url.Values{"VpcId": {vpc}, "CidrBlock": {"10.0.1.0/24"}}, http.StatusBadRequest)
+	if queryXML(t, body, "Code") != "UnsupportedOperation" {
+		t.Fatalf("part 1 must keep subnet writes unsupported: %s", body)
+	}
+	send("DeleteVpc", url.Values{"VpcId": {vpc}}, http.StatusOK)
+	body = send("DeleteVpc", url.Values{"VpcId": {vpc}}, http.StatusBadRequest)
+	if queryXML(t, body, "Code") != "InvalidVpcID.NotFound" {
+		t.Fatalf("SDN missing delete: %s", body)
+	}
 }
 
 func queryXML(t *testing.T, body, tag string) string {

@@ -132,6 +132,17 @@ func mutationGuardFirst(fn *ast.FuncDecl) bool {
 
 func TestMutationMethodsRejectOtherPools(t *testing.T) {
 	cases := map[string]func(*testing.T, *Backend) (resource.Kind, string, error){
+		"CreateVpc": func(t *testing.T, b *Backend) (resource.Kind, string, error) {
+			b.cfg.SDNZone = "tenant"
+			_, err := b.CreateVpc(t.Context(), volumeMutation(), resource.CreateVpcRequest{Cidr: "10.0.0.0/16"})
+			return resource.KindVpc, "", err
+		},
+		"DeleteVpc": func(t *testing.T, b *Backend) (resource.Kind, string, error) {
+			b.cfg.SDNZone = "tenant"
+			id, _ := resource.Parse[resource.VpcID]("vpc-0123456789abcdef0")
+			_, err := b.DeleteVpc(t.Context(), volumeMutation(), resource.DeleteVpcRequest{ID: id})
+			return resource.KindVpc, id.String(), err
+		},
 		"RunInstances": func(t *testing.T, b *Backend) (resource.Kind, string, error) {
 			_, err := b.RunInstances(t.Context(), backend.Mutation{Scope: inventoryScope()}, resource.RunInstancesRequest{})
 			return resource.KindInstance, "", err
@@ -219,7 +230,7 @@ func TestMutationMethodsRejectOtherPools(t *testing.T) {
 			s.VMs[0].Pool = "999999999999"
 			b, _ := networkBackend(t, s, RegionConfig{})
 			kind, id, err := run(t, b)
-			if name == "CreateVolume" || name == "RunInstances" {
+			if name == "CreateVolume" || name == "RunInstances" || name == "CreateVpc" {
 				if resource.CodeOf(err) != resource.CodePermissionDenied {
 					t.Fatalf("create without caller pool: %v", err)
 				}

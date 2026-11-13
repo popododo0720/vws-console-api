@@ -52,6 +52,11 @@ See [registration rules](rules.md) for size limits, reloads and recovery.
 No credential value belongs in region.yaml, command arguments or the
 environment. Snapshot decoder errors never echo submitted values.
 
+Optional `sdn_zone` in region.yaml selects an existing PVE SDN zone for
+VPC writes when `read_only` is false. Grant SDN.Allocate on that zone and
+on /sdn without propagation; startup probes foreign zones and refuses
+inherited allocation. Without the key VPC writes are UnsupportedOperation.
+
 ## Privileged helper
 
 `cmd/vws-region-helper` provides `registration-write` and `lease-write`,

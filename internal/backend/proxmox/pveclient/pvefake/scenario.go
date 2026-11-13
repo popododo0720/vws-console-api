@@ -33,6 +33,24 @@ type Scenario struct {
 	Tokens   []Token   `yaml:"tokens"`
 	Storages []Storage `yaml:"storages"`
 	Networks []Network `yaml:"networks"`
+	SDNZones []string  `yaml:"sdn_zones"`
+	VNets    []VNet    `yaml:"vnets"`
+}
+
+// VNet holds pending SDN configuration and its seeded subnets.
+type VNet struct {
+	Name    string   `yaml:"vnet" json:"vnet"`
+	Zone    string   `yaml:"zone" json:"zone"`
+	Alias   string   `yaml:"alias" json:"alias"`
+	State   string   `yaml:"state" json:"state"`
+	Subnets []Subnet `yaml:"subnets" json:"-"`
+}
+
+// Subnet is a PVE SDN subnet, whose ID is zone-address-prefix.
+type Subnet struct {
+	ID      string `yaml:"subnet" json:"subnet"`
+	CIDR    string `yaml:"cidr" json:"cidr"`
+	Gateway string `yaml:"gateway" json:"gateway"`
 }
 
 // Network is one node's bridge interface.
@@ -201,6 +219,10 @@ func (s Scenario) clone() Scenario {
 	s.Roles, s.Tokens = slices.Clone(s.Roles), slices.Clone(s.Tokens)
 	s.Storages = slices.Clone(s.Storages)
 	s.Networks = slices.Clone(s.Networks)
+	s.SDNZones, s.VNets = slices.Clone(s.SDNZones), slices.Clone(s.VNets)
+	for i := range s.VNets {
+		s.VNets[i].Subnets = slices.Clone(s.VNets[i].Subnets)
+	}
 	for i := range s.VMs {
 		s.VMs[i].Config = maps.Clone(s.VMs[i].Config)
 		s.VMs[i].Snapshots = slices.Clone(s.VMs[i].Snapshots)

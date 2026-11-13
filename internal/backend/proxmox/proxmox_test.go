@@ -168,7 +168,7 @@ func TestReadOnlyBackendEveryMethod(t *testing.T) {
 		for _, r := range resource.ReadActions() {
 			want := resource.ActionEmpty
 			if r.CapabilityKey() == "ec2:DescribeVpcs" || r.CapabilityKey() == "ec2:DescribeSubnets" {
-				want = resource.ActionPartial
+				want = resource.ActionSupported
 			}
 			if r.CapabilityKey() == "ec2:DescribeInstances" || r.CapabilityKey() == "ec2:DescribeVolumes" ||
 				r.CapabilityKey() == "ec2:DescribeSnapshots" || r.CapabilityKey() == "ec2:DescribeImages" {
