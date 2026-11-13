@@ -471,6 +471,10 @@ func TestRegionDaemonReadsRestartAndReadiness(t *testing.T) {
 		if err != nil || json.Unmarshal(data, &stored) != nil || stored.Fingerprint != fp {
 			t.Fatal("disk does not name the committed new token")
 		}
+		oldToken := filepath.Join(dir, "private", "pve-token."+tokenFingerprint(pveclient.Secret(token)))
+		if _, err := os.Stat(oldToken); !os.IsNotExist(err) {
+			t.Fatal("committed registration with helper error left the previous token file:", err)
+		}
 		awaitStatus(t, ops+"/readyz", http.StatusOK)
 		awaitStatus(t, secondOps+"/readyz", http.StatusOK)
 		put(t, "test", next.ID, next.Secret, http.StatusOK)

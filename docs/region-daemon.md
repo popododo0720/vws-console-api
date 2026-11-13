@@ -72,9 +72,11 @@ Registration runs the PVE self-check, acquires the registration lock, writes
 the candidate token, then commits by renaming registration.json. That rename
 is the only commit point. There are no compensation writes: a helper failure,
 including a nonzero exit after rename, leaves a matching old or new pair.
-A retry converges. After success and registration unlock, deletion of a different
+A retry converges. After a confirmed commit and registration unlock, deletion of a different
 previous token is best effort. A busy lock or other cleanup failure produces a
 secret-free warning without changing the successful result.
+After a registration-write error, the writer re-reads identity under the lock;
+if the candidate fingerprint committed, it attempts cleanup and returns the error.
 An omitted token is read by the stored fingerprint, verified and self-checked;
 only the identity is written. Readers select the named file and verify its
 content hash. If an old token was deleted during rotation, the reader re-reads

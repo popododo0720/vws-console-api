@@ -206,13 +206,17 @@ func (c *Connection) Register(ctx context.Context, data json.RawMessage) error {
 	if err := c.Helper.WriteToken(ctx, s.Fingerprint, token); err != nil {
 		return err
 	}
-	if err := c.Helper.WriteRegistration(ctx, identity); err != nil {
-		return err
+	err = c.Helper.WriteRegistration(ctx, identity)
+	if err != nil {
+		current, _, readErr := c.registration()
+		if readErr != nil || current.Fingerprint != s.Fingerprint {
+			return err
+		}
 	}
 	if old.Fingerprint != "" && old.Fingerprint != s.Fingerprint {
 		cleanupFingerprint = old.Fingerprint
 	}
-	return nil
+	return err
 }
 
 // Check reloads the shared files and repeats the startup self-check.
