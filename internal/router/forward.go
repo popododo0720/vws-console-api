@@ -72,6 +72,10 @@ func (f *Forwarder) Handler(service sigv4.Service, writeError func(http.Response
 			Rewrite: func(pr *httputil.ProxyRequest) {
 				pr.Out.URL.Scheme, pr.Out.URL.Host = "http", "proxy"
 				pr.Out.Host = "proxy"
+				if service == sigv4.ServiceS3 {
+					// DialContext selects the socket; S3 still needs the signed bucket host.
+					pr.Out.Host = pr.In.Host
+				}
 				for name := range pr.Out.Header {
 					if strings.HasPrefix(strings.ToLower(name), "x-vws-") {
 						pr.Out.Header.Del(name)

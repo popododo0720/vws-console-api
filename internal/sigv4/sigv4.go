@@ -426,6 +426,9 @@ func sign(
 		return err
 	}
 	r.Body = io.NopCloser(bytes.NewReader(body))
+	if len(body) == 0 {
+		r.Body = http.NoBody
+	}
 	r.ContentLength = int64(len(body))
 	sum := sha256.Sum256(body)
 	payload := hex.EncodeToString(sum[:])
