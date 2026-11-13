@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/popododo0720/vws-console-api/internal/resource"
@@ -14,50 +15,59 @@ import (
 
 var actionName = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9]{0,127}$`)
 
-// Action names the IAM action of a verified request to an AWS service from its
-// headers, form or path only (design.md 3.2.5): X-Amz-Target for JSON
-// protocols, the S3 method, path and subresource for S3, the Query Action=,
-// and <service>:<METHOD> for any other REST protocol. It reads the body only
-// for a Query form and leaves it replayable.
-func Action(service sigv4.Service, r *http.Request) (string, error) {
+// Action names the IAM actions a verified request to an AWS service needs,
+// from its headers, form or path only (design.md 3.2.5). The first is the
+// request's own action; any other is a permission it also uses, such as
+// s3:GetObject on a copy source. X-Amz-Target names the action only of a
+// JSON-protocol call (a POST to / with no Query Action), and S3 never reads
+// it: a header the service ignores must not choose what IAM checks. Query
+// calls use Action=, S3 its method, path and subresource, and any other REST
+// call <service>:<METHOD>. The body is read only for a Query form and stays
+// replayable.
+func Action(service sigv4.Service, r *http.Request) ([]string, error) {
 	prefix := string(service) + ":"
-	if target := r.Header.Get("X-Amz-Target"); target != "" {
-		op := target[strings.LastIndexByte(target, '.')+1:]
-		if !actionName.MatchString(op) {
-			return "", resource.Invalid("X-Amz-Target", "malformed")
-		}
-		return prefix + op, nil
-	}
 	query, err := url.ParseQuery(r.URL.RawQuery)
 	if err != nil {
-		return "", resource.Invalid("query", "malformed")
+		return nil, resource.Invalid("query", "malformed")
 	}
 	if service == sigv4.ServiceS3 {
-		op, err := s3Action(r.Method, r.URL.Path, query)
+		ops, err := s3Action(r.Method, r.URL.Path, query, r.Header.Get("X-Amz-Copy-Source"))
 		if err != nil {
-			return "", err
+			return nil, err
 		}
-		return prefix + op, nil
+		for i := range ops {
+			ops[i] = prefix + ops[i]
+		}
+		return ops, nil
 	}
-	actions := query["Action"]
 	form, err := queryForm(r)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	actions = append(actions, form["Action"]...)
+	actions := slices.Concat(query["Action"], form["Action"])
+	if target := r.Header.Get("X-Amz-Target"); target != "" {
+		op := target[strings.LastIndexByte(target, '.')+1:]
+		switch {
+		case !actionName.MatchString(op):
+			return nil, resource.Invalid("X-Amz-Target", "malformed")
+		case len(actions) > 0 || r.Method != http.MethodPost || r.URL.Path != "/":
+			return nil, resource.Invalid("X-Amz-Target", "only a JSON-protocol POST to / takes it")
+		}
+		return []string{prefix + op}, nil
+	}
 	switch {
 	case len(actions) > 1:
-		return "", resource.Invalid("Action", "repeated")
+		return nil, resource.Invalid("Action", "repeated")
 	case len(actions) == 1 && !actionName.MatchString(actions[0]):
-		return "", resource.Invalid("Action", "malformed")
+		return nil, resource.Invalid("Action", "malformed")
 	case len(actions) == 1:
-		return prefix + actions[0], nil
+		return []string{prefix + actions[0]}, nil
 	}
 	switch r.Method {
 	case http.MethodGet, http.MethodHead, http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodPatch:
-		return prefix + r.Method, nil
+		return []string{prefix + r.Method}, nil
 	default:
-		return "", resource.Invalid("method", "unsupported")
+		return nil, resource.Invalid("method", "unsupported")
 	}
 }
 
@@ -149,17 +159,20 @@ func s3Subresources() map[string]bool {
 	return m
 }
 
-func s3Action(method, path string, query url.Values) (string, error) {
+// s3Action also names the read a CopyObject or UploadPartCopy makes of its
+// x-amz-copy-source, which S3 authorizes as s3:GetObject (or
+// s3:GetObjectVersion) on the source; any other request carrying one is refused.
+func s3Action(method, path string, query url.Values, copySource string) ([]string, error) {
 	rest := strings.TrimPrefix(path, "/")
 	bucket, key, isObject := strings.Cut(rest, "/")
 	if rest == "" {
 		if method == http.MethodGet && len(query) == 0 {
-			return "ListAllMyBuckets", nil
+			return []string{"ListAllMyBuckets"}, nil
 		}
-		return "", resource.Invalid("path", "unsupported S3 request")
+		return nil, resource.Invalid("path", "unsupported S3 request")
 	}
 	if bucket == "" || isObject && key == "" {
-		return "", resource.Invalid("path", "malformed")
+		return nil, resource.Invalid("path", "malformed")
 	}
 	known := s3Subresources()
 	sub := ""
@@ -168,7 +181,7 @@ func s3Action(method, path string, query url.Values) (string, error) {
 			continue
 		}
 		if sub != "" {
-			return "", resource.Invalid(k, "more than one S3 subresource")
+			return nil, resource.Invalid(k, "more than one S3 subresource")
 		}
 		sub = k
 	}
@@ -189,7 +202,7 @@ func s3Action(method, path string, query url.Values) (string, error) {
 		op = ops.post
 	}
 	if !ok || op == "" {
-		return "", resource.Invalid("path", "unsupported S3 request")
+		return nil, resource.Invalid("path", "unsupported S3 request")
 	}
 	if _, versioned := query["versionId"]; versioned && isObject {
 		switch op {
@@ -199,5 +212,18 @@ func s3Action(method, path string, query url.Values) (string, error) {
 			op = strings.Replace(op, "ObjectTagging", "ObjectVersionTagging", 1)
 		}
 	}
-	return op, nil
+	if copySource == "" {
+		return []string{op}, nil
+	}
+	if op != "PutObject" || method != http.MethodPut {
+		return nil, resource.Invalid("x-amz-copy-source", "not a copy request")
+	}
+	source, version, _ := strings.Cut(strings.TrimPrefix(copySource, "/"), "?versionId=")
+	if b, k, ok := strings.Cut(source, "/"); !ok || b == "" || k == "" {
+		return nil, resource.Invalid("x-amz-copy-source", "malformed")
+	}
+	if version != "" {
+		return []string{op, "GetObjectVersion"}, nil
+	}
+	return []string{op, "GetObject"}, nil
 }

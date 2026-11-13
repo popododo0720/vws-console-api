@@ -130,7 +130,7 @@ type ForwardConfig struct {
 }
 
 // Any verifies the signature for the credential scope's service, authorizes
-// the action Action derives on "*", and forwards the verified bytes unchanged.
+// every action Action derives on "*", and forwards the verified bytes unchanged.
 func (f *Forwarder) Any(cfg ForwardConfig) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, service, err := sigv4.CredentialScope(r.Header.Get("Authorization"))
@@ -143,16 +143,18 @@ func (f *Forwarder) Any(cfg ForwardConfig) http.Handler {
 			cfg.Error(w, r, err)
 			return
 		}
-		action, err := Action(service, r)
+		actions, err := Action(service, r)
 		if err != nil {
 			cfg.Error(w, r, err)
 			return
 		}
-		op := strings.TrimPrefix(action, string(service)+":")
-		if err := iam.Check(r.Context(), cfg.Authorizer, caller, action, "*"); err != nil {
-			f.record(r.Context(), w, r, caller, service, op, http.StatusForbidden, time.Now())
-			cfg.Error(w, r, err)
-			return
+		op := strings.TrimPrefix(actions[0], string(service)+":")
+		for _, action := range actions {
+			if err := iam.Check(r.Context(), cfg.Authorizer, caller, action, "*"); err != nil {
+				f.record(r.Context(), w, r, caller, service, op, http.StatusForbidden, time.Now())
+				cfg.Error(w, r, err)
+				return
+			}
 		}
 		f.Handler(service, cfg.Error)(w, r, caller, op)
 	})

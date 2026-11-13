@@ -127,6 +127,27 @@ func TestIAMDenyReachesNoOrigin(t *testing.T) {
 	}
 }
 
+type denyOne struct{ action string }
+
+func (d denyOne) Authorize(_ context.Context, req iam.Request) (iam.Decision, error) {
+	return iam.Decision{Allowed: req.Action != d.action}, nil
+}
+
+func TestCopyNeedsReadOnTheSource(t *testing.T) {
+	cred, _ := caller(t)
+	h, o := stack(t, denyOne{"s3:GetObject"}, cred, io.Discard)
+	r := httptest.NewRequestWithContext(t.Context(), http.MethodPut, "/bucket/key", nil)
+	r.Header.Set("X-Amz-Copy-Source", "/secret/key")
+	if err := sigv4.SignHeaders(r, cred, sigv4.ServiceS3, "ap-northeast-2", time.Now(), "x-amz-copy-source"); err != nil {
+		t.Fatal(err)
+	}
+	res := httptest.NewRecorder()
+	h.ServeHTTP(res, r)
+	if res.Code != http.StatusForbidden || o.calls != 0 {
+		t.Fatalf("copy without s3:GetObject answered %d with %d proxy calls", res.Code, o.calls)
+	}
+}
+
 func TestForwardedBodyIsByteIdentical(t *testing.T) {
 	cred, allow := caller(t)
 	var logs bytes.Buffer
