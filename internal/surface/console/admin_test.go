@@ -50,7 +50,8 @@ func TestAdminRoutesRequireRoot(t *testing.T) {
 		`{"account":"123456789012","userName":"root","password":"root password 9"}`, nil)
 	root := cookie(t, login, SessionCookie)
 	for _, path := range []string{
-		"regions", "regions/pve-lab-1", "aws-accounts", "aws-accounts/123456789012", "permissions", "projects/123456789012",
+		"regions", "regions/pve-lab-1", "aws-accounts", "aws-accounts/123456789012",
+		"permissions", "projects", "projects/123456789012",
 	} {
 		for _, who := range []struct {
 			name   string
@@ -73,7 +74,7 @@ func TestAdminRoutesRequireRoot(t *testing.T) {
 						t.Fatal("secret in response")
 					}
 				}
-				if who.status == 200 && path != "permissions" && rec.Header().Get("ETag") == "" {
+				if who.status == 200 && path != "permissions" && path != "projects" && rec.Header().Get("ETag") == "" {
 					t.Fatal("missing ETag")
 				}
 				if path == "permissions" {

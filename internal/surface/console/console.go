@@ -153,6 +153,7 @@ func (h *handler) routes(mux *http.ServeMux) {
 	handle("PATCH /api/v1/admin/aws-accounts/{id}", h.adminWriteAccount)
 	handle("DELETE /api/v1/admin/aws-accounts/{id}", h.adminWriteAccount)
 	handle("GET /api/v1/admin/permissions", h.adminPermissions)
+	handle("GET /api/v1/admin/projects", h.adminProjects)
 	handle("GET /api/v1/admin/projects/{project}", h.adminProject)
 	handle("PUT /api/v1/admin/projects/{project}", h.adminMapProject)
 	handle("GET /api/v1/projects", h.listProjects)

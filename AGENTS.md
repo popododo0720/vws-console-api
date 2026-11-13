@@ -183,6 +183,12 @@ change both files together.
 
 ## Working here
 
+`GET /api/v1/admin/projects` requires root and lists only stored mappings in
+project order, with array fields encoded as arrays. Undecodable records are
+skipped with a count-only warning. Enforced by `TestAdminProjectsListsOnlyStoredMappings`,
+`TestAdminProjectsSkipsUndecodableRecords`, `TestAdminRoutesRequireRoot` and
+`storetest.Run`'s project list group.
+
 - Write short declarative sentences, make a minimal diff, and prove with
   real artifacts. Never use Cursor cloud agents.
 - One issue is one branch from `main` and one PR. Commits are atomic and do

@@ -56,6 +56,7 @@ func routeAction(pattern string) (authorization, bool) {
 		"PATCH /api/v1/admin/aws-accounts/{id}":     nil,
 		"DELETE /api/v1/admin/aws-accounts/{id}":    nil,
 		"GET /api/v1/admin/permissions":             nil,
+		"GET /api/v1/admin/projects":                nil,
 		"GET /api/v1/admin/projects/{project}":      nil,
 		"PUT /api/v1/admin/projects/{project}":      nil,
 		"GET /api/v1/projects":                      listProjectsAction,

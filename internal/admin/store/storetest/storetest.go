@@ -39,9 +39,47 @@ func Run(t *testing.T, newBackend func(t *testing.T) store.Backend) {
 	t.Run("lifecycle", func(t *testing.T) { lifecycle(t, newBackend(t)) })
 	t.Run("one writer wins", func(t *testing.T) { oneWriterWins(t, newBackend(t)) })
 	t.Run("project pool claims", func(t *testing.T) { projectClaims(t, newBackend(t)) })
+	t.Run("project list", func(t *testing.T) { projectList(t, newBackend(t)) })
 	t.Run("project concurrency", func(t *testing.T) { projectConcurrency(t, newBackend(t)) })
 	t.Run("project interrupted write", func(t *testing.T) { projectInterruptedWrite(t, newBackend(t)) })
 	t.Run("project transaction limit", func(t *testing.T) { projectTransactionLimit(t, newBackend(t)) })
+}
+
+func projectList(t *testing.T, b store.Backend) {
+	ctx := t.Context()
+	projects := store.New(b).Projects()
+	items, skipped, err := projects.List(ctx)
+	if err != nil || items == nil || len(items) != 0 || len(skipped) != 0 {
+		t.Fatalf("empty list: %+v %+v %v", items, skipped, err)
+	}
+	second, err := projects.Put(ctx, store.Project{
+		Project:     "222222222222",
+		Pools:       []store.ProjectPool{{Region: "pve-test-1", Pool: "shared"}},
+		AWSAccounts: []string{"333333333333"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	version, err := b.Create(ctx, "projects/111111111111", []byte(`{"project":"111111111111"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.Create(ctx, "projects/corrupt", []byte("{")); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		items, skipped, err = store.New(b).Projects().List(ctx)
+		if err != nil || len(items) != 2 || len(skipped) != 1 || skipped[0].Key != "projects/corrupt" {
+			t.Fatalf("list mappings without pool claims: %+v %+v %v", items, skipped, err)
+		}
+		if items[0].Project != "111111111111" || items[0].Version != version ||
+			items[0].Pools == nil || len(items[0].Pools) != 0 ||
+			items[0].AWSAccounts == nil || len(items[0].AWSAccounts) != 0 ||
+			items[1].Project != second.Project || items[1].Version != second.Version ||
+			!slices.Equal(items[1].Pools, second.Pools) || !slices.Equal(items[1].AWSAccounts, second.AWSAccounts) {
+			t.Fatalf("sorted mappings after registry recreation: %+v", items)
+		}
+	}
 }
 
 func projectTransactionLimit(t *testing.T, b store.Backend) {
