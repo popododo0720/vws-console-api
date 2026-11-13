@@ -26,6 +26,7 @@ import (
 	"github.com/popododo0720/vws-lib/obs/report"
 
 	"github.com/popododo0720/vws-console-api/internal/backend/proxmox"
+	"github.com/popododo0720/vws-console-api/internal/resource"
 	"github.com/popododo0720/vws-console-api/internal/server"
 	"github.com/popododo0720/vws-console-api/internal/surface/regionapi"
 )
@@ -271,6 +272,9 @@ func finalizeLaunches(
 				continue
 			}
 			if err := finalize(ctx, fence); err != nil && ctx.Err() == nil {
+				if resource.IsUnsupported(resource.AsError(err)) {
+					return
+				}
 				_ = report.Error(ctx, fmt.Errorf("finalize launches: %w", err)) //nolint:errcheck // reported; next tick resumes
 			}
 		}
