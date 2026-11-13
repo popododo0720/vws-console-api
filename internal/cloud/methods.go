@@ -80,18 +80,6 @@ func (s *Service) TerminateInstances(ctx context.Context, c resource.Caller,
 	return mutate(ctx, s, c, token, req, s.backends.Compute.TerminateInstances)
 }
 
-// CreateVolume accepts a blank volume and returns the operation.
-func (s *Service) CreateVolume(ctx context.Context, c resource.Caller,
-	token resource.ClientToken, req resource.CreateVolumeRequest,
-) (acc resource.Accepted[resource.Volume], err error) {
-	defer s.startMutation(&ctx, c, req)(ctx, &acc.Operation, &err)
-	token, err = fillToken(token)
-	if err != nil {
-		return resource.Accepted[resource.Volume]{}, err
-	}
-	return mutate(ctx, s, c, token, req, s.backends.Compute.CreateVolume)
-}
-
 // AttachVolume accepts an attachment and returns the operation.
 func (s *Service) AttachVolume(ctx context.Context, c resource.Caller,
 	token resource.ClientToken, req resource.AttachVolumeRequest,

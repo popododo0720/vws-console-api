@@ -73,9 +73,11 @@ func (a AllSupported) RegionCapabilities(_ context.Context, region string) (reso
 		})
 	}
 	return resource.RegionCapabilities{
-		Region:        region,
-		Kind:          a.Kind,
-		Zones:         []resource.RegionZone{},
+		Region: region,
+		Kind:   a.Kind,
+		Zones: []resource.RegionZone{{
+			ZoneName: resource.ZoneName, ZoneID: resource.ZoneName, State: "available",
+		}},
 		Actions:       actions,
 		InstanceTypes: types,
 	}, nil

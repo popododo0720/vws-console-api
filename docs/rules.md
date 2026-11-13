@@ -177,6 +177,15 @@ it. When you add or change a rule, change its row here and its line in
 | Proxmox instance and volume tag writes check every target and resulting tag budget before writing, preserve operator tags, system tags and description text, and reject aws:/vws:/vws. keys. Every config PUT carries its read digest; a checksum conflict rereads and recomputes once, then returns IncorrectState. Instance overflow uses the vws:tags description block under 8192 bytes. Volume tags remain inline vws.vt tags, limited to 128 encoded characters. Retrying across backend recreation retains tag values and the synchronous operation ID. | `TestTagWritesRoundTripRetryRestart`, `TestTagWritesRejectReservedAndBoundary`, `TestTagWritesDigestConflict`, `TestMutationMethodsRejectOtherPools` |
 | The repo is English only (see "English only"). Hangul is allowed only in files `.github/english-allowlist` lists with a reason (today: Unicode tag test data). | `scripts/check-english.sh` (CI job `english`) |
 
+CreateVolume validates availabilityZone against the caller region's capability
+document before backend dispatch. An omitted zone uses the first declared zone.
+A document with no zones returns a typed availabilityZone error; the fake
+declares its legacy zone explicitly. A foreign zone or unreadable document
+creates nothing. Resource normalization checks volume shape; regional
+zone membership belongs to the kernel. Enforced by
+`TestCreateVolumeUsesRegionalZones`, `TestCreateVolumeRefusesUnreadableZones` and
+`TestCreateVolumeRefusesEmptyZones`.
+
 ## Adding a long-running action (moved from AGENTS.md)
 
 1. Add the `Action` constant in `internal/resource`, plus its request type
