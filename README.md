@@ -13,6 +13,24 @@ finish before the response.
 The console JSON is the resource model. `instanceId`, `pending`, and `running`
 are the same strings on the query surface.
 
+`GET /api/v1/instances` returns instance rows in `items`;
+`GET /api/v1/instances/{id}` returns one row. The console instance JSON includes:
+
+| Field | Meaning |
+| --- | --- |
+| `instanceId` | The instance's EC2 ID. |
+| `region` | The origin region. |
+| `state` | The EC2 lifecycle state, such as `running` or `stopped`. |
+| `instanceType` | The region's instance type name. |
+| `availabilityZone` | The instance's availability zone. |
+| `nodeStatus` | Proxmox only: `online` or `unknown` when its node is offline. Omitted for AWS. |
+
+An offline Proxmox instance keeps the last successfully read row and EC2 state
+in the region daemon's memory, with `nodeStatus: "unknown"`. Live pool membership
+still controls visibility, and mutations are refused as `Unavailable` before
+any PVE write. Nothing is persisted. After a daemon restart, an offline VM
+without a snapshot is omitted until its node returns.
+
 ## Run
 
 ```sh

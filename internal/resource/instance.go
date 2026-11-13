@@ -124,6 +124,7 @@ type Instance struct {
 	ReservationID ReservationID `json:"reservationId"`
 	OwnerID       AccountID     `json:"ownerId"`
 	State         InstanceState `json:"state"`
+	NodeStatus    string        `json:"nodeStatus,omitempty"`
 	StateReason   StateReason   `json:"stateReason,omitzero"`
 	ImageID       ImageID       `json:"imageId"`
 	InstanceType  string        `json:"instanceType"`

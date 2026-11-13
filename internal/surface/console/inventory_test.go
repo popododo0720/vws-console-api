@@ -180,6 +180,81 @@ func TestConsoleInventoryMetadata(t *testing.T) {
 	}
 }
 
+func TestConsoleInstanceNodeStatus(t *testing.T) {
+	id, err := resource.Parse[resource.InstanceID]("i-0123456789abcdef0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	reservation, err := resource.Parse[resource.ReservationID]("r-0123456789abcdef0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	image, err := resource.Parse[resource.ImageID]("ami-0123456789abcdef0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		region, status string
+	}{
+		{"pve-a-1", "online"},
+		{"pve-a-1", "unknown"},
+		{"us-east-1", ""},
+	} {
+		t.Run(tc.region+tc.status, func(t *testing.T) {
+			set, err := regionclient.New(inventoryTransport(func(
+				_ context.Context, _, method string, s backend.Scope, _, dst any,
+			) error {
+				if method == "DescribeAddresses" {
+					return nil
+				}
+				if method != "DescribeInstances" {
+					t.Fatalf("unexpected method %s", method)
+				}
+				wire, err := json.Marshal(resource.Page[resource.Instance]{Items: []resource.Instance{{
+					ID: id, ReservationID: reservation, ImageID: image,
+					OwnerID: s.Account, State: resource.InstanceRunning, NodeStatus: tc.status,
+				}}})
+				if err != nil {
+					return err
+				}
+				return json.Unmarshal(wire, dst)
+			}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			catalog := backend.NewStaticRegions([]backend.ProxmoxRegion{{Name: "pve-a-1"}},
+				[]backend.AWSAccount{{ID: "123456789012", AllowedRegions: []string{"us-east-1"}}})
+			h := inventoryHandler(t, set, catalog)
+			for _, route := range []string{"instances", "instances/" + id.String()} {
+				rec := inventoryGET(t, h, route, tc.region)
+				if rec.Code != http.StatusOK {
+					t.Fatalf("%s: %d %s", route, rec.Code, rec.Body)
+				}
+				var item map[string]json.RawMessage
+				if route == "instances" {
+					var page struct {
+						Items []map[string]json.RawMessage `json:"items"`
+					}
+					if err := json.Unmarshal(rec.Body.Bytes(), &page); err != nil || len(page.Items) != 1 {
+						t.Fatalf("list: %s, %v", rec.Body, err)
+					}
+					item = page.Items[0]
+				} else if err := json.Unmarshal(rec.Body.Bytes(), &item); err != nil {
+					t.Fatal(err)
+				}
+				raw, present := item["nodeStatus"]
+				if tc.status == "" {
+					if present {
+						t.Fatalf("AWS nodeStatus must be omitted: %s", rec.Body)
+					}
+				} else if string(raw) != `"`+tc.status+`"` {
+					t.Fatalf("nodeStatus = %s; want %q", raw, tc.status)
+				}
+			}
+		})
+	}
+}
+
 func TestFakeInventoryHasNoPartialOrStale(t *testing.T) {
 	h := inventoryHandler(t, fake.New(fake.Options{}).Set(), backend.DefaultRegions())
 	for _, region := range []string{"", "all"} {

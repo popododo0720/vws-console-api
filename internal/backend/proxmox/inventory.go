@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"maps"
 	"slices"
 	"strconv"
 	"strings"
@@ -15,6 +16,11 @@ import (
 )
 
 type inventoryVM struct{ pveclient.ClusterResource }
+
+type instanceSnapshot struct {
+	pool     string
+	instance resource.Instance
+}
 
 func (vm inventoryVM) Identity() string { return vm.ID }
 
@@ -49,14 +55,25 @@ func (b *Backend) poolVMs(ctx context.Context, s backend.Scope) ([]inventoryVM, 
 		return nil, fmt.Errorf("proxmox: list VM inventory: %w", err)
 	}
 	var visible []inventoryVM
+	live := map[int]string{}
 	for _, vm := range rows {
 		if vm.Type != "qemu" || vm.Template == 1 {
 			continue
+		}
+		if !slices.Contains(strings.Split(vm.Tags, ";"), "vws.holder") {
+			live[vm.VMID] = vm.Pool
 		}
 		if b.ownsPool(s, vm.Pool) {
 			visible = append(visible, inventoryVM{vm})
 		}
 	}
+	b.instanceMu.Lock()
+	for vmid, snapshot := range b.lastInstances {
+		if pool, ok := live[vmid]; !ok || pool != snapshot.pool {
+			delete(b.lastInstances, vmid)
+		}
+	}
+	b.instanceMu.Unlock()
 	return visible, nil
 }
 
@@ -133,6 +150,7 @@ func (b *Backend) instance(
 	}
 	inst := resource.Instance{
 		ID: id, ReservationID: reservation, ImageID: image, State: state, Tags: tags.User,
+		NodeStatus:   "online",
 		InstanceType: NearestInstanceType(cfg.Cores*cfg.Sockets, cfg.Memory),
 		Zone:         b.region + b.nodeLetter(ctx, vm.Node),
 	}
@@ -149,7 +167,7 @@ func (b *Backend) instance(
 	return inst, nil
 }
 
-// DescribeInstances reads the caller's current pool without a cross-call cache.
+// DescribeInstances checks the live pool and retains last-seen rows for offline nodes.
 func (b *Backend) DescribeInstances(
 	ctx context.Context, s backend.Scope, q resource.InstanceQuery,
 ) (resource.Page[resource.Instance], error) {
@@ -177,16 +195,40 @@ func (b *Backend) DescribeInstances(
 	found := map[resource.InstanceID]bool{}
 	var configError error
 	for _, vm := range page.Items {
-		cfg, err := b.client.VMConfig(ctx, pveclient.VM{Node: vm.Node, VMID: vm.VMID})
-		if err != nil {
-			configError = err
-		}
 		var inst resource.Instance
-		if err == nil {
-			if cfg.Template == 1 || slices.Contains(strings.Split(cfg.Tags, ";"), "vws.holder") {
+		var err error
+		if vm.Status == "unknown" {
+			b.instanceMu.Lock()
+			snapshot, ok := b.lastInstances[vm.VMID]
+			b.instanceMu.Unlock()
+			if !ok || snapshot.pool != vm.Pool {
+				configError = &resource.Error{Code: resource.CodeUnavailable, Message: "Proxmox node is offline"}
 				continue
 			}
-			inst, err = b.instance(ctx, ids, vm, cfg)
+			inst = snapshot.instance
+			inst.Tags = maps.Clone(inst.Tags)
+			inst.NodeStatus = "unknown"
+		} else {
+			cfg, readErr := b.client.VMConfig(ctx, pveclient.VM{Node: vm.Node, VMID: vm.VMID})
+			err = readErr
+			if err != nil {
+				configError = err
+			} else {
+				if cfg.Template == 1 || slices.Contains(strings.Split(cfg.Tags, ";"), "vws.holder") {
+					continue
+				}
+				inst, err = b.instance(ctx, ids, vm, cfg)
+			}
+			if err == nil {
+				snapshot := inst
+				snapshot.Tags = maps.Clone(inst.Tags)
+				b.instanceMu.Lock()
+				if b.lastInstances == nil {
+					b.lastInstances = map[int]instanceSnapshot{}
+				}
+				b.lastInstances[vm.VMID] = instanceSnapshot{pool: vm.Pool, instance: snapshot}
+				b.instanceMu.Unlock()
+			}
 		}
 		if err != nil {
 			if ctx.Err() != nil {
