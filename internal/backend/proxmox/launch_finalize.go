@@ -115,6 +115,19 @@ finalize:
 			if err != nil {
 				return err
 			}
+			if b.cfg.LiveTests {
+				user, err := descriptionTags(cfg.Description)
+				if err != nil {
+					return err
+				}
+				live, err := liveRunTag(user)
+				if err != nil {
+					return err
+				}
+				if live != "" {
+					expected = append(expected, live)
+				}
+			}
 			tags := strings.FieldsFunc(cfg.Tags, func(r rune) bool { return r == ';' })
 			complete := true
 			for _, tag := range expected {
