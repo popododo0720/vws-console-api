@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"strings"
@@ -28,6 +29,7 @@ import (
 	"github.com/popododo0720/vws-console-api/internal/globalconfig"
 	"github.com/popododo0720/vws-console-api/internal/iam"
 	"github.com/popododo0720/vws-console-api/internal/resource"
+	"github.com/popododo0720/vws-console-api/internal/router"
 	"github.com/popododo0720/vws-console-api/internal/server"
 	"github.com/popododo0720/vws-console-api/internal/service"
 	"github.com/popododo0720/vws-console-api/internal/sigv4"
@@ -312,6 +314,14 @@ func run(ctx context.Context, args []string) (err error) {
 		return err
 	}
 	defer connection.Close()
+	forward := router.NewForwarder(*awsProxySocket, auditLogger)
+	defer forward.Close()
+	route := func(local, aws http.Handler, writeError func(http.ResponseWriter, *http.Request, error)) http.Handler {
+		if *backendKind != "regions" {
+			return local
+		}
+		return router.New(router.Config{Regions: regions, Local: local, AWS: aws, Error: writeError})
+	}
 	return server.Serve(ctx, server.Options{Logger: logger, OpsAddr: *opsAddr, Surfaces: []server.Surface{
 		{Name: "console", Addr: *consoleAddr, Handler: console.New(console.Config{
 			Service:        svc,
@@ -334,10 +344,18 @@ func run(ctx context.Context, args []string) (err error) {
 			RegionConnection:   testRegionConnection,
 			AccountConnection:  connection.TestConnection,
 		})},
-		{Name: "ec2", Addr: *ec2Addr, Handler: ec2query.New(ec2query.Config{
+		{Name: "ec2", Addr: *ec2Addr, Handler: route(ec2query.New(ec2query.Config{
 			Service: svc, Verifier: ec2, Authorizer: auth, Requests: requests,
-		})},
-		{Name: "s3", Addr: *s3Addr, Handler: s3rest.New(s3rest.Config{Service: svc, Verifier: s3, Authorizer: auth})},
+		}), ec2query.New(ec2query.Config{
+			Service: svc, Verifier: ec2, Authorizer: auth, Requests: requests,
+			Forward: forward.Handler(sigv4.ServiceEC2, ec2query.WriteError),
+		}), ec2query.WriteError)},
+		{Name: "s3", Addr: *s3Addr, Handler: route(
+			s3rest.New(s3rest.Config{Service: svc, Verifier: s3, Authorizer: auth}),
+			s3rest.New(s3rest.Config{
+				Service: svc, Verifier: s3, Authorizer: auth,
+				Forward: forward.Handler(sigv4.ServiceS3, s3rest.WriteError),
+			}), s3rest.WriteError)},
 		{Name: "iam", Addr: *iamAddr, Handler: iamquery.New(iamquery.Config{
 			Admin: admin, Authorizer: auth, IAM: verifier(sigv4.ServiceIAM), STS: verifier(sigv4.ServiceSTS),
 		})},
