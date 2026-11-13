@@ -221,6 +221,7 @@ type SDNVNet struct {
 	Zone  string `json:"zone"`
 	Tag   int    `json:"tag"`
 	Alias string `json:"alias"`
+	State string `json:"state"`
 }
 
 // SDNSubnet is one entry of GET /cluster/sdn/vnets/{vnet}/subnets.

@@ -99,7 +99,7 @@ func (b *Backend) bridges(ctx context.Context) ([]bridge, error) {
 	return out, nil
 }
 
-// DescribeVpcs lists the bridge inventory shared by the region's accounts.
+// DescribeVpcs combines shared bridges with pool-scoped SDN VNets.
 func (b *Backend) DescribeVpcs(
 	ctx context.Context, s backend.Scope, q resource.VpcQuery,
 ) (resource.Page[resource.Vpc], error) {
@@ -114,6 +114,15 @@ func (b *Backend) DescribeVpcs(
 				ID: row.VPC, OwnerID: s.Account, Cidr: row.CIDR,
 				State: resource.VpcAvailable, IsDefault: row.Iface == b.cfg.DefaultBridge,
 			})
+		}
+	}
+	vnets, err := b.sdnVPCs(ctx, s)
+	if err != nil {
+		return resource.Page[resource.Vpc]{}, err
+	}
+	for _, row := range vnets {
+		if row.row.State != "deleted" && (len(q.IDs) == 0 || slices.Contains(q.IDs, row.vpc.ID)) {
+			out = append(out, row.vpc)
 		}
 	}
 	if len(q.IDs) == 1 && len(out) == 0 {
@@ -140,6 +149,32 @@ func (b *Backend) DescribeSubnets(
 				ID: row.Subnet, OwnerID: s.Account, VpcID: row.VPC, Cidr: row.CIDR,
 				State: resource.SubnetAvailable, DefaultForAz: row.Iface == b.cfg.DefaultBridge,
 			})
+		}
+	}
+	vnets, err := b.sdnVPCs(ctx, s)
+	if err != nil {
+		return resource.Page[resource.Subnet]{}, err
+	}
+	ids, err := NewIDs(b.cluster)
+	if err != nil {
+		return resource.Page[resource.Subnet]{}, err
+	}
+	for _, vnet := range vnets {
+		if vnet.row.State == "deleted" {
+			continue
+		}
+		subnets, err := b.client.SDNSubnets(ctx, vnet.row.VNet)
+		if err != nil {
+			return resource.Page[resource.Subnet]{}, err
+		}
+		for _, subnet := range subnets {
+			id, err := ids.SDNSubnet(vnet.row.VNet, subnet.CIDR)
+			if err == nil && (len(q.IDs) == 0 || slices.Contains(q.IDs, id)) {
+				out = append(out, resource.Subnet{
+					ID: id, OwnerID: s.Account, VpcID: vnet.vpc.ID,
+					Cidr: subnet.CIDR, State: resource.SubnetAvailable,
+				})
+			}
 		}
 	}
 	if len(q.IDs) == 1 && len(out) == 0 {

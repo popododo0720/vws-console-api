@@ -36,6 +36,16 @@ Enforced by `TestManagedPoolChecks`, `TestRegionConnectionChecksMappedPools`,
 `TestReadinessSafeReasonRoundTrip`, `TestAdminHealthFailureMessagesAreSafe`,
 `TestNestedPoolReadsByQuery` and `TestImageInventoryPoolBoundaries`.
 
+Proxmox `sdn_zone` enables VPC create/delete with canonical IPv4 CIDRs.
+VNet aliases persist the owner pool, CIDR and mutation fingerprint; retries
+and backend restarts recover that identity. Unmarked VNets remain shared
+read-only inventory. SDN.Allocate is refused outside the configured zone,
+except on /sdn when fixed and foreign-zone probes prove it does not propagate.
+Subnet writes remain unsupported in this first part of #798.
+Enforced by `TestSDNVPCLifecycle`, `TestSDNInventoryAndBoundaries`,
+`TestStartupSDNScope`, `TestSDNCapabilities`, `TestCheckVPCCIDR`,
+`TestCheckSubnetCIDR` and `TestEC2QueryProxmoxRegionalLifecycle`.
+
 Configured Proxmox subnets with mode `static` or an empty mode allocate the
 lowest free IPv4 address in the inclusive `ip_range`, or the usable CIDR
 hosts excluding the gateway. Every allocation reads every QEMU VM's live

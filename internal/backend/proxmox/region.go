@@ -15,6 +15,7 @@ import (
 type RegionConfig struct {
 	Now             func() time.Time              `yaml:"-"`
 	ReadOnly        bool                          `yaml:"read_only"`
+	SDNZone         string                        `yaml:"sdn_zone"`
 	Storages        map[string]string             `yaml:"storages"`
 	Templates       TemplateConfig                `yaml:"templates"`
 	InstanceTypes   map[string]InstanceTypeConfig `yaml:"instance_types"`

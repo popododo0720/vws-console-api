@@ -45,6 +45,7 @@ func (f *Fake) routes() {
 	f.taskRoutes()
 	f.writeRoutes()
 	f.consoleRoutes()
+	f.sdnRoutes()
 	f.mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		msg := fmt.Sprintf("Method '%s %s' not implemented", r.Method, r.URL.Path)
 		reply(w, nil, &failure{http.StatusNotImplemented, msg})

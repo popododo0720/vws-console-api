@@ -21,6 +21,7 @@ type Backend struct {
 	zones           []backend.Zone
 	statusMu        sync.Mutex
 	volumeMu        sync.Mutex
+	sdnMu           sync.Mutex
 	launchMu        sync.Mutex
 	finalizeMu      sync.Mutex
 	instanceMu      sync.Mutex
@@ -81,9 +82,16 @@ func (b *Backend) RegionCapabilities(ctx context.Context, region string) (resour
 		doc.Actions[key] = resource.ActionCapability{State: resource.ActionSupported}
 	}
 	for _, key := range []string{"ec2:DescribeVpcs", "ec2:DescribeSubnets"} {
-		doc.Actions[key] = resource.ActionCapability{
-			State: resource.ActionPartial, ReasonCode: "BridgeInventory",
-			Reason: "bridge inventory; SDN inventory is not yet served",
+		doc.Actions[key] = resource.ActionCapability{State: resource.ActionSupported}
+	}
+	for _, key := range []string{"ec2:CreateVpc", "ec2:DeleteVpc"} {
+		if !b.cfg.ReadOnly {
+			doc.Actions[key] = resource.ActionCapability{
+				State: resource.ActionUnsupported, ReasonCode: "NoSDNZone", Reason: "no sdn_zone configured",
+			}
+			if b.cfg.SDNZone != "" {
+				doc.Actions[key] = resource.ActionCapability{State: resource.ActionSupported}
+			}
 		}
 	}
 	for _, key := range []string{"ec2:DescribeRouteTables", "ec2:DescribeVolumesModifications"} {
@@ -220,20 +228,6 @@ func (b *Backend) CreateSubnet(
 	ctx context.Context, m backend.Mutation, req resource.CreateSubnetRequest,
 ) (resource.Accepted[resource.Subnet], error) {
 	return resource.Accepted[resource.Subnet]{}, resource.Unsupported("CreateSubnet", "read-only")
-}
-
-// CreateVpc is unavailable in the phase-one backend.
-func (b *Backend) CreateVpc(
-	ctx context.Context, m backend.Mutation, req resource.CreateVpcRequest,
-) (resource.Accepted[resource.Vpc], error) {
-	return resource.Accepted[resource.Vpc]{}, resource.Unsupported("CreateVpc", "read-only")
-}
-
-// DeleteVpc is unavailable in the phase-one backend.
-func (b *Backend) DeleteVpc(
-	ctx context.Context, m backend.Mutation, req resource.DeleteVpcRequest,
-) (resource.Accepted[resource.Vpc], error) {
-	return resource.Accepted[resource.Vpc]{}, resource.Unsupported("DeleteVpc", "read-only")
 }
 
 // TagVpcs is unavailable in the phase-one backend.
