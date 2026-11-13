@@ -14,6 +14,7 @@ type Option func(*options)
 
 type options struct {
 	seeded bool
+	phase2 func(*testing.T) MutationWorld
 }
 
 // SeededInventory declares that every set the harness returns reopens the same
