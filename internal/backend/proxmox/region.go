@@ -6,12 +6,14 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"time"
 
 	"go.yaml.in/yaml/v3"
 )
 
 // RegionConfig holds node-local settings, never registration metadata or secrets.
 type RegionConfig struct {
+	Now             func() time.Time              `yaml:"-"`
 	ReadOnly        bool                          `yaml:"read_only"`
 	Storages        map[string]string             `yaml:"storages"`
 	Templates       TemplateConfig                `yaml:"templates"`

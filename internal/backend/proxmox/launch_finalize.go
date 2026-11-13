@@ -126,6 +126,10 @@ finalize:
 			if complete || slices.Contains(tags, LaunchFailureTag) {
 				return nil
 			}
+			if stage == 0 && b.launchExpired(marker) {
+				inventory.stale = true
+				return b.sweepLaunch(ctx, s, target, marker, expected, fence)
+			}
 			fields := url.Values{"tags": {strings.Join(tags, ";")}, "description": {cfg.Description}}
 			if stage == 0 {
 				fields, err = b.launchConfig(ctx, ids, marker, cfg)

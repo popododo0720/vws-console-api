@@ -36,6 +36,7 @@ type LaunchMarker struct {
 	DOT         []string
 	Attempt     int
 	IPFence     string
+	CreatedAt   int64
 }
 
 func (m LaunchMarker) line() (string, error) {
@@ -53,6 +54,9 @@ func (m LaunchMarker) line() (string, error) {
 	if m.IPFence != "" {
 		fields = append(fields, "ipfence="+m.IPFence)
 	}
+	if m.CreatedAt != 0 {
+		fields = append(fields, "created="+strconv.FormatInt(m.CreatedAt, 10))
+	}
 	return strings.Join(fields, " "), nil
 }
 
@@ -63,7 +67,7 @@ func (m LaunchMarker) validate() error {
 	if m.IPFence != "" && !launchHex(m.IPFence, 32) {
 		return fmt.Errorf("%w: launch IP fence", ErrInput)
 	}
-	if !launchHex(m.Key, 64) || !launchHex(m.Fingerprint, 64) ||
+	if m.CreatedAt < 0 || !launchHex(m.Key, 64) || !launchHex(m.Fingerprint, 64) ||
 		m.Count < 1 || m.Count > 10 || m.Index < 0 || m.Index >= m.Count || m.Attempt < 1 {
 		return fmt.Errorf("%w: launch marker identity or index", ErrInput)
 	}
@@ -186,6 +190,10 @@ func parseLaunchMarker(line string) (LaunchMarker, error) {
 	errs = append(errs, err)
 	m.Snippet, err = url.QueryUnescape(values["ud"])
 	errs = append(errs, err)
+	if created, exists := values["created"]; exists {
+		m.CreatedAt, err = strconv.ParseInt(created, 10, 64)
+		errs = append(errs, err)
+	}
 	for _, err := range errs {
 		if err != nil {
 			return LaunchMarker{}, fmt.Errorf("%w: invalid launch marker field", ErrInput)
