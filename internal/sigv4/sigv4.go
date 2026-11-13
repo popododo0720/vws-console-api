@@ -225,6 +225,9 @@ func NewVerifier(v Verifier) *Verifier {
 const maxQueryParams = 128
 
 func (v *Verifier) checkRegion(ctx context.Context, region string) error {
+	if v.Service == ServiceIAM || v.Service == ServiceSTS {
+		return nil
+	}
 	if v.Regions == nil {
 		return Reject(FailureMalformed, resource.Unauthenticated("credential scope rejected"))
 	}
@@ -316,6 +319,7 @@ func (v *Verifier) Verify(r *http.Request) (resource.Caller, error) {
 		return resource.Caller{}, err
 	}
 	r.Body = io.NopCloser(bytes.NewReader(body))
+	r.GetBody = func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(body)), nil }
 	r.ContentLength = int64(len(body))
 	sum := sha256.Sum256(body)
 	payloadHash := hex.EncodeToString(sum[:])
@@ -450,6 +454,30 @@ type authorization struct {
 	credential    string
 	signedHeaders []string
 	signature     string
+}
+
+// CredentialScope reads only Authorization. Its result is unverified routing input.
+func CredentialScope(header string) (string, Service, error) {
+	auth, err := parseAuthorization(header)
+	if err != nil {
+		return "", "", err
+	}
+	parts := strings.Split(auth.credential, "/")
+	if len(parts) != 5 || parts[0] == "" || len(parts[1]) != 8 || parts[2] == "" ||
+		len(parts[2]) > 63 || parts[4] != "aws4_request" {
+		return "", "", Reject(FailureMalformed, resource.Unauthenticated("credential scope rejected"))
+	}
+	for _, c := range parts[2] {
+		if c != '-' && (c < 'a' || c > 'z') && (c < '0' || c > '9') {
+			return "", "", Reject(FailureMalformed, resource.Unauthenticated("credential scope rejected"))
+		}
+	}
+	switch service := Service(parts[3]); service {
+	case ServiceEC2, ServiceS3, ServiceIAM, ServiceSTS:
+		return parts[2], service, nil
+	default:
+		return "", "", Reject(FailureMalformed, resource.Unauthenticated("credential scope rejected"))
+	}
 }
 
 func parseAuthorization(h string) (authorization, error) {

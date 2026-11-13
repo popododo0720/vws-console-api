@@ -30,6 +30,7 @@ import (
 	"github.com/popododo0720/vws-console-api/internal/cloud"
 	"github.com/popododo0720/vws-console-api/internal/iam"
 	"github.com/popododo0720/vws-console-api/internal/resource"
+	"github.com/popododo0720/vws-console-api/internal/sigv4"
 	"github.com/popododo0720/vws-console-api/internal/surface/console"
 	"github.com/popododo0720/vws-console-api/internal/surface/regionapi"
 )
@@ -155,11 +156,6 @@ func TestRegionsProcessInventoryAndRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { closeRegistry() })
-	if _, err := registry.Regions().Create(t.Context(), store.Region{
-		Name: "pve-test-1", RegionEndpoint: region.URL,
-	}); err != nil {
-		t.Fatal(err)
-	}
 	if _, err := registry.AWSAccounts().Create(t.Context(), store.AWSAccount{
 		ID: "987654321098", AllowedRegions: []string{"us-east-1"},
 	}); err != nil {
@@ -175,10 +171,59 @@ func TestRegionsProcessInventoryAndRestart(t *testing.T) {
 				"-default-region=pve-test-1", "-aws-proxy-socket="+socket))
 			close(done)
 		}()
-		if err := waitListening(ctx, []string{p.console, p.ops}, errc, done); err != nil {
+		if err := waitListening(ctx, []string{p.console, p.ops, p.ec2, p.s3}, errc, done); err != nil {
 			cancel()
 			t.Fatal(err)
 		}
+		signed := func(service sigv4.Service, name string, want int) {
+			t.Helper()
+			addr, path := p.s3, "/"
+			if service == sigv4.ServiceEC2 {
+				addr, path = p.ec2, "/?Action=DescribeInstances&Version=2016-11-15"
+			}
+			req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://"+addr+path, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := sigv4.Sign(req, sigv4.Credential{AccessKey: "AKIDEXAMPLE", Secret: "secret"},
+				service, name, time.Now()); err != nil {
+				t.Fatal(err)
+			}
+			res, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer res.Body.Close()
+			body, err := io.ReadAll(res.Body)
+			if err != nil || res.StatusCode != want {
+				t.Fatalf("signed %s/%s: %d %s %v", service, name, res.StatusCode, body, err)
+			}
+		}
+		before := pveCalls.Load()
+		for _, service := range []sigv4.Service{sigv4.ServiceEC2, sigv4.ServiceS3} {
+			want := http.StatusUnauthorized
+			if service == sigv4.ServiceS3 {
+				want = http.StatusBadRequest
+			}
+			signed(service, "pve-unknown-1", want)
+		}
+		if pveCalls.Load() != before {
+			t.Fatal("unknown credential region reached backend")
+		}
+		if attempt == 0 {
+			if _, err := registry.Regions().Create(t.Context(), store.Region{
+				Name: "pve-test-1", RegionEndpoint: region.URL,
+			}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		for _, service := range []sigv4.Service{sigv4.ServiceEC2, sigv4.ServiceS3} {
+			signed(service, "pve-test-1", http.StatusOK)
+		}
+		if pveCalls.Load() <= before {
+			t.Fatal("verified scope did not reach registered region")
+		}
+		signed(sigv4.ServiceEC2, "us-east-1", http.StatusOK)
 		call := func(path, name string, want int) string {
 			t.Helper()
 			req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://"+p.console+path, nil)

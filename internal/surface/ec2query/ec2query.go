@@ -36,11 +36,15 @@ type Config struct {
 	Authorizer iam.Authorizer
 	// Requests limits each account's calls per action. Nil limits nothing.
 	Requests *throttle.Limiter
+	// Forward receives only verified, authorized requests.
+	Forward func(http.ResponseWriter, *http.Request, resource.Caller, string)
 }
 
 // New returns the query handler.
 func New(cfg Config) http.Handler {
-	h := &handler{svc: cfg.Service, verifier: cfg.Verifier, authz: cfg.Authorizer, requests: cfg.Requests}
+	h := &handler{
+		svc: cfg.Service, verifier: cfg.Verifier, authz: cfg.Authorizer, requests: cfg.Requests, forward: cfg.Forward,
+	}
 	return http.HandlerFunc(h.serve)
 }
 
@@ -49,6 +53,7 @@ type handler struct {
 	verifier *sigv4.Verifier
 	authz    iam.Authorizer
 	requests *throttle.Limiter
+	forward  func(http.ResponseWriter, *http.Request, resource.Caller, string)
 }
 
 func (h *handler) serve(w http.ResponseWriter, r *http.Request) {
@@ -101,6 +106,10 @@ func (h *handler) serve(w http.ResponseWriter, r *http.Request) {
 	if err := iam.Check(r.Context(), h.authz, caller, "ec2:"+action, "*"); err != nil {
 		h.svc.AuditDenied(r.Context(), caller, "ec2:"+action, err)
 		writeErr(w, r, err)
+		return
+	}
+	if h.forward != nil {
+		h.forward(w, r, caller, action)
 		return
 	}
 	switch action {
@@ -1434,6 +1443,9 @@ func writeXML(w http.ResponseWriter, v any) {
 	}
 	server.RecordFailure(w, err)
 }
+
+// WriteError renders routing failures with the surface's existing error contract.
+func WriteError(w http.ResponseWriter, r *http.Request, err error) { writeErr(w, r, err) }
 
 func writeErr(w http.ResponseWriter, r *http.Request, err error) {
 	e := resource.AsError(err)
