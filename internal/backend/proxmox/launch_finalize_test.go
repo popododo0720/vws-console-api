@@ -3,6 +3,7 @@ package proxmox
 import (
 	"bytes"
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -30,7 +31,6 @@ func finalizeBackend(t *testing.T) (*launchWorld, backend.Mutation, resource.Run
 					"VM.Config.Network", "VM.Config.Options", "VM.Config.Disk", "VM.Config.HWType", "VM.PowerMgmt")
 			}
 		}
-		s.VMs[0].Config["smbios1"] += ",manufacturer=VWS"
 		s.VMs[0].Config["scsi0"] += ",cache=writeback"
 		s.VMs[0].Config["net0"] = "virtio=02:00:00:00:00:01,bridge=old,firewall=1"
 		s.Roles = append(s.Roles, pvefake.Role{ID: "Network", Privs: []string{"SDN.Use"}})
@@ -41,14 +41,7 @@ func finalizeBackend(t *testing.T) (*launchWorld, backend.Mutation, resource.Run
 	return w, m, req
 }
 
-func finalizePass(t *testing.T, b *Backend) error {
-	t.Helper()
-	finalizer, ok := any(b).(interface{ FinalizeLaunches(context.Context) error })
-	if !ok {
-		t.Fatal("backend cannot resume launch finalization")
-	}
-	return finalizer.FinalizeLaunches(t.Context())
-}
+func admitFinalize(context.Context) error { return nil }
 
 func launchVM(t *testing.T, w *launchWorld, index int) pveclient.VM {
 	t.Helper()
@@ -110,7 +103,7 @@ func TestFinalizeLaunchDoesNotBlockAccept(t *testing.T) {
 	finished, done := make(chan error, 1), make(chan struct{})
 	go func() {
 		defer close(done)
-		finished <- w.b.FinalizeLaunches(ctx)
+		finished <- w.b.FinalizeLaunches(ctx, admitFinalize)
 	}()
 	t.Cleanup(func() { cancel(); unblock(); <-done })
 	select {
@@ -137,7 +130,7 @@ func TestFinalizeLaunchDoesNotBlockAccept(t *testing.T) {
 		t.Fatalf("concurrent accept=%+v error=%v clones=%d", accepted, acceptErr, len(w.forms))
 	}
 	before := len(w.f.Requests())
-	if err := w.b.FinalizeLaunches(ctx); err != nil || len(w.f.Requests()) != before {
+	if err := w.b.FinalizeLaunches(ctx, admitFinalize); err != nil || len(w.f.Requests()) != before {
 		t.Fatalf("overlapping pass reached PVE: %v", err)
 	}
 	unblock()
@@ -148,6 +141,42 @@ func TestFinalizeLaunchDoesNotBlockAccept(t *testing.T) {
 	if err != nil || recovered.Operation.State != resource.OperationSucceeded ||
 		recovered.Instances[0] != first.Items[0].ID {
 		t.Fatalf("held launch did not complete: %+v %v", recovered, err)
+	}
+}
+
+func TestFinalizeLaunchFenceAndInventory(t *testing.T) {
+	for _, limit := range []int{-1, 0, 1, 2, 3} {
+		t.Run(strconv.Itoa(limit), func(t *testing.T) {
+			w, m, req := finalizeBackend(t)
+			req.Count = 3
+			if _, err := w.b.RunInstances(t.Context(), m, req); err != nil {
+				t.Fatal(err)
+			}
+			before, calls := len(w.f.Requests()), 0
+			err := w.b.FinalizeLaunches(t.Context(), func(context.Context) error {
+				calls++
+				if limit >= 0 && calls > limit {
+					return errors.New("leadership lost")
+				}
+				return nil
+			})
+			writes, inventories := 0, 0
+			for _, request := range w.f.Requests()[before:] {
+				if !strings.HasPrefix(request, "GET ") {
+					writes++
+				}
+				if strings.Contains(request, "/cluster/resources?type=vm") {
+					inventories++
+				}
+			}
+			want, wantCalls := req.Count*3, req.Count*3
+			if limit >= 0 {
+				want, wantCalls = limit, limit+1
+			}
+			if (err != nil) != (limit >= 0) || writes != want || calls != wantCalls || inventories > req.Count+1 {
+				t.Fatalf("fence=%v writes=%d calls=%d inventories=%d", err, writes, calls, inventories)
+			}
+		})
 	}
 }
 
@@ -189,7 +218,7 @@ func TestFinalizeLaunchCrashWindows(t *testing.T) {
 					return false
 				}
 				w.f.FailNext("qmstart", "injected start failure")
-				if err := finalizePass(t, w.b); err == nil {
+				if err := w.b.FinalizeLaunches(t.Context(), admitFinalize); err == nil {
 					t.Fatal("start failure was ignored")
 				}
 				cfg, err := w.b.client.VMConfig(t.Context(), launchVM(t, w, 0))
@@ -207,7 +236,7 @@ func TestFinalizeLaunchCrashWindows(t *testing.T) {
 					}
 					return false
 				}
-				if err := finalizePass(t, w.b); err == nil {
+				if err := w.b.FinalizeLaunches(t.Context(), admitFinalize); err == nil {
 					t.Fatal("completion write failure was ignored")
 				}
 				w.intercept = nil
@@ -216,7 +245,7 @@ func TestFinalizeLaunchCrashWindows(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := finalizePass(t, w.b); err != nil {
+			if err := w.b.FinalizeLaunches(t.Context(), admitFinalize); err != nil {
 				t.Fatal(err)
 			}
 			assertFinalized(t, w, m, accepted)
@@ -229,7 +258,7 @@ func TestFinalizeLaunchCrashWindows(t *testing.T) {
 				t.Fatalf("retry=%+v error=%v clones=%d", replayed, err, len(w.forms))
 			}
 			before := len(w.f.RequestMethods())
-			if err := finalizePass(t, w.b); err != nil {
+			if err := w.b.FinalizeLaunches(t.Context(), admitFinalize); err != nil {
 				t.Fatal(err)
 			}
 			for _, method := range w.f.RequestMethods()[before:] {
@@ -291,7 +320,7 @@ func TestFinalizeLaunchBoundaries(t *testing.T) {
 			slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
 			defer slog.SetDefault(old)
 			before := len(w.f.Requests())
-			err = finalizePass(t, w.b)
+			err = w.b.FinalizeLaunches(t.Context(), admitFinalize)
 			if boundary == "read only" {
 				if !resource.IsUnsupported(resource.AsError(err)) {
 					t.Fatalf("read-only finalize=%v", err)
@@ -314,7 +343,7 @@ func TestFinalizeLaunchBoundaries(t *testing.T) {
 				if err := w.f.SetTaskDelay(0); err != nil {
 					t.Fatal(err)
 				}
-				if err := finalizePass(t, w.b); err != nil {
+				if err := w.b.FinalizeLaunches(t.Context(), admitFinalize); err != nil {
 					t.Fatal(err)
 				}
 				assertFinalized(t, w, m, accepted)
@@ -368,13 +397,13 @@ func TestFinalizeLaunchConfigCAS(t *testing.T) {
 					}
 					return false
 				}
-				err = finalizePass(t, w.b)
+				err = w.b.FinalizeLaunches(t.Context(), admitFinalize)
 				if writes != 2 || (err != nil) != (conflicts == 2) {
 					t.Fatalf("CAS attempts=%d error=%v", writes, err)
 				}
 				w.intercept = nil
 				if conflicts == 2 {
-					if err := finalizePass(t, w.b); err != nil {
+					if err := w.b.FinalizeLaunches(t.Context(), admitFinalize); err != nil {
 						t.Fatal(err)
 					}
 				}

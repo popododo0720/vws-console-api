@@ -27,7 +27,7 @@ func TestLaunchFinalizerLeaderGate(t *testing.T) {
 			default:
 				return "", nil
 			}
-		}, func(context.Context) error {
+		}, func(context.Context, func(context.Context) error) error {
 			if calls < 3 {
 				t.Error("finalized without local leadership")
 			}

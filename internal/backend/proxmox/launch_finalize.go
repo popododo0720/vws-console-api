@@ -17,7 +17,7 @@ import (
 )
 
 // FinalizeLaunches resumes unfinished clones in the managed pools.
-func (b *Backend) FinalizeLaunches(ctx context.Context) error {
+func (b *Backend) FinalizeLaunches(ctx context.Context, fence func(context.Context) error) error {
 	if b.cfg.ReadOnly {
 		return resource.Unsupported("FinalizeLaunches", "read-only")
 	}
@@ -26,6 +26,11 @@ func (b *Backend) FinalizeLaunches(ctx context.Context) error {
 	}
 	defer b.finalizeMu.Unlock()
 	var failures []error
+	var fenceErr error
+	checkFence := func(ctx context.Context) error {
+		fenceErr = fence(ctx)
+		return fenceErr
+	}
 	for _, account := range slices.Sorted(maps.Keys(b.cfg.Pools)) {
 		s := backend.Scope{Pool: b.cfg.Pools[account]}
 		// Pool keys may be operator labels; those launches carry their account in the marker.
@@ -45,10 +50,10 @@ func (b *Backend) FinalizeLaunches(ctx context.Context) error {
 			if vm.Pool != s.Pool || vm.Status == "unknown" {
 				continue
 			}
-			if err := b.finalizeLaunch(ctx, s, vm); err != nil {
+			if err := b.finalizeLaunch(ctx, s, vm, checkFence); err != nil {
 				failures = append(failures, fmt.Errorf("proxmox: finalize VM %d: %w", vm.VMID, err))
 			}
-			if ctx.Err() != nil {
+			if ctx.Err() != nil || fenceErr != nil {
 				return errors.Join(failures...)
 			}
 		}
@@ -56,7 +61,9 @@ func (b *Backend) FinalizeLaunches(ctx context.Context) error {
 	return errors.Join(failures...)
 }
 
-func (b *Backend) finalizeLaunch(ctx context.Context, s backend.Scope, vm inventoryVM) error {
+func (b *Backend) finalizeLaunch(
+	ctx context.Context, s backend.Scope, vm inventoryVM, fence func(context.Context) error,
+) error {
 	target := pveclient.VM{Node: vm.Node, VMID: vm.VMID}
 	ids, err := NewIDs(b.cluster)
 	if err != nil {
@@ -65,14 +72,16 @@ func (b *Backend) finalizeLaunch(ctx context.Context, s backend.Scope, vm invent
 finalize:
 	for stage := range 2 {
 		for attempt := range 2 {
-			current, err := b.visibleVMs(ctx, s)
-			if err != nil {
-				return err
-			}
-			if !slices.ContainsFunc(current, func(v inventoryVM) bool {
-				return v.VMID == vm.VMID && v.Node == vm.Node && v.Pool == s.Pool && v.Status != "unknown"
-			}) {
-				return resource.Denied("proxmox: finalize VM left its pool or went offline")
+			if attempt > 0 {
+				current, err := b.visibleVMs(ctx, s)
+				if err != nil {
+					return err
+				}
+				if !slices.ContainsFunc(current, func(v inventoryVM) bool {
+					return v.VMID == vm.VMID && v.Node == vm.Node && v.Pool == s.Pool && v.Status != "unknown"
+				}) {
+					return resource.Denied("proxmox: finalize VM left its pool or went offline")
+				}
 			}
 			cfg, err := b.client.VMConfig(ctx, target)
 			if err != nil {
@@ -107,18 +116,20 @@ finalize:
 			if complete || slices.Contains(tags, LaunchFailureTag) {
 				return nil
 			}
+			fields := url.Values{"tags": {strings.Join(tags, ";")}, "description": {cfg.Description}}
 			if stage == 0 {
-				fields, configErr := b.launchConfig(ctx, ids, marker, cfg)
-				if configErr != nil {
-					return configErr
+				fields, err = b.launchConfig(ctx, ids, marker, cfg)
+				if err != nil {
+					return err
 				}
 				if len(fields) == 0 {
 					break
 				}
-				err = b.client.WriteConfig(ctx, target, cfg.Digest, fields)
-			} else {
-				err = b.client.WriteConfigTags(ctx, target, cfg.Digest, strings.Join(tags, ";"), cfg.Description)
 			}
+			if err := fence(ctx); err != nil {
+				return err
+			}
+			err = b.client.WriteConfig(ctx, target, cfg.Digest, fields)
 			if pveclient.DigestConflict(err) {
 				if attempt == 0 {
 					continue
@@ -155,6 +166,9 @@ finalize:
 			if len(rows) > 0 && rows[0].Status == "RUNNING" {
 				upid = rows[0].UPID
 			} else {
+				if err := fence(ctx); err != nil {
+					return err
+				}
 				upid, err = b.client.Power(ctx, target, "start", 0)
 			}
 			if err == nil {

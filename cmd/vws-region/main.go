@@ -241,17 +241,24 @@ func run(ctx context.Context, args []string) (err error) {
 
 func finalizeLaunches(
 	ctx context.Context, admit func(context.Context) (string, error),
-	finalize func(context.Context) error, ticks <-chan time.Time,
+	finalize func(context.Context, func(context.Context) error) error, ticks <-chan time.Time,
 ) {
+	fence := func(ctx context.Context) error {
+		peer, err := admit(ctx)
+		if peer != "" {
+			return errors.New("finalize requires local leadership")
+		}
+		return err
+	}
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticks:
-			if peer, err := admit(ctx); err != nil || peer != "" {
+			if err := fence(ctx); err != nil {
 				continue
 			}
-			if err := finalize(ctx); err != nil && ctx.Err() == nil {
+			if err := finalize(ctx, fence); err != nil && ctx.Err() == nil {
 				_ = report.Error(ctx, fmt.Errorf("finalize launches: %w", err)) //nolint:errcheck // reported; next tick resumes
 			}
 		}
