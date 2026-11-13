@@ -24,6 +24,28 @@ type mutationAudit struct {
 	resolved    bool
 }
 
+// AuditDenied records an IAM refusal before dispatch without contacting a backend.
+func (s *Service) AuditDenied(ctx context.Context, c resource.Caller, action string, result error) {
+	if s.audit == nil || resource.CodeOf(result) != resource.CodePermissionDenied {
+		return
+	}
+	start := time.Now()
+	state := &mutationAudit{destination: audit.Unknown, resolved: true}
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	regions, err := s.registeredRegions(ctx, c)
+	if err == nil {
+		switch regions[s.capabilityRegion(c.Region)].Kind {
+		case resource.RegionKindProxmox:
+			state.destination = audit.PVE
+		case resource.RegionKindAWS:
+			state.destination = audit.AWS
+		}
+	}
+	service, name, _ := strings.Cut(action, ":")
+	s.recordMutation(ctx, state, c, audit.Entry{Service: service, Action: name}, start, nil, &result)
+}
+
 func (s *Service) startMutation(ctx *context.Context, c resource.Caller, req any,
 ) func(context.Context, *resource.Operation, *error) {
 	start := time.Now()
