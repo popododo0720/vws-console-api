@@ -14,6 +14,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"go.yaml.in/yaml/v3"
 )
 
 const (
@@ -89,13 +91,18 @@ var ownerRules = []struct {
 			vwsProto,
 			"cloud.google.com/go/longrunning",
 		),
-		[]string{"internal/backend/grpcclient"},
-		"protobuf and gRPC types stay inside internal/backend/grpcclient",
+		[]string{"internal/backend/grpcclient/iamclient"},
+		"protobuf and gRPC types stay inside internal/backend/grpcclient/iamclient",
+	},
+	{
+		hasPrefix(vwsProto+"/gen/go/vws/compute", vwsProto+"/gen/go/vws/storage", vwsProto+"/gen/go/vws/network"),
+		nil,
+		"compute, storage and network gRPC services are retired",
 	},
 	{
 		hasPrefix("k8s.io", "sigs.k8s.io"),
-		[]string{"internal/backend/launch/kubestore"},
-		"Kubernetes types stay inside internal/backend/launch/kubestore",
+		nil,
+		"Kubernetes imports are forbidden",
 	},
 	{
 		func(imp string) bool {
@@ -191,10 +198,17 @@ func TestArchitectureRules(t *testing.T) {
 		"internal/widget/proto.go": `package widget; import _ "` + vwsProto + `/gen/go/vws/common/v1"`,
 		"internal/widget/longrunning.go": `package widget; import _ "` +
 			`cloud.google.com/go/longrunning/autogen/longrunningpb"`,
-		"internal/backend/grpcclient/ok.go":       `package grpcclient; import _ "google.golang.org/grpc"`,
-		"internal/widget/kube.go":                 `package widget; import _ "k8s.io/client-go/kubernetes"`,
-		"internal/widget/runtime.go":              `package widget; import _ "sigs.k8s.io/controller-runtime/pkg/client"`,
-		"internal/backend/launch/kubestore/ok.go": `package kubestore; import _ "k8s.io/api/core/v1"`,
+		"internal/backend/grpcclient/iamclient/ok.go": `package iamclient; import _ "google.golang.org/grpc"`,
+		"internal/backend/grpcclient/bad.go":          `package grpcclient; import _ "google.golang.org/grpc"`,
+		"internal/backend/grpcclient/iamclient/compute.go": `package iamclient; import _ "` +
+			vwsProto + `/gen/go/vws/compute/v1"`,
+		"internal/backend/grpcclient/iamclient/storage.go": `package iamclient; import _ "` +
+			vwsProto + `/gen/go/vws/storage/v1"`,
+		"internal/backend/grpcclient/iamclient/network.go": `package iamclient; import _ "` +
+			vwsProto + `/gen/go/vws/network/v1"`,
+		"internal/widget/kube.go":                  `package widget; import _ "k8s.io/client-go/kubernetes"`,
+		"internal/widget/runtime.go":               `package widget; import _ "sigs.k8s.io/controller-runtime/pkg/client"`,
+		"internal/backend/launch/kubestore/bad.go": `package kubestore; import _ "k8s.io/api/core/v1"`,
 		"internal/backend/grpcclient/pve.go": `package grpcclient; import _ "` +
 			module + `/internal/backend/proxmox/pveclient"`,
 		"internal/backend/proxmox/ok.go": `package proxmox; import _ "` +
@@ -215,6 +229,15 @@ func TestArchitectureRules(t *testing.T) {
 		writeFile(t, filepath.Join(probe, rel), src)
 	}
 	want := []string{
+		"internal/backend/grpcclient imports google.golang.org/grpc: " +
+			"protobuf and gRPC types stay inside internal/backend/grpcclient/iamclient",
+		"internal/backend/grpcclient/iamclient imports " + vwsProto + "/gen/go/vws/compute/v1: " +
+			"compute, storage and network gRPC services are retired",
+		"internal/backend/grpcclient/iamclient imports " + vwsProto + "/gen/go/vws/storage/v1: " +
+			"compute, storage and network gRPC services are retired",
+		"internal/backend/grpcclient/iamclient imports " + vwsProto + "/gen/go/vws/network/v1: " +
+			"compute, storage and network gRPC services are retired",
+		"internal/backend/launch/kubestore imports k8s.io/api/core/v1: Kubernetes imports are forbidden",
 		"cmd/pvefake imports " + module + "/internal/backend/proxmox/pveclient: " +
 			"PVE API types stay inside internal/backend/proxmox",
 		"internal/widget imports " + module + "/internal/backend/proxmox/pveclient/pvefake: " +
@@ -238,21 +261,21 @@ func TestArchitectureRules(t *testing.T) {
 		"internal/surface/regionapi/nested imports " + module + "/internal/backend: " +
 			"surfaces reach backends only through internal/cloud",
 		"internal/widget imports cloud.google.com/go/longrunning/autogen/longrunningpb: " +
-			"protobuf and gRPC types stay inside internal/backend/grpcclient",
+			"protobuf and gRPC types stay inside internal/backend/grpcclient/iamclient",
 		"internal/widget imports " + vwsProto + "/gen/go/vws/common/v1: " +
-			"protobuf and gRPC types stay inside internal/backend/grpcclient",
+			"protobuf and gRPC types stay inside internal/backend/grpcclient/iamclient",
 		"internal/widget imports google.golang.org/genproto/googleapis/rpc/errdetails: " +
-			"protobuf and gRPC types stay inside internal/backend/grpcclient",
+			"protobuf and gRPC types stay inside internal/backend/grpcclient/iamclient",
 		"internal/widget imports google.golang.org/grpc: " +
-			"protobuf and gRPC types stay inside internal/backend/grpcclient",
+			"protobuf and gRPC types stay inside internal/backend/grpcclient/iamclient",
 		"internal/widget imports google.golang.org/protobuf/proto: " +
-			"protobuf and gRPC types stay inside internal/backend/grpcclient",
+			"protobuf and gRPC types stay inside internal/backend/grpcclient/iamclient",
 		"internal/widget imports go.etcd.io/etcd/client/v3: " +
 			"etcd types stay inside internal/admin/store/etcdstore",
 		"internal/widget imports k8s.io/client-go/kubernetes: " +
-			"Kubernetes types stay inside internal/backend/launch/kubestore",
+			"Kubernetes imports are forbidden",
 		"internal/widget imports sigs.k8s.io/controller-runtime/pkg/client: " +
-			"Kubernetes types stay inside internal/backend/launch/kubestore",
+			"Kubernetes imports are forbidden",
 	}
 	sort.Strings(want)
 	if got := archViolations(loadProduction(t, probe)); !reflect.DeepEqual(got, want) {
@@ -287,6 +310,42 @@ func TestArchitectureRules(t *testing.T) {
 	}
 	for _, v := range archViolations(loadProduction(t, root)) {
 		t.Error(v)
+	}
+}
+
+func TestDepguardForbidsKubernetesEverywhere(t *testing.T) {
+	var cfg struct {
+		Linters struct {
+			Settings struct {
+				Depguard struct {
+					Rules map[string]struct {
+						Files []string `yaml:"files"`
+						Deny  []struct {
+							Pkg string `yaml:"pkg"`
+						} `yaml:"deny"`
+					} `yaml:"rules"`
+				} `yaml:"depguard"`
+			} `yaml:"settings"`
+		} `yaml:"linters"`
+	}
+	data, err := os.ReadFile(filepath.Join(repoRoot(t), ".golangci.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	rule := cfg.Linters.Settings.Depguard.Rules["no-kubernetes"]
+	if !reflect.DeepEqual(rule.Files, []string{"$all"}) {
+		t.Fatalf("Kubernetes depguard must cover every file without exceptions: %v", rule.Files)
+	}
+	var denied []string
+	for _, entry := range rule.Deny {
+		denied = append(denied, entry.Pkg)
+	}
+	sort.Strings(denied)
+	if !reflect.DeepEqual(denied, []string{"k8s.io", "sigs.k8s.io"}) {
+		t.Fatalf("Kubernetes depguard prefixes: %v", denied)
 	}
 }
 

@@ -81,7 +81,7 @@ func TestRegistryConfiguration(t *testing.T) {
 	if _, _, err := g.Regions().List(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, _, err := openRegistry(t.Context(), "", "grpc"); err == nil {
+	if _, _, _, err := openRegistry(t.Context(), "", "regions"); err == nil {
 		t.Fatal("production silently used memory")
 	}
 	if _, _, _, err := openRegistry(t.Context(), filepath.Join(t.TempDir(), "missing"), "fake"); err == nil {
@@ -131,7 +131,7 @@ func TestAdminBootstrapRejectsInvalidFlags(t *testing.T) {
 }
 
 func TestAdminMemoryRegistryForEveryBackend(t *testing.T) {
-	for _, kind := range []string{"fake", "proxmox", "grpc", "regions"} {
+	for _, kind := range []string{"fake", "proxmox", "regions"} {
 		t.Run(kind, func(t *testing.T) {
 			g, key, closeRegistry, err := (adminBootstrap{store: "memory"}).open(t.Context(), "", kind)
 			if err != nil {
@@ -180,12 +180,12 @@ func TestAWSProxySocketConfiguration(t *testing.T) {
 	}
 }
 
-func TestGRPCRefusesDefaultCredentials(t *testing.T) {
+func TestRegionsNamesOnlyMissingCredentials(t *testing.T) {
 	clearCredentialEnv(t)
 	t.Setenv("VWS_ACCESS_KEY", "AKIDREAL")
-	err := run(t.Context(), []string{"-backend=grpc"})
+	err := run(t.Context(), []string{"-backend=regions"})
 	if err == nil {
-		t.Fatal("grpc backend started with the default console token and secret")
+		t.Fatal("regions backend started with the default console token and secret")
 	}
 	for _, want := range []string{"VWS_CONSOLE_TOKEN", "VWS_SECRET_KEY"} {
 		if !strings.Contains(err.Error(), want) {
@@ -194,6 +194,18 @@ func TestGRPCRefusesDefaultCredentials(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "VWS_ACCESS_KEY") {
 		t.Errorf("error %q names a credential that was given", err)
+	}
+}
+
+func TestRetiredAndUnknownBackendsAreRejected(t *testing.T) {
+	clearCredentialEnv(t)
+	t.Setenv("VWS_SECRET_KEY_FILE", filepath.Join(t.TempDir(), "missing"))
+	for _, kind := range []string{"grpc", "", "bogus", "GRPC"} {
+		err := run(t.Context(), []string{"-backend=" + kind})
+		want := `unknown -backend "` + kind + `": valid values are fake|regions|proxmox`
+		if err == nil || err.Error() != want {
+			t.Fatalf("%q: got %v, want %s", kind, err, want)
+		}
 	}
 }
 

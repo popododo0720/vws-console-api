@@ -22,10 +22,7 @@ import (
 	"github.com/popododo0720/vws-console-api/internal/backend"
 	"github.com/popododo0720/vws-console-api/internal/backend/awssdk"
 	"github.com/popododo0720/vws-console-api/internal/backend/fake"
-	"github.com/popododo0720/vws-console-api/internal/backend/grpcclient"
 	"github.com/popododo0720/vws-console-api/internal/backend/grpcclient/iamclient"
-	"github.com/popododo0720/vws-console-api/internal/backend/launch"
-	"github.com/popododo0720/vws-console-api/internal/backend/launch/kubestore"
 	"github.com/popododo0720/vws-console-api/internal/backend/proxmox"
 	"github.com/popododo0720/vws-console-api/internal/cloud"
 	"github.com/popododo0720/vws-console-api/internal/globalconfig"
@@ -70,7 +67,7 @@ func serve(ctx context.Context, args []string) (err error) {
 func run(ctx context.Context, args []string) (err error) {
 	fs := flag.NewFlagSet("vws-console-api", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
-	backendKind := fs.String("backend", "fake", "fake, grpc, regions or proxmox")
+	backendKind := fs.String("backend", "fake", "fake, regions or proxmox")
 	defaultRegion := fs.String("default-region", resource.RegionName, "default console region")
 	regionConfig := fs.String("region-config", "/etc/vws/region.yaml", "node-local Proxmox configuration")
 	registrationFile := fs.String("registration-file", "/etc/pve/vws/registration.json", "public Proxmox registration")
@@ -80,7 +77,7 @@ func run(ctx context.Context, args []string) (err error) {
 	auditLog := fs.String("audit-log", "", "append-only audit stream path; empty uses stderr")
 	awsProxySocket := fs.String("aws-proxy-socket", "/run/vws/aws-proxy.sock", "AWS inventory and test proxy socket")
 	globalConfig := fs.String("global-config", "", "global.yaml bootstrap path for the admin registry; "+
-		"required for regions and grpc unless -admin-store memory; empty uses memory with fake and proxmox")
+		"required for regions unless -admin-store memory; empty uses memory with fake and proxmox")
 	var bootstrap adminBootstrap
 	bootstrap.flags(fs)
 	consoleAddr := fs.String("console-addr", "127.0.0.1:8080", "console listen address")
@@ -91,13 +88,6 @@ func run(ctx context.Context, args []string) (err error) {
 	consoleToken := fs.String("console-token", "dev-token", "deprecated: bearer token accepted on the console; use VWS_CONSOLE_TOKEN or VWS_CONSOLE_TOKEN_FILE")
 	accessKey := fs.String("access-key", "AKIDEXAMPLE", "deprecated: access key accepted by the signature check; use VWS_ACCESS_KEY or VWS_ACCESS_KEY_FILE")
 	secret := fs.String("secret", "secret", "deprecated: secret for the access key; use VWS_SECRET_KEY or VWS_SECRET_KEY_FILE")
-	computeAddr := fs.String("compute-addr", "127.0.0.1:19001", "compute gRPC address")
-	storageAddr := fs.String("storage-addr", "127.0.0.1:19002", "storage gRPC address")
-	networkAddr := fs.String("network-addr", "127.0.0.1:19003", "network gRPC address")
-	launchNamespace := fs.String("launch-namespace", "", "Kubernetes namespace that holds the RunInstances launch "+
-		"records as ConfigMaps, with -backend=grpc; empty records no launches")
-	kubeconfig := fs.String("kubeconfig", "", "kubeconfig path for -launch-namespace; "+
-		"empty uses $KUBECONFIG, then the default path, then the in-cluster service account")
 	iamMode := fs.String("iam", "static", "static: only the -access-key root key, no IAM/STS management; "+
 		"fake: in-memory IAM users, groups, roles, policies and STS sessions, lost on restart; "+
 		"grpc: vws-iam at -iam-endpoint authenticates keys, authorizes requests and serves console sign-in and STS AssumeRole")
@@ -154,6 +144,11 @@ func run(ctx context.Context, args []string) (err error) {
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("flags: %w", err)
 	}
+	switch *backendKind {
+	case "fake", "regions", "proxmox":
+	default:
+		return fmt.Errorf("unknown -backend %q: valid values are fake|regions|proxmox", *backendKind)
+	}
 	if err := bootstrap.validate(*globalConfig); err != nil {
 		return err
 	}
@@ -162,11 +157,6 @@ func run(ctx context.Context, args []string) (err error) {
 	creds, err := resolveCredentials(ctx, fs, osCredentialEnv(), logger, consoleToken, accessKey, secret)
 	if err != nil {
 		return err
-	}
-	if *backendKind == "grpc" {
-		if err := requireExplicit(creds, *backendKind); err != nil {
-			return err
-		}
 	}
 
 	if err := limits.Validate(); err != nil {
@@ -193,48 +183,15 @@ func run(ctx context.Context, args []string) (err error) {
 	var caps backend.Capabilities
 	var discovery func(context.Context, backend.ProxmoxRegion) (resource.RegionCapabilities, error)
 	var localRegions backend.RegionCatalog
-	// sweep undoes the launches a dead request left behind; nil without a launch store.
-	var sweep func(context.Context)
 	switch *backendKind {
 	case "fake":
-		if *launchNamespace != "" {
-			return errors.New("-launch-namespace needs -backend=grpc")
-		}
 		direct, parseErr := resource.Parse[resource.SubnetID]("subnet-direct-prod")
 		if parseErr != nil {
 			return parseErr
 		}
 		set = fake.New(fake.Options{Direct: []fake.DirectNetwork{{ID: direct, Cidr: "192.168.200.0/24"}}}).Set()
-	case "grpc":
-		client, dialErr := grpcclient.Dial(ctx, grpcclient.Addrs{
-			Compute: *computeAddr,
-			Storage: *storageAddr,
-			Network: *networkAddr,
-		})
-		if dialErr != nil {
-			return dialErr
-		}
-		defer func() { err = errors.Join(err, client.Close()) }()
-		client.SetLogger(logger)
-		if *launchNamespace == "" {
-			logger.WarnContext(ctx, "no -launch-namespace: RunInstances steps are not recorded")
-		} else {
-			store, openErr := kubestore.Open(*kubeconfig, *launchNamespace)
-			if openErr != nil {
-				return fmt.Errorf("-launch-namespace: %w", openErr)
-			}
-			client.SetLaunches(launch.NewTracker(store, nil))
-			sweep = client.SweepLaunches
-		}
-		set = client.Set()
 	case "regions":
-		if *launchNamespace != "" {
-			return errors.New("-launch-namespace needs -backend=grpc")
-		}
 	case "proxmox":
-		if *launchNamespace != "" {
-			return errors.New("-launch-namespace needs -backend=grpc")
-		}
 		b, closeBackend, openErr := standaloneBackend(
 			ctx, *regionConfig, *registrationFile, *pveEndpoint, *pveCA, *helperPath,
 		)
@@ -246,8 +203,6 @@ func run(ctx context.Context, args []string) (err error) {
 		identity := proxmox.Identity(b)
 		localRegions = backend.NewStaticRegions([]backend.ProxmoxRegion{identity.Region}, nil)
 		caller.Region = identity.Region.Name
-	default:
-		return fmt.Errorf("unknown -backend %q", *backendKind)
 	}
 	if *backendKind == "regions" || *backendKind == "proxmox" {
 		if err := requireExplicit(creds, *backendKind); err != nil {
@@ -352,9 +307,6 @@ func run(ctx context.Context, args []string) (err error) {
 
 	ctx, stop := signal.NotifyContext(ctx, stopSignals()...)
 	defer stop()
-	if sweep != nil {
-		go sweep(ctx)
-	}
 	connection, err := awssdk.NewConnectionClient(*awsProxySocket)
 	if err != nil {
 		return err

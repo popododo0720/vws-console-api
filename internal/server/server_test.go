@@ -246,7 +246,7 @@ func TestWriteFailureIsLogged(t *testing.T) {
 // server span: the inbound traceparent is hidden from the telemetry middleware,
 // so the traceparent an outbound call injects from the handler context carries
 // the local trace id, not the caller's, and a caller cannot force sampling
-// through the parent-based sampler. grpcclient's TestClientPropagatesTraceparent
+// through the parent-based sampler. iamclient's TestIAMCallsAreTracedAndMeasured
 // covers the gRPC hop.
 func TestHTTPMiddlewareStartsARootServerSpan(t *testing.T) {
 	previous := otel.GetTracerProvider()

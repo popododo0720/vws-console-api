@@ -1,19 +1,19 @@
 """End-to-end suite. Drives the EC2 Query and S3 entry points with boto3.
 
 Environment:
-  VWS_E2E_BACKEND  fake (default) or grpc. Names the backend behind the entry points.
+   VWS_E2E_BACKEND  fake (default), regions or proxmox behind the entry points.
   VWS_E2E_EC2      EC2 Query endpoint. Default http://127.0.0.1:8081.
   VWS_E2E_S3       S3 endpoint. Default http://127.0.0.1:8082.
   VWS_E2E_IAM      IAM and STS Query endpoint (one listener). Default http://127.0.0.1:8084.
   VWS_E2E_CAPS     Comma list of capabilities the backend has: vm, eip, direct
                    (a direct network VWS_E2E_DIRECT_SUBNET is configured).
-                   Default is vm,eip,direct for fake and none for grpc.
+                    Default is vm,eip,direct for fake and none for real backends.
   VWS_E2E_DIRECT_SUBNET
                    The direct subnet the direct steps use. Default
                    subnet-direct-prod, the one -backend=fake serves.
   VWS_E2E_ACCESS_KEY, VWS_E2E_SECRET_KEY
                    Root credentials for the SigV4 clients. The defaults are
-                   the public development values, which a grpc backend refuses,
+                    the public development values, which real backends refuse,
                    so a live run sets both.
 
   VWS_E2E_WAIT_TIMEOUT  Seconds to poll DescribeInstances for running/stopped

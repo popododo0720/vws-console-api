@@ -50,10 +50,9 @@ go run ./cmd/vws-console-api -backend=fake \
 
 `docs/proxmox-mapping.md` has the id, tag, pool and zone rules and
 `docs/proxmox-safety.md` the token and test safety rules.
-`docs/region-layer.md` describes region layer operations. `-backend=grpc`,
-which dials `-compute-addr`, `-storage-addr`, and `-network-addr`, is the
-retired Kubernetes path. It stays until `regions` and `proxmox` land and is
-not the production path.
+`docs/region-layer.md` describes region layer operations. The retired
+Kubernetes backend and its service-address and launch-store flags are removed.
+`-iam=grpc` continues to connect to vws-iam independently of the backend.
 
 ### Credentials
 
@@ -68,7 +67,7 @@ puts the value in the process arguments (`ps`, `/proc/<pid>/cmdline`), so it is
 kept only for compatibility and logs a deprecation warning that names the flag,
 never the value. Setting both `X_FILE` and `X` is an error, as is an empty or
 unreadable file; one trailing newline in a file is dropped, like
-`-root-password-file`. With `-backend=grpc` every credential must be given; the
+`-root-password-file`. With `regions` or `proxmox` every credential must be given; the
 defaults (`dev-token`, `AKIDEXAMPLE`, `secret`) are public development values
 and are refused against real backends.
 The fake backend is in-memory and is gone when the process exits.
@@ -85,7 +84,7 @@ listener so no path collides with a bucket name or a console route.
 The process calls `obs.Setup` from vws-lib once at start and defers its
 shutdown. With `OTEL_EXPORTER_OTLP_ENDPOINT` empty (the default) it exports
 nothing and keeps the JSON log on stdout. Every inbound HTTP request gets a
-server span, and every compute, storage, network, and IAM gRPC call carries
+server span, and every IAM gRPC call carries
 the W3C `traceparent` and the `x-request-id` metadata. Errors go through
 `report.Error` and `report.Panic` only; the service does not import Sentry.
 
