@@ -35,25 +35,33 @@ type LaunchMarker struct {
 	Snippet     string
 	DOT         []string
 	Attempt     int
+	IPFence     string
 }
 
 func (m LaunchMarker) line() (string, error) {
 	if err := m.validate(); err != nil {
 		return "", err
 	}
-	return strings.Join([]string{
+	fields := []string{
 		"vws:v=1", "uuid=" + m.UUID, "key=" + m.Key, "fp=" + m.Fingerprint,
 		"n=" + strconv.Itoa(m.Index) + "/" + strconv.Itoa(m.Count),
 		"ami=" + m.Image.String(), "acct=" + m.Account.String(),
 		"type=" + url.QueryEscape(m.Type), "subnet=" + m.Subnet.String(),
 		"kp=" + url.QueryEscape(m.KeyPair), "ud=" + url.QueryEscape(m.Snippet),
 		"dot=" + strings.Join(m.DOT, ","), "attempt=" + strconv.Itoa(m.Attempt),
-	}, " "), nil
+	}
+	if m.IPFence != "" {
+		fields = append(fields, "ipfence="+m.IPFence)
+	}
+	return strings.Join(fields, " "), nil
 }
 
 func (m LaunchMarker) validate() error {
 	if err := checkUUID(m.UUID); err != nil {
 		return fmt.Errorf("proxmox: launch marker: %w", err)
+	}
+	if m.IPFence != "" && !launchHex(m.IPFence, 32) {
+		return fmt.Errorf("%w: launch IP fence", ErrInput)
 	}
 	if !launchHex(m.Key, 64) || !launchHex(m.Fingerprint, 64) ||
 		m.Count < 1 || m.Count > 10 || m.Index < 0 || m.Index >= m.Count || m.Attempt < 1 {
@@ -184,6 +192,7 @@ func parseLaunchMarker(line string) (LaunchMarker, error) {
 		}
 	}
 	m.UUID, m.Key, m.Fingerprint = values["uuid"], values["key"], values["fp"]
+	m.IPFence = values["ipfence"]
 	if values["dot"] != "" {
 		m.DOT = strings.Split(values["dot"], ",")
 	}

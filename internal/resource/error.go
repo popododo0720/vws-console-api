@@ -96,8 +96,9 @@ type Error struct {
 	rulesLimit bool
 	// deleting marks a bucket create refused because the caller's own bucket
 	// of that name is still being deleted (#321).
-	deleting bool
-	capacity bool
+	deleting       bool
+	capacity       bool
+	subnetCapacity bool
 }
 
 type invalidReason uint8
@@ -212,6 +213,8 @@ func (e *Error) UnmarshalJSON(data []byte) error {
 		decoded.deleting = true
 	case "capacity":
 		decoded.capacity = true
+	case "subnetCapacity":
+		decoded.subnetCapacity = true
 	default:
 		return Invalid("refinement", "unknown resource error refinement")
 	}
@@ -248,6 +251,8 @@ func (e *Error) refinement() string {
 		return "deleting"
 	case e.capacity:
 		return "capacity"
+	case e.subnetCapacity:
+		return "subnetCapacity"
 	default:
 		return ""
 	}
@@ -565,6 +570,17 @@ func InsufficientInstanceCapacity() *Error {
 
 // IsInsufficientInstanceCapacity reports whether e names a placement shortage.
 func IsInsufficientInstanceCapacity(e *Error) bool { return e != nil && e.capacity }
+
+// InsufficientFreeAddressesInSubnet reports an exhausted private address range.
+func InsufficientFreeAddressesInSubnet() *Error {
+	return &Error{
+		Code: CodeInvalidArgument, Kind: KindSubnet, subnetCapacity: true,
+		Message: "There are not enough free addresses in the subnet to satisfy the request.",
+	}
+}
+
+// IsInsufficientFreeAddressesInSubnet identifies address exhaustion across region transport.
+func IsInsufficientFreeAddressesInSubnet(e *Error) bool { return e != nil && e.subnetCapacity }
 
 // TooLarge reports a body or object that exceeds the size this process accepts.
 // It is not a quota, so callers must not retry it unchanged.

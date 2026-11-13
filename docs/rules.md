@@ -7,6 +7,33 @@ it. When you add or change a rule, change its row here and its line in
 
 ## Rules
 
+Configured Proxmox subnets with mode `static` or an empty mode allocate the
+lowest free IPv4 address in the inclusive `ip_range`, or the usable CIDR
+hosts excluding the gateway. Every allocation reads every QEMU VM's live
+`ipconfig0` across all pools, including templates, and requires cluster-wide
+`VM.Audit`; an unreadable config fails closed. Before cloning, RunInstances
+counts unconfigured pending launch markers against free capacity and returns
+`InsufficientFreeAddressesInSubnet` without cloning when capacity is exhausted.
+If capacity disappears after acceptance, finalize leaves the VM for retry
+(failure cleanup belongs to #998).
+
+Every static finalizer pass first CAS-updates the optional 32-hex `ipfence`
+launch marker on all eligible unconfigured VMs in managed pools. A locked
+pending VM or a failed barrier prevents allocation in that pass. Each barrier
+and allocation write rechecks the leader fence. This makes a delayed old
+leader's allocation either visible before the barrier or rejected by its
+stale per-VM digest; the five-second lease margin alone is not a write fence.
+The ordinary finalizer lock serializes allocations within a process without
+holding the launch mutex during start waits. Retry keeps a configured VM's
+address; no in-memory address cache is authoritative. Describe reads the IPv4
+address from `ipconfig0` for both the instance and primary NIC, omitting absent
+or DHCP values. Direct and DHCP launch configuration is unchanged. Enforced
+by `TestStaticLaunchLowestFreeAndModes`, `TestStaticLaunchExhaustionAndPending`,
+`TestStaticLaunchConcurrentAndCrashRetry`,
+`TestStaticLaunchLeaderHandoverFencesDelayedWrite`, `TestStaticPrivateIPQuery`,
+`TestStaticLaunchRefusesIncompleteInventory`, and
+`TestInsufficientFreeAddressesInSubnetWire`.
+
 Console usage requires `vws:GetUsage` on `*`, accepts only one `from` and
 `to` date with start before exclusive end and at most 366 days, and reads
 current allocation from live project pools without PVE or registry writes

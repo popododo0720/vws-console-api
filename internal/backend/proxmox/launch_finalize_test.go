@@ -28,7 +28,8 @@ func finalizeBackend(t *testing.T) (*launchWorld, backend.Mutation, resource.Run
 		for i := range s.Roles {
 			if s.Roles[i].ID == "Launch" {
 				s.Roles[i].Privs = append(s.Roles[i].Privs, "VM.Config.CPU", "VM.Config.Memory",
-					"VM.Config.Network", "VM.Config.Options", "VM.Config.Disk", "VM.Config.HWType", "VM.PowerMgmt", "VM.Snapshot")
+					"VM.Config.Network", "VM.Config.Options", "VM.Config.Disk", "VM.Config.HWType",
+					"VM.PowerMgmt", "VM.Snapshot", "VM.Config.Cloudinit")
 			}
 		}
 		s.VMs[0].Config["scsi0"] += ",cache=writeback"

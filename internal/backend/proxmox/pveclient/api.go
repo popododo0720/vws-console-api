@@ -84,6 +84,7 @@ type VMConfig struct {
 	QMPStatus   string `json:"qmpstatus"`
 	Protection  int    `json:"protection"`
 	Net0        string `json:"net0"`
+	IPConfig0   string `json:"ipconfig0"`
 	Serial0     string `json:"serial0"`
 	Agent       string `json:"agent"`
 

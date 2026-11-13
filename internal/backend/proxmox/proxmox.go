@@ -52,7 +52,7 @@ func (b *Backend) RegionCapabilities(ctx context.Context, region string) (resour
 		Region: region, Kind: resource.RegionKindProxmox,
 		Cluster: &resource.RegionCluster{Name: b.cluster}, Zones: zones,
 		Actions: map[string]resource.ActionCapability{}, InstanceTypes: types,
-		Features: resource.RegionFeatures{SnapshotScope: "vm", LiveTests: b.cfg.LiveTests},
+		Features: resource.RegionFeatures{SnapshotScope: "vm", LiveTests: b.cfg.LiveTests, PrivateIPMode: "static"},
 	}
 	for _, a := range resource.Actions() {
 		doc.Actions[a.CapabilityKey()] = resource.ActionCapability{
@@ -80,7 +80,7 @@ func (b *Backend) RegionCapabilities(ctx context.Context, region string) (resour
 	if !b.cfg.ReadOnly {
 		doc.Actions["ec2:RunInstances"] = resource.ActionCapability{
 			State: resource.ActionPartial, ReasonCode: "LaunchDefaults",
-			Reason: "user data, static IPs, extra disks and custom root sizes are not supported",
+			Reason: "user data, extra disks and custom root sizes are not supported",
 		}
 		doc.Actions["vws:OpenConsole"] = resource.ActionCapability{State: resource.ActionSupported}
 		doc.Actions["ec2:CreateVolume"] = resource.ActionCapability{
