@@ -98,6 +98,7 @@ type VM struct {
 	Template bool              `yaml:"template"`
 	MaxCPU   int               `yaml:"maxcpu"`
 	MaxMem   int64             `yaml:"maxmem"`
+	MaxDisk  int64             `yaml:"maxdisk"`
 	Config   map[string]string `yaml:"config"`
 
 	Snapshots []Snapshot `yaml:"snapshots"`

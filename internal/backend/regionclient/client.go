@@ -22,7 +22,9 @@ func New(transport Transport) (backend.Set, error) {
 	if transport == nil {
 		return backend.Set{}, resource.Invalid("transport", "region transport is required")
 	}
-	set := backend.Set{Compute: compute{transport}, Storage: storage{transport}, Network: network{transport}}
+	set := backend.Set{
+		Compute: compute{transport}, Storage: storage{transport}, Network: network{transport}, Usage: usage{transport},
+	}
 	if console, ok := transport.(backend.Console); ok {
 		set.Console = console
 	}
@@ -34,6 +36,12 @@ type compute struct{ transport Transport }
 type storage struct{ transport Transport }
 
 type network struct{ transport Transport }
+
+type usage struct{ transport Transport }
+
+func (u usage) GetAllocation(ctx context.Context, s backend.Scope, req struct{}) (resource.Allocation, error) {
+	return call[resource.Allocation](ctx, u.transport, "Usage", "GetAllocation", s, req)
+}
 
 func call[T any](
 	ctx context.Context, transport Transport, service, method string, scope any, req any,

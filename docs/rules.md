@@ -7,6 +7,15 @@ it. When you add or change a rule, change its row here and its line in
 
 ## Rules
 
+Console usage requires `vws:GetUsage` on `*`, accepts only one `from` and
+`to` date with start before exclusive end and at most 366 days, and reads
+current allocation from live project pools without PVE or registry writes
+or retained snapshots. Failed regions omit allocation and report a fixed
+safe error. Enforced by `TestUsageWindowAndAuthorization`,
+`TestUsageFailureMetadataAndRegistry`, `TestUsageAPIAllocationReadOnlyAcrossRestart`
+and `TestAllocationRequiresPoolVisibility`. The first part excludes AWS
+cost and historical RRD data (`docs/usage.md`).
+
 | Rule | Enforced by |
 | --- | --- |
 | `backendtest.Phase2` selects mutation groups with seeded launch inputs for backends that cannot create networks. Each group gets an isolated pvefake world; every Connect constructs a new Backend over that world's upstream state. The groups check power, tags, volumes, attachments and snapshots; replay and fingerprint mismatch after restart; live pool tenancy; real leader admission without PVE access when fenced; W2 partial allocation, W3 clone allocation and W4 configured-before-start recovery; and UPID-backed operation recovery after restart. Test-only wrappers bypass pool checks or admission and subprocess probes must fail their selected contract group without skips. | `internal/backend/proxmox.TestContractPhase2`; `TestPhase2GuardRemoval`; `backendtest.Phase2` |

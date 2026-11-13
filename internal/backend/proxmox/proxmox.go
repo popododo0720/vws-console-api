@@ -28,7 +28,7 @@ type Backend struct {
 
 // Set returns the services sharing this backend.
 func (b *Backend) Set() backend.Set {
-	return backend.Set{Compute: b, Storage: b, Network: b, Console: b}
+	return backend.Set{Compute: b, Storage: b, Network: b, Console: b, Usage: b}
 }
 
 // RegionCapabilities declares regional action support.

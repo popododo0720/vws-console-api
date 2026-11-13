@@ -60,11 +60,14 @@ func routeAction(pattern string) (authorization, bool) {
 		"GET /api/v1/admin/projects/{project}":      nil,
 		"PUT /api/v1/admin/projects/{project}":      nil,
 		"GET /api/v1/projects":                      listProjectsAction,
-		"GET /api/v1/instances":                     ec2("DescribeInstances"),
-		"GET /api/v1/instances/{id}":                ec2("DescribeInstances"),
-		"POST /api/v1/instances/stop":               ec2("StopInstances"),
-		"POST /api/v1/instances/start":              ec2("StartInstances"),
-		"POST /api/v1/instances/terminate":          ec2("TerminateInstances"),
+		"GET /api/v1/usage": func(*http.Request) (string, string) {
+			return "vws:GetUsage", "*"
+		},
+		"GET /api/v1/instances":            ec2("DescribeInstances"),
+		"GET /api/v1/instances/{id}":       ec2("DescribeInstances"),
+		"POST /api/v1/instances/stop":      ec2("StopInstances"),
+		"POST /api/v1/instances/start":     ec2("StartInstances"),
+		"POST /api/v1/instances/terminate": ec2("TerminateInstances"),
 		"GET /api/v1/operations/{id}": func(*http.Request) (string, string) {
 			return "vws:GetOperation", "*"
 		},

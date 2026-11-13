@@ -42,6 +42,7 @@ func New(catalog backend.RegionCatalog, resolve Resolver, keys ...keyPairClient)
 		Network: network{base.Network, r},
 		Storage: storage{base.Storage, r},
 		Console: r,
+		Usage:   base.Usage,
 	}, nil
 }
 
