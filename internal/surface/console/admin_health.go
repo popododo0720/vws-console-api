@@ -67,7 +67,10 @@ func (h *handler) regionFailure(ctx context.Context, err error) string {
 	var errno syscall.Errno
 	var certificate *tls.CertificateVerificationError
 	var record tls.RecordHeaderError
+	var regional *resource.Error
 	switch {
+	case errors.As(err, &regional) && regional.Code == resource.CodeUnavailable && regional.Message == "not ready":
+		message = "not ready"
 	case errors.As(err, &config):
 		message = config.Error()
 		reason := "invalid certificate or CA"

@@ -80,11 +80,9 @@ func healthRequest(ctx context.Context, h http.Handler, name, token string) *htt
 }
 
 func TestAdminHealthReadsRegionWithoutWrites(t *testing.T) {
-	c, fake := serve(t, scenario())
-	b, err := New(t.Context(), c, registration(), RegionConfig{ReadOnly: true})
-	if err != nil {
-		t.Fatal(err)
-	}
+	leader, fake, _ := testLeader(t, scenario())
+	acquireLeader(t, leader)
+	b := leader.backend
 	h, err := regionapi.New(regionapi.Config{
 		Backend: b.Set(), Capabilities: b, Region: "pve-test-1", Status: b,
 		Version: regionapi.Version{ReleaseLine: "1.0", ClusterName: "test"},
@@ -101,6 +99,7 @@ func TestAdminHealthReadsRegionWithoutWrites(t *testing.T) {
 	admin, counting := healthConsole(t, srv.URL, config)
 	for _, quorum := range []bool{true, false, false} {
 		fake.SetQuorate(quorum)
+		leader.checkQuorum(t.Context())
 		rec := healthRequest(t.Context(), admin, "pve-test-1", "root")
 		var result struct {
 			resource.RegionStatus
@@ -112,11 +111,14 @@ func TestAdminHealthReadsRegionWithoutWrites(t *testing.T) {
 		}
 		if rec.Code != 200 || result.Status != "ok" || result.Quorate != quorum ||
 			len(result.Nodes) != 1 || result.Nodes[0].Name != "pve1" || !result.Nodes[0].Online ||
-			result.Leader != nil || result.LastError != nil || result.CheckedAt.IsZero() {
+			result.PVERelease != "9.2" || result.LastError != nil || result.CheckedAt.IsZero() {
 			t.Fatalf("health: %d %s", rec.Code, rec.Body)
 		}
-		if !strings.Contains(rec.Body.String(), `"leader":null`) ||
-			!strings.Contains(rec.Body.String(), `"lastError":null`) || rec.Header().Get("Cache-Control") != "no-store" {
+		if quorum && (result.Leader == nil || *result.Leader != "pve1") ||
+			!quorum && result.Leader != nil {
+			t.Fatalf("health leader: %s", rec.Body)
+		}
+		if !strings.Contains(rec.Body.String(), `"lastError":null`) || rec.Header().Get("Cache-Control") != "no-store" {
 			t.Fatalf("health wire: %s", rec.Body)
 		}
 	}

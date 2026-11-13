@@ -61,13 +61,15 @@ func NewLeader(ctx context.Context, b *Backend, helper LeaseWriter, path string)
 	}
 	for _, row := range rows {
 		if row.Type == "node" && row.Local == 1 && registrationCluster.MatchString(row.Name) {
-			return &Leader{
+			leader := &Leader{
 				backend: b, node: row.Name, helper: helper, path: path, read: os.ReadFile, now: time.Now,
 				ticks: func(d time.Duration) (<-chan time.Time, func()) {
 					t := time.NewTicker(d)
 					return t.C, t.Stop
 				},
-			}, nil
+			}
+			b.leader.Store(leader)
+			return leader, nil
 		}
 	}
 	return nil, errors.New("leader local node unavailable")
@@ -124,7 +126,7 @@ func (l *Leader) checkQuorum(ctx context.Context) {
 	at := l.now()
 	checkCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
-	status, err := l.backend.Status(checkCtx)
+	status, err := l.backend.clusterStatus(checkCtx)
 	if ctx.Err() != nil {
 		return
 	}

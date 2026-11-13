@@ -91,7 +91,7 @@ func (s *Service) Regions(ctx context.Context, c resource.Caller) ([]resource.Re
 					continue
 				}
 				items[i].State = "available"
-				if doc.Cluster != nil && (!doc.Cluster.Quorate || doc.Cluster.Leader == "") {
+				if doc.Cluster != nil && (!doc.Cluster.Quorate || doc.Cluster.Leader == "" || doc.Cluster.PVERelease == "") {
 					items[i].State = "degraded"
 				}
 			}

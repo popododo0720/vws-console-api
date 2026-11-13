@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/popododo0720/vws-console-api/internal/backend"
@@ -122,6 +123,9 @@ func (c *Client) do(ctx context.Context, method, path string, data []byte, dst a
 		return resource.TooLarge("region response exceeds the limit")
 	}
 	if resp.StatusCode != http.StatusOK {
+		if resp.StatusCode == http.StatusServiceUnavailable && strings.TrimSpace(string(body)) == "region not ready" {
+			return &resource.Error{Code: resource.CodeUnavailable, Message: "not ready"}
+		}
 		var envelope errorBody
 		if err := json.Unmarshal(body, &envelope); err != nil {
 			return fmt.Errorf("decode region error: %w", err)
