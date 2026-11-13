@@ -185,7 +185,7 @@ change both files together.
 | Each commit is one logical change that passes tests. | Judgment: `git rebase -x 'go test ./...' origin/main` |
 | Proxmox instance and volume tag writes preserve system tags and operator text, refuse reserved keys, send config digests and retry a conflict once. Instance overflow uses the description; volume tags must fit 128 encoded characters. | `TestTagWritesRoundTripRetryRestart`, `TestTagWritesRejectReservedAndBoundary`, `TestTagWritesDigestConflict`, `TestMutationMethodsRejectOtherPools` |
 | The repo is English only. | CI job `english` |
-| S3 forwarding signs with the current project's encrypted RGW key, denies missing keys before origin access, bounds origin replies, refuses redirects and never logs credentials. | `TestS3ContractAndLogCanary`, `TestMissingKeyMakesNoOriginCall`, `TestMalformedOriginResponses`, `TestOriginCannotRedirectCredentials`; `storetest.Run` RGW credentials |
+| S3 forwarding signs with the current project's encrypted RGW key, denies missing keys before origin access, bounds origin replies, skips invalid list records with count-only reports while advancing markers, refuses redirects and never logs credentials. | `TestS3ContractAndLogCanary`, `TestMissingKeyMakesNoOriginCall`, `TestMalformedOriginResponses`, `TestOriginCannotRedirectCredentials`, `TestListsSkipInvalidRecordsAndFinishPaging`, `TestMaximalValidListReplies`; `storetest.Run` RGW credentials |
 
 ## Working here
 

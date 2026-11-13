@@ -9,6 +9,7 @@ import (
 	"encoding/xml"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -34,6 +35,10 @@ type Storage struct {
 }
 
 var _ backend.Storage = (*Storage)(nil)
+
+// A list page has 1000 keys of 1024 bytes, up to six XML bytes per key byte,
+// 1 KiB of metadata per entry and 4 KiB of envelope. Bucket lists also fit.
+const maxListReplyBytes = 1000*(6*1024+1024) + 4096
 
 // New requires an origin, its signing region and the registry KEK.
 func New(endpoint, region string, registry *store.Registry, kek *secret.Key) (*Storage, error) {
@@ -131,8 +136,11 @@ func (s *Storage) call(ctx context.Context, sc backend.Scope, method, path strin
 		return nil, nil, unavailable()
 	}
 	limit := int64(1 << 20)
-	if method == http.MethodGet && strings.Count(path, "/") > 1 {
-		limit = resource.MaxObjectBytes
+	if method == http.MethodGet && resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		limit = maxListReplyBytes
+		if strings.Count(path, "/") > 1 {
+			limit = resource.MaxObjectBytes
+		}
 	}
 	data, err := bounded(resp.Body, limit)
 	closeErr := resp.Body.Close()
@@ -191,12 +199,17 @@ func (s *Storage) buckets(ctx context.Context, sc backend.Scope) ([]resource.Buc
 		return nil, unavailable()
 	}
 	items := make([]resource.Bucket, 0, len(doc.Buckets))
+	skipped := 0
 	for _, b := range doc.Buckets {
 		name, err := resource.ParseStoredBucketName(b.Name)
 		if err != nil {
-			return nil, unavailable()
+			skipped++
+			continue
 		}
 		items = append(items, resource.Bucket{Name: name, OwnerID: sc.Account, CreationDate: b.CreationDate})
+	}
+	if skipped > 0 {
+		slog.WarnContext(ctx, "skipping invalid S3 bucket records", slog.Int("count", skipped))
 	}
 	slices.SortFunc(items, func(a, b resource.Bucket) int { return strings.Compare(a.Name.String(), b.Name.String()) })
 	return items, nil
@@ -348,16 +361,21 @@ func (s *Storage) ListObjects(
 	}
 	out := resource.ObjectListing{CommonPrefixes: doc.Prefixes}
 	var last string
+	skipped := 0
 	for _, o := range doc.Contents {
+		last = max(last, o.Key)
 		key, err := resource.Parse[resource.ObjectKey](o.Key)
 		if err != nil || o.Size < 0 {
-			return resource.ObjectListing{}, unavailable()
+			skipped++
+			continue
 		}
 		out.Objects = append(out.Objects, resource.Object{
 			Bucket: q.Bucket, Key: key, OwnerID: sc.Account,
 			ETag: o.ETag, Size: o.Size, LastModified: o.LastModified,
 		})
-		last = max(last, o.Key)
+	}
+	if skipped > 0 {
+		slog.WarnContext(ctx, "skipping invalid S3 object records", slog.Int("count", skipped))
 	}
 	for _, p := range doc.Prefixes {
 		last = max(last, p)

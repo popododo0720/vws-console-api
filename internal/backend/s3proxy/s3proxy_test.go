@@ -3,6 +3,7 @@ package s3proxy_test
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -142,8 +143,11 @@ func TestMalformedOriginResponses(t *testing.T) {
 	for _, c := range creds {
 		sc.Account = c.Account
 	}
-	for _, body := range []string{"<", "<wrong/>", "<ListAllMyBucketsResult/><extra/>", strings.Repeat("x", (1<<20)+1)} {
-		t.Run(strings.SplitN(body, "x", 2)[0], func(t *testing.T) {
+	for i, body := range []string{
+		"<", "<wrong/>", "<ListAllMyBucketsResult/><extra/>",
+		"<ListAllMyBucketsResult>" + strings.Repeat(" ", 9<<20) + "</ListAllMyBucketsResult>",
+	} {
+		t.Run(fmt.Sprintf("case-%d", i), func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				_, _ = io.WriteString(w, body)
 			}))
@@ -197,5 +201,130 @@ func TestTransientReadsRetryAndCancellation(t *testing.T) {
 	cancel()
 	if _, err := s.ListBuckets(ctx, sc, resource.BucketQuery{}); err == nil || calls.Load() != 3 {
 		t.Fatalf("canceled request: %v calls=%d", err, calls.Load())
+	}
+}
+
+func TestListsSkipInvalidRecordsAndFinishPaging(t *testing.T) {
+	g, k, _ := registry(t)
+	var logs bytes.Buffer
+	old := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
+	defer slog.SetDefault(old)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/" {
+			fmt.Fprint(w, `<ListAllMyBucketsResult><Buckets><Bucket><Name>a-good</Name></Bucket>`+
+				`<Bucket><Name>secret-canary-796-INVALID</Name></Bucket><Bucket><Name>z-good</Name></Bucket>`+
+				`</Buckets></ListAllMyBucketsResult>`)
+			return
+		}
+		if r.URL.Query().Get("marker") == "z-bad" {
+			fmt.Fprint(w, `<ListBucketResult/>`)
+			return
+		}
+		fmt.Fprint(w, `<ListBucketResult><IsTruncated>true</IsTruncated>`+
+			`<Contents><Key>a-good</Key><Size>1</Size></Contents><Contents><Key>/invalid</Key></Contents>`+
+			`<Contents><Key>z-bad</Key><Size>-1</Size></Contents></ListBucketResult>`)
+	}))
+	defer server.Close()
+	s := proxy(t, server.URL, g, k)
+	sc := backend.Scope{Account: mustText[resource.AccountID](t, "123456789012")}
+	first, err := s.ListBuckets(t.Context(), sc, resource.BucketQuery{Page: resource.PageRequest{Size: 1}})
+	if err != nil || len(first.Items) != 1 || first.NextToken != "a-good" {
+		t.Fatalf("first buckets: %+v %v", first, err)
+	}
+	last, err := s.ListBuckets(t.Context(), sc, resource.BucketQuery{Page: resource.PageRequest{Token: first.NextToken}})
+	if err != nil || len(last.Items) != 1 || last.Items[0].Name.String() != "z-good" || last.NextToken != "" {
+		t.Fatalf("last buckets: %+v %v", last, err)
+	}
+	q := resource.ObjectQuery{Bucket: mustText[resource.BucketName](t, "a-good")}
+	objects, err := s.ListObjects(t.Context(), sc, q)
+	if err != nil || len(objects.Objects) != 1 || objects.NextToken != "z-bad" {
+		t.Fatalf("objects: %+v %v", objects, err)
+	}
+	q.Token = objects.NextToken
+	end, err := s.ListObjects(t.Context(), sc, q)
+	if err != nil || len(end.Objects) != 0 || end.NextToken != "" {
+		t.Fatalf("end: %+v %v", end, err)
+	}
+	if !strings.Contains(logs.String(), `"count"`) || strings.Contains(logs.String(), "canary") {
+		t.Fatalf("unsafe or missing skipped-record report: %s", logs.String())
+	}
+}
+
+func mustText[T any, P interface {
+	*T
+	UnmarshalText([]byte) error
+}](t *testing.T, value string) T {
+	t.Helper()
+	v, err := resource.Parse[T, P](value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return v
+}
+
+func TestMaximalValidListReplies(t *testing.T) {
+	g, k, _ := registry(t)
+	for _, objects := range []bool{true, false} {
+		var body strings.Builder
+		body.WriteString("<ListBucketResult>")
+		if !objects {
+			body.Reset()
+			body.WriteString("<ListAllMyBucketsResult><Buckets>")
+		}
+		for i := range map[bool]int{true: 1000, false: 10000}[objects] {
+			if objects {
+				fmt.Fprintf(&body, "<Contents><Key>%04d%s</Key><Size>1</Size><ETag>%s</ETag>"+
+					"<LastModified>2026-11-13T00:00:00Z</LastModified><StorageClass>STANDARD</StorageClass></Contents>",
+					i, strings.Repeat("&quot;", 1020), strings.Repeat("a", 32))
+			} else {
+				fmt.Fprintf(&body, "<Bucket><Name>%04d%s</Name><CreationDate>2026-11-13T00:00:00Z</CreationDate></Bucket>",
+					i, strings.Repeat("a", 59))
+			}
+		}
+		body.WriteString(map[bool]string{true: "</ListBucketResult>", false: "</Buckets></ListAllMyBucketsResult>"}[objects])
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			fmt.Fprint(w, body.String())
+		}))
+		t.Cleanup(server.Close)
+		s, sc := proxy(t, server.URL, g, k), backend.Scope{Account: mustText[resource.AccountID](t, "123456789012")}
+		if objects {
+			page, err := s.ListObjects(t.Context(), sc, resource.ObjectQuery{Bucket: mustText[resource.BucketName](t, "a-good")})
+			if err != nil || len(page.Objects) != 1000 {
+				t.Fatalf("maximal objects: count=%d %v", len(page.Objects), err)
+			}
+		} else if page, err := s.ListBuckets(t.Context(), sc, resource.BucketQuery{}); err != nil || len(page.Items) != 50 {
+			t.Fatalf("maximal buckets: count=%d %v", len(page.Items), err)
+		}
+		server.Close()
+	}
+}
+
+func TestObjectAndErrorReplyBoundsRemainSmall(t *testing.T) {
+	g, k, _ := registry(t)
+	sc := backend.Scope{Account: mustText[resource.AccountID](t, "123456789012")}
+	for _, object := range []bool{true, false} {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			if object {
+				fmt.Fprint(w, strings.Repeat("x", resource.MaxObjectBytes+1))
+			} else {
+				w.WriteHeader(http.StatusForbidden)
+				fmt.Fprint(w, "<Error><Code>AccessDenied</Code>"+strings.Repeat(" ", (1<<20)+1)+"</Error>")
+			}
+		}))
+		t.Cleanup(server.Close)
+		s := proxy(t, server.URL, g, k)
+		var err error
+		if object {
+			_, _, err = s.GetObject(t.Context(), sc, resource.GetObjectRequest{
+				Bucket: mustText[resource.BucketName](t, "a-good"), Key: mustText[resource.ObjectKey](t, "key"),
+			})
+		} else {
+			_, err = s.ListBuckets(t.Context(), sc, resource.BucketQuery{})
+		}
+		if resource.CodeOf(err) != resource.CodeUnavailable {
+			t.Fatalf("oversized reply (object=%v): %v", object, err)
+		}
+		server.Close()
 	}
 }
