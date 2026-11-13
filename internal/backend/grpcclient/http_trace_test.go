@@ -69,7 +69,7 @@ func TestOneTraceCrossesFromHTTPToTheBackend(t *testing.T) {
 	root := iam.NewStatic(cred.AccessKey, cred.Secret, account)
 	verifier := sigv4.Verifier{Service: sigv4.ServiceEC2, Regions: backend.DefaultRegions(), Auth: iam.Authenticator(root)}
 	ec2 := ec2query.New(ec2query.Config{
-		Service:    cloud.New(cloud.Config{Backends: client.Set(), Audit: slog.New(slog.DiscardHandler)}),
+		Service:    cloud.New(cloud.Config{Backends: client.Set()}),
 		Verifier:   sigv4.NewVerifier(verifier),
 		Authorizer: root,
 	})

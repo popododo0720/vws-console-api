@@ -14,10 +14,11 @@ type Destination string
 
 // The destinations a change request can go to.
 const (
-	PVE   Destination = "pve"
-	AWS   Destination = "aws"
-	IAM   Destination = "iam"
-	Admin Destination = "admin"
+	Unknown Destination = "unknown"
+	PVE     Destination = "pve"
+	AWS     Destination = "aws"
+	IAM     Destination = "iam"
+	Admin   Destination = "admin"
 )
 
 // Result is how a change request ended: Accepted, Denied or Error(code).

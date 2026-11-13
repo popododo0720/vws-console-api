@@ -358,7 +358,10 @@ func (v *Verifier) authenticate(r *http.Request, req AuthRequest, sent string) (
 	if id.Account.IsZero() {
 		return resource.Caller{}, unknownKey()
 	}
-	return resource.Caller{Account: id.Account, Subject: req.AccessKeyID, Principal: id.Principal, Root: id.Root, Ref: id.Ref}, nil
+	return resource.Caller{
+		Account: id.Account, Subject: req.AccessKeyID, Principal: id.Principal,
+		Root: id.Root, Ref: id.Ref, Region: req.Region, SourceIP: req.SourceIP,
+	}, nil
 }
 
 // sourceIP is the peer address. X-Forwarded-For is not trusted: console-api

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 
+	"github.com/popododo0720/vws-console-api/internal/audit"
 	"github.com/popododo0720/vws-console-api/internal/backend"
 	"github.com/popododo0720/vws-console-api/internal/resource"
 )
@@ -13,7 +14,10 @@ import (
 // creates every volume and instance before it returns, so it runs inside the
 // launch cap: past it a launch waits briefly, then is refused with nothing
 // created.
-func (s *Service) RunInstances(ctx context.Context, c resource.Caller, token resource.ClientToken, req resource.RunInstancesRequest) (resource.Accepted[resource.Instance], error) {
+func (s *Service) RunInstances(ctx context.Context, c resource.Caller,
+	token resource.ClientToken, req resource.RunInstancesRequest,
+) (acc resource.Accepted[resource.Instance], err error) {
+	defer s.startMutation(&ctx, c, req)(ctx, &acc.Operation, &err)
 	return mutate(ctx, s, c, token, req, func(
 		ctx context.Context, m backend.Mutation, req resource.RunInstancesRequest,
 	) (resource.Accepted[resource.Instance], error) {
@@ -29,8 +33,11 @@ func (s *Service) RunInstances(ctx context.Context, c resource.Caller, token res
 // StopInstances accepts a stop and returns the operation.
 // A zero token is filled here. RunInstances still requires one, because a
 // token minted inside mutate would make every retry a new launch.
-func (s *Service) StopInstances(ctx context.Context, c resource.Caller, token resource.ClientToken, req resource.StopInstancesRequest) (resource.Accepted[resource.InstanceStateChange], error) {
-	token, err := fillToken(token)
+func (s *Service) StopInstances(ctx context.Context, c resource.Caller,
+	token resource.ClientToken, req resource.StopInstancesRequest,
+) (acc resource.Accepted[resource.InstanceStateChange], err error) {
+	defer s.startMutation(&ctx, c, req)(ctx, &acc.Operation, &err)
+	token, err = fillToken(token)
 	if err != nil {
 		return resource.Accepted[resource.InstanceStateChange]{}, err
 	}
@@ -38,8 +45,11 @@ func (s *Service) StopInstances(ctx context.Context, c resource.Caller, token re
 }
 
 // StartInstances accepts a start and returns the operation.
-func (s *Service) StartInstances(ctx context.Context, c resource.Caller, token resource.ClientToken, req resource.StartInstancesRequest) (resource.Accepted[resource.InstanceStateChange], error) {
-	token, err := fillToken(token)
+func (s *Service) StartInstances(ctx context.Context, c resource.Caller,
+	token resource.ClientToken, req resource.StartInstancesRequest,
+) (acc resource.Accepted[resource.InstanceStateChange], err error) {
+	defer s.startMutation(&ctx, c, req)(ctx, &acc.Operation, &err)
+	token, err = fillToken(token)
 	if err != nil {
 		return resource.Accepted[resource.InstanceStateChange]{}, err
 	}
@@ -49,8 +59,9 @@ func (s *Service) StartInstances(ctx context.Context, c resource.Caller, token r
 // RebootInstances accepts a reboot and returns the operation.
 func (s *Service) RebootInstances(
 	ctx context.Context, c resource.Caller, token resource.ClientToken, req resource.RebootInstancesRequest,
-) (resource.Accepted[resource.InstanceStateChange], error) {
-	token, err := fillToken(token)
+) (acc resource.Accepted[resource.InstanceStateChange], err error) {
+	defer s.startMutation(&ctx, c, req)(ctx, &acc.Operation, &err)
+	token, err = fillToken(token)
 	if err != nil {
 		return resource.Accepted[resource.InstanceStateChange]{}, err
 	}
@@ -58,8 +69,11 @@ func (s *Service) RebootInstances(
 }
 
 // TerminateInstances accepts a terminate and returns the operation.
-func (s *Service) TerminateInstances(ctx context.Context, c resource.Caller, token resource.ClientToken, req resource.TerminateInstancesRequest) (resource.Accepted[resource.InstanceStateChange], error) {
-	token, err := fillToken(token)
+func (s *Service) TerminateInstances(ctx context.Context, c resource.Caller,
+	token resource.ClientToken, req resource.TerminateInstancesRequest,
+) (acc resource.Accepted[resource.InstanceStateChange], err error) {
+	defer s.startMutation(&ctx, c, req)(ctx, &acc.Operation, &err)
+	token, err = fillToken(token)
 	if err != nil {
 		return resource.Accepted[resource.InstanceStateChange]{}, err
 	}
@@ -67,8 +81,11 @@ func (s *Service) TerminateInstances(ctx context.Context, c resource.Caller, tok
 }
 
 // CreateVolume accepts a blank volume and returns the operation.
-func (s *Service) CreateVolume(ctx context.Context, c resource.Caller, token resource.ClientToken, req resource.CreateVolumeRequest) (resource.Accepted[resource.Volume], error) {
-	token, err := fillToken(token)
+func (s *Service) CreateVolume(ctx context.Context, c resource.Caller,
+	token resource.ClientToken, req resource.CreateVolumeRequest,
+) (acc resource.Accepted[resource.Volume], err error) {
+	defer s.startMutation(&ctx, c, req)(ctx, &acc.Operation, &err)
+	token, err = fillToken(token)
 	if err != nil {
 		return resource.Accepted[resource.Volume]{}, err
 	}
@@ -76,8 +93,11 @@ func (s *Service) CreateVolume(ctx context.Context, c resource.Caller, token res
 }
 
 // AttachVolume accepts an attachment and returns the operation.
-func (s *Service) AttachVolume(ctx context.Context, c resource.Caller, token resource.ClientToken, req resource.AttachVolumeRequest) (resource.Accepted[resource.Volume], error) {
-	token, err := fillToken(token)
+func (s *Service) AttachVolume(ctx context.Context, c resource.Caller,
+	token resource.ClientToken, req resource.AttachVolumeRequest,
+) (acc resource.Accepted[resource.Volume], err error) {
+	defer s.startMutation(&ctx, c, req)(ctx, &acc.Operation, &err)
+	token, err = fillToken(token)
 	if err != nil {
 		return resource.Accepted[resource.Volume]{}, err
 	}
@@ -87,9 +107,10 @@ func (s *Service) AttachVolume(ctx context.Context, c resource.Caller, token res
 // DetachVolume accepts a detach and returns the operation.
 func (s *Service) DetachVolume(
 	ctx context.Context, c resource.Caller, token resource.ClientToken, req resource.DetachVolumeRequest,
-) (resource.Accepted[resource.VolumeAttachment], error) {
+) (acc resource.Accepted[resource.VolumeAttachment], err error) {
+	defer s.startMutation(&ctx, c, req)(ctx, &acc.Operation, &err)
 	minted := token.IsZero()
-	token, err := fillToken(token)
+	token, err = fillToken(token)
 	if err != nil {
 		return resource.Accepted[resource.VolumeAttachment]{}, err
 	}
@@ -108,8 +129,11 @@ func (s *Service) DetachVolume(
 }
 
 // DeleteVolume accepts a delete and returns the operation.
-func (s *Service) DeleteVolume(ctx context.Context, c resource.Caller, token resource.ClientToken, req resource.DeleteVolumeRequest) (resource.Accepted[resource.Volume], error) {
-	token, err := fillToken(token)
+func (s *Service) DeleteVolume(ctx context.Context, c resource.Caller,
+	token resource.ClientToken, req resource.DeleteVolumeRequest,
+) (acc resource.Accepted[resource.Volume], err error) {
+	defer s.startMutation(&ctx, c, req)(ctx, &acc.Operation, &err)
+	token, err = fillToken(token)
 	if err != nil {
 		return resource.Accepted[resource.Volume]{}, err
 	}
@@ -117,8 +141,11 @@ func (s *Service) DeleteVolume(ctx context.Context, c resource.Caller, token res
 }
 
 // ModifyVolume accepts a size change and returns the operation.
-func (s *Service) ModifyVolume(ctx context.Context, c resource.Caller, token resource.ClientToken, req resource.ModifyVolumeRequest) (resource.Accepted[resource.Volume], error) {
-	token, err := fillToken(token)
+func (s *Service) ModifyVolume(ctx context.Context, c resource.Caller,
+	token resource.ClientToken, req resource.ModifyVolumeRequest,
+) (acc resource.Accepted[resource.Volume], err error) {
+	defer s.startMutation(&ctx, c, req)(ctx, &acc.Operation, &err)
+	token, err = fillToken(token)
 	if err != nil {
 		return resource.Accepted[resource.Volume]{}, err
 	}
@@ -126,8 +153,11 @@ func (s *Service) ModifyVolume(ctx context.Context, c resource.Caller, token res
 }
 
 // CreateTags accepts tags for instances and returns the operation.
-func (s *Service) CreateTags(ctx context.Context, c resource.Caller, token resource.ClientToken, req resource.CreateTagsRequest) (resource.Accepted[resource.Instance], error) {
-	token, err := fillToken(token)
+func (s *Service) CreateTags(ctx context.Context, c resource.Caller,
+	token resource.ClientToken, req resource.CreateTagsRequest,
+) (acc resource.Accepted[resource.Instance], err error) {
+	defer s.startMutation(&ctx, c, req)(ctx, &acc.Operation, &err)
+	token, err = fillToken(token)
 	if err != nil {
 		return resource.Accepted[resource.Instance]{}, err
 	}
@@ -137,8 +167,9 @@ func (s *Service) CreateTags(ctx context.Context, c resource.Caller, token resou
 // DeleteTags accepts a tag delete for instances and returns the operation.
 func (s *Service) DeleteTags(
 	ctx context.Context, c resource.Caller, token resource.ClientToken, req resource.DeleteTagsRequest,
-) (resource.Accepted[resource.Instance], error) {
-	token, err := fillToken(token)
+) (acc resource.Accepted[resource.Instance], err error) {
+	defer s.startMutation(&ctx, c, req)(ctx, &acc.Operation, &err)
+	token, err = fillToken(token)
 	if err != nil {
 		return resource.Accepted[resource.Instance]{}, err
 	}
@@ -148,8 +179,9 @@ func (s *Service) DeleteTags(
 // UntagVpcs accepts a tag delete for VPCs and returns the operation.
 func (s *Service) UntagVpcs(
 	ctx context.Context, c resource.Caller, token resource.ClientToken, req resource.UntagVpcsRequest,
-) (resource.Accepted[resource.Vpc], error) {
-	token, err := fillToken(token)
+) (acc resource.Accepted[resource.Vpc], err error) {
+	defer s.startMutation(&ctx, c, req)(ctx, &acc.Operation, &err)
+	token, err = fillToken(token)
 	if err != nil {
 		return resource.Accepted[resource.Vpc]{}, err
 	}
@@ -159,8 +191,9 @@ func (s *Service) UntagVpcs(
 // UntagSubnets accepts a tag delete for subnets and returns the operation.
 func (s *Service) UntagSubnets(
 	ctx context.Context, c resource.Caller, token resource.ClientToken, req resource.UntagSubnetsRequest,
-) (resource.Accepted[resource.Subnet], error) {
-	token, err := fillToken(token)
+) (acc resource.Accepted[resource.Subnet], err error) {
+	defer s.startMutation(&ctx, c, req)(ctx, &acc.Operation, &err)
+	token, err = fillToken(token)
 	if err != nil {
 		return resource.Accepted[resource.Subnet]{}, err
 	}
@@ -168,8 +201,11 @@ func (s *Service) UntagSubnets(
 }
 
 // TagVpcs accepts tags for VPCs and returns the operation.
-func (s *Service) TagVpcs(ctx context.Context, c resource.Caller, token resource.ClientToken, req resource.TagVpcsRequest) (resource.Accepted[resource.Vpc], error) {
-	token, err := fillToken(token)
+func (s *Service) TagVpcs(ctx context.Context, c resource.Caller,
+	token resource.ClientToken, req resource.TagVpcsRequest,
+) (acc resource.Accepted[resource.Vpc], err error) {
+	defer s.startMutation(&ctx, c, req)(ctx, &acc.Operation, &err)
+	token, err = fillToken(token)
 	if err != nil {
 		return resource.Accepted[resource.Vpc]{}, err
 	}
@@ -177,8 +213,11 @@ func (s *Service) TagVpcs(ctx context.Context, c resource.Caller, token resource
 }
 
 // TagSubnets accepts tags for subnets and returns the operation.
-func (s *Service) TagSubnets(ctx context.Context, c resource.Caller, token resource.ClientToken, req resource.TagSubnetsRequest) (resource.Accepted[resource.Subnet], error) {
-	token, err := fillToken(token)
+func (s *Service) TagSubnets(ctx context.Context, c resource.Caller,
+	token resource.ClientToken, req resource.TagSubnetsRequest,
+) (acc resource.Accepted[resource.Subnet], err error) {
+	defer s.startMutation(&ctx, c, req)(ctx, &acc.Operation, &err)
+	token, err = fillToken(token)
 	if err != nil {
 		return resource.Accepted[resource.Subnet]{}, err
 	}
@@ -188,8 +227,9 @@ func (s *Service) TagSubnets(ctx context.Context, c resource.Caller, token resou
 // TagVolumes accepts tags for volumes and returns the operation.
 func (s *Service) TagVolumes(
 	ctx context.Context, c resource.Caller, token resource.ClientToken, req resource.TagVolumesRequest,
-) (resource.Accepted[resource.Volume], error) {
-	token, err := fillToken(token)
+) (acc resource.Accepted[resource.Volume], err error) {
+	defer s.startMutation(&ctx, c, req)(ctx, &acc.Operation, &err)
+	token, err = fillToken(token)
 	if err != nil {
 		return resource.Accepted[resource.Volume]{}, err
 	}
@@ -199,8 +239,9 @@ func (s *Service) TagVolumes(
 // UntagVolumes accepts a tag delete for volumes and returns the operation.
 func (s *Service) UntagVolumes(
 	ctx context.Context, c resource.Caller, token resource.ClientToken, req resource.UntagVolumesRequest,
-) (resource.Accepted[resource.Volume], error) {
-	token, err := fillToken(token)
+) (acc resource.Accepted[resource.Volume], err error) {
+	defer s.startMutation(&ctx, c, req)(ctx, &acc.Operation, &err)
+	token, err = fillToken(token)
 	if err != nil {
 		return resource.Accepted[resource.Volume]{}, err
 	}
@@ -221,8 +262,11 @@ func (s *Service) DescribeImages(ctx context.Context, c resource.Caller, q resou
 
 // CreateKeyPair accepts a key pair and returns the operation. The private key
 // is only on this result.
-func (s *Service) CreateKeyPair(ctx context.Context, c resource.Caller, token resource.ClientToken, req resource.CreateKeyPairRequest) (resource.Accepted[resource.KeyPair], error) {
-	token, err := fillToken(token)
+func (s *Service) CreateKeyPair(ctx context.Context, c resource.Caller,
+	token resource.ClientToken, req resource.CreateKeyPairRequest,
+) (acc resource.Accepted[resource.KeyPair], err error) {
+	defer s.startMutation(&ctx, c, req)(ctx, &acc.Operation, &err)
+	token, err = fillToken(token)
 	if err != nil {
 		return resource.Accepted[resource.KeyPair]{}, err
 	}
@@ -230,8 +274,11 @@ func (s *Service) CreateKeyPair(ctx context.Context, c resource.Caller, token re
 }
 
 // DeleteKeyPair accepts a delete and returns the operation.
-func (s *Service) DeleteKeyPair(ctx context.Context, c resource.Caller, token resource.ClientToken, req resource.DeleteKeyPairRequest) (resource.Accepted[resource.KeyPair], error) {
-	token, err := fillToken(token)
+func (s *Service) DeleteKeyPair(ctx context.Context, c resource.Caller,
+	token resource.ClientToken, req resource.DeleteKeyPairRequest,
+) (acc resource.Accepted[resource.KeyPair], err error) {
+	defer s.startMutation(&ctx, c, req)(ctx, &acc.Operation, &err)
+	token, err = fillToken(token)
 	if err != nil {
 		return resource.Accepted[resource.KeyPair]{}, err
 	}
@@ -244,8 +291,11 @@ func (s *Service) DescribeKeyPairs(ctx context.Context, c resource.Caller, q res
 }
 
 // CreateSnapshot accepts a snapshot and returns the operation.
-func (s *Service) CreateSnapshot(ctx context.Context, c resource.Caller, token resource.ClientToken, req resource.CreateSnapshotRequest) (resource.Accepted[resource.Snapshot], error) {
-	token, err := fillToken(token)
+func (s *Service) CreateSnapshot(ctx context.Context, c resource.Caller,
+	token resource.ClientToken, req resource.CreateSnapshotRequest,
+) (acc resource.Accepted[resource.Snapshot], err error) {
+	defer s.startMutation(&ctx, c, req)(ctx, &acc.Operation, &err)
+	token, err = fillToken(token)
 	if err != nil {
 		return resource.Accepted[resource.Snapshot]{}, err
 	}
@@ -256,8 +306,9 @@ func (s *Service) CreateSnapshot(ctx context.Context, c resource.Caller, token r
 // operation.
 func (s *Service) RegisterImage(
 	ctx context.Context, c resource.Caller, token resource.ClientToken, req resource.RegisterImageRequest,
-) (resource.Accepted[resource.Image], error) {
-	token, err := fillToken(token)
+) (acc resource.Accepted[resource.Image], err error) {
+	defer s.startMutation(&ctx, c, req)(ctx, &acc.Operation, &err)
+	token, err = fillToken(token)
 	if err != nil {
 		return resource.Accepted[resource.Image]{}, err
 	}
@@ -265,8 +316,11 @@ func (s *Service) RegisterImage(
 }
 
 // DeleteSnapshot accepts a delete and returns the operation.
-func (s *Service) DeleteSnapshot(ctx context.Context, c resource.Caller, token resource.ClientToken, req resource.DeleteSnapshotRequest) (resource.Accepted[resource.Snapshot], error) {
-	token, err := fillToken(token)
+func (s *Service) DeleteSnapshot(ctx context.Context, c resource.Caller,
+	token resource.ClientToken, req resource.DeleteSnapshotRequest,
+) (acc resource.Accepted[resource.Snapshot], err error) {
+	defer s.startMutation(&ctx, c, req)(ctx, &acc.Operation, &err)
+	token, err = fillToken(token)
 	if err != nil {
 		return resource.Accepted[resource.Snapshot]{}, err
 	}
@@ -346,8 +400,11 @@ func (s *Service) GetOperation(ctx context.Context, c resource.Caller, id resour
 // EC2 has no ClientToken on this action. An empty token is derived from the
 // normalized request, the same place other actions call fillToken, so a retry
 // is the original subnet instead of a second one.
-func (s *Service) CreateSubnet(ctx context.Context, c resource.Caller, token resource.ClientToken, req resource.CreateSubnetRequest) (resource.Accepted[resource.Subnet], error) {
-	token, req, err := fillTokenFromRequest(c, token, req)
+func (s *Service) CreateSubnet(ctx context.Context, c resource.Caller,
+	token resource.ClientToken, req resource.CreateSubnetRequest,
+) (acc resource.Accepted[resource.Subnet], err error) {
+	defer s.startMutation(&ctx, c, req)(ctx, &acc.Operation, &err)
+	token, req, err = fillTokenFromRequest(c, token, req)
 	if err != nil {
 		return resource.Accepted[resource.Subnet]{}, err
 	}
@@ -355,8 +412,11 @@ func (s *Service) CreateSubnet(ctx context.Context, c resource.Caller, token res
 }
 
 // DeleteSubnet accepts a delete and returns the operation.
-func (s *Service) DeleteSubnet(ctx context.Context, c resource.Caller, token resource.ClientToken, req resource.DeleteSubnetRequest) (resource.Accepted[resource.Subnet], error) {
-	token, err := fillToken(token)
+func (s *Service) DeleteSubnet(ctx context.Context, c resource.Caller,
+	token resource.ClientToken, req resource.DeleteSubnetRequest,
+) (acc resource.Accepted[resource.Subnet], err error) {
+	defer s.startMutation(&ctx, c, req)(ctx, &acc.Operation, &err)
+	token, err = fillToken(token)
 	if err != nil {
 		return resource.Accepted[resource.Subnet]{}, err
 	}
@@ -369,8 +429,11 @@ func (s *Service) DescribeSubnets(ctx context.Context, c resource.Caller, q reso
 }
 
 // CreateVpc accepts a VPC and returns the operation.
-func (s *Service) CreateVpc(ctx context.Context, c resource.Caller, token resource.ClientToken, req resource.CreateVpcRequest) (resource.Accepted[resource.Vpc], error) {
-	token, err := fillToken(token)
+func (s *Service) CreateVpc(ctx context.Context, c resource.Caller,
+	token resource.ClientToken, req resource.CreateVpcRequest,
+) (acc resource.Accepted[resource.Vpc], err error) {
+	defer s.startMutation(&ctx, c, req)(ctx, &acc.Operation, &err)
+	token, err = fillToken(token)
 	if err != nil {
 		return resource.Accepted[resource.Vpc]{}, err
 	}
@@ -378,8 +441,11 @@ func (s *Service) CreateVpc(ctx context.Context, c resource.Caller, token resour
 }
 
 // DeleteVpc accepts a delete and returns the operation.
-func (s *Service) DeleteVpc(ctx context.Context, c resource.Caller, token resource.ClientToken, req resource.DeleteVpcRequest) (resource.Accepted[resource.Vpc], error) {
-	token, err := fillToken(token)
+func (s *Service) DeleteVpc(ctx context.Context, c resource.Caller,
+	token resource.ClientToken, req resource.DeleteVpcRequest,
+) (acc resource.Accepted[resource.Vpc], err error) {
+	defer s.startMutation(&ctx, c, req)(ctx, &acc.Operation, &err)
+	token, err = fillToken(token)
 	if err != nil {
 		return resource.Accepted[resource.Vpc]{}, err
 	}
@@ -392,8 +458,11 @@ func (s *Service) DescribeVpcs(ctx context.Context, c resource.Caller, q resourc
 }
 
 // CreateSecurityGroup accepts a group and returns the operation.
-func (s *Service) CreateSecurityGroup(ctx context.Context, c resource.Caller, token resource.ClientToken, req resource.CreateSecurityGroupRequest) (resource.Accepted[resource.SecurityGroup], error) {
-	token, err := fillToken(token)
+func (s *Service) CreateSecurityGroup(ctx context.Context, c resource.Caller,
+	token resource.ClientToken, req resource.CreateSecurityGroupRequest,
+) (acc resource.Accepted[resource.SecurityGroup], err error) {
+	defer s.startMutation(&ctx, c, req)(ctx, &acc.Operation, &err)
+	token, err = fillToken(token)
 	if err != nil {
 		return resource.Accepted[resource.SecurityGroup]{}, err
 	}
@@ -401,8 +470,11 @@ func (s *Service) CreateSecurityGroup(ctx context.Context, c resource.Caller, to
 }
 
 // DeleteSecurityGroup accepts a delete and returns the operation.
-func (s *Service) DeleteSecurityGroup(ctx context.Context, c resource.Caller, token resource.ClientToken, req resource.DeleteSecurityGroupRequest) (resource.Accepted[resource.SecurityGroup], error) {
-	token, err := fillToken(token)
+func (s *Service) DeleteSecurityGroup(ctx context.Context, c resource.Caller,
+	token resource.ClientToken, req resource.DeleteSecurityGroupRequest,
+) (acc resource.Accepted[resource.SecurityGroup], err error) {
+	defer s.startMutation(&ctx, c, req)(ctx, &acc.Operation, &err)
+	token, err = fillToken(token)
 	if err != nil {
 		return resource.Accepted[resource.SecurityGroup]{}, err
 	}
@@ -415,8 +487,11 @@ func (s *Service) DescribeSecurityGroups(ctx context.Context, c resource.Caller,
 }
 
 // AllocateAddress accepts an allocation and returns the operation.
-func (s *Service) AllocateAddress(ctx context.Context, c resource.Caller, token resource.ClientToken, req resource.AllocateAddressRequest) (resource.Accepted[resource.Address], error) {
-	token, err := fillToken(token)
+func (s *Service) AllocateAddress(ctx context.Context, c resource.Caller,
+	token resource.ClientToken, req resource.AllocateAddressRequest,
+) (acc resource.Accepted[resource.Address], err error) {
+	defer s.startMutation(&ctx, c, req)(ctx, &acc.Operation, &err)
+	token, err = fillToken(token)
 	if err != nil {
 		return resource.Accepted[resource.Address]{}, err
 	}
@@ -424,8 +499,11 @@ func (s *Service) AllocateAddress(ctx context.Context, c resource.Caller, token 
 }
 
 // ReleaseAddress accepts a release and returns the operation.
-func (s *Service) ReleaseAddress(ctx context.Context, c resource.Caller, token resource.ClientToken, req resource.ReleaseAddressRequest) (resource.Accepted[resource.Address], error) {
-	token, err := fillToken(token)
+func (s *Service) ReleaseAddress(ctx context.Context, c resource.Caller,
+	token resource.ClientToken, req resource.ReleaseAddressRequest,
+) (acc resource.Accepted[resource.Address], err error) {
+	defer s.startMutation(&ctx, c, req)(ctx, &acc.Operation, &err)
+	token, err = fillToken(token)
 	if err != nil {
 		return resource.Accepted[resource.Address]{}, err
 	}
@@ -433,8 +511,11 @@ func (s *Service) ReleaseAddress(ctx context.Context, c resource.Caller, token r
 }
 
 // AssociateAddress attaches an address to an instance and returns the operation.
-func (s *Service) AssociateAddress(ctx context.Context, c resource.Caller, token resource.ClientToken, req resource.AssociateAddressRequest) (resource.Accepted[resource.Address], error) {
-	token, err := fillToken(token)
+func (s *Service) AssociateAddress(ctx context.Context, c resource.Caller,
+	token resource.ClientToken, req resource.AssociateAddressRequest,
+) (acc resource.Accepted[resource.Address], err error) {
+	defer s.startMutation(&ctx, c, req)(ctx, &acc.Operation, &err)
+	token, err = fillToken(token)
 	if err != nil {
 		return resource.Accepted[resource.Address]{}, err
 	}
@@ -442,8 +523,11 @@ func (s *Service) AssociateAddress(ctx context.Context, c resource.Caller, token
 }
 
 // DisassociateAddress detaches an address and returns the operation.
-func (s *Service) DisassociateAddress(ctx context.Context, c resource.Caller, token resource.ClientToken, req resource.DisassociateAddressRequest) (resource.Accepted[resource.Address], error) {
-	token, err := fillToken(token)
+func (s *Service) DisassociateAddress(ctx context.Context, c resource.Caller,
+	token resource.ClientToken, req resource.DisassociateAddressRequest,
+) (acc resource.Accepted[resource.Address], err error) {
+	defer s.startMutation(&ctx, c, req)(ctx, &acc.Operation, &err)
+	token, err = fillToken(token)
 	if err != nil {
 		return resource.Accepted[resource.Address]{}, err
 	}
@@ -456,8 +540,11 @@ func (s *Service) DescribeAddresses(ctx context.Context, c resource.Caller, q re
 }
 
 // AuthorizeSecurityGroupIngress accepts one inbound rule and returns the operation.
-func (s *Service) AuthorizeSecurityGroupIngress(ctx context.Context, c resource.Caller, token resource.ClientToken, req resource.AuthorizeSecurityGroupIngressRequest) (resource.Accepted[resource.SecurityGroup], error) {
-	token, err := fillToken(token)
+func (s *Service) AuthorizeSecurityGroupIngress(ctx context.Context, c resource.Caller,
+	token resource.ClientToken, req resource.AuthorizeSecurityGroupIngressRequest,
+) (acc resource.Accepted[resource.SecurityGroup], err error) {
+	defer s.startMutation(&ctx, c, req)(ctx, &acc.Operation, &err)
+	token, err = fillToken(token)
 	if err != nil {
 		return resource.Accepted[resource.SecurityGroup]{}, err
 	}
@@ -467,8 +554,9 @@ func (s *Service) AuthorizeSecurityGroupIngress(ctx context.Context, c resource.
 // RevokeSecurityGroupIngress removes one inbound rule and returns the operation.
 func (s *Service) RevokeSecurityGroupIngress(
 	ctx context.Context, c resource.Caller, token resource.ClientToken, req resource.RevokeSecurityGroupIngressRequest,
-) (resource.Accepted[resource.SecurityGroup], error) {
-	token, err := fillToken(token)
+) (acc resource.Accepted[resource.SecurityGroup], err error) {
+	defer s.startMutation(&ctx, c, req)(ctx, &acc.Operation, &err)
+	token, err = fillToken(token)
 	if err != nil {
 		return resource.Accepted[resource.SecurityGroup]{}, err
 	}
@@ -489,7 +577,11 @@ func fillToken(token resource.ClientToken) (resource.ClientToken, error) {
 
 // CreateBucket creates a bucket. A name the caller already owns is
 // BucketAlreadyOwned; a name another account holds is AlreadyExists (#315).
-func (s *Service) CreateBucket(ctx context.Context, c resource.Caller, name resource.BucketName) (resource.Bucket, error) {
+func (s *Service) CreateBucket(ctx context.Context, c resource.Caller, name resource.BucketName,
+) (item resource.Bucket, err error) {
+	defer s.startMutation(&ctx, c, audit.Entry{
+		Service: "s3", Action: "CreateBucket", ResourceIDs: []string{name.String()},
+	})(ctx, nil, &err)
 	return readOne(ctx, c, bucketName{name: name}, func(ctx context.Context, sc backend.Scope, q bucketName) (resource.Bucket, error) {
 		return s.backends.Storage.CreateBucket(ctx, sc, q.name)
 	})
@@ -508,7 +600,10 @@ func (s *Service) ListBuckets(ctx context.Context, c resource.Caller, q resource
 }
 
 // DeleteBucket removes an empty bucket.
-func (s *Service) DeleteBucket(ctx context.Context, c resource.Caller, name resource.BucketName) error {
+func (s *Service) DeleteBucket(ctx context.Context, c resource.Caller, name resource.BucketName) (err error) {
+	defer s.startMutation(&ctx, c, audit.Entry{
+		Service: "s3", Action: "DeleteBucket", ResourceIDs: []string{name.String()},
+	})(ctx, nil, &err)
 	if name.IsZero() {
 		return resource.Invalid("name", "required")
 	}
@@ -518,7 +613,11 @@ func (s *Service) DeleteBucket(ctx context.Context, c resource.Caller, name reso
 }
 
 // PutObject stores an object. The call finishes before it returns.
-func (s *Service) PutObject(ctx context.Context, c resource.Caller, req resource.PutObjectRequest, body io.Reader) (resource.Object, error) {
+func (s *Service) PutObject(ctx context.Context, c resource.Caller, req resource.PutObjectRequest, body io.Reader,
+) (item resource.Object, err error) {
+	defer s.startMutation(&ctx, c, audit.Entry{
+		Service: "s3", Action: "PutObject", ResourceIDs: auditObjectID(req.Bucket, req.Key),
+	})(ctx, nil, &err)
 	return readOne(ctx, c, req, func(ctx context.Context, sc backend.Scope, q resource.PutObjectRequest) (resource.Object, error) {
 		return s.backends.Storage.PutObject(ctx, sc, q, body)
 	})
@@ -566,7 +665,12 @@ func (s *Service) ListObjects(ctx context.Context, c resource.Caller, q resource
 }
 
 // DeleteObject removes an object. A missing object is success.
-func (s *Service) DeleteObject(ctx context.Context, c resource.Caller, bucket resource.BucketName, key resource.ObjectKey) error {
+func (s *Service) DeleteObject(ctx context.Context, c resource.Caller,
+	bucket resource.BucketName, key resource.ObjectKey,
+) (err error) {
+	defer s.startMutation(&ctx, c, audit.Entry{
+		Service: "s3", Action: "DeleteObject", ResourceIDs: auditObjectID(bucket, key),
+	})(ctx, nil, &err)
 	if bucket.IsZero() || key.IsZero() {
 		return resource.Invalid("key", "required")
 	}

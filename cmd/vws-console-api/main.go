@@ -329,8 +329,17 @@ func run(ctx context.Context, args []string) (err error) {
 		set, discovery = regional.Backends, regional.Discovery
 		caller.Region = *defaultRegion
 	}
+	auditOut := os.Stderr
+	if *auditLog != "" {
+		auditOut, err = os.OpenFile(*auditLog, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
+		if err != nil {
+			return fmt.Errorf("open -audit-log: %w", err)
+		}
+		defer func() { err = errors.Join(err, auditOut.Close()) }()
+	}
+	auditLogger := audit.New(auditOut)
 	svc := cloud.New(cloud.Config{
-		Backends: set, Regions: regions, Capabilities: caps, Audit: logger, Launches: throttle.NewLaunches(launchLimits),
+		Backends: set, Regions: regions, Capabilities: caps, Audit: auditLogger, Launches: throttle.NewLaunches(launchLimits),
 		Discovery: discovery,
 		Region:    caller.Region,
 	})
@@ -346,14 +355,6 @@ func run(ctx context.Context, args []string) (err error) {
 	if sweep != nil {
 		go sweep(ctx)
 	}
-	auditOut := os.Stderr
-	if *auditLog != "" {
-		auditOut, err = os.OpenFile(*auditLog, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
-		if err != nil {
-			return fmt.Errorf("open -audit-log: %w", err)
-		}
-		defer func() { err = errors.Join(err, auditOut.Close()) }()
-	}
 	connection, err := awssdk.NewConnectionClient(*awsProxySocket)
 	if err != nil {
 		return err
@@ -365,7 +366,7 @@ func run(ctx context.Context, args []string) (err error) {
 			Region:         caller.Region,
 			Registry:       registry,
 			AdminKey:       adminKey,
-			Audit:          audit.New(auditOut),
+			Audit:          auditLogger,
 			RegionStatus:   health,
 			RegionPool:     pool,
 			Auth:           console.BearerTokens{*consoleToken: caller},

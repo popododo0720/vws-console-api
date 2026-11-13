@@ -211,5 +211,6 @@ func (h *handler) gate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	c.SourceIP = h.clientIP(r)
 	h.mux.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), callerKey{}, c)))
 }

@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 
 	"github.com/popododo0720/vws-console-api/internal/backend"
 	"github.com/popododo0720/vws-console-api/internal/resource"
@@ -74,10 +73,6 @@ func mutate[R resource.Request[R], T resource.Owned](
 	if err := guardAccepted(c.Account, acc, req.Action()); err != nil {
 		return resource.Accepted[T]{}, err
 	}
-	s.audit.LogAttrs(ctx, slog.LevelInfo, "mutation accepted",
-		slog.String("action", req.Action().String()),
-		slog.String("subject", c.Subject),
-		slog.String("operation", acc.Operation.ID.String()))
 	return acc, nil
 }
 
