@@ -116,7 +116,7 @@ change both files together.
 | IAM tag, MFA, access key and policy actions follow AWS and act only on the authorized entity. | `TestAccessKeyCallsActOnTheAuthorizedARN`, `TestEntityPolicyCallsActOnTheAuthorizedARN`, `TestMFADeviceTagSerialValidationPrecedesAuthorization` |
 | Access key secrets and policy documents are never logged or traced. | `TestAccessKeySecretIsNeverLoggedOrTraced` |
 | Every `resource.Action` has a console route. | `TestEveryActionHasARoute` |
-| An unapplied query parameter, filter or subresource is rejected; an EC2 query index is taken only as `strconv.Itoa(n)` spells it. | `TestUnreadQueryFieldsAreRejected`, `TestNonCanonicalIndexIsRejected` |
+| An unapplied query parameter, filter or subresource is rejected; an EC2 query index is taken only as `strconv.Itoa(n)` spells it; the EC2 Query keys each action takes are a data table (`queryKeys`). | `TestUnreadQueryFieldsAreRejected`, `TestNonCanonicalIndexIsRejected`, `TestQueryKeyIndexesFollowTheirBounds` |
 | A 500 logs the cause and leaves it off the response body. | `TestInternalErrorIsLogged` |
 | S3 conditional writes honor `If-None-Match`. | `TestPutIfNoneMatchIsWriteOnce` |
 | S3 bucket creates answer as S3 outside us-east-1. | `backendtest.BucketCreate` |

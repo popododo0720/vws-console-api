@@ -29,7 +29,3 @@ func (h *handler) rebootInstances(w http.ResponseWriter, r *http.Request, c reso
 	}
 	writeXML(w, rebootXML{RequestID: requestID(r), Return: true})
 }
-
-func allowReboot(key string) bool {
-	return key == "Action" || key == "Version" || indexed(key, "InstanceId", 100)
-}
