@@ -21,9 +21,10 @@ const Prefix = "/vws/admin/"
 
 // Errors of every Backend and of the Registry.
 var (
-	ErrNotFound = errors.New("admin store: record not found")
-	ErrExists   = errors.New("admin store: record already exists")
-	ErrConflict = errors.New("admin store: version does not match")
+	ErrNotFound    = errors.New("admin store: record not found")
+	ErrExists      = errors.New("admin store: record already exists")
+	ErrConflict    = errors.New("admin store: version does not match")
+	ErrRegionInUse = errors.New("region has project pool mappings; remove the mappings before deleting the region")
 )
 
 // Version is the compare-and-swap token of a stored record. It is never 0.

@@ -6,6 +6,7 @@ package etcdstore
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	clientv3 "go.etcd.io/etcd/client/v3"
@@ -86,6 +87,35 @@ func (s *Store) Update(ctx context.Context, key string, value []byte, expected s
 
 // Delete removes key if its mod revision is expected.
 func (s *Store) Delete(ctx context.Context, key string, expected store.Version) error {
+	if name, ok := strings.CutPrefix(key, "regions/"); ok {
+		ctx, cancel := context.WithTimeout(ctx, CallTimeout)
+		defer cancel()
+		k := store.Prefix + key
+		claims := store.Prefix + "project-pools/" + name + "/"
+		resp, err := s.kv.Txn(ctx).
+			If(
+				clientv3.Compare(clientv3.CreateRevision(k), ">", 0),
+				clientv3.Compare(clientv3.ModRevision(k), "=", int64(expected)),
+				clientv3.Compare(clientv3.CreateRevision(claims), "=", 0).WithPrefix(),
+			).
+			Then(clientv3.OpDelete(k)).
+			Else(clientv3.OpGet(k)).
+			Commit()
+		if err != nil {
+			return fmt.Errorf("etcd delete region %s: %w", k, err)
+		}
+		if resp.Succeeded {
+			return nil
+		}
+		current := resp.Responses[0].GetResponseRange().Kvs
+		if len(current) == 0 {
+			return store.ErrNotFound
+		}
+		if current[0].ModRevision != int64(expected) {
+			return store.ErrConflict
+		}
+		return store.ErrRegionInUse
+	}
 	_, err := s.ifAt(ctx, key, expected, clientv3.OpDelete(store.Prefix+key))
 	return err
 }

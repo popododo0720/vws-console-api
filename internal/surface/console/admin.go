@@ -131,6 +131,10 @@ func (h *handler) adminAccount(w http.ResponseWriter, r *http.Request) {
 }
 
 func adminError(w http.ResponseWriter, r *http.Request, err error) {
+	if errors.Is(err, store.ErrRegionInUse) {
+		writeErr(w, r, &resource.Error{Code: resource.CodeConflict, Message: store.ErrRegionInUse.Error()})
+		return
+	}
 	if errors.Is(err, store.ErrExists) || errors.Is(err, store.ErrConflict) {
 		writeErr(w, r, &resource.Error{Code: resource.CodeConflict, Message: "registration already exists or changed"})
 		return

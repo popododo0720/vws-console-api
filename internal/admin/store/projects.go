@@ -69,7 +69,7 @@ func ValidateProject(v Project) error {
 	if !account.MatchString(v.Project) {
 		return resource.Invalid("project", "must be 12 digits")
 	}
-	// At most 65 compares and 65 writes when every old pool is replaced,
+	// At most 97 compares and 65 writes when every old pool is replaced,
 	// below etcd's default 128-operation transaction limit.
 	if len(v.Pools) > 32 || len(v.AWSAccounts) > 128 {
 		return resource.Invalid("body", "at most 32 pools and 128 AWS accounts")
@@ -120,6 +120,14 @@ func (p Projects) Put(ctx context.Context, v Project) (Project, error) {
 		return v, err
 	}
 	checks := []Entry{{Key: key, Version: v.Version}}
+	for _, pool := range v.Pools {
+		regionKey := "regions/" + pool.Region
+		region, err := p.records.b.Get(ctx, regionKey)
+		if err != nil {
+			return v, fmt.Errorf("read project pool region: %w", err)
+		}
+		checks = append(checks, Entry{Key: regionKey, Version: region.Version})
+	}
 	puts := []Entry{{Key: key, Value: data}}
 	var deletes []string
 	seen := map[ProjectPool]bool{}

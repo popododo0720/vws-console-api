@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/popododo0720/vws-console-api/internal/admin/store"
 	"github.com/popododo0720/vws-console-api/internal/backend/fake"
@@ -127,6 +128,37 @@ func TestAdminRegionLifecycleAndCanary(t *testing.T) {
 	record, err := json.Marshal(original)
 	if err != nil || bytes.Contains(record, []byte(validRegion()["tokenSecret"].(string))) {
 		t.Fatal("global record retained the token")
+	}
+}
+
+func TestAdminRegionDeleteRefusesProjectMappings(t *testing.T) {
+	e, g, app, auditLog := accountFixture(t)
+	post := regionCall(t, e, "POST", validRegion(), "", 201)
+	mapping, err := g.Projects().Put(t.Context(), store.Project{
+		Project: "123456789012", Pools: []store.ProjectPool{{Region: "pve-test-1", Pool: "mapped"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		rec := regionCall(t, e, "DELETE", nil, post.Header().Get("ETag"), 409)
+		if !strings.Contains(rec.Body.String(), "project pool mappings") {
+			t.Fatalf("missing dependency explanation: %s", rec.Body)
+		}
+	}
+	if err := g.ClaimCluster(t.Context(), "test", "pve-other-1", time.Now()); !errors.Is(err, store.ErrExists) {
+		t.Fatalf("refusal released cluster claim: %v", err)
+	}
+	mapping.Pools = nil
+	if _, err := g.Projects().Put(t.Context(), mapping); err != nil {
+		t.Fatal(err)
+	}
+	regionCall(t, e, "DELETE", nil, post.Header().Get("ETag"), 204)
+	if strings.Count(auditLog.String(), "\n") != 4 {
+		t.Fatalf("expected one audit per region write: %s", auditLog)
+	}
+	if strings.Contains(app.String()+auditLog.String(), validRegion()["tokenSecret"].(string)) {
+		t.Fatal("region secret escaped into logs")
 	}
 }
 

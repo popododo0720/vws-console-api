@@ -69,6 +69,13 @@ func (m *Memory) Delete(_ context.Context, key string, expected Version) error {
 	if err := m.check(key, expected); err != nil {
 		return err
 	}
+	if name, ok := strings.CutPrefix(key, "regions/"); ok {
+		for claim := range m.entries {
+			if strings.HasPrefix(claim, "project-pools/"+name+"/") {
+				return ErrRegionInUse
+			}
+		}
+	}
 	delete(m.entries, key)
 	return nil
 }

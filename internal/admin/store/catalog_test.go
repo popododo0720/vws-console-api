@@ -23,6 +23,9 @@ func TestCatalogProjectPoolDefaultsAndRemapping(t *testing.T) {
 	}
 	memory := NewMemory()
 	registry := New(memory)
+	if _, err := registry.Regions().Create(ctx, Region{Name: "pve-test-1"}); err != nil {
+		t.Fatal(err)
+	}
 	pools := registry.Catalog().(backend.ProjectPools)
 	if pool, err := pools.ProjectPool(ctx, account, "pve-test-1"); err != nil || pool != account.String() {
 		t.Fatalf("default pool: %q %v", pool, err)
