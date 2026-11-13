@@ -100,6 +100,7 @@ func launchBackend(
 		t.Fatal(err)
 	}
 	w.b, err = New(t.Context(), c, registration(), RegionConfig{
+		Now:      func() time.Time { return time.Unix(1700000000, 0) },
 		Storages: map[string]string{"gp2": "local"}, Templates: TemplateConfig{Pool: "images"},
 	})
 	if err != nil {

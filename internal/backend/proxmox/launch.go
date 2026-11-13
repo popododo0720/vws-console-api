@@ -243,6 +243,7 @@ func (b *Backend) allocateLaunch(
 			UUID: uuid, Key: key, Fingerprint: fingerprint,
 			Index: index, Count: req.Count, Account: scope.Account, Image: req.ImageID,
 			Type: req.InstanceType, Subnet: req.SubnetID, KeyPair: req.KeyName, Attempt: 1,
+			CreatedAt: b.launchNow().Unix(),
 		}
 		if r.prefix.IsValid() {
 			marker.IPFence = fmt.Sprintf("%x", raw)
