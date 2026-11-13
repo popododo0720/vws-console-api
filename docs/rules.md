@@ -176,11 +176,13 @@ it. When you add or change a rule, change its row here and its line in
 | The repo is English only (see "English only"). Hangul is allowed only in files `.github/english-allowlist` lists with a reason (today: Unicode tag test data). | `scripts/check-english.sh` (CI job `english`) |
 
 CreateVolume validates availabilityZone against the caller region's capability
-document before backend dispatch. An omitted zone uses the first declared zone
-(the legacy zone when the document has none). A foreign zone or unreadable
-document creates nothing. Resource normalization checks volume shape; regional
+document before backend dispatch. An omitted zone uses the first declared zone.
+A document with no zones returns a typed availabilityZone error; the fake
+declares its legacy zone explicitly. A foreign zone or unreadable document
+creates nothing. Resource normalization checks volume shape; regional
 zone membership belongs to the kernel. Enforced by
-`TestCreateVolumeUsesRegionalZones` and `TestCreateVolumeRefusesUnreadableZones`.
+`TestCreateVolumeUsesRegionalZones`, `TestCreateVolumeRefusesUnreadableZones` and
+`TestCreateVolumeRefusesEmptyZones`.
 
 ## Adding a long-running action (moved from AGENTS.md)
 

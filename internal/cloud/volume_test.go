@@ -61,3 +61,32 @@ func TestCreateVolumeRefusesUnreadableZones(t *testing.T) {
 		t.Fatalf("unreadable zone catalog: %v", err)
 	}
 }
+
+func TestCreateVolumeRefusesEmptyZones(t *testing.T) {
+	for _, zone := range []string{"", resource.ZoneName} {
+		t.Run("zone="+zone, func(t *testing.T) {
+			doc, err := (backend.AllSupported{Kind: resource.RegionKindProxmox}).
+				RegionCapabilities(t.Context(), "pve-test-1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			doc.Zones = []resource.RegionZone{}
+			set := fake.New(fake.Options{}).Set()
+			svc := New(Config{Backends: set, Capabilities: stubCapabilities{doc: doc}})
+			c := caller(t)
+			c.Region = "pve-test-1"
+			_, err = svc.CreateVolume(t.Context(), c, token(t, "empty-zones"),
+				resource.CreateVolumeRequest{SizeGiB: 1, Zone: zone})
+			var typed *resource.Error
+			if !errors.As(err, &typed) || typed.Code != resource.CodeInvalidArgument || typed.Field != "availabilityZone" {
+				t.Fatalf("empty zones must return a typed availabilityZone error: %v", err)
+			}
+			page, err := set.Compute.DescribeVolumes(t.Context(), scope(c), resource.VolumeQuery{
+				Page: resource.PageRequest{Size: 100},
+			})
+			if err != nil || len(page.Items) != 0 {
+				t.Fatalf("empty zones created a volume: %+v, %v", page, err)
+			}
+		})
+	}
+}

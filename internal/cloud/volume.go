@@ -16,9 +16,16 @@ func (s *Service) CreateVolume(ctx context.Context, c resource.Caller,
 	if err != nil {
 		return resource.Accepted[resource.Volume]{}, err
 	}
-	zones, err := s.AvailabilityZones(ctx, c)
+	if err := requireCaller(c); err != nil {
+		return resource.Accepted[resource.Volume]{}, err
+	}
+	caps, err := s.caps.RegionCapabilities(ctx, s.capabilityRegion(c.Region))
 	if err != nil {
 		return resource.Accepted[resource.Volume]{}, err
+	}
+	zones := caps.Zones
+	if len(zones) == 0 {
+		return resource.Accepted[resource.Volume]{}, resource.Invalid("availabilityZone", "no zones available in region")
 	}
 	if req.Zone == "" {
 		req.Zone = zones[0].ZoneName
