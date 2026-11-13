@@ -265,9 +265,6 @@ func (r CreateVolumeRequest) Normalize() (CreateVolumeRequest, error) {
 	if r.Zone == "" {
 		r.Zone = ZoneName
 	}
-	if r.Zone != ZoneName {
-		return CreateVolumeRequest{}, Invalid("availabilityZone", "unsupported")
-	}
 	if err := validRequestTags(r.Tags); err != nil {
 		return CreateVolumeRequest{}, err
 	}
