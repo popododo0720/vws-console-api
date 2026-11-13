@@ -39,6 +39,8 @@ func run(ctx context.Context) (err error) {
 	stsRegion := flag.String("sts-region", "us-east-1",
 		"signing region of the STS endpoint (us-east-1 for the global endpoint)")
 	origin := flag.String("ec2-endpoint", "", "EC2 URL, optionally containing {region}")
+	services := flag.String("aws-endpoint", "https://{service}.{region}.amazonaws.com",
+		"URL template of every other AWS service; {service} is the signing name")
 	flag.Parse()
 	source, err := proxy.SourceCredential()
 	if err != nil {
@@ -54,6 +56,9 @@ func run(ctx context.Context) (err error) {
 		CredentialDirectory: os.Getenv("CREDENTIALS_DIRECTORY"),
 	}, source, *sts, *stsRegion, *origin)
 	if err != nil {
+		return err
+	}
+	if err := p.ServiceEndpoint(*services); err != nil {
 		return err
 	}
 	shutdown, err := obs.Setup(ctx, obs.ForService("vws-aws-proxy"))

@@ -47,6 +47,7 @@ type Proxy struct {
 	accounts    Accounts
 	source      sigv4.Credential
 	sts, origin string
+	services    string
 	stsRegion   string
 	transport   http.RoundTripper
 	mu          sync.Mutex
@@ -64,12 +65,9 @@ func New(accounts Accounts, source sigv4.Credential, sts, stsRegion, origin stri
 	if !regexp.MustCompile(`^[a-z]{2}(-[a-z]+)+-[0-9]+$`).MatchString(stsRegion) {
 		return nil, errors.New("proxy: invalid STS region")
 	}
-	for _, raw := range []string{sts, strings.ReplaceAll(origin, "{region}", "us-east-1")} {
-		u, err := url.Parse(raw)
-		if err != nil || u.User != nil || u.Host == "" || u.RawQuery != "" || u.Fragment != "" ||
-			(u.Path != "" && u.Path != "/") || (u.Scheme != "https" &&
-			(u.Scheme != "http" || !net.ParseIP(u.Hostname()).IsLoopback())) {
-			return nil, errors.New("proxy: invalid endpoint")
+	for _, raw := range []string{sts, origin} {
+		if err := checkEndpoint(raw); err != nil {
+			return nil, err
 		}
 	}
 	return &Proxy{
@@ -91,6 +89,10 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 	r = r.WithContext(ctx)
+	if r.Header.Get("X-Vws-Target-Service") != string(sigv4.ServiceEC2) {
+		p.serveService(w, r)
+		return
+	}
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
 	if err != nil {
 		refuse(w, http.StatusBadRequest, "InvalidParameterValue")
@@ -123,28 +125,8 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	a, err := p.accounts.Account(ctx, account, region)
-	if err == nil || a.MappingVersion != 0 || errors.Is(err, store.ErrNotFound) {
-		p.mu.Lock()
-		for key := range p.cache {
-			if key.project == account && key.mappingVersion != a.MappingVersion {
-				delete(p.cache, key)
-			}
-		}
-		p.mu.Unlock()
-	}
-	allowed := false
-	for _, v := range a.Regions {
-		allowed = allowed || v == region
-	}
-	if err != nil || !allowed || a.ExternalID == "" ||
-		!accountID(a.ID) || !strings.HasPrefix(a.RoleARN, "arn:aws:iam::"+a.ID+":role/") {
-		refuse(w, http.StatusForbidden, "AccessDenied")
-		return
-	}
-	cred, err := p.credentials(ctx, account, principal, a)
-	if err != nil {
-		refuse(w, http.StatusBadGateway, "InternalError")
+	cred, ok := p.session(ctx, w, account, principal, region)
+	if !ok {
 		return
 	}
 	target, err := url.Parse(strings.ReplaceAll(p.origin, "{region}", region))
@@ -163,13 +145,46 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			pr.Out.ContentLength = int64(len(body))
 		},
 		Transport: signedTransport{
-			p: p, credential: cred, region: region, resend: repeatableAction(q.Get("Action"), q.Get("ClientToken")),
+			p: p, credential: cred, service: sigv4.ServiceEC2, region: region,
+			resend: repeatableAction(q.Get("Action"), q.Get("ClientToken")),
 		},
 		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, _ error) {
 			refuse(w, http.StatusBadGateway, "InternalError")
 		},
 	}
 	forward.ServeHTTP(w, r)
+}
+
+// session resolves the current account mapping and its AssumeRole session,
+// refusing the request when either is unusable.
+func (p *Proxy) session(
+	ctx context.Context, w http.ResponseWriter, account, principal, region string,
+) (sigv4.Credential, bool) {
+	a, err := p.accounts.Account(ctx, account, region)
+	if err == nil || a.MappingVersion != 0 || errors.Is(err, store.ErrNotFound) {
+		p.mu.Lock()
+		for key := range p.cache {
+			if key.project == account && key.mappingVersion != a.MappingVersion {
+				delete(p.cache, key)
+			}
+		}
+		p.mu.Unlock()
+	}
+	allowed := false
+	for _, v := range a.Regions {
+		allowed = allowed || v == region
+	}
+	if err != nil || !allowed || a.ExternalID == "" ||
+		!accountID(a.ID) || !strings.HasPrefix(a.RoleARN, "arn:aws:iam::"+a.ID+":role/") {
+		refuse(w, http.StatusForbidden, "AccessDenied")
+		return sigv4.Credential{}, false
+	}
+	cred, err := p.credentials(ctx, account, principal, a)
+	if err != nil {
+		refuse(w, http.StatusBadGateway, "InternalError")
+		return sigv4.Credential{}, false
+	}
+	return cred, true
 }
 
 func allowedAction(action string) bool {
@@ -204,19 +219,21 @@ func refuse(w http.ResponseWriter, status int, code string) {
 type signedTransport struct {
 	p          *Proxy
 	credential sigv4.Credential
+	service    sigv4.Service
 	region     string
 	resend     bool
+	signed     []string
 }
 
 func (s signedTransport) RoundTrip(r *http.Request) (*http.Response, error) {
-	return s.p.send(r, s.credential, sigv4.ServiceEC2, s.region, s.resend)
+	return s.p.send(r, s.credential, s.service, s.region, s.resend, s.signed...)
 }
 
 func (p *Proxy) send(
-	r *http.Request, c sigv4.Credential, service sigv4.Service, region string, resend bool,
+	r *http.Request, c sigv4.Credential, service sigv4.Service, region string, resend bool, signed ...string,
 ) (*http.Response, error) {
 	for attempt := 0; attempt < 3; attempt++ {
-		if err := sigv4.Sign(r, c, service, region, p.now()); err != nil {
+		if err := sigv4.SignHeaders(r, c, service, region, p.now(), signed...); err != nil {
 			return nil, errors.New("proxy: signing failed")
 		}
 		resp, err := p.transport.RoundTrip(r)

@@ -4,12 +4,16 @@
 requests. Its unix socket is mode 0700; run the global API under the same user
 and place the socket in a private directory. The API must replace all client
 `X-Vws-*` headers with its verified VWS project, principal, target region and service.
-The service is `ec2`; only unambiguous `Describe*` Query actions pass.
-Bodies are limited to 1 MiB. Requests have a 30-second deadline. Transient
+For `ec2` only unambiguous Query actions of the EC2 list pass, with bodies
+up to 1 MiB. Any other service (S3, DynamoDB, Lambda, ...) is forwarded with
+its method, path, query, body and `x-amz-*` headers unchanged, re-signed for
+that service at `-aws-endpoint` (default
+`https://{service}.{region}.amazonaws.com`), with bodies up to 4 MiB;
+presigned queries, `X-Amz-Region-Set` and other methods are refused before STS. Requests have a 30-second deadline. Transient
 upstream failures get at most three attempts with 100/200 ms backoff.
 
 Flags: `-socket`, `-global-config`, `-accounts`, `-projects`, `-sts-endpoint`,
-`-sts-region`, `-ec2-endpoint`.
+`-sts-region`, `-ec2-endpoint`, `-aws-endpoint`.
 AssumeRole is signed for `-sts-region` (default `us-east-1`, the global STS
 endpoint's region), never for the EC2 region of the request; a regional STS
 endpoint needs its own region here.
@@ -69,9 +73,12 @@ All outbound errors exposed to callers are fixed messages, never response bodies
 credential fields or transport error strings. The command uses vws-lib telemetry
 and HTTP server spans/metrics; sanitized STS decoding failures use `report.Error`.
 
-Phase 1 rebuilds the outbound headers from the Query content type and signature;
-it does not forward arbitrary client headers. Transparent service forwarding,
-streaming signatures and presigned requests remain #794/#795.
+For EC2 the outbound headers are rebuilt from the Query content type and
+signature. For other services only `x-amz-*` (signed) and a fixed list of
+content, cache and conditional headers are copied; the caller's signature,
+date, session token and payload hash never are. Streaming (`aws-chunked`)
+bodies, hop-by-hop handling and services whose endpoint prefix is not their
+signing name remain #795.
 
 ## Private account connection tests
 

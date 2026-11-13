@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -18,11 +20,21 @@ import (
 	"github.com/popododo0720/vws-console-api/internal/audit"
 	"github.com/popododo0720/vws-console-api/internal/backend"
 	"github.com/popododo0720/vws-console-api/internal/iam"
+	"github.com/popododo0720/vws-console-api/internal/proxy"
 	"github.com/popododo0720/vws-console-api/internal/resource"
 	"github.com/popododo0720/vws-console-api/internal/router"
 	"github.com/popododo0720/vws-console-api/internal/sigv4"
 	"github.com/popododo0720/vws-console-api/internal/surface/ec2query"
 )
+
+type oneAccount struct{}
+
+func (oneAccount) Account(context.Context, string, string) (proxy.Account, error) {
+	return proxy.Account{
+		ID: "987654321098", RoleARN: "arn:aws:iam::987654321098:role/vws", ExternalID: "external",
+		Regions: []string{"ap-northeast-2"},
+	}, nil
+}
 
 type origin struct {
 	mu    sync.Mutex
@@ -41,13 +53,33 @@ func (o *origin) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
+	w.Header().Set("X-Origin", "aws")
 	w.WriteHeader(http.StatusOK)
+	fmt.Fprint(w, `{"arn":"arn:aws:dynamodb:ap-northeast-2:987654321098:table/t"}`)
 }
 
-// stack is the router with the generic forward handler in front of a fake
-// AWS proxy on a unix socket, the only way out of the global API.
+// stack is the global API (router with the generic forward handler) in front
+// of the real AWS proxy on a unix socket, in front of a fake STS and origin.
 func stack(t *testing.T, authz iam.Authorizer, cred sigv4.Credential, logs io.Writer) (http.Handler, *origin) {
 	t.Helper()
+	sts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprintf(w, `<AssumeRoleResponse><AssumeRoleResult><Credentials>`+
+			`<AccessKeyId>session-key</AccessKeyId><SecretAccessKey>session-secret</SecretAccessKey>`+
+			`<SessionToken>session-token</SessionToken><Expiration>%s</Expiration>`+
+			`</Credentials></AssumeRoleResult></AssumeRoleResponse>`, time.Now().Add(time.Hour).UTC().Format(time.RFC3339))
+	}))
+	t.Cleanup(sts.Close)
+	o := &origin{}
+	aws := httptest.NewServer(o)
+	t.Cleanup(aws.Close)
+	p, err := proxy.New(oneAccount{}, sigv4.Credential{AccessKey: "source-key", Secret: "source-secret"},
+		sts.URL, "us-east-1", aws.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.ServiceEndpoint(aws.URL); err != nil {
+		t.Fatal(err)
+	}
 	dir, err := os.MkdirTemp(os.Getenv("TMPDIR"), "r794-")
 	if err != nil {
 		t.Fatal(err)
@@ -58,10 +90,15 @@ func stack(t *testing.T, authz iam.Authorizer, cred sigv4.Credential, logs io.Wr
 	if err != nil {
 		t.Fatal(err)
 	}
-	o := &origin{}
-	server := &http.Server{Handler: o, ReadHeaderTimeout: time.Second}
-	go func() { _ = server.Serve(listener) }()
-	t.Cleanup(func() { server.Close() })
+	server := &http.Server{Handler: p, ReadHeaderTimeout: time.Second}
+	done := make(chan error, 1)
+	go func() { done <- server.Serve(listener) }()
+	t.Cleanup(func() {
+		server.Close()
+		if err := <-done; !errors.Is(err, http.ErrServerClosed) {
+			t.Error(err)
+		}
+	})
 	f := router.NewForwarder(socket, audit.New(logs))
 	t.Cleanup(f.Close)
 	catalog := backend.NewStaticRegions(nil, []backend.AWSAccount{
@@ -117,7 +154,7 @@ func TestIAMDenyReachesNoOrigin(t *testing.T) {
 		t.Fatalf("deny answered %d %s, want 403", res.Code, res.Body)
 	}
 	if o.calls != 0 {
-		t.Fatalf("proxy received %d requests after an IAM deny", o.calls)
+		t.Fatalf("origin received %d requests after an IAM deny", o.calls)
 	}
 	if len(deny.asked) != 1 || deny.asked[0] != "dynamodb:PutItem" {
 		t.Fatalf("authorized %v, want [dynamodb:PutItem]", deny.asked)
@@ -133,12 +170,14 @@ func TestForwardedBodyIsByteIdentical(t *testing.T) {
 	h, o := stack(t, allow, cred, &logs)
 	body := []byte("{\"TableName\":\"t\",\"Item\":{\"k\":{\"B\":\"\x00\xff\r\n\"}}}  \n")
 	want := sha256.Sum256(body)
-	req := dynamoPut(t, cred, body)
-	req.Header.Set("X-Vws-Account", "000000000000")
 	res := httptest.NewRecorder()
-	h.ServeHTTP(res, req)
-	if res.Code != http.StatusOK || o.calls != 1 {
-		t.Fatalf("forwarded call answered %d %s; proxy calls %d", res.Code, res.Body, o.calls)
+	h.ServeHTTP(res, dynamoPut(t, cred, body))
+	if res.Code != http.StatusOK || res.Header().Get("X-Origin") != "aws" ||
+		res.Body.String() != `{"arn":"arn:aws:dynamodb:ap-northeast-2:987654321098:table/t"}` {
+		t.Fatalf("forwarded call answered %d %v %s", res.Code, res.Header(), res.Body)
+	}
+	if o.calls != 1 {
+		t.Fatalf("origin received %d requests, want 1", o.calls)
 	}
 	if got := sha256.Sum256(o.body[0]); got != want {
 		t.Fatalf("forwarded body sha256 %x, received %x", got, want)
@@ -146,14 +185,15 @@ func TestForwardedBodyIsByteIdentical(t *testing.T) {
 	r := o.got[0]
 	if r.Header.Get("X-Amz-Target") != "DynamoDB_20120810.PutItem" ||
 		r.Header.Get("Content-Type") != "application/x-amz-json-1.0" ||
-		r.Header.Get("X-Vws-Target-Service") != "dynamodb" ||
-		r.Header.Get("X-Vws-Target-Region") != "ap-northeast-2" ||
-		r.Header.Get("X-Vws-Account") != "123456789012" ||
-		r.Header.Get("Authorization") != "" {
-		t.Fatalf("forwarding metadata: %v", r.Header)
+		r.Header.Get("X-Amz-Security-Token") != "session-token" ||
+		!strings.Contains(r.Header.Get("Authorization"), "Credential=session-key/") ||
+		!strings.Contains(r.Header.Get("Authorization"), "/ap-northeast-2/dynamodb/aws4_request") ||
+		!strings.Contains(r.Header.Get("Authorization"), "x-amz-target") ||
+		r.Header.Get("X-Vws-Account") != "" {
+		t.Fatalf("origin request not re-signed for dynamodb: %v", r.Header)
 	}
 	if line := logs.String(); !strings.Contains(line, `"service":"dynamodb"`) ||
 		!strings.Contains(line, `"result":"accepted"`) {
-		t.Fatalf("forwarded change not audited: %s", line)
+		t.Fatalf("forwarded change not audited: %s", logs.String())
 	}
 }
