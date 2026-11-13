@@ -17,6 +17,11 @@ import (
 func (c *Client) WriteConfigTags(
 	ctx context.Context, vm VM, digest, tags, description string,
 ) (err error) {
+	return c.WriteConfig(ctx, vm, digest, url.Values{"tags": {tags}, "description": {description}})
+}
+
+// WriteConfig applies a synchronous config CAS without retrying a stale update.
+func (c *Client) WriteConfig(ctx context.Context, vm VM, digest string, fields url.Values) (err error) {
 	path, err := vm.path()
 	if err != nil {
 		return err
@@ -29,7 +34,11 @@ func (c *Client) WriteConfigTags(
 	defer cancel()
 	u := *c.base
 	u.Path = strings.TrimSuffix(u.Path, "/") + "/api2/json" + path
-	form := url.Values{"digest": {digest}, "tags": {tags}, "description": {description}}
+	form := url.Values{}
+	for key, values := range fields {
+		form[key] = append([]string(nil), values...)
+	}
+	form.Set("digest", digest)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPut, u.String(), strings.NewReader(form.Encode()))
 	if err != nil {
 		return fmt.Errorf("pve PUT %s: %w", path, err)

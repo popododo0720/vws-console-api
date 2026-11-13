@@ -29,6 +29,22 @@ type syncOperation struct {
 	keyHash [8]byte
 }
 
+type launchOperation struct {
+	keyHash [18]byte
+}
+
+func newLaunchOperation(cluster, key string) (launchOperation, error) {
+	if err := checkPart(cluster); err != nil || !launchHex(key, 64) {
+		return launchOperation{}, fmt.Errorf("%w: launch operation cluster or key", ErrInput)
+	}
+	sum := sha256.Sum256([]byte("vws-pve-op-launch-v1\x00" + cluster + "\x00" + key))
+	return launchOperation{keyHash: [18]byte(sum[:18])}, nil
+}
+
+func (op launchOperation) encode() (resource.OperationID, error) {
+	return encodeOperation(fmt.Sprintf("03%02x%x", int(resource.ActionRunInstances), op.keyHash))
+}
+
 func nodeHash(name string) uint16 {
 	sum := sha256.Sum256([]byte("vws-pve-op-node-v1\x00" + name))
 	return binary.BigEndian.Uint16(sum[:2])
@@ -110,6 +126,11 @@ func decodeOperation(id resource.OperationID) (operationID, error) {
 		return syncOperation{
 			action: action, kind: kind, local: local[6:23], keyHash: [8]byte(raw[12:20]),
 		}, nil
+	case 3:
+		if resource.Action(raw[1]) != resource.ActionRunInstances {
+			return nil, fmt.Errorf("%w: launch operation action", ErrInput)
+		}
+		return launchOperation{keyHash: [18]byte(raw[2:20])}, nil
 	default:
 		return nil, fmt.Errorf("%w: unknown operation version %02x", ErrInput, raw[0])
 	}

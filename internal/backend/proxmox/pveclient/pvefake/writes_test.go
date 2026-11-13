@@ -141,6 +141,50 @@ func TestConfigCASAndAtomicPrivileges(t *testing.T) {
 	w.write(t, "PUT", "/nodes/pve2/qemu/101/config", "description=foreign", "scoped@pve!one", 403)
 }
 
+func TestCloneDescriptionAndConfigClientCAS(t *testing.T) {
+	w := newWriteWorld(t)
+	w.delay(t, 10)
+	srv := httptest.NewServer(w.f)
+	t.Cleanup(srv.Close)
+	c := client(t, srv, "writer@pve!one", "k")
+	source := pveclient.VM{Node: "pve1", VMID: 9000}
+	upid, err := c.Clone(t.Context(), source, 102, "vws-a", "launch", "key=launch", "", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg := w.config(t, "pve1", 102); cfg["description"] != "key=launch" || cfg["lock"] != "clone" {
+		t.Fatal(cfg)
+	}
+	w.now.Add(10)
+	if w.status(t, upid).ExitStatus != "OK" {
+		t.Fatal("clone failed")
+	}
+	target := pveclient.VM{Node: "pve1", VMID: 102}
+	digest := w.config(t, "pve1", 102)["digest"].(string)
+	form := url.Values{"cores": {"3"}, "description": {"finalized"}, "digest": {"ignored"}}
+	if err := c.WriteConfig(t.Context(), target, digest, form); err != nil {
+		t.Fatal(err)
+	}
+	before := w.config(t, "pve1", 102)
+	if before["cores"] != float64(3) || before["description"] != "finalized" || form.Get("digest") != "ignored" {
+		t.Fatal(before, form)
+	}
+	err = c.WriteConfig(t.Context(), target, digest, url.Values{"cores": {"4"}, "description": {"lost"}})
+	if !pveclient.DigestConflict(err) {
+		t.Fatalf("stale digest = %v", err)
+	}
+	after := w.config(t, "pve1", 102)
+	if after["digest"] != before["digest"] || after["cores"] != float64(3) || after["description"] != "finalized" {
+		t.Fatal(after)
+	}
+	if err := c.WriteConfig(t.Context(), target, "", form); err == nil {
+		t.Fatal("empty digest accepted")
+	}
+	if _, err := c.Clone(t.Context(), source, 0, "", "", "", "", true); err == nil {
+		t.Fatal("invalid clone accepted")
+	}
+}
+
 func TestCloneCopiesDisksAndConfigACLsAreAtomic(t *testing.T) {
 	w := newWriteWorld(t)
 	w.write(t, "POST", "/nodes/pve1/qemu/100/clone", "newid=102&full=1", "writer@pve!one", 200)
