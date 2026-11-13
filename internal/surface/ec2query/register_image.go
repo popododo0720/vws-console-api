@@ -106,13 +106,3 @@ func onlyTrue(r *http.Request, key, reason string) error {
 		return resource.Invalid(key, "Value ("+v+") for parameter "+key+" is invalid.")
 	}
 }
-
-func allowRegisterImage(key string) bool {
-	switch key {
-	case "Action", "Version", "ClientToken", "Name", "Description", "Architecture", "VirtualizationType",
-		"EnaSupport", "RootDeviceName", registerDevice, registerSnapshot, registerDeleteOnEnd:
-		return true
-	default:
-		return false
-	}
-}

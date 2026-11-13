@@ -612,7 +612,7 @@ func refuseUnsupportedDeviceFields(r *http.Request, prefix string) error {
 // one adds a volume to each instance (#423 AC2), in index order. Normalize
 // checks them all with the CreateVolume rules and the device names. A field
 // of unsupportedDeviceFields is refused first, at any index, so the answer
-// names it. The other mapping fields are refused by allowRun.
+// names it. The other mapping fields are refused by rejectUnknown.
 func blockDeviceMappings(r *http.Request) (ebsMapping, []resource.LaunchVolume, error) {
 	var root ebsMapping
 	var extras []resource.LaunchVolume
@@ -677,7 +677,7 @@ func networkInterfaceFields() []string { return []string{"DeviceIndex", "SubnetI
 
 // networkInterfaces reads the RunInstances NetworkInterface.N members. Each
 // places one interface on a subnet; Normalize checks the device indexes.
-// Every other member field is refused by allowRun rather than ignored.
+// Every other member field is refused by rejectUnknown rather than ignored.
 func networkInterfaces(r *http.Request) ([]resource.NetworkInterfaceSpec, error) {
 	var out []resource.NetworkInterfaceSpec
 	for i := 1; i <= resource.MaxNetworkInterfaces; i++ {
@@ -805,113 +805,16 @@ type encodingText interface {
 }
 
 func rejectUnknown(r *http.Request, action string) error {
-	var allow func(string) bool
-	switch action {
-	case resource.ActionRunInstances.String():
-		allow = allowRun
-	case resource.ActionStopInstances.String():
-		allow = allowStop
-	case resource.ActionCreateSubnet.String():
-		allow = allowSubnet
-	case resource.ActionCreateVpc.String():
-		allow = allowCreateVpc
-	case resource.ActionDeleteVpc.String():
-		allow = allowDeleteVpc
-	case resource.ActionCreateVolume.String():
-		allow = allowCreateVolume
-	case resource.ActionAttachVolume.String():
-		allow = allowAttachVolume
-	case resource.ActionDetachVolume.String():
-		allow = allowDetachVolume
-	case resource.ActionDeleteVolume.String():
-		allow = allowDeleteVolume
-	case resource.ActionModifyVolume.String():
-		allow = allowModifyVolume
-	case resource.ActionCreateTags.String():
-		allow = allowCreateTags
-	case resource.ActionDeleteTags.String():
-		allow = allowDeleteTags
-	case resource.ActionCreateSecurityGroup.String():
-		allow = allowCreateGroup
-	case resource.ActionAuthorizeSecurityGroupIngress.String():
-		allow = allowAuthorize
-	case resource.ActionRevokeSecurityGroupIngress.String():
-		allow = allowRevoke
-	case resource.ActionStartInstances.String():
-		allow = allowStop
-	case resource.ActionTerminateInstances.String():
-		allow = allowStop
-	case resource.ActionRebootInstances.String():
-		allow = allowReboot
-	case resource.ActionCreateKeyPair.String():
-		allow = allowCreateKey
-	case resource.ActionDeleteKeyPair.String():
-		allow = allowDeleteKey
-	case "ImportKeyPair":
-		allow = allowImportKey
-	case "DescribeInstanceAttribute":
-		allow = allowInstanceAttribute
-	case resource.ActionDeleteSecurityGroup.String():
-		allow = allowDeleteGroup
-	case resource.ActionDeleteSubnet.String():
-		allow = allowDeleteSubnet
-	case resource.ActionAllocateAddress.String():
-		allow = allowAllocateAddress
-	case resource.ActionReleaseAddress.String():
-		allow = allowReleaseAddress
-	case resource.ActionCreateSnapshot.String():
-		allow = allowCreateSnapshot
-	case resource.ActionDeleteSnapshot.String():
-		allow = allowDeleteSnapshot
-	case resource.ActionRegisterImage.String():
-		allow = allowRegisterImage
-	case resource.ActionAssociateAddress.String():
-		allow = allowAssociateAddress
-	case resource.ActionDisassociateAddress.String():
-		allow = allowDisassociateAddress
-	case "DescribeInstances":
-		allow = allowDescribeInstances
-	case "DescribeSubnets":
-		allow = allowDescribeSubnets
-	case "DescribeVpcs":
-		allow = allowDescribeVpcs
-	case "DescribeVolumes":
-		allow = allowDescribeVolumes
-	case "DescribeImages":
-		allow = allowDescribeImages
-	case "DescribeKeyPairs":
-		allow = allowDescribeKeyPairs
-	case "DescribeSecurityGroups":
-		allow = allowDescribeGroups
-	case "DescribeAddresses":
-		allow = allowDescribeAddresses
-	case "DescribeSnapshots":
-		allow = allowDescribeSnapshots
-	case "DescribeInstanceStatus":
-		allow = allowDescribeInstanceStatus
-	case "DescribeInstanceTypes":
-		allow = allowDescribeInstanceTypes
-	case "DescribeTags":
-		allow = allowDescribeTags
-	case "DescribeVolumesModifications":
-		allow = allowDescribeVolumesModifications
-	case "DescribeAvailabilityZones":
-		allow = allowDescribeAvailabilityZones
-	case "DescribeRegions":
-		allow = allowDescribeRegions
-	case "DescribeRouteTables":
-		allow = allowDescribeRouteTables
-	default:
-		allow = allowCommon
-	}
+	keys := queryKeys(action)
+	ingress := action == resource.ActionAuthorizeSecurityGroupIngress.String() ||
+		action == resource.ActionRevokeSecurityGroupIngress.String()
 	pastLimit := false
 	for key := range r.Form {
-		if allow(key) {
+		if acceptsKey(keys, key) {
 			continue
 		}
 		// An unknown key wins over the limit, whatever the map order.
-		if (action == resource.ActionAuthorizeSecurityGroupIngress.String() ||
-			action == resource.ActionRevokeSecurityGroupIngress.String()) && ruleIndexPastLimit(key) {
+		if ingress && ruleIndexPastLimit(keys, key) {
 			pastLimit = true
 			continue
 		}
@@ -926,7 +829,7 @@ func rejectUnknown(r *http.Request, action string) error {
 // ruleIndexPastLimit reports an authorize key that is refused only because an
 // index is above maxQueryIndex. Such an index names a rule past the 60 a group
 // can hold, so it is the group limit, not an unknown parameter (#219).
-func ruleIndexPastLimit(key string) bool {
+func ruleIndexPastLimit(keys []queryKey, key string) bool {
 	parts := strings.Split(key, ".")
 	past := false
 	for i, part := range parts {
@@ -935,275 +838,11 @@ func ruleIndexPastLimit(key string) bool {
 			past = true
 		}
 	}
-	return past && allowAuthorize(strings.Join(parts, "."))
-}
-
-func allowCommon(key string) bool {
-	return key == "Action" || key == "Version"
-}
-
-func allowRun(key string) bool {
-	switch key {
-	case "Action", "Version", "ImageId", "InstanceType", "SubnetId", "MinCount", "MaxCount", "ClientToken", "KeyName", "UserData":
-		return true
-	default:
-		return tagField(key) || tagSpecField(key) || blockDeviceField(key) || networkInterfaceField(key)
-	}
-}
-
-// networkInterfaceField is a NetworkInterface.N field networkInterfaces
-// reads. N is written as networkInterfaces reads it, so no member is
-// accepted and then skipped.
-func networkInterfaceField(key string) bool {
-	rest, ok := strings.CutPrefix(key, "NetworkInterface.")
-	if !ok {
-		return false
-	}
-	n, field, ok := strings.Cut(rest, ".")
-	i, err := strconv.Atoi(n)
-	return ok && err == nil && strconv.Itoa(i) == n && inRange(n, resource.MaxNetworkInterfaces) &&
-		slices.Contains(networkInterfaceFields(), field)
-}
-
-// blockDeviceField is a BlockDeviceMapping.N field blockDeviceMappings
-// reads or refuses by name.
-func blockDeviceField(key string) bool {
-	rest, ok := strings.CutPrefix(key, "BlockDeviceMapping.")
-	if !ok {
-		return false
-	}
-	n, field, ok := strings.Cut(rest, ".")
-	return ok && inRange(n, maxBlockDeviceMappings) && (slices.Contains(mappingFields(), field) ||
-		slices.ContainsFunc(unsupportedDeviceFields(), func(u unsupportedDeviceField) bool { return u.field == field }))
-}
-
-func allowStop(key string) bool {
-	return key == "Action" || key == "Version" || key == "ClientToken" || indexed(key, "InstanceId", 100)
-}
-
-func allowSubnet(key string) bool {
-	return key == "Action" || key == "Version" || key == "ClientToken" || key == "CidrBlock" || key == "VpcId" || key == "AvailabilityZone" || tagSpecField(key)
-}
-
-func allowCreateVpc(key string) bool {
-	return key == "Action" || key == "Version" || key == "ClientToken" || key == "CidrBlock" || key == "InstanceTenancy" || tagSpecField(key)
-}
-
-func allowDeleteVpc(key string) bool {
-	return key == "Action" || key == "Version" || key == "ClientToken" || key == "VpcId"
-}
-
-func allowCreateVolume(key string) bool {
-	switch key {
-	case "Action", "Version", "ClientToken", "Size", "AvailabilityZone", "VolumeType", "SnapshotId", "Iops", "Throughput":
-		return true
-	default:
-		return tagSpecField(key)
-	}
-}
-
-func allowAttachVolume(key string) bool {
-	return key == "Action" || key == "Version" || key == "ClientToken" || key == "VolumeId" || key == "InstanceId" || key == "Device"
-}
-
-func allowDetachVolume(key string) bool {
-	switch key {
-	case "Action", "Version", "ClientToken", "VolumeId", "InstanceId", "Device", "Force":
-		return true
-	default:
-		return false
-	}
-}
-
-func allowDeleteVolume(key string) bool {
-	return key == "Action" || key == "Version" || key == "ClientToken" || key == "VolumeId"
-}
-
-func allowModifyVolume(key string) bool {
-	switch key {
-	case "Action", "Version", "VolumeId", "Size", "VolumeType", "Iops", "Throughput":
-		return true
-	default:
-		return false
-	}
-}
-
-// allowDeleteTags is allowCreateTags without ClientToken, which EC2
-// DeleteTags does not take.
-func allowDeleteTags(key string) bool {
-	return key != "ClientToken" && allowCreateTags(key)
-}
-
-func allowCreateTags(key string) bool {
-	if key == "Action" || key == "Version" || key == "ClientToken" || indexed(key, "ResourceId", 20) {
-		return true
-	}
-	rest, ok := strings.CutPrefix(key, "Tag.")
-	if !ok {
-		return false
-	}
-	n, field, ok := strings.Cut(rest, ".")
-	return ok && (field == "Key" || field == "Value") && inRange(n, 50)
-}
-
-func allowCreateGroup(key string) bool {
-	return key == "Action" || key == "Version" || key == "ClientToken" || key == "GroupName" || key == "GroupDescription" || key == "VpcId"
-}
-
-func allowAuthorize(key string) bool {
-	if legacyRuleField(key) || key == "Action" || key == "Version" || key == "ClientToken" || key == "GroupId" {
-		return true
-	}
-	_, field, ok := ipPermissionKey(key)
-	return ok && permissionLeaf(field)
-}
-
-// allowRevoke takes the same IpPermissions list as authorize.
-func allowRevoke(key string) bool {
-	return allowAuthorize(key)
+	return past && acceptsKey(keys, strings.Join(parts, "."))
 }
 
 func legacyRuleField(key string) bool {
 	return key == "IpProtocol" || key == "FromPort" || key == "ToPort" || key == "CidrIp"
-}
-
-func allowCreateKey(key string) bool {
-	return key == "Action" || key == "Version" || key == "ClientToken" ||
-		key == "KeyName" || key == "KeyType" || key == "KeyFormat" || tagSpecField(key)
-}
-
-func allowImportKey(key string) bool {
-	return key == "Action" || key == "Version" || key == "KeyName" ||
-		key == "PublicKeyMaterial" || tagSpecField(key)
-}
-
-func allowInstanceAttribute(key string) bool {
-	return key == "Action" || key == "Version" || key == "InstanceId" || key == "Attribute" || key == "DryRun"
-}
-
-func allowDeleteKey(key string) bool {
-	return key == "Action" || key == "Version" || key == "ClientToken" || key == "KeyName" || key == "KeyPairId"
-}
-
-func allowDeleteGroup(key string) bool {
-	return key == "Action" || key == "Version" || key == "ClientToken" || key == "GroupId" || key == "GroupName"
-}
-
-func allowDeleteSubnet(key string) bool {
-	return key == "Action" || key == "Version" || key == "ClientToken" || key == "SubnetId"
-}
-
-func allowAllocateAddress(key string) bool {
-	return key == "Action" || key == "Version" || key == "ClientToken" || key == "Domain"
-}
-
-func allowReleaseAddress(key string) bool {
-	return key == "Action" || key == "Version" || key == "ClientToken" || key == "AllocationId"
-}
-
-func allowAssociateAddress(key string) bool {
-	return key == "Action" || key == "Version" || key == "ClientToken" || key == "AllocationId" || key == "InstanceId"
-}
-
-func allowDisassociateAddress(key string) bool {
-	return key == "Action" || key == "Version" || key == "ClientToken" || key == "AssociationId"
-}
-
-func allowCreateSnapshot(key string) bool {
-	return key == "Action" || key == "Version" || key == "ClientToken" ||
-		key == "VolumeId" || key == "Description" || tagSpecField(key)
-}
-
-func allowDeleteSnapshot(key string) bool {
-	return key == "Action" || key == "Version" || key == "ClientToken" || key == "SnapshotId"
-}
-
-func allowDescribeBase(key string) bool {
-	switch key {
-	case "Action", "Version", "MaxResults", "maxResults", "NextToken", "nextToken", "DryRun", "dryRun":
-		return true
-	default:
-		return filterField(key)
-	}
-}
-
-func allowDescribeKeyPairs(key string) bool {
-	return allowDescribeBase(key) || indexed(key, "KeyName", 100) || indexed(key, "KeyPairId", 100) || key == "IncludePublicKey"
-}
-
-func allowDescribeGroups(key string) bool {
-	return allowDescribeBase(key) || indexed(key, "GroupId", 100) || indexed(key, "GroupName", 100)
-}
-
-func allowDescribeAddresses(key string) bool {
-	return allowDescribeBase(key) || indexed(key, "AllocationId", 100) || indexed(key, "PublicIp", 100)
-}
-
-func allowDescribeSnapshots(key string) bool {
-	return allowDescribeBase(key) || indexed(key, "SnapshotId", 100) || indexed(key, "Owner", 100) || indexed(key, "OwnerId", 100) || indexed(key, "RestorableBy", 100)
-}
-
-func allowDescribeVpcs(key string) bool {
-	return allowDescribeBase(key) || indexed(key, "VpcId", 100)
-}
-
-func allowDescribeVolumes(key string) bool {
-	return allowDescribeBase(key) || indexed(key, "VolumeId", 100)
-}
-
-func allowDescribeImages(key string) bool {
-	return allowDescribeBase(key) || indexed(key, "ImageId", 100) || indexed(key, "Owner", 100) || indexed(key, "OwnerId", 100) || indexed(key, "ExecutableBy", 100) || key == "IncludeDeprecated" || key == "IncludeDisabled"
-}
-
-func allowDescribeInstances(key string) bool {
-	return allowDescribeBase(key) || indexed(key, "InstanceId", 100)
-}
-
-func allowDescribeSubnets(key string) bool {
-	return allowDescribeBase(key) || indexed(key, "SubnetId", 100)
-}
-
-func allowDescribeInstanceStatus(key string) bool {
-	return allowDescribeBase(key) || indexed(key, "InstanceId", 100) ||
-		key == "IncludeAllInstances" || key == "includeAllInstances" ||
-		key == "IncludeManagedResources" || key == "includeManagedResources"
-}
-
-func allowDescribeInstanceTypes(key string) bool {
-	return allowDescribeBase(key) || indexed(key, "InstanceType", 100) ||
-		key == "IncludeUnsupportedInRegion" || key == "includeUnsupportedInRegion"
-}
-
-func allowDescribeTags(key string) bool {
-	return allowDescribeBase(key)
-}
-
-func allowDescribeVolumesModifications(key string) bool {
-	return allowDescribeBase(key) || indexed(key, "VolumeId", 100) ||
-		key == "IncludeManagedResources" || key == "includeManagedResources"
-}
-
-// allowDescribeSimple is the describe shape without pagination.
-func allowDescribeSimple(key string) bool {
-	switch key {
-	case "Action", "Version", "DryRun", "dryRun":
-		return true
-	default:
-		return filterField(key)
-	}
-}
-
-func allowDescribeAvailabilityZones(key string) bool {
-	return allowDescribeSimple(key) || indexed(key, "ZoneName", 100) || indexed(key, "ZoneId", 100) ||
-		key == "AllAvailabilityZones"
-}
-
-func allowDescribeRegions(key string) bool {
-	return allowDescribeSimple(key) || indexed(key, "RegionName", 100) || key == "AllRegions"
-}
-
-func allowDescribeRouteTables(key string) bool {
-	return allowDescribeBase(key) || indexed(key, "RouteTableId", 100)
 }
 
 func rejectDryRun(r *http.Request) error {
@@ -1286,29 +925,6 @@ func selectsCaller(values []string, account resource.AccountID) bool {
 	return false
 }
 
-func tagSpecField(key string) bool {
-	rest, ok := strings.CutPrefix(key, "TagSpecification.")
-	if !ok {
-		return false
-	}
-	n, field, ok := strings.Cut(rest, ".")
-	if !ok || !inRange(n, 5) {
-		return false
-	}
-	if field == "ResourceType" {
-		return true
-	}
-	tagRest, ok := strings.CutPrefix(field, "Tag.")
-	if !ok {
-		return false
-	}
-	m, leaf, ok := strings.Cut(tagRest, ".")
-	if !ok || !inRange(m, resource.MaxTags) {
-		return false
-	}
-	return leaf == "Key" || leaf == "Value"
-}
-
 // ipPermissionKey splits IpPermissions.N.field. N is written without leading
 // zeros, so two keys never name one permission.
 func ipPermissionKey(key string) (int, string, bool) {
@@ -1339,35 +955,6 @@ func permissionSource(field string) (string, int, string, bool) {
 	return list, m, leaf, ok
 }
 
-func permissionLeaf(field string) bool {
-	switch field {
-	case "IpProtocol", "FromPort", "ToPort":
-		return true
-	default:
-	}
-	list, _, leaf, ok := permissionSource(field)
-	if !ok {
-		return false
-	}
-	switch list {
-	case "IpRanges":
-		return leaf == "CidrIp" || leaf == "Description"
-	case "Ipv6Ranges":
-		return leaf == "CidrIpv6" || leaf == "Description"
-	case "PrefixListIds":
-		return leaf == "PrefixListId" || leaf == "Description"
-	case "Groups":
-		switch leaf {
-		case "Description", "GroupId", "GroupName", "PeeringStatus", "UserId", "VpcId", "VpcPeeringConnectionId":
-			return true
-		default:
-			return false
-		}
-	default:
-		return false
-	}
-}
-
 func queryIndex(raw string) (int, bool) {
 	n, err := strconv.Atoi(raw)
 	if err != nil || n < 1 || n > maxQueryIndex || strconv.Itoa(n) != raw {
@@ -1376,44 +963,8 @@ func queryIndex(raw string) (int, bool) {
 	return n, true
 }
 
-func tagField(key string) bool {
-	rest, ok := strings.CutPrefix(key, "Tag.")
-	if !ok {
-		return false
-	}
-	n, field, ok := strings.Cut(rest, ".")
-	if !ok || (field != "Key" && field != "Value") {
-		return false
-	}
-	return inRange(n, 20)
-}
-
-func filterField(key string) bool {
-	rest, ok := strings.CutPrefix(key, "Filter.")
-	if !ok {
-		return false
-	}
-	n, field, ok := strings.Cut(rest, ".")
-	if !ok || !inRange(n, 20) {
-		return false
-	}
-	if field == "Name" {
-		return true
-	}
-	idx, ok := strings.CutPrefix(field, "Value.")
-	return ok && inRange(idx, filterValueMax)
-}
-
 // filterValueMax is the most values one Filter.N takes.
 const filterValueMax = 20
-
-func indexed(key, prefix string, max int) bool {
-	rest, ok := strings.CutPrefix(key, prefix+".")
-	if !ok || strings.Contains(rest, ".") {
-		return false
-	}
-	return inRange(rest, max)
-}
 
 // inRange reports an index from 1 to max spelled as the readers spell it,
 // strconv.Itoa(n). Another spelling, such as 01 or +1, names a key no reader

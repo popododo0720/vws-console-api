@@ -957,7 +957,7 @@ func tagSelectors(r *http.Request) ([]resource.TagSelector, error) {
 	return out, resource.ValidateTagSelectors(out)
 }
 
-// maxDeleteTagIndex bounds Tag.N on DeleteTags, as allowDeleteTags does.
+// maxDeleteTagIndex bounds Tag.N on DeleteTags, as its queryKeys do.
 const maxDeleteTagIndex = resource.MaxTags
 
 // deleteTags deletes tags from instances, VPCs, subnets and volumes, mixed as in
