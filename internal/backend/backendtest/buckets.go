@@ -8,6 +8,23 @@ import (
 	"github.com/popododo0720/vws-console-api/internal/resource"
 )
 
+// S3 runs the shared bucket and object groups without compute requirements.
+func S3(t *testing.T, newSet Harness) {
+	t.Helper()
+	t.Run("BucketCreate", func(t *testing.T) { BucketCreate(t, newSet) })
+	t.Run("Objects", func(t *testing.T) {
+		account, err := resource.Parse[resource.AccountID]("123456789012")
+		if err != nil {
+			t.Fatal(err)
+		}
+		other, err := resource.Parse[resource.AccountID]("210987654321")
+		if err != nil {
+			t.Fatal(err)
+		}
+		contractObjects(t.Context(), t, newSet(), account, other)
+	})
+}
+
 // BucketCreate is the #315 table. S3 CreateBucket on a name the caller
 // already owns is BucketAlreadyOwnedByYou and changes nothing; a name
 // another account holds is BucketAlreadyExists. A name freed by

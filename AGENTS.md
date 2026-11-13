@@ -16,6 +16,7 @@ project is someone else's cloud.
 | `internal/cloud` | The kernel: normalization, idempotency keys, tenancy checks. One backend call per method. |
 | `internal/backend` | The client contract (`Compute`, `Storage`, `Network`) in model types. |
 | `internal/backend/fake` | In-memory backends that honor the contract. |
+| `internal/backend/s3proxy` | Path-style S3 forwarding with encrypted project RGW credentials from the admin registry. |
 | `internal/backend/backendtest` | The contract as tests. Every backend runs it. |
 | `internal/backend/grpcclient/iamclient` | The vws-iam client. The only package that sees protobuf. |
 | `internal/backend/launch` | The RunInstances launch record and the tracker that writes it on transitions. |
@@ -186,6 +187,7 @@ change both files together.
 | Each commit is one logical change that passes tests. | Judgment: `git rebase -x 'go test ./...' origin/main` |
 | Proxmox instance and volume tag writes preserve system tags and operator text, refuse reserved keys, send config digests and retry a conflict once. Instance overflow uses the description; volume tags must fit 128 encoded characters. | `TestTagWritesRoundTripRetryRestart`, `TestTagWritesRejectReservedAndBoundary`, `TestTagWritesDigestConflict`, `TestMutationMethodsRejectOtherPools` |
 | The repo is English only. | CI job `english` |
+| S3 forwarding signs with the current project's encrypted RGW key, denies missing keys before origin access, bounds origin replies, refuses redirects and never logs credentials. | `TestS3ContractAndLogCanary`, `TestMissingKeyMakesNoOriginCall`, `TestMalformedOriginResponses`, `TestOriginCannotRedirectCredentials`; `storetest.Run` RGW credentials |
 
 ## Working here
 
