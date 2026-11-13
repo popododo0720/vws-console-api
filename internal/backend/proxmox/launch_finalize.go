@@ -16,6 +16,11 @@ import (
 	"github.com/popododo0720/vws-console-api/internal/resource"
 )
 
+type launchInventory struct {
+	vms   []inventoryVM
+	stale bool
+}
+
 // FinalizeLaunches resumes unfinished clones in the managed pools.
 func (b *Backend) FinalizeLaunches(ctx context.Context, fence func(context.Context) error) error {
 	if b.cfg.ReadOnly {
@@ -46,11 +51,12 @@ func (b *Backend) FinalizeLaunches(ctx context.Context, fence func(context.Conte
 			failures = append(failures, err)
 			continue
 		}
+		inventory := launchInventory{vms: vms}
 		for _, vm := range vms {
 			if vm.Pool != s.Pool || vm.Status == "unknown" {
 				continue
 			}
-			if err := b.finalizeLaunch(ctx, s, vm, checkFence); err != nil {
+			if err := b.finalizeLaunch(ctx, s, vm, &inventory, checkFence); err != nil {
 				failures = append(failures, fmt.Errorf("proxmox: finalize VM %d: %w", vm.VMID, err))
 			}
 			if ctx.Err() != nil || fenceErr != nil {
@@ -62,7 +68,7 @@ func (b *Backend) FinalizeLaunches(ctx context.Context, fence func(context.Conte
 }
 
 func (b *Backend) finalizeLaunch(
-	ctx context.Context, s backend.Scope, vm inventoryVM, fence func(context.Context) error,
+	ctx context.Context, s backend.Scope, vm inventoryVM, inventory *launchInventory, fence func(context.Context) error,
 ) error {
 	target := pveclient.VM{Node: vm.Node, VMID: vm.VMID}
 	ids, err := NewIDs(b.cluster)
@@ -72,16 +78,17 @@ func (b *Backend) finalizeLaunch(
 finalize:
 	for stage := range 2 {
 		for attempt := range 2 {
-			if attempt > 0 {
-				current, err := b.visibleVMs(ctx, s)
+			if inventory.stale || stage == 1 || attempt > 0 {
+				inventory.vms, err = b.visibleVMs(ctx, s)
 				if err != nil {
 					return err
 				}
-				if !slices.ContainsFunc(current, func(v inventoryVM) bool {
-					return v.VMID == vm.VMID && v.Node == vm.Node && v.Pool == s.Pool && v.Status != "unknown"
-				}) {
-					return resource.Denied("proxmox: finalize VM left its pool or went offline")
-				}
+				inventory.stale = false
+			}
+			if !slices.ContainsFunc(inventory.vms, func(v inventoryVM) bool {
+				return v.VMID == vm.VMID && v.Node == vm.Node && v.Pool == s.Pool && v.Status != "unknown"
+			}) {
+				return resource.Denied("proxmox: finalize VM left its pool or went offline")
 			}
 			cfg, err := b.client.VMConfig(ctx, target)
 			if err != nil {
@@ -142,18 +149,17 @@ finalize:
 			break
 		}
 		if stage == 0 {
-			// Refresh ownership and status after config; a completed start needs no second submission.
-			vms, err := b.visibleVMs(ctx, s)
+			inventory.vms, err = b.visibleVMs(ctx, s)
 			if err != nil {
 				return err
 			}
-			index := slices.IndexFunc(vms, func(v inventoryVM) bool {
+			index := slices.IndexFunc(inventory.vms, func(v inventoryVM) bool {
 				return v.VMID == vm.VMID && v.Node == vm.Node && v.Pool == s.Pool
 			})
 			if index < 0 {
 				return resource.Denied("proxmox: finalize VM left its pool")
 			}
-			if vms[index].Status == "running" {
+			if inventory.vms[index].Status == "running" {
 				continue
 			}
 			rows, err := b.client.OwnTasks(ctx, vm.Node, url.Values{
@@ -172,6 +178,7 @@ finalize:
 				upid, err = b.client.Power(ctx, target, "start", 0)
 			}
 			if err == nil {
+				inventory.stale = true
 				err = b.client.WaitTask(ctx, pveclient.Task{Node: vm.Node, UPID: upid}, pveclient.StartWait)
 			}
 			if err != nil {

@@ -36,19 +36,55 @@ func finalizeBackend(t *testing.T) (*launchWorld, backend.Mutation, resource.Run
 		s.Roles = append(s.Roles, pvefake.Role{ID: "Network", Privs: []string{"SDN.Use"}})
 		s.Tokens[0].ACL = append(s.Tokens[0].ACL, pvefake.ACE{Path: "/sdn/zones/localnetwork", Role: "Network"})
 	})
-	m.Pool = "managed"
-	w.b.cfg.Pools = map[string]string{m.Account.String(): m.Pool}
+	m.Pool, w.b.cfg.Pools = "managed", map[string]string{m.Account.String(): "managed"}
 	return w, m, req
 }
 
 func admitFinalize(context.Context) error { return nil }
 
-func launchVM(t *testing.T, w *launchWorld, index int) pveclient.VM {
+func checkLaunch(t *testing.T, err error) {
 	t.Helper()
-	id, err := strconv.Atoi(w.forms[index].Get("newid"))
 	if err != nil {
 		t.Fatal(err)
 	}
+}
+
+func TestFinalizeLaunchPoolMoveAfterWait(t *testing.T) {
+	for _, index := range []int{0, 1} {
+		t.Run(strconv.Itoa(index), func(t *testing.T) {
+			w, m, req := finalizeBackend(t)
+			_, err := w.b.RunInstances(t.Context(), m, req)
+			checkLaunch(t, err)
+			checkLaunch(t, w.f.SetTaskDelay(time.Hour))
+			vm, before := launchVM(t, w, index), 0
+			move := sync.OnceFunc(func() {
+				if err := w.f.MoveVM(vm.VMID, "images"); err != nil {
+					t.Error(err)
+				}
+				before = len(w.f.Requests())
+			})
+			w.intercept = func(_ http.ResponseWriter, r *http.Request) bool {
+				if strings.Contains(r.URL.Path, ":qmstart:") {
+					w.elapsed.Add(int64(time.Hour))
+					move()
+				}
+				return false
+			}
+			err = w.b.FinalizeLaunches(t.Context(), admitFinalize)
+			if resource.CodeOf(err) != resource.CodePermissionDenied ||
+				slices.ContainsFunc(w.f.Requests()[before:], func(request string) bool {
+					return !strings.HasPrefix(request, "GET ") && strings.Contains(request, "/"+strconv.Itoa(vm.VMID)+"/")
+				}) {
+				t.Fatalf("pool-moved VM %d written or accepted: %v", vm.VMID, err)
+			}
+		})
+	}
+}
+
+func launchVM(t *testing.T, w *launchWorld, index int) pveclient.VM {
+	t.Helper()
+	id, err := strconv.Atoi(w.forms[index].Get("newid"))
+	checkLaunch(t, err)
 	return pveclient.VM{Node: "pve1", VMID: id}
 }
 
@@ -79,12 +115,8 @@ func TestFinalizeLaunchDoesNotBlockAccept(t *testing.T) {
 	w, m, req := finalizeBackend(t)
 	req.Count = 1
 	first, err := w.b.RunInstances(t.Context(), m, req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := w.f.SetTaskDelay(time.Hour); err != nil {
-		t.Fatal(err)
-	}
+	checkLaunch(t, err)
+	checkLaunch(t, w.f.SetTaskDelay(time.Hour))
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	held, release := make(chan struct{}), make(chan struct{})
 	signal := sync.OnceFunc(func() { close(held) })
@@ -134,9 +166,7 @@ func TestFinalizeLaunchDoesNotBlockAccept(t *testing.T) {
 		t.Fatalf("overlapping pass reached PVE: %v", err)
 	}
 	unblock()
-	if err := <-finished; err != nil {
-		t.Fatal(err)
-	}
+	checkLaunch(t, <-finished)
 	recovered, err := w.b.RecoverLaunch(t.Context(), m.Scope, m.Key, m.Fingerprint)
 	if err != nil || recovered.Operation.State != resource.OperationSucceeded ||
 		recovered.Instances[0] != first.Items[0].ID {
@@ -149,11 +179,10 @@ func TestFinalizeLaunchFenceAndInventory(t *testing.T) {
 		t.Run(strconv.Itoa(limit), func(t *testing.T) {
 			w, m, req := finalizeBackend(t)
 			req.Count = 3
-			if _, err := w.b.RunInstances(t.Context(), m, req); err != nil {
-				t.Fatal(err)
-			}
+			_, err := w.b.RunInstances(t.Context(), m, req)
+			checkLaunch(t, err)
 			before, calls := len(w.f.Requests()), 0
-			err := w.b.FinalizeLaunches(t.Context(), func(context.Context) error {
+			err = w.b.FinalizeLaunches(t.Context(), func(context.Context) error {
 				calls++
 				if limit >= 0 && calls > limit {
 					return errors.New("leadership lost")
@@ -173,7 +202,7 @@ func TestFinalizeLaunchFenceAndInventory(t *testing.T) {
 			if limit >= 0 {
 				want, wantCalls = limit, limit+1
 			}
-			if (err != nil) != (limit >= 0) || writes != want || calls != wantCalls || inventories > req.Count+1 {
+			if (err != nil) != (limit >= 0) || writes != want || calls != wantCalls || inventories > 1+2*req.Count {
 				t.Fatalf("fence=%v writes=%d calls=%d inventories=%d", err, writes, calls, inventories)
 			}
 		})
@@ -242,12 +271,8 @@ func TestFinalizeLaunchCrashWindows(t *testing.T) {
 				w.intercept = nil
 			}
 			w.b, err = New(t.Context(), w.b.client, Identity(w.b), w.b.cfg)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := w.b.FinalizeLaunches(t.Context(), admitFinalize); err != nil {
-				t.Fatal(err)
-			}
+			checkLaunch(t, err)
+			checkLaunch(t, w.b.FinalizeLaunches(t.Context(), admitFinalize))
 			assertFinalized(t, w, m, accepted)
 			if window == "W4" && configWrites != req.Count {
 				t.Fatalf("replayed config writes=%d, want %d", configWrites, req.Count)
@@ -258,21 +283,12 @@ func TestFinalizeLaunchCrashWindows(t *testing.T) {
 				t.Fatalf("retry=%+v error=%v clones=%d", replayed, err, len(w.forms))
 			}
 			before := len(w.f.RequestMethods())
-			if err := w.b.FinalizeLaunches(t.Context(), admitFinalize); err != nil {
-				t.Fatal(err)
-			}
-			for _, method := range w.f.RequestMethods()[before:] {
-				if method != http.MethodGet {
-					t.Fatalf("completed pass wrote %s", method)
-				}
+			checkLaunch(t, w.b.FinalizeLaunches(t.Context(), admitFinalize))
+			if slices.ContainsFunc(w.f.RequestMethods()[before:], func(method string) bool { return method != http.MethodGet }) {
+				t.Fatal("completed pass wrote PVE")
 			}
 			rows, err := w.b.client.OwnTasks(t.Context(), "pve1", url.Values{"typefilter": {"qmstart"}})
-			successes := 0
-			for _, row := range rows {
-				if row.Status == "OK" {
-					successes++
-				}
-			}
+			successes := len(slices.DeleteFunc(rows, func(row pveclient.TaskRow) bool { return row.Status != "OK" }))
 			if err != nil || successes != req.Count {
 				t.Fatalf("successful starts=%d tasks=%+v error=%v", successes, rows, err)
 			}
@@ -285,33 +301,23 @@ func TestFinalizeLaunchBoundaries(t *testing.T) {
 		t.Run(boundary, func(t *testing.T) {
 			w, m, req := finalizeBackend(t)
 			if boundary == "lock" {
-				if err := w.f.SetTaskDelay(time.Hour); err != nil {
-					t.Fatal(err)
-				}
+				checkLaunch(t, w.f.SetTaskDelay(time.Hour))
 			}
 			accepted, err := w.b.RunInstances(t.Context(), m, req)
-			if err != nil {
-				t.Fatal(err)
-			}
+			checkLaunch(t, err)
 			vm := launchVM(t, w, 0)
 			cfg, err := w.b.client.VMConfig(t.Context(), vm)
-			if err != nil {
-				t.Fatal(err)
-			}
+			checkLaunch(t, err)
 			switch boundary {
 			case "foreign pool":
-				if err := w.f.MoveVM(vm.VMID, "images"); err != nil {
-					t.Fatal(err)
-				}
+				checkLaunch(t, w.f.MoveVM(vm.VMID, "images"))
 			case "foreign account", "malformed":
 				description := strings.ReplaceAll(cfg.Description, "acct="+m.Account.String(), "acct=999999999999")
 				if boundary == "malformed" {
 					description = "vws:v=broken"
 				}
 				fields := url.Values{"description": {description}}
-				if err := w.b.client.WriteConfig(t.Context(), vm, cfg.Digest, fields); err != nil {
-					t.Fatal(err)
-				}
+				checkLaunch(t, w.b.client.WriteConfig(t.Context(), vm, cfg.Digest, fields))
 			case "read only":
 				w.b.cfg.ReadOnly = true
 			}
@@ -340,12 +346,8 @@ func TestFinalizeLaunchBoundaries(t *testing.T) {
 			}
 			if boundary == "lock" {
 				w.elapsed.Add(int64(time.Hour))
-				if err := w.f.SetTaskDelay(0); err != nil {
-					t.Fatal(err)
-				}
-				if err := w.b.FinalizeLaunches(t.Context(), admitFinalize); err != nil {
-					t.Fatal(err)
-				}
+				checkLaunch(t, w.f.SetTaskDelay(0))
+				checkLaunch(t, w.b.FinalizeLaunches(t.Context(), admitFinalize))
 				assertFinalized(t, w, m, accepted)
 			} else if boundary != "read only" {
 				cfg, err := w.b.client.VMConfig(t.Context(), launchVM(t, w, 1))
@@ -364,16 +366,12 @@ func TestFinalizeLaunchConfigCAS(t *testing.T) {
 				w, m, req := finalizeBackend(t)
 				req.Count = 1
 				accepted, err := w.b.RunInstances(t.Context(), m, req)
-				if err != nil {
-					t.Fatal(err)
-				}
+				checkLaunch(t, err)
 				vm := launchVM(t, w, 0)
 				before, _ := w.b.client.VMConfig(t.Context(), vm)
 				before.SMBIOS1 += ",manufacturer=VWS"
 				fields := url.Values{"smbios1": {before.SMBIOS1}}
-				if err := w.b.client.WriteConfig(t.Context(), vm, before.Digest, fields); err != nil {
-					t.Fatal(err)
-				}
+				checkLaunch(t, w.b.client.WriteConfig(t.Context(), vm, before.Digest, fields))
 				writes := 0
 				w.intercept = func(_ http.ResponseWriter, r *http.Request) bool {
 					if r.Method != http.MethodPut || r.ParseForm() != nil || r.Form.Has("tags") != (stage == "tags") {
@@ -403,9 +401,7 @@ func TestFinalizeLaunchConfigCAS(t *testing.T) {
 				}
 				w.intercept = nil
 				if conflicts == 2 {
-					if err := w.b.FinalizeLaunches(t.Context(), admitFinalize); err != nil {
-						t.Fatal(err)
-					}
+					checkLaunch(t, w.b.FinalizeLaunches(t.Context(), admitFinalize))
 				}
 				assertFinalized(t, w, m, accepted)
 				cfg, err := w.b.client.VMConfig(t.Context(), vm)
