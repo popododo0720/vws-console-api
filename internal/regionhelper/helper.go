@@ -6,7 +6,9 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -55,10 +57,10 @@ func credentialPath(dir string) string {
 
 func (h helper) execute(args []string, stdin io.Reader, stdout io.Writer) error {
 	if len(args) != 0 && args[0] == "token-read" {
-		if len(args) != 1 {
+		if len(args) != 2 || !validFingerprint(args[1]) {
 			return errors.New("unexpected arguments")
 		}
-		data, err := privateRead(filepath.Join(h.private, "pve-token"), true, h.owner)
+		data, err := privateRead(filepath.Join(h.private, "pve-token."+args[1]), true, h.owner)
 		if err != nil {
 			return err
 		}
@@ -77,6 +79,10 @@ func validLockName(s string) bool {
 	return regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$`).MatchString(s)
 }
 
+func validFingerprint(s string) bool {
+	return regexp.MustCompile(`^[0-9a-f]{64}$`).MatchString(s)
+}
+
 func validSnippetName(s string) bool {
 	return regexp.MustCompile(
 		`^vws-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-user\.yaml$`,
@@ -91,8 +97,42 @@ func (h helper) run(args []string, stdin io.Reader) (err error) {
 	switch args[0] {
 	case "registration-write":
 		root, name, write = h.public, "registration.json", true
-	case "token-write":
-		root, name, write, encrypt = h.private, "pve-token", true, true
+	case "token-write", "token-delete":
+		if len(args) != 2 || !validFingerprint(args[1]) {
+			return errors.New("invalid token fingerprint")
+		}
+		root, name = h.private, "pve-token."+args[1]
+		write, encrypt = args[0] == "token-write", args[0] == "token-write"
+		if !write {
+			locks, openErr := os.OpenRoot(h.locks)
+			if openErr != nil {
+				return fmt.Errorf("open registration lock root: %w", openErr)
+			}
+			defer func() { err = errors.Join(err, locks.Close()) }()
+			if err := locks.Mkdir("registration", 0o700); err != nil {
+				return fmt.Errorf("acquire registration lock: %w", err)
+			}
+			defer func() { err = errors.Join(err, locks.Remove("registration")) }()
+			path := filepath.Join(h.public, "registration.json")
+			f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+			if err != nil && !errors.Is(err, os.ErrNotExist) {
+				return errors.New("registration unreadable")
+			}
+			if err == nil {
+				info, statErr := f.Stat()
+				data, readErr := io.ReadAll(io.LimitReader(f, (65<<10)+1))
+				var identity struct {
+					Fingerprint string `json:"fingerprint"`
+				}
+				if err := errors.Join(statErr, readErr, f.Close()); err != nil || !info.Mode().IsRegular() || len(data) > 65<<10 ||
+					json.Unmarshal(data, &identity) != nil || !validFingerprint(identity.Fingerprint) {
+					return errors.New("invalid registration identity")
+				}
+				if identity.Fingerprint == args[1] {
+					return errors.New("cannot delete active token")
+				}
+			}
+		}
 	case "lease-write":
 		root, name, write = h.public, "leader", true
 	case "lock", "unlock":
@@ -116,7 +156,7 @@ func (h helper) run(args []string, stdin io.Reader) (err error) {
 	default:
 		return errors.New("unknown operation")
 	}
-	if (args[0] == "registration-write" || args[0] == "token-write" || args[0] == "lease-write") && len(args) != 1 {
+	if (args[0] == "registration-write" || args[0] == "lease-write") && len(args) != 1 {
 		return errors.New("unexpected arguments")
 	}
 	if err := confined(root, filepath.Join(root, name)); err != nil {
@@ -153,6 +193,9 @@ func (h helper) run(args []string, stdin io.Reader) (err error) {
 		return errors.New("cannot read bounded input")
 	}
 	if encrypt {
+		if fmt.Sprintf("%x", sha256.Sum256(data)) != args[1] {
+			return errors.New("token fingerprint mismatch")
+		}
 		key, err := privateRead(h.kek, true, h.owner)
 		if err != nil {
 			return err

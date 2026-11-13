@@ -3,7 +3,9 @@ package regionhelper
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -70,7 +72,7 @@ func TestCommandsAndConfinement(t *testing.T) {
 			t.Fatalf("accepted %q", args)
 		}
 	}
-	for _, verb := range []string{"registration-write", "lease-write", "token-write"} {
+	for _, verb := range []string{"registration-write", "lease-write"} {
 		if err := h.run([]string{verb}, strings.NewReader("payload")); err != nil {
 			t.Fatalf("%s: %v", verb, err)
 		}
@@ -108,11 +110,12 @@ func TestSnippetNames(t *testing.T) {
 func TestTokenWriteEncrypted(t *testing.T) {
 	h := fixture(t)
 	plain := []byte("synthetic-PVE-token-never-on-disk")
+	fp := fmt.Sprintf("%x", sha256.Sum256(plain))
 	for range 2 {
-		if err := h.run([]string{"token-write"}, bytes.NewReader(plain)); err != nil {
+		if err := h.run([]string{"token-write", fp}, bytes.NewReader(plain)); err != nil {
 			t.Fatal(err)
 		}
-		sealed, err := os.ReadFile(h.private + "/pve-token")
+		sealed, err := os.ReadFile(h.private + "/pve-token." + fp)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -132,9 +135,56 @@ func TestTokenWriteEncrypted(t *testing.T) {
 				t.Fatal("corrupt envelope accepted")
 			}
 		}
-		st, _ := os.Stat(h.private + "/pve-token")
+		st, _ := os.Stat(h.private + "/pve-token." + fp)
 		if st.Mode().Perm() != 0o600 {
 			t.Fatal("private file mode:", st.Mode())
+		}
+	}
+	if err := h.run([]string{"token-write", fp}, strings.NewReader("different")); err == nil {
+		t.Fatal("accepted token fingerprint mismatch")
+	}
+	if err := h.run([]string{"registration-write"}, strings.NewReader(`{"fingerprint":"`+fp+`"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.run([]string{"token-delete", fp}, nil); err == nil {
+		t.Fatal("deleted active token")
+	}
+	inactive := `{"fingerprint":"` + strings.Repeat("0", 64) + `"}`
+	if err := h.run([]string{"registration-write"}, strings.NewReader(inactive)); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if err := h.run([]string{"token-delete", fp}, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := os.Stat(h.private + "/pve-token." + fp); !os.IsNotExist(err) {
+		t.Fatal("inactive token still exists")
+	}
+}
+
+func TestTokenFingerprintGrammar(t *testing.T) {
+	h := fixture(t)
+	c := Client{Path: "/must-not-execute"}
+	for _, fp := range []string{
+		"", "../escape", strings.Repeat("a", 63), strings.Repeat("a", 65),
+		strings.Repeat("A", 64), strings.Repeat("g", 64), strings.Repeat("0", 64) + "\n",
+	} {
+		for _, verb := range []string{"token-read", "token-write", "token-delete"} {
+			for _, args := range [][]string{{verb}, {verb, fp}, {verb, strings.Repeat("0", 64), "extra"}} {
+				if err := h.execute(args, strings.NewReader("secret"), &bytes.Buffer{}); err == nil {
+					t.Fatalf("accepted %q", args)
+				}
+			}
+		}
+		for _, call := range []func() error{
+			func() error { return c.WriteToken(t.Context(), fp, nil) },
+			func() error { _, err := c.ReadToken(t.Context(), fp); return err },
+			func() error { return c.DeleteToken(t.Context(), fp) },
+		} {
+			if err := call(); err == nil || err.Error() != "invalid token fingerprint" {
+				t.Fatalf("fingerprint was not rejected before exec: %v", err)
+			}
 		}
 	}
 }
@@ -171,7 +221,8 @@ func TestAtomicRestartAndLocks(t *testing.T) {
 func TestFailuresDoNotLeakContents(t *testing.T) {
 	h := fixture(t)
 	os.WriteFile(h.kek, []byte("secret-invalid-key"), 0o600)
-	err := h.run([]string{"token-write"}, strings.NewReader("secret-token"))
+	fp := fmt.Sprintf("%x", sha256.Sum256([]byte("secret-token")))
+	err := h.run([]string{"token-write", fp}, strings.NewReader("secret-token"))
 	if err == nil || strings.Contains(err.Error(), "secret") {
 		t.Fatalf("unsafe error: %v", err)
 	}
@@ -214,17 +265,44 @@ func TestCredentialConfigAndInputBoundary(t *testing.T) {
 
 func TestMain(m *testing.M) {
 	if root := os.Getenv("VWS_HELPER_TEST_ROOT"); root != "" {
-		if fail, err := os.ReadFile(root + "/fail"); err == nil && string(fail) == os.Args[1] {
+		fail, _ := os.ReadFile(root + "/fail")
+		if string(fail) == os.Args[1] || string(fail) == "after:"+os.Args[1] || string(fail) == os.Args[1]+"+token-write" {
 			if os.Remove(root+"/fail") != nil {
 				os.Exit(2)
 			}
-			os.Exit(1)
+			if string(fail) == os.Args[1]+"+token-write" {
+				if os.WriteFile(root+"/fail", []byte("token-write"), 0o600) != nil {
+					os.Exit(2)
+				}
+				os.Exit(1)
+			}
+			if string(fail) == os.Args[1] {
+				os.Exit(1)
+			}
 		}
 		h := helper{
 			public: root + "/public", private: root + "/private", locks: root + "/locks",
 			kek: root + "/region-kek", owner: uint32(os.Geteuid()),
 		}
+		if os.Getenv("VWS_HELPER_TEST_ROTATE") == os.Args[1] {
+			if _, err := os.Stat(root + "/next-registration"); err == nil {
+				data, err := os.ReadFile(root + "/public/registration.json")
+				var identity struct {
+					Fingerprint string `json:"fingerprint"`
+				}
+				if err != nil || json.Unmarshal(data, &identity) != nil {
+					os.Exit(2)
+				}
+				if os.Rename(root+"/next-registration", root+"/public/registration.json") != nil ||
+					os.Remove(root+"/private/pve-token."+identity.Fingerprint) != nil {
+					os.Exit(2)
+				}
+			}
+		}
 		if err := h.execute(os.Args[1:], os.Stdin, os.Stdout); err != nil {
+			os.Exit(1)
+		}
+		if string(fail) == "after:"+os.Args[1] {
 			os.Exit(1)
 		}
 		os.Exit(0)
@@ -246,11 +324,12 @@ func TestMain(m *testing.M) {
 func TestTokenReadAndCredentialFallback(t *testing.T) {
 	h := fixture(t)
 	plain := []byte("canary-token-read")
-	if err := h.run([]string{"token-write"}, bytes.NewReader(plain)); err != nil {
+	fp := fmt.Sprintf("%x", sha256.Sum256(plain))
+	if err := h.run([]string{"token-write", fp}, bytes.NewReader(plain)); err != nil {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
-	if err := h.execute([]string{"token-read"}, nil, &out); err != nil {
+	if err := h.execute([]string{"token-read", fp}, nil, &out); err != nil {
 		t.Fatal(err)
 	}
 	if bytes.Contains(out.Bytes(), plain) {
@@ -280,13 +359,15 @@ func TestClientUsesFixedArgvAndStdin(t *testing.T) {
 	t.Setenv("VWS_HELPER_TEST_CAPTURE", path)
 	ctx := context.Background()
 	const secret = "synthetic-secret"
+	fp := fmt.Sprintf("%x", sha256.Sum256([]byte(secret)))
 	const snippet = "vws-123e4567-e89b-12d3-a456-426614174000-user.yaml"
 	for _, tc := range []struct {
 		argv string
 		call func() error
 	}{
 		{"registration-write", func() error { return c.WriteRegistration(ctx, []byte(secret)) }},
-		{"token-write", func() error { return c.WriteToken(ctx, []byte(secret)) }},
+		{"token-write|" + fp, func() error { return c.WriteToken(ctx, fp, []byte(secret)) }},
+		{"token-delete|" + fp, func() error { return c.DeleteToken(ctx, fp) }},
 		{"lease-write", func() error { return c.WriteLease(ctx, []byte(secret)) }},
 		{"lock|leader", func() error { return c.Lock(ctx, "leader") }},
 		{"unlock|leader", func() error { return c.Unlock(ctx, "leader") }},
@@ -392,7 +473,8 @@ func TestNoShellAndTypedClient(t *testing.T) {
 		t.Fatalf("want one direct helper exec, got %d", calls)
 	}
 	c := Client{Path: "/does-not-exist"}
-	if err := c.WriteToken(context.Background(), []byte("secret")); err == nil ||
+	fp := fmt.Sprintf("%x", sha256.Sum256([]byte("secret")))
+	if err := c.WriteToken(context.Background(), fp, []byte("secret")); err == nil ||
 		strings.Contains(err.Error(), "secret") {
 		t.Fatalf("wrapper error: %v", err)
 	}

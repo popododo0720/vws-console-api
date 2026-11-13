@@ -32,6 +32,13 @@ leader changes. This first part of #766 fences followers with 503; forwarding, p
 ## Registration
 
 Before registration, `/readyz` returns 503 with `unregistered`.
+When registration.json names a token file that is absent or unreadable, for
+example on a node that still has the unsuffixed `pve-token` layout, `/readyz`
+returns 503 and the daemon logs `region not ready` with reason
+`registration token unreadable`. There is no automatic
+migration: re-register the region with its token (a PUT that includes
+`token`), which writes `pve-token.<fp>` and the matching identity without a
+restart.
 `PUT /internal/v1/registration` requires the global client's mTLS certificate.
 Its JSON fields are `region`, `cluster_name`, `zones` (letter and node groups),
 `tokenId` (`user@realm!name`) and `token` (write-only).
@@ -41,17 +48,46 @@ environment. Snapshot decoder errors never echo submitted values.
 
 ## Privileged helper
 
-`cmd/vws-region-helper` provides `registration-write`, `token-write` and
-`lease-write`, taking contents on stdin (at most 1 MiB) and no path arguments.
-`token-read` takes no arguments and returns only the encrypted envelope.
-They atomically replace `/etc/pve/vws/registration.json`,
-`/etc/pve/priv/vws/pve-token` and `/etc/pve/vws/leader`.
+`cmd/vws-region-helper` provides `registration-write` and `lease-write`,
+taking contents on stdin (at most 1 MiB) and no arguments.
+`token-write <fp>`, `token-read <fp>` and `token-delete <fp>` require a full
+lowercase SHA-256 fingerprint matching `^[0-9a-f]{64}$`, checked by both
+helper and client before exec. Token files are
+`/etc/pve/priv/vws/pve-token.<fp>`. token-write refuses stdin whose hash
+differs and seals only that file; token-read returns only its encrypted
+envelope. token-delete acquires the registration lock across the identity check
+and removal, refuses the current fingerprint, and releases its lock on success
+or error. A busy lock refuses deletion without removing any file or that lock;
+an absent inactive file is already deleted.
+Identity and lease writes atomically replace `/etc/pve/vws/registration.json`
+and `/etc/pve/vws/leader`.
 Public identity and lease files use mode 0640 (pmxcfs owns them as root:www-data);
 token and snippet files use 0600. Token files contain a versioned AES-256-GCM envelope
 authenticated with the raw 32-byte `$CREDENTIALS_DIRECTORY/region-kek`.
 The credential must be a root-owned regular file with no group/other access.
 With no credential directory, the helper uses `/etc/vws/credentials/region-kek`.
 `regionhelper.Open` authenticates and decrypts this format.
+
+Registration runs the PVE self-check, acquires the registration lock, writes
+the candidate token, then commits by renaming registration.json. That rename
+is the only commit point. There are no compensation writes: a helper failure,
+including a nonzero exit after rename, leaves a matching old or new pair.
+A retry converges. After a confirmed commit and registration unlock, deletion of a different
+previous token is best effort. A busy lock or other cleanup failure produces a
+secret-free warning without changing the successful result.
+After a registration-write error, the writer re-reads identity under the lock;
+if the candidate fingerprint committed, it attempts cleanup and returns the error.
+An omitted token is read by the stored fingerprint, verified and self-checked;
+only the identity is written. Readers select the named file and verify its
+content hash. If an old token was deleted during rotation, the reader re-reads
+identity once and retries only when the fingerprint changed. Missing or
+mismatched pairs fail readiness and serving until repaired.
+`TestRegionDaemonReadsRestartAndReadiness` enforces pre-commit and after-rename
+failures, retry, rotation, failed candidates, reader races, torn pairs and
+recovery. `TestTokenFingerprintGrammar`, `TestTokenWriteEncrypted` and
+`TestTokenReadAndCredentialFallback` enforce the helper contract.
+`TestTokenDeleteSerializesRegistration` enforces deletion/publication
+serialization, busy-lock refusal and lock release after success or refusal.
 
 `lock NAME` uses mkdir under `/etc/pve/priv/lock/vws-region/`; a duplicate
 lock fails. `unlock NAME` removes an empty directory; an absent lock succeeds.
