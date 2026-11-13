@@ -17,6 +17,14 @@ type Registration struct {
 	ClusterName string
 }
 
+type selfCheckError struct {
+	check string
+	cause error
+}
+
+func (e *selfCheckError) Error() string { return e.cause.Error() }
+func (e *selfCheckError) Unwrap() error { return e.cause }
+
 // Identity returns the checked identity, without credentials.
 func Identity(b *Backend) Registration {
 	return Registration{
@@ -33,7 +41,7 @@ func New(ctx context.Context, client *pveclient.Client, reg Registration, cfg Re
 		return nil, errors.New("proxmox: registration region name is required")
 	}
 	if err := validateInstanceTypes(cfg); err != nil {
-		return nil, err
+		return nil, &selfCheckError{check: "instance_types", cause: err}
 	}
 	if _, err := NewIDs(reg.ClusterName); err != nil {
 		return nil, fmt.Errorf("proxmox: registration cluster_name: %w", err)
@@ -43,13 +51,15 @@ func New(ctx context.Context, client *pveclient.Client, reg Registration, cfg Re
 		err = errors.New("missing or null permission inventory")
 	}
 	if err != nil {
-		return nil, fmt.Errorf("proxmox: check token permissions: %w", err)
+		return nil, &selfCheckError{check: "privileges", cause: fmt.Errorf("proxmox: check token permissions: %w", err)}
 	}
 	if cfg.ReadOnly {
 		for path, privileges := range permissions {
 			for privilege := range privileges {
 				if forbiddenPrivilege(privilege) {
-					return nil, fmt.Errorf("proxmox: read_only token holds %s on %s", privilege, path)
+					return nil, &selfCheckError{
+						check: "privileges", cause: fmt.Errorf("proxmox: read_only token holds %s on %s", privilege, path),
+					}
 				}
 			}
 		}
@@ -57,14 +67,16 @@ func New(ctx context.Context, client *pveclient.Client, reg Registration, cfg Re
 		for path, privileges := range permissions {
 			for privilege := range privileges {
 				if forbiddenMutationPrivilege(path, privilege) {
-					return nil, fmt.Errorf("proxmox: mutation token holds %s on %s", privilege, path)
+					return nil, &selfCheckError{
+						check: "privileges", cause: fmt.Errorf("proxmox: mutation token holds %s on %s", privilege, path),
+					}
 				}
 			}
 		}
 	}
 	status, err := client.ClusterStatus(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("proxmox: check cluster_name: %w", err)
+		return nil, &selfCheckError{check: "cluster_name", cause: fmt.Errorf("proxmox: check cluster_name: %w", err)}
 	}
 	if err := checkClusterName(status, reg.ClusterName); err != nil {
 		return nil, err
@@ -72,7 +84,7 @@ func New(ctx context.Context, client *pveclient.Client, reg Registration, cfg Re
 	if len(cfg.Storages) != 0 || cfg.SnippetsStorage != "" {
 		rows, err := client.ClusterResources(ctx, pveclient.ResourceStorage)
 		if err != nil {
-			return nil, fmt.Errorf("proxmox: check storages: %w", err)
+			return nil, &selfCheckError{check: "storages", cause: fmt.Errorf("proxmox: check storages: %w", err)}
 		}
 		known := map[string]bool{}
 		for _, row := range rows {
@@ -82,11 +94,15 @@ func New(ctx context.Context, client *pveclient.Client, reg Registration, cfg Re
 		}
 		for volumeType, storage := range cfg.Storages {
 			if storage == "" || !known[storage] {
-				return nil, fmt.Errorf("proxmox: storages.%s: unknown storage %q", volumeType, storage)
+				return nil, &selfCheckError{
+					check: "storages", cause: fmt.Errorf("proxmox: storages.%s: unknown storage %q", volumeType, storage),
+				}
 			}
 		}
 		if cfg.SnippetsStorage != "" && !known[cfg.SnippetsStorage] {
-			return nil, fmt.Errorf("proxmox: snippets_storage: unknown storage %q", cfg.SnippetsStorage)
+			return nil, &selfCheckError{
+				check: "storages", cause: fmt.Errorf("proxmox: snippets_storage: unknown storage %q", cfg.SnippetsStorage),
+			}
 		}
 	}
 	return &Backend{
