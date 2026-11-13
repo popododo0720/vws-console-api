@@ -230,6 +230,10 @@ func (b *Backend) GetOperation(
 	if err != nil {
 		return resource.Operation{}, missing
 	}
+	if _, ok := decoded.(launchOperation); ok {
+		recovered, err := b.readLaunch(ctx, s, "", "", id)
+		return recovered.Operation, err
+	}
 	if sync, ok := decoded.(syncOperation); ok {
 		if sync.action == resource.ActionCreateSnapshot && sync.kind == resource.KindSnapshot {
 			return b.snapshotCreateOperation(ctx, s, id, sync)

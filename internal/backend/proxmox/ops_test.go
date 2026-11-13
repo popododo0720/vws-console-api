@@ -15,10 +15,15 @@ func TestOperationIDGolden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	launch, err := newLaunchOperation("test", strings.Repeat("a", 64))
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, tc := range []struct {
 		op   operationID
 		want string
 	}{
+		{launch, "op-compute-0301c8ca477577561646cd14140350d76f8d5c30"},
 		{
 			taskOperation{
 				node: nodeHash("pve1"), pid: 0x123456, starttime: 0x6553f100,
@@ -58,7 +63,8 @@ func TestOperationIDRefusesInvalid(t *testing.T) {
 		{"long", resource.ServiceCompute, a + "00"},
 		{"uppercase", resource.ServiceCompute, strings.ToUpper(a)},
 		{"non hex", resource.ServiceCompute, a[:39] + "g"},
-		{"version", resource.ServiceCompute, "03" + a[2:]},
+		{"version", resource.ServiceCompute, "04" + a[2:]},
+		{"launch action", resource.ServiceCompute, "03ff" + a[4:]},
 		{"task action", resource.ServiceCompute, a[:20] + "ff" + a[22:]},
 		{"task pad", resource.ServiceCompute, a[:39] + "1"},
 		{"sync action", resource.ServiceCompute, b[:2] + "ff" + b[4:]},
@@ -74,6 +80,16 @@ func TestOperationIDRefusesInvalid(t *testing.T) {
 				t.Fatal("invalid operation accepted")
 			}
 		})
+	}
+	for _, parts := range [][2]string{
+		{"", strings.Repeat("a", 64)},
+		{"test\x00other", strings.Repeat("a", 64)},
+		{"test", "short"},
+		{"test", strings.Repeat("A", 64)},
+	} {
+		if _, err := newLaunchOperation(parts[0], parts[1]); !errors.Is(err, ErrInput) {
+			t.Fatalf("launch inputs %q: %v", parts, err)
+		}
 	}
 	instance, err := resource.Parse[resource.InstanceID]("i-0123456789abcdef0")
 	if err != nil {
@@ -148,6 +164,7 @@ func FuzzOperationIDRoundTrip(f *testing.F) {
 			t.Fatal(err)
 		}
 		ops := []operationID{
+			launchOperation{keyHash: [18]byte{byte(node), byte(pid), byte(start), action, kind, byte(key)}},
 			taskOperation{node: node, pid: pid, starttime: start, action: resource.Action(action), instance: instance},
 			syncOperation{
 				action: resource.Action(action), kind: resource.Kind(kind), local: local,

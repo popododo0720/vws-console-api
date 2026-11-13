@@ -81,6 +81,41 @@ System tags are never decoded as user tags: `vws.k.`, `vws.f.`, `vws.n.`,
 tags sit on the VM that holds it as `vws.vt.<serial[0:8]>.<enc key>.<enc
 value>`. Snapshot tags are in the snapshot `description`.
 
+## Launch recovery and operations
+
+`RecoverLaunch` reads the bound pool and returns allocated indexes, the expected
+count, reservation and operation. Finalized VMs are indexed by
+`vws.k.<key[0:24]>`; unfinalized VMs are found through config descriptions.
+The full version-1 marker remains after finalize to confirm the full key and
+fingerprint and recover UUIDs and count. Tag prefixes alone are insufficient.
+The marker UUID determines the instance ID even while PVE still has a temporary
+clone UUID. A changed fingerprint is `IdempotencyMismatch`; unrelated keys and
+foreign pools are invisible. Replay lasts for the VMs' lifetime.
+Config reads run with at most eight requests in flight. Unrelated malformed
+markers are logged and skipped; matching corruption remains Unavailable.
+
+Format `03` has exactly 40 lowercase hex digits:
+`"03" + action(2) + H("vws-pve-op-launch-v1" || cluster || key)[0:36]`.
+Only action `01` (`RunInstances`) is accepted. Clone UPIDs remain internal.
+`GetOperation` recomputes this ID from pool-bound markers. It is running while
+indexes are missing, any VM is locked, or any VM lacks the four expected replay
+tags or final UUID. It succeeds only when all N indexes are finalized.
+Finalize publishes the four replay tags together in its last CAS, after resize
+and start have succeeded; their presence is the completion record.
+
+Finalize (#772) records failure by a digest-CAS addition of `vws.launch.failed`
+to a VM retaining its marker, before cleanup. That carrier must remain until
+the operation need no longer be readable. The reader reports failed with a
+fixed Conflict error, without exposing PVE diagnostics. Failure overrides
+completion; deleting every carrier makes the operation NotFound.
+
+`pveclient.Clone` writes the description with the allocation POST, without a
+digest. Later writes use `WriteConfig` (including `WriteConfigTags`) with the
+read digest. A stale digest is a conflict and changes nothing; callers must
+reread before recomputing a write.
+Clone input validation rejects malformed pool IDs and DNS names, and bounds
+valid UTF-8 descriptions to 8192 bytes before making any request.
+
 ## Project = pool
 
 - A VM's project is its pool, the `pool` field of its `GET /cluster/resources`
@@ -129,5 +164,5 @@ value>`. Snapshot tags are in the snapshot `description`.
 | EBS volume, snapshot | VM disk, VM snapshot without RAM state |
 | VPC, subnet | SDN VNet and subnet, or one default VPC per bridge or VLAN |
 | Security group | Proxmox firewall security group; a VM with its firewall off has none |
-| Long-running operation | Proxmox task (UPID) |
+| Long-running operation | Proxmox task (UPID), or key-derived format 03 for a launch |
 | Console access | `vncproxy` or `termproxy`, relayed by VWS; no Proxmox account is handed out |

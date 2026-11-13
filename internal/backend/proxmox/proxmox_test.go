@@ -193,6 +193,10 @@ func TestReadOnlyBackendEveryMethod(t *testing.T) {
 				out := method.Call(args)
 				last := out[len(out)-1]
 				switch {
+				case name == "RecoverLaunch":
+					if last.IsNil() || !errors.Is(last.Interface().(error), ErrInput) {
+						t.Fatalf("%s with an empty key: %v", name, out)
+					}
 				case name == "PoolExists":
 					if last.IsNil() || out[0].Bool() || resource.CodeOf(last.Interface().(error)) != resource.CodeUnavailable {
 						t.Fatalf("%s with an empty pool: %v", name, out)
