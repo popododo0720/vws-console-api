@@ -278,6 +278,8 @@ func (b *Backend) allocateLaunch(
 func (b *Backend) launchTemplate(
 	ctx context.Context, ids IDs, rows []pveclient.ClusterResource, pool string, image resource.ImageID,
 ) (pveclient.VM, pveclient.VMConfig, error) {
+	// An unreadable template cannot be ruled out as the image, so its error replaces NotFound when nothing matches.
+	var readErr error
 	for _, row := range rows {
 		public := b.cfg.Templates.Pool != "" && row.Pool == b.cfg.Templates.Pool ||
 			b.cfg.Templates.Tag != "" && slices.Contains(strings.Split(row.Tags, ";"), b.cfg.Templates.Tag)
@@ -287,12 +289,22 @@ func (b *Backend) launchTemplate(
 		vm := pveclient.VM{Node: row.Node, VMID: row.VMID}
 		cfg, err := b.client.VMConfig(ctx, vm)
 		if err != nil {
-			return vm, cfg, fmt.Errorf("proxmox: template config: %w", err)
+			err = fmt.Errorf("proxmox: template config: %w", err)
+			if ctx.Err() != nil {
+				return vm, cfg, err
+			}
+			if readErr == nil {
+				readErr = err
+			}
+			continue
 		}
 		id, err := ids.Image(configUUID(cfg))
 		if err == nil && id == image && cfg.Template == 1 {
 			return vm, cfg, nil
 		}
+	}
+	if readErr != nil {
+		return pveclient.VM{}, pveclient.VMConfig{}, readErr
 	}
 	return pveclient.VM{}, pveclient.VMConfig{}, resource.NotFound(resource.KindImage, image.String())
 }

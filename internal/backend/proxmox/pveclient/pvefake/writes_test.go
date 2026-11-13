@@ -205,11 +205,21 @@ func TestCloneStorageAndInputBounds(t *testing.T) {
 	t.Cleanup(srv.Close)
 	c := client(t, srv, "writer@pve!one", "k")
 	source := pveclient.VM{Node: "pve1", VMID: 100}
-	for _, storage := range []string{"", "../target", "target/node", strings.Repeat("x", 65)} {
+	for _, storage := range []string{
+		"", "../target", "target/node", strings.Repeat("x", 65), "a", "1local", "local.", "local_",
+	} {
 		before := len(w.f.Requests())
 		_, err := c.Clone(t.Context(), source, 102, "vws-a", "launch", "marker", "", true, storage)
 		if err == nil || len(w.f.Requests()) != before {
 			t.Fatalf("invalid storage %q reached PVE: %v", storage, err)
+		}
+	}
+	// PVE's pve-storage-id grammar is case-insensitive and allows '.', '-' and '_' inside.
+	for _, storage := range []string{"ceph.pool", "Local-LVM", "a1"} {
+		before := len(w.f.Requests())
+		_, _ = c.Clone(t.Context(), source, 102, "vws-a", "launch", "marker", "", true, storage)
+		if len(w.f.Requests()) == before {
+			t.Fatalf("valid storage %q was refused before PVE", storage)
 		}
 	}
 	before := len(w.f.Requests())

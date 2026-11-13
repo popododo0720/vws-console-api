@@ -2,6 +2,7 @@ package proxmox
 
 import (
 	"fmt"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -22,9 +23,13 @@ type launchWorld struct {
 	f      *pvefake.Fake
 	forms  []url.Values
 	failAt int
+	// failConfig is a path suffix whose config reads answer 500.
+	failConfig string
 }
 
-func launchBackend(t *testing.T, shared bool) (*launchWorld, backend.Mutation, resource.RunInstancesRequest) {
+func launchBackend(
+	t *testing.T, shared bool, edits ...func(*pvefake.Scenario),
+) (*launchWorld, backend.Mutation, resource.RunInstancesRequest) {
 	t.Helper()
 	cryptotest.SetGlobalRandom(t, 771)
 	s := mutationScenario()
@@ -48,12 +53,20 @@ func launchBackend(t *testing.T, shared bool) (*launchWorld, backend.Mutation, r
 		s.Tokens[0].ACL = append(s.Tokens[0].ACL, pvefake.ACE{Path: "/pool/" + pool, Role: "Launch"})
 	}
 	s.Tokens[0].ACL = append(s.Tokens[0].ACL, pvefake.ACE{Path: "/storage/local", Role: "Storage"})
+	for _, edit := range edits {
+		edit(&s)
+	}
 	f, err := pvefake.New(s)
 	if err != nil {
 		t.Fatal(err)
 	}
 	w := &launchWorld{f: f}
 	srv := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		if w.failConfig != "" && r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, w.failConfig) {
+			rw.WriteHeader(http.StatusInternalServerError)
+			_, _ = rw.Write([]byte(`{"message":"node unreachable"}`))
+			return
+		}
 		if strings.HasSuffix(r.URL.Path, "/clone") {
 			if err := r.ParseForm(); err != nil {
 				t.Error(err)
@@ -314,5 +327,40 @@ func TestRunInstancesBoundaryInputs(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestRunInstancesSkipsUnreadableTemplate(t *testing.T) {
+	const otherUUID = "7d444840-9dc0-41e1-a5cc-a5b8a1c4f2b1"
+	second := func(s *pvefake.Scenario) {
+		vm := s.VMs[0]
+		vm.VMID, vm.Config = 150, maps.Clone(vm.Config)
+		vm.Config["smbios1"] = "uuid=" + otherUUID
+		vm.Config["scsi0"] = "local:vm-150-disk-0,serial=0123456789abcdef1"
+		vm.Snapshots = nil
+		s.VMs = append(s.VMs, vm)
+		s.Storages[0].Content = append(s.Storages[0].Content, pvefake.StorageContent{
+			VolID: "local:vm-150-disk-0", Content: "images", Size: 8 << 30, VMID: 150,
+		})
+	}
+	w, m, req := launchBackend(t, false, second)
+	w.failConfig = "/qemu/100/config"
+	other, err := newIDs(t, "test").Image(otherUUID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unreadable := req.ImageID
+	req.ImageID, req.Count = other, 1
+	got, err := w.b.RunInstances(t.Context(), m, req)
+	if err != nil || len(got.Items) != 1 || len(w.forms) != 1 {
+		t.Fatalf("readable template behind an unreadable one: %v; clones=%d", err, len(w.forms))
+	}
+	if marker, _, err := ReadLaunchMarker(w.forms[0].Get("description")); err != nil || marker.Image != other {
+		t.Fatalf("clone marker=%+v %v", marker, err)
+	}
+	m.Key, req.ImageID = strings.Repeat("b", 64), unreadable
+	_, err = w.b.RunInstances(t.Context(), m, req)
+	if err == nil || resource.CodeOf(err) == resource.CodeNotFound || len(w.forms) != 1 {
+		t.Fatalf("unreadable requested template = %v; clones=%d", err, len(w.forms))
 	}
 }

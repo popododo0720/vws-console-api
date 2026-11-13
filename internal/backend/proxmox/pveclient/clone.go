@@ -24,7 +24,7 @@ func (c *Client) Clone(
 		return "", errors.New("pve clone: invalid storage or target")
 	}
 	if len(storage) == 1 && (len(storage[0]) > 64 ||
-		!regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_-]*$`).MatchString(storage[0])) {
+		!regexp.MustCompile(`(?i)^[a-z][a-z0-9._-]*[a-z0-9]$`).MatchString(storage[0])) {
 		return "", errors.New("pve clone: invalid storage")
 	}
 	if newid < 100 || newid > 999999999 || len(pool) > 64 ||
