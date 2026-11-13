@@ -50,7 +50,9 @@ go run ./cmd/vws-console-api -backend=fake \
 
 `docs/proxmox-mapping.md` has the id, tag, pool and zone rules and
 `docs/proxmox-safety.md` the token and test safety rules.
-`docs/region-layer.md` describes region layer operations. The retired
+`docs/region-layer.md` describes region layer operations.
+`docs/terraform.md` has the Terraform provider blocks, aws-cli examples and
+the pve action table for using pve and AWS regions through one endpoint. The retired
 Kubernetes backend and its service-address and launch-store flags are removed.
 `-iam=grpc` continues to connect to vws-iam independently of the backend.
 
