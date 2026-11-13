@@ -32,6 +32,7 @@ func TestRegionDiscoveryHealthAndReadBound(t *testing.T) {
 		{Name: "pve-healthy-1"},
 		{Name: "pve-noquorum-1"},
 		{Name: "pve-leaderless-1"},
+		{Name: "pve-noversion-1"},
 		{Name: "pve-stalled-1"},
 		{Name: "pve-stalled-2"},
 	}, []backend.AWSAccount{{AllowedRegions: []string{"us-east-1", "us-east-1", "us-west-2"}}})
@@ -53,9 +54,12 @@ func TestRegionDiscoveryHealthAndReadBound(t *testing.T) {
 		doc := resource.RegionCapabilities{Region: name, Kind: resource.RegionKindAWS}
 		if strings.HasPrefix(name, "pve-") {
 			doc.Kind = resource.RegionKindProxmox
-			doc.Cluster = &resource.RegionCluster{Quorate: name != "pve-noquorum-1", Leader: "pve1"}
+			doc.Cluster = &resource.RegionCluster{Quorate: name != "pve-noquorum-1", Leader: "pve1", PVERelease: "9.2"}
 			if name == "pve-leaderless-1" {
 				doc.Cluster.Leader = ""
+			}
+			if name == "pve-noversion-1" {
+				doc.Cluster.PVERelease = ""
 			}
 		}
 		return doc, nil
@@ -68,11 +72,12 @@ func TestRegionDiscoveryHealthAndReadBound(t *testing.T) {
 		`{"name":"pve-healthy-1","kind":"pve","state":"available"},` +
 		`{"name":"pve-leaderless-1","kind":"pve","state":"degraded"},` +
 		`{"name":"pve-noquorum-1","kind":"pve","state":"degraded"},` +
+		`{"name":"pve-noversion-1","kind":"pve","state":"degraded"},` +
 		`{"name":"pve-stalled-1","kind":"pve","state":"unavailable"},` +
 		`{"name":"pve-stalled-2","kind":"pve","state":"unavailable"},` +
 		`{"name":"us-east-1","kind":"aws","state":"available"},` +
 		`{"name":"us-west-2","kind":"aws","state":"unavailable"}]}`
-	if rec.Code != 200 || strings.TrimSpace(rec.Body.String()) != want || calls.Load() != 7 {
+	if rec.Code != 200 || strings.TrimSpace(rec.Body.String()) != want || calls.Load() != 8 {
 		t.Fatalf("discovery: %d %s; calls=%d", rec.Code, rec.Body, calls.Load())
 	}
 	if elapsed < 5*time.Second || elapsed >= 8*time.Second {

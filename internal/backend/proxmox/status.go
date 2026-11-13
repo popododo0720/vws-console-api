@@ -9,6 +9,30 @@ import (
 
 // Status reads PVE live and retains only the last failure in process memory.
 func (b *Backend) Status(ctx context.Context) (resource.RegionStatus, error) {
+	result, err := b.clusterStatus(ctx)
+	if err != nil {
+		return resource.RegionStatus{}, err
+	}
+	versionCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	version, err := b.client.Version(versionCtx)
+	if err == nil {
+		result.PVERelease = version.Version
+	}
+	if ctx.Err() != nil {
+		return resource.RegionStatus{}, ctx.Err()
+	}
+	if leader := b.leader.Load(); leader != nil {
+		if node := leader.Current(); node != "" {
+			result.Leader = &node
+		}
+	}
+	return result, nil
+}
+
+func (b *Backend) clusterStatus(ctx context.Context) (resource.RegionStatus, error) {
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
 	rows, err := b.client.ClusterStatus(ctx)
 	if err != nil && ctx.Err() != nil {
 		return resource.RegionStatus{}, ctx.Err()

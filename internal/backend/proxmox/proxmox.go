@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"sync"
+	"sync/atomic"
 
 	"github.com/popododo0720/vws-console-api/internal/backend"
 	"github.com/popododo0720/vws-console-api/internal/backend/proxmox/pveclient"
@@ -15,6 +16,7 @@ type Backend struct {
 	region          string
 	cluster         string
 	client          *pveclient.Client
+	leader          atomic.Pointer[Leader]
 	cfg             RegionConfig
 	zones           []backend.Zone
 	statusMu        sync.Mutex
@@ -48,9 +50,19 @@ func (b *Backend) RegionCapabilities(ctx context.Context, region string) (resour
 	if err != nil {
 		return resource.RegionCapabilities{}, err
 	}
+	status, err := b.Status(ctx)
+	if err != nil {
+		return resource.RegionCapabilities{}, err
+	}
+	cluster := &resource.RegionCluster{
+		Name: b.cluster, Quorate: status.Quorate, PVERelease: status.PVERelease,
+	}
+	if status.Leader != nil {
+		cluster.Leader = *status.Leader
+	}
 	doc := resource.RegionCapabilities{
 		Region: region, Kind: resource.RegionKindProxmox,
-		Cluster: &resource.RegionCluster{Name: b.cluster}, Zones: zones,
+		Cluster: cluster, Zones: zones,
 		Actions: map[string]resource.ActionCapability{}, InstanceTypes: types,
 		Features: resource.RegionFeatures{SnapshotScope: "vm", LiveTests: b.cfg.LiveTests, PrivateIPMode: "static"},
 	}

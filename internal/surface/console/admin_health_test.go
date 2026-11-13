@@ -32,6 +32,11 @@ func TestAdminHealthFailureMessagesAreSafe(t *testing.T) {
 		want string
 	}{
 		{errors.New("credential-canary " + endpoint + " " + certPath + " " + keyPath), "region transport failed"},
+		{fmt.Errorf("%s: %w", endpoint, &resource.Error{Code: resource.CodeUnavailable, Message: "not ready"}), "not ready"},
+		{
+			&resource.Error{Code: resource.CodeUnavailable, Message: "credential-canary " + endpoint},
+			"region transport failed",
+		},
 		{fmt.Errorf("%s credential-canary: %w", endpoint, context.DeadlineExceeded), "deadline exceeded"},
 		{fmt.Errorf("%s credential-canary: %w", endpoint, dial), "dial: connection refused"},
 		{&tls.CertificateVerificationError{Err: errors.New(certPath + " credential-canary")}, "TLS handshake failed"},
