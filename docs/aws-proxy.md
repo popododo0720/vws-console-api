@@ -1,20 +1,29 @@
-# EC2 inventory proxy
+# AWS forwarding proxy
 
 `cmd/vws-aws-proxy` accepts only local, already authenticated and authorized
 requests. Its unix socket is mode 0700; run the global API under the same user
 and place the socket in a private directory. The API must replace all client
 `X-Vws-*` headers with its verified VWS project, principal, target region and service.
-The service is `ec2`; only unambiguous `Describe*` Query actions pass.
-Bodies are limited to 1 MiB. Requests have a 30-second deadline. Transient
+EC2 retains its unambiguous Query action list and 1 MiB body limit. Other
+services forward their method, path, query and body with a 4 MiB limit.
+Requests have a 30-second deadline. Transient
 upstream failures get at most three attempts with 100/200 ms backoff.
 
 Flags: `-socket`, `-global-config`, `-accounts`, `-projects`, `-sts-endpoint`,
-`-sts-region`, `-ec2-endpoint`.
+`-sts-region`, `-ec2-endpoint`, `-aws-endpoint`.
 AssumeRole is signed for `-sts-region` (default `us-east-1`, the global STS
 endpoint's region), never for the EC2 region of the request; a regional STS
 endpoint needs its own region here.
 Endpoints must use HTTPS, except numeric loopback addresses for offline tests.
 The EC2 endpoint can contain `{region}`. Redirects are returned, never followed.
+The required `-aws-endpoint` supplies the endpoint for other services, for
+example `https://{service}.{region}.<operator-supplied-dns-suffix>`. Replace
+the suffix with the actual service DNS suffix before starting the process.
+`{service}` is the signing name and `{region}` is the verified target region;
+an endpoint whose DNS prefix differs from its signing name needs an appropriate
+operator-selected template. No endpoint is inferred from client headers.
+For S3, an inbound `bucket.s3.<suffix>` host retains the bucket prefix on the
+target host (including dotted bucket names); path-style paths stay unchanged.
 
 Use `-global-config /etc/vws/global.yaml` to read the live admin registry over
 the bootstrap's IAM etcd TLS connection. Project remaps and account changes
@@ -69,9 +78,29 @@ All outbound errors exposed to callers are fixed messages, never response bodies
 credential fields or transport error strings. The command uses vws-lib telemetry
 and HTTP server spans/metrics; sanitized STS decoding failures use `report.Error`.
 
-Phase 1 rebuilds the outbound headers from the Query content type and signature;
-it does not forward arbitrary client headers. Transparent service forwarding,
-streaming signatures and presigned requests remain #794/#795.
+Forwarding replaces Authorization, X-Amz-Date and the user's session token with
+the assumed session's signature and token. S3 always receives a recomputed
+X-Amz-Content-Sha256; other services receive it only when it was present.
+Other x-amz headers, Content-Type and Content-Length are kept and signed,
+along with supported content, cache and conditional headers. Hop-by-hop
+headers and Connection-nominated headers are removed; local identity metadata,
+cookies and caller credentials never reach the origin.
+
+STREAMING-AWS4-HMAC-SHA256-PAYLOAD bodies are unwrapped and signed as a single
+payload. Both wire bytes and decoded bytes must fit the 4 MiB bound. The
+aws-chunked encoding and X-Amz-Decoded-Content-Length are removed, other
+content encodings remain and Content-Length reflects the decoded bytes.
+Malformed sizes, signatures, truncation and excess bytes return the fixed
+InvalidParameterValue error before STS or origin calls. This private socket
+accepts only requests already authenticated and authorized by the global API;
+unwrapping does not authenticate the user's chunk signatures.
+
+Presigned query authentication, UNSIGNED-PAYLOAD and SigV4a (including
+X-Amz-Region-Set) return UnauthorizedOperation before any outbound call.
+The origin's status, end-to-end headers and body bytes pass through unchanged,
+including arn:aws: strings and compressed payloads. Automatic response
+decompression is disabled. Generic mutations are not retried after uncertain
+transport errors or 5xx responses; throttling retains the bounded retry policy.
 
 ## Private account connection tests
 

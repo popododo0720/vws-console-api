@@ -16,6 +16,8 @@ import (
 	"time"
 
 	"github.com/popododo0720/vws-console-api/internal/admin/store"
+	"github.com/popododo0720/vws-console-api/internal/backend"
+	"github.com/popododo0720/vws-console-api/internal/resource"
 	"github.com/popododo0720/vws-console-api/internal/sigv4"
 )
 
@@ -52,16 +54,21 @@ func setup(t *testing.T) *fixture {
 	}
 	checkSignature := func(r *http.Request, c sigv4.Credential, service sigv4.Service) {
 		t.Helper()
-		got := r.Header.Get("Authorization")
-		date, err := time.Parse("20060102T150405Z", r.Header.Get("X-Amz-Date"))
+		account, err := resource.Parse[resource.AccountID]("123456789012")
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := sigv4.Sign(r, c, service, "us-east-1", date); err != nil {
-			t.Fatal(err)
-		}
-		if got != r.Header.Get("Authorization") {
-			t.Error("origin received an invalid signature")
+		c.Account = account
+		v := sigv4.NewVerifier(sigv4.Verifier{
+			Service: service, Now: f.p.now, Regions: backend.NewStaticRegions(nil, []backend.AWSAccount{
+				{ID: "123456789012", AllowedRegions: []string{"us-east-1"}},
+			}),
+			Auth: sigv4.Lookup(func(_ context.Context, key string) (sigv4.Credential, bool) {
+				return c, key == c.AccessKey
+			}),
+		})
+		if _, err := v.Verify(r); err != nil {
+			t.Errorf("origin received an invalid signature: %v", err)
 		}
 	}
 	sts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
