@@ -100,6 +100,9 @@ func TestListProjectsUnreadableAWSAccountKeepsProxmoxRegions(t *testing.T) {
 	e, _, app, _ := accountFixture(t)
 	b := store.NewMemory()
 	g := store.New(b)
+	if _, err := g.Regions().Create(t.Context(), store.Region{Name: "pve-lab-1"}); err != nil {
+		t.Fatal(err)
+	}
 	e.h.(*handler).registry = g
 	if _, err := g.AWSAccounts().Create(t.Context(), store.AWSAccount{
 		ID: "210987654321", RoleARN: "arn:aws:iam::210987654321:role/canary-role-one", AllowedRegions: []string{"us-east-1"},

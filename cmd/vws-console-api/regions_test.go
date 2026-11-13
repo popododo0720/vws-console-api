@@ -41,6 +41,9 @@ func TestInventoryCatalogForwardsProjectPools(t *testing.T) {
 		t.Fatal(err)
 	}
 	registry := store.New(store.NewMemory())
+	if _, err := registry.Regions().Create(t.Context(), store.Region{Name: "pve-test-1"}); err != nil {
+		t.Fatal(err)
+	}
 	catalog := inventoryCatalog{RegionCatalog: registry.Catalog()}
 	mapping := store.Project{Project: account.String()}
 	for _, pool := range []string{"team-a", "team-b"} {

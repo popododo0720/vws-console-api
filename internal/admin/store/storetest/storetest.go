@@ -7,6 +7,7 @@ import (
 	"errors"
 	"slices"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/popododo0720/vws-console-api/internal/admin/store"
@@ -37,6 +38,8 @@ func Account(id string) store.AWSAccount {
 // empty.
 func Run(t *testing.T, newBackend func(t *testing.T) store.Backend) {
 	t.Run("lifecycle", func(t *testing.T) { lifecycle(t, newBackend(t)) })
+	t.Run("region deletion dependencies", func(t *testing.T) { regionDeletionDependencies(t, newBackend(t)) })
+	t.Run("region deletion mapping race", func(t *testing.T) { regionDeletionMappingRace(t, newBackend(t)) })
 	t.Run("RGW credentials", func(t *testing.T) { rgwCredentials(t, newBackend(t)) })
 	t.Run("one writer wins", func(t *testing.T) { oneWriterWins(t, newBackend(t)) })
 	t.Run("project pool claims", func(t *testing.T) { projectClaims(t, newBackend(t)) })
@@ -46,7 +49,114 @@ func Run(t *testing.T, newBackend func(t *testing.T) store.Backend) {
 	t.Run("project transaction limit", func(t *testing.T) { projectTransactionLimit(t, newBackend(t)) })
 }
 
+func regionDeletionDependencies(t *testing.T, b store.Backend) {
+	ctx := t.Context()
+	g := store.New(b)
+	region, err := g.Regions().Create(ctx, Region("pve-test-1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	projectRegions(t, b, "pve-test-10")
+	other, err := g.Projects().Put(ctx, store.Project{
+		Project: "333333333333", Pools: []store.ProjectPool{{Region: "pve-test-10", Pool: "mapped"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mapping, err := g.Projects().Put(ctx, store.Project{
+		Project: "111111111111",
+		Pools:   []store.ProjectPool{{Region: region.Name, Pool: "mapped"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := g.Regions().Delete(ctx, region.Name, region.Version+1); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("stale delete with dependency: %v", err)
+	}
+	if err := g.Regions().Delete(ctx, "../"+region.Name, region.Version); err == nil {
+		t.Fatal("invalid region name accepted")
+	}
+	for range 2 {
+		g = store.New(b)
+		err := g.Regions().Delete(ctx, region.Name, region.Version)
+		if !errors.Is(err, store.ErrRegionInUse) || !strings.Contains(err.Error(), "project pool mappings") {
+			t.Fatalf("delete mapped region must explain dependency: %v", err)
+		}
+		got, err := g.Regions().Get(ctx, region.Name)
+		if err != nil || got.Version != region.Version {
+			t.Fatalf("refusal changed region: %+v %v", got, err)
+		}
+		gotMapping, err := g.Projects().Get(ctx, mapping.Project)
+		if err != nil || gotMapping.Version != mapping.Version || !slices.Equal(gotMapping.Pools, mapping.Pools) {
+			t.Fatalf("refusal changed mapping: %+v %v", gotMapping, err)
+		}
+	}
+	mapping.Pools = nil
+	if _, err := g.Projects().Put(ctx, mapping); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.Regions().Delete(ctx, region.Name, region.Version); err != nil {
+		t.Fatalf("delete after removing mapping: %v", err)
+	}
+	if got, err := g.Projects().Get(ctx, other.Project); err != nil || !slices.Equal(got.Pools, other.Pools) {
+		t.Fatalf("deletion changed another region's mapping: %+v %v", got, err)
+	}
+	if err := g.Regions().Delete(ctx, region.Name, region.Version); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("repeat delete: %v", err)
+	}
+	mapping.Version = 0
+	mapping.Project = "222222222222"
+	mapping.Pools = []store.ProjectPool{{Region: region.Name, Pool: "mapped"}}
+	if _, err := g.Projects().Put(ctx, mapping); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("mapping deleted region: %v", err)
+	}
+}
+
+type deleteBeforeProjectSwap struct {
+	store.Backend
+	region store.Region
+}
+
+func (b deleteBeforeProjectSwap) Swap(
+	ctx context.Context, checks, puts []store.Entry, deletes []string,
+) (store.Version, error) {
+	if err := store.New(b.Backend).Regions().Delete(ctx, b.region.Name, b.region.Version); err != nil {
+		return 0, err
+	}
+	return b.Backend.Swap(ctx, checks, puts, deletes)
+}
+
+func regionDeletionMappingRace(t *testing.T, b store.Backend) {
+	ctx := t.Context()
+	region, err := store.New(b).Regions().Create(ctx, Region("pve-test-1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	g := store.New(deleteBeforeProjectSwap{Backend: b, region: region})
+	if _, err := g.Projects().Put(ctx, store.Project{
+		Project: "111111111111", Pools: []store.ProjectPool{{Region: region.Name, Pool: "racing"}},
+	}); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("mapping committed after region deletion: %v", err)
+	}
+	for _, prefix := range []string{"projects/", "project-pools/"} {
+		entries, err := b.List(ctx, prefix)
+		if err != nil || len(entries) != 0 {
+			t.Fatalf("failed mapping left %s: %+v %v", prefix, entries, err)
+		}
+	}
+}
+
+func projectRegions(t *testing.T, b store.Backend, names ...string) {
+	t.Helper()
+	for _, name := range names {
+		if _, err := store.New(b).Regions().Create(t.Context(), Region(name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
 func projectList(t *testing.T, b store.Backend) {
+	projectRegions(t, b, "pve-test-1")
 	ctx := t.Context()
 	projects := store.New(b).Projects()
 	items, skipped, err := projects.List(ctx)
@@ -87,6 +197,7 @@ func projectTransactionLimit(t *testing.T, b store.Backend) {
 	v := store.Project{Project: "111111111111"}
 	for i := range 32 {
 		v.Pools = append(v.Pools, store.ProjectPool{Region: "pve-site-" + strconv.Itoa(i), Pool: "old"})
+		projectRegions(t, b, "pve-site-"+strconv.Itoa(i))
 	}
 	projects := store.New(b).Projects()
 	v, err := projects.Put(t.Context(), v)
@@ -111,6 +222,7 @@ func projectTransactionLimit(t *testing.T, b store.Backend) {
 }
 
 func projectClaims(t *testing.T, b store.Backend) {
+	projectRegions(t, b, "pve-test-1", "pve-other-1")
 	ctx := t.Context()
 	projects := store.New(b).Projects()
 	pool := store.ProjectPool{Region: "pve-test-1", Pool: "shared"}
@@ -155,6 +267,7 @@ func projectClaims(t *testing.T, b store.Backend) {
 }
 
 func projectConcurrency(t *testing.T, b store.Backend) {
+	projectRegions(t, b, "pve-test-1")
 	const writers = 8
 	ctx := t.Context()
 	results := make(chan error, writers)
@@ -227,6 +340,7 @@ func (b interruptedProjectStore) Swap(
 }
 
 func projectInterruptedWrite(t *testing.T, b store.Backend) {
+	projectRegions(t, b, "pve-test-1")
 	ctx := t.Context()
 	v := store.Project{
 		Project: "111111111111", Pools: []store.ProjectPool{{Region: "pve-test-1", Pool: "crash"}},
