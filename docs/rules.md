@@ -7,6 +7,19 @@ it. When you add or change a rule, change its row here and its line in
 
 ## Rules
 
+Proxmox DescribeImages lists only UUID-bearing QEMU templates in the caller's
+current mapped pool, plus unpooled templates for the default project with
+Pool.Audit. Public launch-template configuration does not widen inventory
+visibility. Holders, ordinary VMs and the synthetic unknown image are excluded;
+invalid UUIDs are skipped with a warning. Names and descriptions come from
+template configs; root size is unknown unless the configured boot disk has
+a valid size. Owner and ID filters precede stable image-ID paging. A missing
+single requested image is NotFound, or Unavailable if a candidate config
+could not be read. Reads never write PVE state and are stable across restart.
+Enforced by `TestImageInventoryFieldsAndRestart`, `TestImageInventoryPoolBoundaries`,
+`TestImageInventorySkipsInvalidTemplates`, `TestImageInventoryFiltersAndPaging`,
+`TestImageInventoryFailures` and `TestImageRootSize`.
+
 Configured Proxmox subnets with mode `static` or an empty mode allocate the
 lowest free IPv4 address in the inclusive `ip_range`, or the usable CIDR
 hosts excluding the gateway. Every allocation reads every QEMU VM's live

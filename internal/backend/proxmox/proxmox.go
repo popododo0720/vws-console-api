@@ -64,7 +64,7 @@ func (b *Backend) RegionCapabilities(ctx context.Context, region string) (resour
 	}
 	for _, key := range []string{
 		"ec2:DescribeInstances", "ec2:DescribeAvailabilityZones", "ec2:DescribeRegions",
-		"ec2:DescribeVolumes", "ec2:DescribeSnapshots", "ec2:DescribeTags",
+		"ec2:DescribeVolumes", "ec2:DescribeSnapshots", "ec2:DescribeTags", "ec2:DescribeImages",
 	} {
 		doc.Actions[key] = resource.ActionCapability{State: resource.ActionSupported}
 	}
@@ -120,13 +120,6 @@ func (b *Backend) ModifyVolume(
 	ctx context.Context, m backend.Mutation, req resource.ModifyVolumeRequest,
 ) (resource.Accepted[resource.Volume], error) {
 	return resource.Accepted[resource.Volume]{}, resource.Unsupported("ModifyVolume", "read-only")
-}
-
-// DescribeImages answers the phase-one empty inventory.
-func (b *Backend) DescribeImages(
-	ctx context.Context, s backend.Scope, q resource.ImageQuery,
-) (resource.Page[resource.Image], error) {
-	return resource.Page[resource.Image]{}, nil
 }
 
 // CreateKeyPair is unavailable in the phase-one backend.

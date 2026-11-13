@@ -3,7 +3,13 @@
 `cmd/vws-region` runs the phase-one read-only Proxmox backend. It serves
 regionapi with client certificate verification on `:8443` and operations
 on `:8083`. EC2, S3 and console listeners are disabled; phase one exposes
-no flags to enable them. The backend currently declares empty inventory.
+no flags to enable them. The backend lists pool-scoped instances, template
+images, volumes, VM snapshots and tags, plus availability zones and instance
+types. VPCs and subnets expose bridge inventory; SDN inventory is not yet
+served. Key pairs, route tables, volume modifications and S3 inventory remain
+empty. Templates without a valid SMBIOS UUID are skipped with a warning;
+images use the template name and description, with root size when the boot
+disk configuration supplies it.
 
 ```sh
 vws-region -config /etc/vws/region.yaml
