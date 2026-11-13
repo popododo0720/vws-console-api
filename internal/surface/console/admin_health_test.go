@@ -34,6 +34,16 @@ func TestAdminHealthFailureMessagesAreSafe(t *testing.T) {
 		{errors.New("credential-canary " + endpoint + " " + certPath + " " + keyPath), "region transport failed"},
 		{fmt.Errorf("%s: %w", endpoint, &resource.Error{Code: resource.CodeUnavailable, Message: "not ready"}), "not ready"},
 		{
+			fmt.Errorf("%s: %w", endpoint, (&resource.Error{
+				Code: resource.CodeUnavailable, Message: `pool "vws-default": missing Pool.Audit`,
+			}).WithCause(errors.New("credential-canary"))),
+			`pool \"vws-default\": missing Pool.Audit`,
+		},
+		{
+			&resource.Error{Code: resource.CodeUnavailable, Message: "registration self-check failed: storages"},
+			"registration self-check failed: storages",
+		},
+		{
 			&resource.Error{Code: resource.CodeUnavailable, Message: "credential-canary " + endpoint},
 			"region transport failed",
 		},

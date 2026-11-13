@@ -373,6 +373,14 @@ func TestPoolReadsIncludeEmptyAndVMPools(t *testing.T) {
 	if got, err := c.Pool(t.Context(), "new-pool"); !got || err != nil {
 		t.Fatalf("moved VM pool: %t %v", got, err)
 	}
+	if err := f.MoveVM(100, "parent/child"); err != nil {
+		t.Fatal(err)
+	}
+	for pool, want := range map[string]bool{"parent/child": true, "parent/other": false} {
+		if got, err := c.Pool(t.Context(), pool); err != nil || got != want {
+			t.Fatalf("nested pool %s = %t, %v, want %t", pool, got, err, want)
+		}
+	}
 	limited := client(t, srv, poolA, poolAKey)
 	if got, err := limited.Pool(t.Context(), "vws-a"); got || status(err) != 403 {
 		t.Fatalf("pool without Pool.Audit: %t %v", got, err)

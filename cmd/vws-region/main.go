@@ -201,7 +201,7 @@ func run(ctx context.Context, args []string) (err error) {
 	h := regionapi.WithRegistration(conn.Register, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		current := state.Load()
 		if current == nil {
-			http.Error(w, "region not ready", http.StatusServiceUnavailable)
+			regionapi.WriteNotReady(w, probe.Ready(r.Context()))
 			return
 		}
 		(*current).ServeHTTP(w, r)

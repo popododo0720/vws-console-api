@@ -22,6 +22,7 @@ import (
 
 func TestProjectRemappingChangesInventoryWithoutRestart(t *testing.T) {
 	s := inventoryScenario()
+	s.Pools = append(s.Pools, "999999999999")
 	for i, pool := range []string{"team-a", "team-b", ""} {
 		vm := s.VMs[0]
 		vm.VMID, vm.Pool, vm.Config = 101+i, pool, maps.Clone(vm.Config)

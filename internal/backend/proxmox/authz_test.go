@@ -34,6 +34,7 @@ func TestMutationGuardsStayInPool(t *testing.T) {
 	for _, holder := range []bool{false, true} {
 		t.Run(map[bool]string{false: "instance", true: "holder"}[holder], func(t *testing.T) {
 			s := mutationScenario()
+			s.Pools = append(s.Pools, "managed")
 			if holder {
 				s.VMs[0].Tags = "vws.holder"
 			}
@@ -116,7 +117,9 @@ func TestMutationPoolExists(t *testing.T) {
 			if exists {
 				s.Pools = []string{pool}
 			}
-			b, f := networkBackend(t, s, cfg)
+			b, f := networkBackend(t, s, RegionConfig{})
+			// Exercise the live mutation guard independently of startup admission.
+			b.cfg = cfg
 			for range 2 {
 				got, err := b.poolForMutation(t.Context(), inventoryScope())
 				if exists {

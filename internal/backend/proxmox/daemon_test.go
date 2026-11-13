@@ -165,6 +165,8 @@ func TestRegionDaemonReadsRestartAndReadiness(t *testing.T) {
 	t.Setenv("VWS_HELPER_TEST_ROOT", dir)
 	tlsConfig := daemonCertificates(t, dir)
 	s := scenario()
+	s.Pools = []string{"123456789012"}
+	s.Roles[0].Privs = append(s.Roles[0].Privs, "Pool.Audit")
 	next := s.Tokens[0]
 	next.ID, next.Secret = "vws@pve!next", "replacement-secret"
 	s.Tokens = append(s.Tokens, next)
@@ -638,6 +640,14 @@ func TestRegionDaemonReadsRestartAndReadiness(t *testing.T) {
 	})
 	unavailable.Store(true)
 	awaitStatus(t, ops+"/readyz", http.StatusServiceUnavailable)
+	body = request(t, http.MethodGet, first+"/internal/v1/status", "", http.StatusServiceUnavailable)
+	var failure struct {
+		Error *resource.Error `json:"error"`
+	}
+	if err := json.Unmarshal(body, &failure); err != nil || failure.Error == nil ||
+		failure.Error.Message != "registration self-check failed: privileges" {
+		t.Fatalf("readiness lost its safe reason: %s (%v)", body, err)
+	}
 	unavailable.Store(false)
 	awaitStatus(t, ops+"/readyz", http.StatusOK)
 	stop()
