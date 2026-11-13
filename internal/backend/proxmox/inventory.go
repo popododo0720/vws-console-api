@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/popododo0720/vws-lib/obs/report"
+
 	"github.com/popododo0720/vws-console-api/internal/backend"
 	"github.com/popododo0720/vws-console-api/internal/backend/proxmox/pveclient"
 	"github.com/popododo0720/vws-console-api/internal/resource"
@@ -238,6 +240,7 @@ func (b *Backend) DescribeInstances(
 				return resource.Page[resource.Instance]{}, fmt.Errorf("proxmox: read instance config: %w", err)
 			}
 			slog.WarnContext(ctx, "skipping invalid VM", slog.Int("vmid", vm.VMID), slog.Any("error", err))
+			_ = report.Error(ctx, fmt.Errorf("proxmox: invalid VM config: %w", err)) //nolint:errcheck // reported
 			continue
 		}
 		found[inst.ID] = true

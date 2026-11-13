@@ -131,7 +131,7 @@ func TestConfigCASAndAtomicPrivileges(t *testing.T) {
 		t.Fatal("concurrent config writes bypassed CAS")
 	}
 	cfg := w.config(t, "pve1", 100)
-	if cfg["description"] != "two" || cfg["cores"] != float64(3) {
+	if cfg["description"] != "two" || cfg["cores"] != "3" {
 		t.Fatal(cfg)
 	}
 	w.write(t, "PUT", path, "delete=description,tags", "writer@pve!one", 200)
@@ -180,7 +180,7 @@ func TestCloneDescriptionAndConfigClientCAS(t *testing.T) {
 		t.Fatal(err)
 	}
 	before := w.config(t, "pve1", 102)
-	if before["cores"] != float64(3) || before["description"] != "finalized" || form.Get("digest") != "ignored" {
+	if before["cores"] != "3" || before["description"] != "finalized" || form.Get("digest") != "ignored" {
 		t.Fatal(before, form)
 	}
 	err = c.WriteConfig(t.Context(), target, digest, url.Values{"cores": {"4"}, "description": {"lost"}})
@@ -188,7 +188,7 @@ func TestCloneDescriptionAndConfigClientCAS(t *testing.T) {
 		t.Fatalf("stale digest = %v", err)
 	}
 	after := w.config(t, "pve1", 102)
-	if after["digest"] != before["digest"] || after["cores"] != float64(3) || after["description"] != "finalized" {
+	if after["digest"] != before["digest"] || after["cores"] != "3" || after["description"] != "finalized" {
 		t.Fatal(after)
 	}
 	if err := c.WriteConfig(t.Context(), target, "", form); err == nil {
@@ -258,7 +258,7 @@ func TestCloneCopiesDisksAndConfigACLsAreAtomic(t *testing.T) {
 	}
 	cpu := newWriteWorld(t, "VM.Config.CPU")
 	cpu.write(t, "PUT", "/nodes/pve1/qemu/100/config", "cores=3&description=forbidden", "writer@pve!one", 403)
-	if cfg := cpu.config(t, "pve1", 100); cfg["cores"] != float64(2) || cfg["description"] != nil {
+	if cfg := cpu.config(t, "pve1", 100); cfg["cores"] != "2" || cfg["description"] != nil {
 		t.Fatal(cfg)
 	}
 	for _, privileges := range [][]string{{"VM.Clone"}, {"VM.Allocate"}, {"VM.Clone", "VM.Allocate"}} {

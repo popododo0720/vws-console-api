@@ -1,0 +1,1 @@
+`pve-9.2-representative-config.json` represents PVE 9.2 output per issue #1007 and the Proxmox `qm.conf` reference; it is not a raw capture. Field syntax follows https://github.com/proxmox/pve-docs/blob/master/generated/qm.conf.5-opts.adoc; JSON scalar forms follow the issue's observed response.
