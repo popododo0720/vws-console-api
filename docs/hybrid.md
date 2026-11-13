@@ -27,6 +27,9 @@ the AWS API as the common language.
    one exception, along with the operator registry (regions, AWS accounts,
    project mappings), and both live in one etcd. A short read cache is a
    copy only: nothing decides ownership or rebuilds a resource from it.
+   A region daemon retains the last successful instance read in memory for
+   offline-node display only. Live PVE pool membership still controls visibility;
+   a restart omits offline VMs until their nodes return.
 2. A region is a destination. One Proxmox cluster is one `pve-*` region.
    AWS regions keep their AWS names.
 3. A VM made in the Proxmox UI simply shows up. There's no import step and no

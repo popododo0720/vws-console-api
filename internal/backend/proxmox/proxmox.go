@@ -19,6 +19,8 @@ type Backend struct {
 	zones           []backend.Zone
 	statusMu        sync.Mutex
 	volumeMu        sync.Mutex
+	instanceMu      sync.Mutex
+	lastInstances   map[int]instanceSnapshot
 	lastStatusError *resource.RegionStatusError
 }
 

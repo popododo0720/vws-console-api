@@ -33,6 +33,113 @@ func inventoryScope() backend.Scope {
 	return backend.Scope{Account: account}
 }
 
+func TestInventoryOfflineNodeSnapshot(t *testing.T) {
+	for _, state := range []string{"running", "stopped"} {
+		t.Run(state, func(t *testing.T) {
+			s := inventoryScenario()
+			s.VMs[0].Status = state
+			s.VMs[0].Config["tags"] = "vws.t.+name.original"
+			b, f := powerBackend(t, s)
+			page, err := b.DescribeInstances(t.Context(), inventoryScope(), resource.InstanceQuery{})
+			if err != nil || len(page.Items) != 1 || page.Items[0].NodeStatus != "online" {
+				t.Fatalf("online inventory = %+v, %v", page, err)
+			}
+			want := page.Items[0]
+			page.Items[0].Tags["Name"] = "caller changed copy"
+			if err := f.SetNodeOnline("pve1", false); err != nil {
+				t.Fatal(err)
+			}
+			_, err = b.client.VMConfig(t.Context(), pveclient.VM{Node: "pve1", VMID: 100})
+			var he *pveclient.HTTPError
+			if !errors.As(err, &he) || he.Status != 595 {
+				t.Fatalf("offline config = %v", err)
+			}
+			want.NodeStatus = "unknown"
+			want.Tags = map[string]string{"Name": "original"}
+			for range 2 {
+				for _, query := range []resource.InstanceQuery{
+					{}, {IDs: []resource.InstanceID{want.ID}}, {States: []resource.InstanceState{want.State}},
+				} {
+					offline, err := b.DescribeInstances(t.Context(), inventoryScope(), query)
+					if err != nil || len(offline.Items) != 1 || !reflect.DeepEqual(offline.Items[0], want) {
+						t.Fatalf("offline inventory = %+v, %v; want %+v", offline, err, want)
+					}
+					offline.Items[0].Tags["Name"] = "caller changed offline copy"
+				}
+			}
+			before := len(f.RequestMethods())
+			for _, verb := range []string{"start", "stop", "reboot", "destroy"} {
+				_, err := powerCall(t.Context(), b, verb, []resource.InstanceID{want.ID})
+				if resource.CodeOf(err) != resource.CodeUnavailable {
+					t.Fatalf("offline %s = %v", verb, err)
+				}
+			}
+			for _, method := range f.RequestMethods()[before:] {
+				if method != http.MethodGet {
+					t.Fatalf("offline mutation attempted %s", method)
+				}
+			}
+			fresh, err := New(t.Context(), b.client, Identity(b), b.cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			empty, err := fresh.DescribeInstances(t.Context(), inventoryScope(), resource.InstanceQuery{})
+			if err != nil || len(empty.Items) != 0 {
+				t.Fatalf("restart invented offline state: %+v, %v", empty, err)
+			}
+			if err := f.SetNodeOnline("pve1", true); err != nil {
+				t.Fatal(err)
+			}
+			back, err := fresh.DescribeInstances(t.Context(), inventoryScope(), resource.InstanceQuery{})
+			want.NodeStatus = "online"
+			if err != nil || len(back.Items) != 1 || !reflect.DeepEqual(back.Items[0], want) {
+				t.Fatalf("node returned: %+v, %v", back, err)
+			}
+		})
+	}
+}
+
+func TestInventoryOfflineSnapshotRefreshAndPoolMove(t *testing.T) {
+	b, f := powerBackend(t, inventoryScenario())
+	for _, state := range []resource.InstanceState{resource.InstanceRunning, resource.InstanceStopped} {
+		if state == resource.InstanceStopped {
+			if _, err := powerCall(t.Context(), b, "stop", []resource.InstanceID{powerID(t)}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := f.SetNodeOnline("pve1", true); err != nil {
+			t.Fatal(err)
+		}
+		page, err := b.DescribeInstances(t.Context(), inventoryScope(), resource.InstanceQuery{})
+		if err != nil || len(page.Items) != 1 || page.Items[0].State != state {
+			t.Fatalf("refresh = %+v, %v", page, err)
+		}
+		if err := f.SetNodeOnline("pve1", false); err != nil {
+			t.Fatal(err)
+		}
+		page, err = b.DescribeInstances(t.Context(), inventoryScope(), resource.InstanceQuery{})
+		if err != nil || len(page.Items) != 1 || page.Items[0].State != state || page.Items[0].NodeStatus != "unknown" {
+			t.Fatalf("last successful state = %+v, %v", page, err)
+		}
+		if err := f.SetNodeOnline("pve1", true); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := f.MoveVM(100, "999999999999"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.SetNodeOnline("pve1", false); err != nil {
+		t.Fatal(err)
+	}
+	foreign, _ := resource.Parse[resource.AccountID]("999999999999")
+	for _, scope := range []backend.Scope{inventoryScope(), {Account: foreign}} {
+		page, err := b.DescribeInstances(t.Context(), scope, resource.InstanceQuery{})
+		if err != nil || len(page.Items) != 0 {
+			t.Fatalf("snapshot crossed pool boundary: %+v, %v", page, err)
+		}
+	}
+}
+
 func TestInventoryReservationSurvivesRestart(t *testing.T) {
 	for _, uuid := range []string{"5f0c3e9a-8b5d-4b8e-9a51-0c2d6c1f7a10", ""} {
 		t.Run(uuid, func(t *testing.T) {
