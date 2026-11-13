@@ -227,7 +227,7 @@ func configRow(vm *VM) map[string]any {
 	cfg := map[string]any{}
 	for k, v := range vm.Config {
 		cfg[k] = v
-		if k == "cores" || k == "sockets" || k == "memory" || k == "protection" {
+		if k == "protection" {
 			if n, err := strconv.Atoi(v); err == nil {
 				cfg[k] = n
 			}

@@ -105,6 +105,31 @@ func TestServesClusterAndVMReads(t *testing.T) {
 	}
 }
 
+func TestConfigNumericWireForms(t *testing.T) {
+	s := scenario(t)
+	for key, value := range map[string]string{
+		"memory": "1024", "cores": "1", "sockets": "1", "balloon": "512", "agent": "1", "protection": "1",
+	} {
+		s.VMs[0].Config[key] = value
+	}
+	_, srv := start(t, s)
+	var raw struct {
+		Data map[string]any `json:"data"`
+	}
+	get(t, srv, "/nodes/pve1/qemu/100/config", &raw)
+	for key, want := range map[string]any{
+		"memory": "1024", "cores": "1", "sockets": "1", "balloon": "512", "agent": "1", "protection": float64(1),
+	} {
+		if raw.Data[key] != want {
+			t.Errorf("%s = %#v, want %#v", key, raw.Data[key], want)
+		}
+	}
+	get(t, srv, "/nodes/pve1/qemu/9000/config", &raw)
+	if raw.Data["template"] != float64(1) {
+		t.Fatalf("template = %#v", raw.Data["template"])
+	}
+}
+
 func get(t *testing.T, srv *httptest.Server, path string, out any) int {
 	t.Helper()
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/api2/json"+path, nil)

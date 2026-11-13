@@ -80,6 +80,7 @@ type VMConfig struct {
 	Cores       int    `json:"cores"`
 	Sockets     int    `json:"sockets"`
 	Memory      int    `json:"memory"`
+	Balloon     int    `json:"balloon"`
 	Description string `json:"description"`
 	QMPStatus   string `json:"qmpstatus"`
 	Protection  int    `json:"protection"`
@@ -95,7 +96,23 @@ type VMConfig struct {
 func (v *VMConfig) UnmarshalJSON(data []byte) error {
 	type config VMConfig
 	var decoded config
-	if err := json.Unmarshal(data, &decoded); err != nil {
+	wire := struct {
+		*config
+		Cores      *configInt    `json:"cores"`
+		Sockets    *configInt    `json:"sockets"`
+		Memory     *configInt    `json:"memory"`
+		Balloon    *configInt    `json:"balloon"`
+		Template   *configInt    `json:"template"`
+		Protection *configInt    `json:"protection"`
+		Agent      *configString `json:"agent"`
+	}{
+		config: &decoded,
+		Cores:  (*configInt)(&decoded.Cores), Sockets: (*configInt)(&decoded.Sockets),
+		Memory: (*configInt)(&decoded.Memory), Balloon: (*configInt)(&decoded.Balloon),
+		Template: (*configInt)(&decoded.Template), Protection: (*configInt)(&decoded.Protection),
+		Agent: (*configString)(&decoded.Agent),
+	}
+	if err := json.Unmarshal(data, &wire); err != nil {
 		return fmt.Errorf("pveclient: VM config: %w", err)
 	}
 	var fields map[string]json.RawMessage
@@ -120,6 +137,46 @@ func (v *VMConfig) UnmarshalJSON(data []byte) error {
 		}
 	}
 	*v = VMConfig(decoded)
+	return nil
+}
+
+type configInt int
+
+func (n *configInt) UnmarshalJSON(data []byte) error {
+	var text string
+	if len(data) > 0 && data[0] == '"' {
+		if err := json.Unmarshal(data, &text); err != nil {
+			return fmt.Errorf("pveclient: config integer string: %w", err)
+		}
+	} else {
+		text = string(data)
+	}
+	if text == "" {
+		*n = 0
+		return nil
+	}
+	value, err := strconv.Atoi(text)
+	if err != nil {
+		return fmt.Errorf("pveclient: config integer: %w", err)
+	}
+	*n = configInt(value)
+	return nil
+}
+
+type configString string
+
+func (s *configString) UnmarshalJSON(data []byte) error {
+	if len(data) > 0 && data[0] == '"' {
+		if err := json.Unmarshal(data, (*string)(s)); err != nil {
+			return fmt.Errorf("pveclient: config string: %w", err)
+		}
+		return nil
+	}
+	var value configInt
+	if err := json.Unmarshal(data, &value); err != nil {
+		return fmt.Errorf("pveclient: config numeric string: %w", err)
+	}
+	*s = configString(strconv.Itoa(int(value)))
 	return nil
 }
 

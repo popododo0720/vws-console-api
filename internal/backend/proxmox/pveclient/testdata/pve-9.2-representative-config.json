@@ -1,0 +1,19 @@
+{
+  "name": "web-1",
+  "memory": "1024",
+  "cores": "1",
+  "sockets": "1",
+  "agent": "1",
+  "balloon": "512",
+  "template": 0,
+  "protection": 0,
+  "scsi0": "local-lvm:vm-100-disk-0,size=8G",
+  "net0": "virtio=BC:24:11:00:00:01,bridge=vmbr0",
+  "smbios1": "uuid=5f0c3e9a-8b5d-4b8e-9a51-0c2d6c1f7a10",
+  "digest": "0de0e2713135348a2ba880cc161ee96672c5234a",
+  "meta": "creation-qemu=9.2.0,ctime=1794564581",
+  "ostype": "l26",
+  "boot": "order=scsi0;net0",
+  "scsihw": "virtio-scsi-single",
+  "vmgenid": "3f89b3bb-b7dd-4596-8155-872694190001"
+}
