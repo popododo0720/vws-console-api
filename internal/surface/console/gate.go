@@ -58,6 +58,7 @@ func routeAction(pattern string) (authorization, bool) {
 		"GET /api/v1/admin/permissions":             nil,
 		"GET /api/v1/admin/projects/{project}":      nil,
 		"PUT /api/v1/admin/projects/{project}":      nil,
+		"GET /api/v1/projects":                      listProjectsAction,
 		"GET /api/v1/instances":                     ec2("DescribeInstances"),
 		"GET /api/v1/instances/{id}":                ec2("DescribeInstances"),
 		"POST /api/v1/instances/stop":               ec2("StopInstances"),

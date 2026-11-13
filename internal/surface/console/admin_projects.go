@@ -31,25 +31,33 @@ func (h *handler) adminProject(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	v, err := h.registry.Projects().Get(r.Context(), id)
-	if errors.Is(err, store.ErrNotFound) {
-		regions, skipped, listErr := h.registry.Regions().List(r.Context())
-		if listErr != nil {
-			adminError(w, r, listErr)
-			return
-		}
-		if len(skipped) != 0 {
-			h.log.WarnContext(r.Context(), "admin registry skipped undecodable records", slog.Int("count", len(skipped)))
-		}
-		v = store.Project{Project: id, Pools: []store.ProjectPool{}, AWSAccounts: []string{}}
-		for _, region := range regions {
-			v.Pools = append(v.Pools, store.ProjectPool{Region: region.Name, Pool: id})
-		}
-	} else if err != nil {
+	v, err := h.projectMapping(r.Context(), id)
+	if err != nil {
 		adminError(w, r, err)
 		return
 	}
 	writeProject(w, v)
+}
+
+// projectMapping reads a project's mapping. A project without one has the
+// pool named after it in every registered region and no AWS accounts.
+func (h *handler) projectMapping(ctx context.Context, id string) (store.Project, error) {
+	v, err := h.registry.Projects().Get(ctx, id)
+	if !errors.Is(err, store.ErrNotFound) {
+		return v, err
+	}
+	regions, skipped, err := h.registry.Regions().List(ctx)
+	if err != nil {
+		return store.Project{}, err
+	}
+	if len(skipped) != 0 {
+		h.log.WarnContext(ctx, "admin registry skipped undecodable records", slog.Int("count", len(skipped)))
+	}
+	v = store.Project{Project: id, Pools: []store.ProjectPool{}, AWSAccounts: []string{}}
+	for _, region := range regions {
+		v.Pools = append(v.Pools, store.ProjectPool{Region: region.Name, Pool: id})
+	}
+	return v, nil
 }
 
 func (h *handler) adminMapProject(w http.ResponseWriter, r *http.Request) {
