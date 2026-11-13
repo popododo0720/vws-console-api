@@ -45,8 +45,11 @@ type Network struct {
 
 // Storage is one node's storage inventory entry.
 type Storage struct {
-	Node string `yaml:"node"`
-	Name string `yaml:"name"`
+	Node    string `yaml:"node"`
+	Name    string `yaml:"name"`
+	Shared  int    `yaml:"shared"`
+	MaxDisk int64  `yaml:"maxdisk"`
+	Disk    int64  `yaml:"disk"`
 
 	Content []StorageContent `yaml:"content"`
 }
