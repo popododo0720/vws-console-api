@@ -132,6 +132,10 @@ func mutationGuardFirst(fn *ast.FuncDecl) bool {
 
 func TestMutationMethodsRejectOtherPools(t *testing.T) {
 	cases := map[string]func(*testing.T, *Backend) (resource.Kind, string, error){
+		"RunInstances": func(t *testing.T, b *Backend) (resource.Kind, string, error) {
+			_, err := b.RunInstances(t.Context(), backend.Mutation{Scope: inventoryScope()}, resource.RunInstancesRequest{})
+			return resource.KindInstance, "", err
+		},
 		"StartInstances": func(t *testing.T, b *Backend) (resource.Kind, string, error) {
 			return powerCrossPool(t, b, "start")
 		},
@@ -215,7 +219,7 @@ func TestMutationMethodsRejectOtherPools(t *testing.T) {
 			s.VMs[0].Pool = "999999999999"
 			b, _ := networkBackend(t, s, RegionConfig{})
 			kind, id, err := run(t, b)
-			if name == "CreateVolume" {
+			if name == "CreateVolume" || name == "RunInstances" {
 				if resource.CodeOf(err) != resource.CodePermissionDenied {
 					t.Fatalf("create without caller pool: %v", err)
 				}

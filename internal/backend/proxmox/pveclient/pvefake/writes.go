@@ -173,7 +173,7 @@ func (f *Fake) cloneVM(t *Token, r *http.Request) (any, *failure) {
 	if fail != nil {
 		return nil, fail
 	}
-	if fail := writeForm(r, "newid", "pool", "full", "target", "description", "name"); fail != nil {
+	if fail := writeForm(r, "newid", "pool", "full", "target", "storage", "description", "name"); fail != nil {
 		return nil, fail
 	}
 	if r.Form.Get("full") == "0" && !source.Template {
@@ -192,6 +192,15 @@ func (f *Fake) cloneVM(t *Token, r *http.Request) (any, *failure) {
 			return nil, parameter("target", "unknown or offline node")
 		}
 		node = target
+	}
+	destination := r.Form.Get("storage")
+	if destination != "" {
+		if !slices.ContainsFunc(f.s.Storages, func(s Storage) bool { return s.Name == destination && s.Node == node }) {
+			return nil, parameter("storage", "unknown target storage")
+		}
+		if fail := f.need(t, "/storage/"+destination, "Datastore.AllocateSpace"); fail != nil {
+			return nil, fail
+		}
 	}
 	for k, disk := range source.Config {
 		if configPrivilege(k) == "VM.Config.Network" {
@@ -221,6 +230,11 @@ func (f *Fake) cloneVM(t *Token, r *http.Request) (any, *failure) {
 	}
 	for k, v := range clone.Config {
 		clone.Config[k] = strings.ReplaceAll(v, fmt.Sprintf("vm-%d-", source.VMID), fmt.Sprintf("vm-%d-", id))
+		if destination != "" && configPrivilege(k) == "VM.Config.Disk" {
+			if _, rest, ok := strings.Cut(clone.Config[k], ":"); ok {
+				clone.Config[k] = destination + ":" + rest
+			}
+		}
 		if configPrivilege(k) == "VM.Config.Network" {
 			device, options, _ := strings.Cut(v, ",")
 			model, _, _ := strings.Cut(device, "=")
@@ -241,12 +255,12 @@ func (f *Fake) cloneVM(t *Token, r *http.Request) (any, *failure) {
 	return f.submit(t, sourceNode, "qmclone", strconv.Itoa(sourceID), func() string {
 		for i := range f.s.Storages {
 			storage := &f.s.Storages[i]
-			if storage.Node != node {
+			if storage.Node != node || destination != "" && storage.Name != destination {
 				continue
 			}
 			var copies []StorageContent
 			for _, original := range f.s.Storages {
-				if original.Node != sourceNode || original.Name != storage.Name {
+				if original.Node != sourceNode || destination == "" && original.Name != storage.Name {
 					continue
 				}
 				for _, disk := range original.Content {
@@ -254,6 +268,10 @@ func (f *Fake) cloneVM(t *Token, r *http.Request) (any, *failure) {
 						disk.VMID = id
 						disk.VolID = strings.ReplaceAll(disk.VolID,
 							fmt.Sprintf("vm-%d-", sourceID), fmt.Sprintf("vm-%d-", id))
+						if destination != "" {
+							_, name, _ := strings.Cut(disk.VolID, ":")
+							disk.VolID = destination + ":" + name
+						}
 						copies = append(copies, disk)
 					}
 				}

@@ -86,8 +86,8 @@ the highest. Ties go to fewer VMs, then the node name. A placement on shared
 storage takes the disk from every node sharing it. No fit returns
 `InsufficientInstanceCapacity`.
 
-The scheduler isn't called by a create path yet, because `RunInstances` is
-unsupported on Proxmox (see the table below).
+`RunInstances` plans every missing index before submitting any clone.
+Instances remain pending until finalize is implemented in #772.
 
 Tests: `TestScheduleFilters`, `TestSchedulePolicies`,
 `TestScheduleBatchAndZones`, `TestScheduleOneNodeCatalogArithmetic`,
@@ -118,9 +118,12 @@ recovers everything from PVE:
 - Tag writes retry on a config digest conflict. (`TestTagWritesRoundTripRetryRestart`,
   `TestTagWritesDigestConflict`)
 
-There's no Proxmox launch recovery yet, since `RunInstances` isn't
-implemented. The launch marker codec exists and is tested
-(`TestLaunchMarkerRecoversFromPVEConfig`), but nothing writes it.
+`RunInstances` writes launch markers atomically with clones, recovers allocated
+indexes after restart and submits only missing indexes. Retries return the same
+reservation, instance IDs and key-derived format 03 operation. Changed request
+fingerprints are refused. User data, extra disks, custom root sizes and network
+interfaces remain unsupported by this accept path.
+(`TestRunInstancesReplayRestartAndPartial`)
 
 ## Console relay
 
@@ -194,7 +197,7 @@ Paths are relative to `/api2/json`. Every mutation first runs the pool guard
 | StopInstances | `POST .../status/shutdown` (timeout, forceStop=1), or `POST .../status/stop` when forced | `internal/backend/proxmox/power.go` |
 | RebootInstances | `POST .../status/reboot` | `internal/backend/proxmox/power.go` |
 | TerminateInstances | `POST .../status/stop` and wait if running, then `DELETE /nodes/{node}/qemu/{vmid}` (purge, destroy-unreferenced-disks) | `internal/backend/proxmox/power.go` |
-| RunInstances | none: returns Unsupported | `internal/backend/proxmox/proxmox.go` |
+| RunInstances | `GET /cluster/nextid`, `POST /nodes/{node}/qemu/{template}/clone` with bound pool and recovery description | `internal/backend/proxmox/launch.go` |
 | DescribeVolumes | `GET /nodes/{node}/qemu/{vmid}/config`, `GET /nodes/{node}/storage/{storage}/content` | `internal/backend/proxmox/volumes.go` |
 | CreateVolume | `POST /nodes/{node}/qemu` (holder), `POST /nodes/{node}/storage/{storage}/content`, `PUT .../config` | `internal/backend/proxmox/volume_writes.go`, `internal/backend/proxmox/holder.go` |
 | DeleteVolume | `PUT .../config`, `PUT .../unlink` | `internal/backend/proxmox/volume_writes.go` |

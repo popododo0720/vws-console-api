@@ -19,6 +19,7 @@ type Backend struct {
 	zones           []backend.Zone
 	statusMu        sync.Mutex
 	volumeMu        sync.Mutex
+	launchMu        sync.Mutex
 	instanceMu      sync.Mutex
 	lastInstances   map[int]instanceSnapshot
 	lastStatusError *resource.RegionStatusError
@@ -76,6 +77,10 @@ func (b *Backend) RegionCapabilities(ctx context.Context, region string) (resour
 		doc.Actions[key] = resource.ActionCapability{State: resource.ActionEmpty}
 	}
 	if !b.cfg.ReadOnly {
+		doc.Actions["ec2:RunInstances"] = resource.ActionCapability{
+			State: resource.ActionPartial, ReasonCode: "CloneAcceptOnly",
+			Reason: "pending clones only; finalize (#772), user data, extra disks and custom root sizes are not supported",
+		}
 		doc.Actions["vws:OpenConsole"] = resource.ActionCapability{State: resource.ActionSupported}
 		doc.Actions["ec2:CreateVolume"] = resource.ActionCapability{
 			State: resource.ActionPartial, ReasonCode: "NoSnapshotSource",
@@ -107,13 +112,6 @@ func (b *Backend) RegionCapabilities(ctx context.Context, region string) (resour
 		doc.Actions["ec2:CreateSnapshot"] = resource.ActionCapability{State: resource.ActionSupported}
 	}
 	return doc, nil
-}
-
-// RunInstances is unavailable in the phase-one backend.
-func (b *Backend) RunInstances(
-	ctx context.Context, m backend.Mutation, req resource.RunInstancesRequest,
-) (resource.Accepted[resource.Instance], error) {
-	return resource.Accepted[resource.Instance]{}, resource.Unsupported("RunInstances", "read-only")
 }
 
 // ModifyVolume is unavailable in the phase-one backend.

@@ -199,6 +199,41 @@ func TestCloneDescriptionAndConfigClientCAS(t *testing.T) {
 	}
 }
 
+func TestCloneStorageAndInputBounds(t *testing.T) {
+	w := newWriteWorld(t)
+	srv := httptest.NewServer(w.f)
+	t.Cleanup(srv.Close)
+	c := client(t, srv, "writer@pve!one", "k")
+	source := pveclient.VM{Node: "pve1", VMID: 100}
+	for _, storage := range []string{"", "../target", "target/node", strings.Repeat("x", 65)} {
+		before := len(w.f.Requests())
+		_, err := c.Clone(t.Context(), source, 102, "vws-a", "launch", "marker", "", true, storage)
+		if err == nil || len(w.f.Requests()) != before {
+			t.Fatalf("invalid storage %q reached PVE: %v", storage, err)
+		}
+	}
+	before := len(w.f.Requests())
+	_, err := c.Clone(t.Context(), source, 102, "vws-a", "launch", "marker", "../node", true, "target")
+	if err == nil || len(w.f.Requests()) != before {
+		t.Fatalf("invalid target reached PVE: %v", err)
+	}
+	upid, err := c.Clone(t.Context(), source, 102, "vws-a", "launch", "marker", "", true, "target")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w.status(t, upid).ExitStatus != "OK" {
+		t.Fatal("clone failed")
+	}
+	if cfg := w.config(t, "pve1", 102); !strings.HasPrefix(cfg["scsi0"].(string), "target:") {
+		t.Fatal(cfg)
+	}
+	content, err := client(t, srv, auditor, auditorKey).StorageContent(t.Context(), "pve1", "target")
+	if err != nil || len(content) != 1 || content[0].VMID != 102 ||
+		content[0].VolID != "target:vm-102-disk-0" {
+		t.Fatalf("target content=%+v %v", content, err)
+	}
+}
+
 func TestCloneCopiesDisksAndConfigACLsAreAtomic(t *testing.T) {
 	w := newWriteWorld(t)
 	w.write(t, "POST", "/nodes/pve1/qemu/100/clone", "newid=102&full=1", "writer@pve!one", 200)
