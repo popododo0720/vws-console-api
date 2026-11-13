@@ -36,13 +36,11 @@ type Config struct {
 	Verifier *sigv4.Verifier
 	// Authorizer decides each request. Nil denies every request.
 	Authorizer iam.Authorizer
-	// Forward receives only verified, authorized requests.
-	Forward func(http.ResponseWriter, *http.Request, resource.Caller, string)
 }
 
 // New returns the object handler. Paths are /{bucket} and /{bucket}/{key}.
 func New(cfg Config) http.Handler {
-	h := &handler{svc: cfg.Service, verifier: cfg.Verifier, authz: cfg.Authorizer, forward: cfg.Forward}
+	h := &handler{svc: cfg.Service, verifier: cfg.Verifier, authz: cfg.Authorizer}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", h.listBuckets)
 	mux.HandleFunc("GET /{bucket}", h.listObjects)
@@ -60,7 +58,6 @@ type handler struct {
 	svc      *cloud.Service
 	verifier *sigv4.Verifier
 	authz    iam.Authorizer
-	forward  func(http.ResponseWriter, *http.Request, resource.Caller, string)
 }
 
 func (h *handler) wrap(next http.Handler) http.Handler {
@@ -81,10 +78,6 @@ func (h *handler) wrap(next http.Handler) http.Handler {
 		if action, arn, ok := s3Action(r.Method, r.URL.Path); ok {
 			if err := iam.Check(r.Context(), h.authz, caller, action, arn); err != nil {
 				writeErr(w, r, err, r.URL.Path)
-				return
-			}
-			if h.forward != nil {
-				h.forward(w, r, caller, strings.TrimPrefix(action, "s3:"))
 				return
 			}
 		}

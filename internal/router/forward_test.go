@@ -79,14 +79,16 @@ func TestAWSForwardingRequiresSignatureAndIAM(t *testing.T) {
 			})
 			writeError := ec2query.WriteError
 			content, method, path := body, http.MethodPost, "/"
+			var forward http.Handler
 			if service == sigv4.ServiceS3 {
-				handler = s3rest.New(s3rest.Config{
-					Service: svc, Verifier: v, Authorizer: authz, Forward: f.Handler(service, s3rest.WriteError),
+				handler = nil
+				forward = f.Any(router.ForwardConfig{
+					Verifier: func(sigv4.Service) *sigv4.Verifier { return v }, Authorizer: authz, Error: s3rest.WriteError,
 				})
 				content, method, path, writeError = "object bytes", http.MethodPut, "/bucket/key", s3rest.WriteError
 			}
 			h := router.New(router.Config{
-				Regions: catalog, AWS: handler, Error: writeError,
+				Regions: catalog, AWS: handler, Forward: forward, Error: writeError,
 				Local: http.HandlerFunc(func(http.ResponseWriter, *http.Request) { t.Error("AWS request reached local backend") }),
 			})
 			req := httptest.NewRequestWithContext(t.Context(), method, path, strings.NewReader(content))
@@ -112,7 +114,8 @@ func TestAWSForwardingRequiresSignatureAndIAM(t *testing.T) {
 			}
 		}
 	}
-	if strings.Count(logs.String(), `"destination":"aws"`) != 2 {
+	if strings.Count(logs.String(), `"result":"accepted"`) != 2 ||
+		strings.Count(logs.String(), `"service":"s3","action":"PutObject","resource_ids":[],"result":"denied"`) != 1 {
 		t.Fatalf("missing mutation audits: %s", logs.String())
 	}
 	if err := proxy.Close(); err != nil {

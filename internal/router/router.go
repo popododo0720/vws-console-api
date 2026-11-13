@@ -15,10 +15,13 @@ import (
 )
 
 // Config supplies authenticated surface handlers and their wire error renderer.
+// AWS takes EC2 requests for an AWS region; Forward takes every other service
+// for an AWS region. A nil handler refuses its requests.
 type Config struct {
 	Regions backend.RegionCatalog
 	Local   http.Handler
 	AWS     http.Handler
+	Forward http.Handler
 	Error   func(http.ResponseWriter, *http.Request, error)
 }
 
@@ -44,9 +47,18 @@ func New(cfg Config) http.Handler {
 			cfg.Error(w, r, err)
 			return
 		}
-		next := cfg.Local
-		if aws {
+		var next http.Handler
+		switch {
+		case !aws && (service == sigv4.ServiceEC2 || service == sigv4.ServiceS3):
+			next = cfg.Local
+		case aws && service == sigv4.ServiceEC2:
 			next = cfg.AWS
+		case aws:
+			next = cfg.Forward
+		}
+		if next == nil {
+			cfg.Error(w, r, sigv4.Reject(sigv4.FailureMalformed, resource.Unauthenticated("credential scope rejected")))
+			return
 		}
 		next.ServeHTTP(w, r)
 	})
