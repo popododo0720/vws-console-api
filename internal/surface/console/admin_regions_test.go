@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -207,5 +208,45 @@ func TestAdminRegionWritesRequireRootKeyAndCSRF(t *testing.T) {
 	root := cookie(t, login, SessionCookie)
 	if rec := e.do(t, "POST", regionPath, "{}", nil, root); rec.Code != 403 {
 		t.Fatal("cookie write bypassed CSRF")
+	}
+}
+
+func TestAdminRegionSelfCheckLastError(t *testing.T) {
+	e, g, app, auditLog := accountFixture(t)
+	h := e.h.(*handler)
+	const message = "registration self-check failed: storages"
+	stub := httptest.NewTLSServer(regionapi.WithRegistration(func(context.Context, json.RawMessage) error {
+		return &resource.Error{Code: resource.CodeUnavailable, Message: message}
+	}, http.NotFoundHandler()))
+	defer stub.Close()
+	config := stub.Client().Transport.(*http.Transport).TLSClientConfig.Clone()
+	config.Certificates = stub.TLS.Certificates
+	client, err := regionapi.NewClient(stub.URL, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	h.regionRegistration = func(ctx context.Context, _ string, data json.RawMessage) error {
+		return client.Register(ctx, data)
+	}
+	post := regionCall(t, e, "POST", validRegion(), "", 201)
+	for _, response := range []string{
+		post.Body.String(),
+		regionCall(t, e, "PATCH", map[string]any{}, post.Header().Get("ETag"), 200).Body.String(),
+	} {
+		if !strings.Contains(response, message) {
+			t.Errorf("operator cannot see failed check: %s", response)
+		}
+	}
+	v, err := g.Regions().Get(t.Context(), "pve-test-1")
+	if err != nil || v.LastError == nil || v.LastError.Message != message {
+		t.Fatalf("persisted error = %+v, %v", v.LastError, err)
+	}
+	h.regionRegistration = func(context.Context, string, json.RawMessage) error {
+		return &resource.Error{Code: resource.CodeUnavailable, Message: message + validRegion()["tokenSecret"].(string)}
+	}
+	retry := regionCall(t, e, "PATCH", map[string]any{}, `"`+fmt.Sprint(v.Version)+`"`, 200)
+	if strings.Contains(retry.Body.String()+app.String()+auditLog.String(), validRegion()["tokenSecret"].(string)) {
+		t.Fatal("unclassified upstream message exposed the token")
 	}
 }

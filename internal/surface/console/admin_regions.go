@@ -192,7 +192,11 @@ func (h *handler) adminWriteRegion(w http.ResponseWriter, r *http.Request) {
 	pushErr := h.pushRegion(r.Context(), v, in.TokenSecret)
 	v.LastError = nil
 	if pushErr != nil {
-		v.LastError = &resource.RegionStatusError{Time: h.now().UTC(), Message: "region registration push failed"}
+		message := resource.RegistrationFailureMessage(pushErr)
+		if message == "" {
+			message = "region registration push failed"
+		}
+		v.LastError = &resource.RegionStatusError{Time: h.now().UTC(), Message: message}
 	}
 	v, err = h.registry.Regions().Update(r.Context(), v)
 	if err != nil {
