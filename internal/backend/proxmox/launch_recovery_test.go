@@ -1,14 +1,121 @@
 package proxmox
 
 import (
+	"context"
+	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
+	"github.com/popododo0720/vws-console-api/internal/backend/proxmox/pveclient"
 	"github.com/popododo0720/vws-console-api/internal/backend/proxmox/pveclient/pvefake"
 	"github.com/popododo0720/vws-console-api/internal/resource"
 )
+
+func TestLaunchRecoveryInputBounds(t *testing.T) {
+	b, f := powerBackend(t, mutationScenario())
+	before := len(f.Requests())
+	for _, key := range []string{"", "a", strings.Repeat("a", 23), strings.Repeat("a", 63), strings.Repeat("A", 64)} {
+		_, err := b.RecoverLaunch(t.Context(), inventoryScope(), key, strings.Repeat("f", 64))
+		if !errors.Is(err, ErrInput) {
+			t.Fatalf("key %q = %v", key, err)
+		}
+	}
+	if len(f.Requests()) != before {
+		t.Fatal("invalid input reached PVE")
+	}
+}
+
+func TestLaunchRecoverySkipsUnrelatedMarkers(t *testing.T) {
+	m := launchMarker(t)
+	description, err := WithLaunchMarker("", m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, unrelated := range []string{"vws:v=broken", "vws:v=1 key=" + strings.Repeat("b", 64) + " invalid"} {
+		s := mutationScenario()
+		s.VMs[0].Config["description"] = description
+		s.VMs = append(s.VMs, pvefake.VM{
+			VMID: 101, Node: "pve1", Pool: "123456789012", Config: map[string]string{"description": unrelated},
+		})
+		b, _ := powerBackend(t, s)
+		recovered, err := b.RecoverLaunch(t.Context(), inventoryScope(), m.Key, m.Fingerprint)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, err = New(t.Context(), b.client, Identity(b), b.cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		op, err := b.GetOperation(t.Context(), inventoryScope(), recovered.Operation.ID)
+		if err != nil || !reflect.DeepEqual(op, recovered.Operation) {
+			t.Fatalf("unrelated marker hid operation: %+v, %v", op, err)
+		}
+	}
+}
+
+func TestLaunchRecoveryConfigConcurrency(t *testing.T) {
+	s := mutationScenario()
+	m := launchMarker(t)
+	description, err := WithLaunchMarker("", m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.VMs[0].Config["description"] = description
+	for i := range 19 {
+		s.VMs = append(s.VMs, pvefake.VM{VMID: 101 + i, Node: "pve1", Pool: "123456789012"})
+	}
+	b, f := powerBackend(t, s)
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+	defer cancel()
+	var active, maximum atomic.Int32
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/config") {
+			n := active.Add(1)
+			defer active.Add(-1)
+			for old := maximum.Load(); n > old && !maximum.CompareAndSwap(old, n); old = maximum.Load() {
+			}
+			if n == 8 && maximum.Load() == 8 {
+				select {
+				case <-release:
+				default:
+					close(release)
+				}
+			}
+			select {
+			case <-release:
+			case <-ctx.Done():
+				return
+			}
+		}
+		f.ServeHTTP(w, r)
+	}))
+	defer srv.Close()
+	c, err := pveclient.New(pveclient.Config{
+		BaseURL: srv.URL, TokenID: s.Tokens[0].ID, Secret: pveclient.Secret(s.Tokens[0].Secret), HTTPClient: srv.Client(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err = New(ctx, c, Identity(b), b.cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	op, _ := newLaunchOperation("test", m.Key)
+	id, _ := op.encode()
+	if _, err := b.GetOperation(ctx, inventoryScope(), id); err != nil {
+		t.Fatal(err)
+	}
+	if maximum.Load() != 8 {
+		t.Fatalf("concurrent reads = %d; want 8", maximum.Load())
+	}
+}
 
 func TestLaunchRecoveryRestartAndStatus(t *testing.T) {
 	for _, tc := range []struct {

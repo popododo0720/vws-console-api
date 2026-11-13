@@ -5,7 +5,10 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
+	"strings"
+	"unicode/utf8"
 )
 
 // Clone allocates the recovery description atomically with the new VM.
@@ -17,8 +20,11 @@ func (c *Client) Clone(
 	if err != nil {
 		return "", err
 	}
-	if newid < 100 || newid > 999999999 || pool == "" || description == "" {
-		return "", errors.New("pve clone: destination, pool and recovery description required")
+	if newid < 100 || newid > 999999999 || len(pool) > 64 ||
+		!regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`).MatchString(pool) ||
+		!validCloneName(name) || description == "" || len(description) > 8192 ||
+		!utf8.ValidString(description) || strings.ContainsRune(description, 0) {
+		return "", errors.New("pve clone: invalid destination, pool, name or recovery description")
 	}
 	form := url.Values{
 		"newid": {strconv.Itoa(newid)}, "pool": {pool}, "name": {name},
@@ -36,4 +42,16 @@ func (c *Client) Clone(
 		err = errors.New("pve clone: empty task ID")
 	}
 	return upid, err
+}
+
+func validCloneName(name string) bool {
+	if name == "" || len(name) > 253 {
+		return false
+	}
+	for label := range strings.SplitSeq(name, ".") {
+		if len(label) > 63 || !regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?$`).MatchString(label) {
+			return false
+		}
+	}
+	return true
 }

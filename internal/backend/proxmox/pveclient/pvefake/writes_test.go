@@ -148,6 +148,20 @@ func TestCloneDescriptionAndConfigClientCAS(t *testing.T) {
 	t.Cleanup(srv.Close)
 	c := client(t, srv, "writer@pve!one", "k")
 	source := pveclient.VM{Node: "pve1", VMID: 9000}
+	for _, invalid := range [][3]string{
+		{"bad/pool", "launch", "marker"},
+		{strings.Repeat("a", 65), "launch", "marker"},
+		{"vws-a", "-bad", "marker"},
+		{"vws-a", strings.Repeat("a", 64), "marker"},
+		{"vws-a", "launch", strings.Repeat("x", 8193)},
+		{"vws-a", "launch", "bad\x00marker"},
+	} {
+		before := len(w.f.Requests())
+		_, err := c.Clone(t.Context(), source, 102, invalid[0], invalid[1], invalid[2], "", true)
+		if err == nil || len(w.f.Requests()) != before {
+			t.Fatalf("invalid clone reached PVE: %q: %v", invalid, err)
+		}
+	}
 	upid, err := c.Clone(t.Context(), source, 102, "vws-a", "launch", "key=launch", "", true)
 	if err != nil {
 		t.Fatal(err)

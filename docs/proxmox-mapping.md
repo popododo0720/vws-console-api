@@ -91,6 +91,8 @@ fingerprint and recover UUIDs and count. Tag prefixes alone are insufficient.
 The marker UUID determines the instance ID even while PVE still has a temporary
 clone UUID. A changed fingerprint is `IdempotencyMismatch`; unrelated keys and
 foreign pools are invisible. Replay lasts for the VMs' lifetime.
+Config reads run with at most eight requests in flight. Unrelated malformed
+markers are logged and skipped; matching corruption remains Unavailable.
 
 Format `03` has exactly 40 lowercase hex digits:
 `"03" + action(2) + H("vws-pve-op-launch-v1" || cluster || key)[0:36]`.
@@ -111,6 +113,8 @@ completion; deleting every carrier makes the operation NotFound.
 digest. Later writes use `WriteConfig` (including `WriteConfigTags`) with the
 read digest. A stale digest is a conflict and changes nothing; callers must
 reread before recomputing a write.
+Clone input validation rejects malformed pool IDs and DNS names, and bounds
+valid UTF-8 descriptions to 8192 bytes before making any request.
 
 ## Project = pool
 

@@ -3,8 +3,10 @@ package proxmox
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/popododo0720/vws-console-api/internal/backend"
 	"github.com/popododo0720/vws-console-api/internal/backend/proxmox/pveclient"
@@ -55,17 +57,35 @@ func (b *Backend) readLaunch(
 	}
 	finalized := 0
 	var launchKey, launchFP string
-	for _, vm := range vms {
-		// A different finalized launch needs no config read.
-		if key != "" && strings.Contains(vm.Tags, "vws.k.") &&
-			!slices.Contains(strings.Split(vm.Tags, ";"), "vws.k."+key[:24]) {
-			continue
+	vms = slices.DeleteFunc(vms, func(vm inventoryVM) bool {
+		return key != "" && strings.Contains(vm.Tags, "vws.k.") &&
+			!slices.Contains(strings.Split(vm.Tags, ";"), "vws.k."+key[:24])
+	})
+	configs := make([]struct {
+		config pveclient.VMConfig
+		err    error
+	}, len(vms))
+	slots := make(chan struct{}, 8)
+	var reads sync.WaitGroup
+	for i, vm := range vms {
+		slots <- struct{}{}
+		reads.Go(func() {
+			defer func() { <-slots }()
+			configs[i].config, configs[i].err = b.client.VMConfig(ctx, pveclient.VM{Node: vm.Node, VMID: vm.VMID})
+		})
+	}
+	reads.Wait()
+	for i, vm := range vms {
+		cfg := configs[i].config
+		if configs[i].err != nil {
+			return LaunchRecovery{}, launchUnavailable(configs[i].err)
 		}
-		cfg, err := b.client.VMConfig(ctx, pveclient.VM{Node: vm.Node, VMID: vm.VMID})
-		if err != nil {
-			return LaunchRecovery{}, launchUnavailable(err)
-		}
-		if key != "" && !strings.Contains(cfg.Description, " key="+key+" ") {
+		if !b.launchDescriptionMatches(cfg.Description, id) {
+			if strings.Contains(cfg.Description, launchMarkerPrefix) {
+				if _, _, err := ReadLaunchMarker(cfg.Description); err != nil {
+					slog.WarnContext(ctx, "skipping undecodable unrelated launch marker", slog.Int("vmid", vm.VMID))
+				}
+			}
 			continue
 		}
 		marker, found, err := ReadLaunchMarker(cfg.Description)
@@ -75,15 +95,7 @@ func (b *Backend) readLaunch(
 		if !found || marker.Account != s.Account {
 			continue
 		}
-		op, err := newLaunchOperation(b.cluster, marker.Key)
-		if err != nil {
-			return LaunchRecovery{}, launchUnavailable(err)
-		}
-		candidate, err := op.encode()
-		if err != nil {
-			return LaunchRecovery{}, launchUnavailable(err)
-		}
-		if candidate != id || key != "" && marker.Key != key {
+		if key != "" && marker.Key != key {
 			continue
 		}
 		if fingerprint != "" && marker.Fingerprint != fingerprint {
@@ -131,6 +143,28 @@ func (b *Backend) readLaunch(
 		out.Operation.State = resource.OperationSucceeded
 	}
 	return out, nil
+}
+
+func (b *Backend) launchDescriptionMatches(description string, id resource.OperationID) bool {
+	for line := range strings.SplitSeq(description, "\n") {
+		if !strings.HasPrefix(line, launchMarkerPrefix) {
+			continue
+		}
+		for field := range strings.FieldsSeq(line) {
+			key, found := strings.CutPrefix(field, "key=")
+			if !found || !launchHex(key, 64) {
+				continue
+			}
+			op, err := newLaunchOperation(b.cluster, key)
+			if err == nil {
+				candidate, err := op.encode()
+				if err == nil && candidate == id {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 func launchUnavailable(err error) error {
