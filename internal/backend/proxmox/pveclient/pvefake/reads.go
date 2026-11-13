@@ -35,6 +35,7 @@ func (f *Fake) routes() {
 	f.handle("/cluster/status", f.clusterStatus)
 	f.handle("/cluster/resources", f.clusterResources)
 	f.handle("/nodes", f.nodes)
+	f.handle("/pools", f.pools)
 	f.handle("/pools/{pool}", f.pool)
 	f.handle("/nodes/{node}/network", f.network)
 	f.handle("/nodes/{node}/qemu/{vmid}/config", f.config)
@@ -51,7 +52,23 @@ func (f *Fake) routes() {
 }
 
 func (f *Fake) pool(t *Token, r *http.Request) (any, *failure) {
-	name := r.PathValue("pool")
+	return f.poolMembers(t, r.PathValue("pool"))
+}
+
+// pools serves the nested-pool form GET /pools?poolid=<id> (PVE 8.1+).
+func (f *Fake) pools(t *Token, r *http.Request) (any, *failure) {
+	name := r.URL.Query().Get("poolid")
+	if name == "" {
+		return nil, &failure{http.StatusNotImplemented, "pvefake: pool index needs poolid"}
+	}
+	pool, fail := f.poolMembers(t, name)
+	if fail != nil {
+		return nil, fail
+	}
+	return []map[string]any{{"poolid": name, "members": pool["members"]}}, nil
+}
+
+func (f *Fake) poolMembers(t *Token, name string) (map[string]any, *failure) {
 	if fail := f.need(t, "/pool/"+name, "Pool.Audit"); fail != nil {
 		return nil, fail
 	}

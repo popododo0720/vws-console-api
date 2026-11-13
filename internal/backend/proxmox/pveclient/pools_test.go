@@ -80,7 +80,8 @@ func TestBadPoolIDsNeverReachPVE(t *testing.T) {
 	var requests atomic.Int32
 	c, _ := newClient(t, func(http.ResponseWriter, *http.Request) { requests.Add(1) }, nil)
 	for _, pool := range []string{
-		"", ".", "..", "../access", "a/b", "%2F", "a?b", "a#b", "a\x00b", "a b", "-a", strings.Repeat("a", 65),
+		"", ".", "..", "../access", "a//b", "/a", "a/", "a/../b", "a/b/c/d",
+		"%2F", "a?b", "a#b", "a\x00b", "a b", "-a", strings.Repeat("a", 65),
 	} {
 		if exists, err := c.Pool(t.Context(), pool); err == nil || exists {
 			t.Fatalf("bad pool %q: %t %v", pool, exists, err)
@@ -88,6 +89,36 @@ func TestBadPoolIDsNeverReachPVE(t *testing.T) {
 	}
 	if requests.Load() != 0 {
 		t.Fatal("invalid pool reached PVE")
+	}
+}
+
+func TestNestedPoolReadsByQuery(t *testing.T) {
+	for _, tc := range []struct {
+		name, body string
+		status     int
+		exists     bool
+		wantErr    bool
+	}{
+		{"present", `{"data":[{"poolid":"parent/child","members":[]}]}`, 200, true, false},
+		{"other row", `{"data":[{"poolid":"parent","members":[]}]}`, 200, false, false},
+		{"absent 500", `{"data":null,"message":"pool 'parent/child' does not exist"}`, 500, false, false},
+		{"forbidden", `{"data":null,"message":"Permission check failed"}`, 403, false, true},
+		{"null success", `{"data":null}`, 200, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, _ := newClient(t, func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodGet || r.URL.Path != "/api2/json/pools" ||
+					r.URL.Query().Get("poolid") != "parent/child" {
+					t.Errorf("nested pool request: %s %s", r.Method, r.URL.RequestURI())
+				}
+				w.WriteHeader(tc.status)
+				fmt.Fprint(w, tc.body)
+			}, nil)
+			got, err := c.Pool(t.Context(), "parent/child")
+			if got != tc.exists || (err != nil) != tc.wantErr {
+				t.Fatalf("exists=%t err=%v", got, err)
+			}
+		})
 	}
 }
 

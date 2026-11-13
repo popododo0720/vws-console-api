@@ -251,8 +251,10 @@ func TestInventoryPoolMove(t *testing.T) {
 	s := inventoryScenario()
 	s.VMs[0].Pool = "parent/child"
 	b, f := networkBackend(t, s, RegionConfig{
-		DefaultProject: "123456789012", Pools: map[string]string{"123456789012": "parent/child"},
+		DefaultProject: "123456789012",
 	})
+	// Inventory must compare upstream pool names verbatim, even invalid pool IDs.
+	b.cfg.Pools = map[string]string{"123456789012": "parent/child"}
 	foreign, _ := resource.Parse[resource.AccountID]("999999999999")
 	for _, pool := range []string{"parent/child", "999999999999", ""} {
 		if err := f.MoveVM(100, pool); err != nil {

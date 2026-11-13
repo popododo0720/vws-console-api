@@ -17,6 +17,7 @@ import (
 type ConnectionConfig struct {
 	URL, CAPEM, ClusterName, TokenID string
 	TokenSecret                      string `json:"-"`
+	Pools                            []string
 }
 
 // TestConnection checks PVE without constructing a backend or persisting credentials.
@@ -94,6 +95,10 @@ func TestConnection(ctx context.Context, cfg ConnectionConfig) []resource.Connec
 				return steps
 			}
 		}
+	}
+	if err := checkPools(ctx, client, cfg.Pools); err != nil {
+		steps[3].Message = resource.AsError(err).Message
+		return steps
 	}
 	steps[3].Result, steps[3].Message = resource.ConnectionPass, "token privileges are read-only"
 	return steps

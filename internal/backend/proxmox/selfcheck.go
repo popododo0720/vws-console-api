@@ -81,6 +81,16 @@ func New(ctx context.Context, client *pveclient.Client, reg Registration, cfg Re
 	if err := checkClusterName(status, reg.ClusterName); err != nil {
 		return nil, err
 	}
+	pools := make([]string, 0, len(cfg.Pools)+1)
+	for _, pool := range cfg.Pools {
+		pools = append(pools, pool)
+	}
+	if cfg.Templates.Pool != "" {
+		pools = append(pools, cfg.Templates.Pool)
+	}
+	if err := checkPools(ctx, client, pools); err != nil {
+		return nil, &selfCheckError{check: "pools", cause: err}
+	}
 	if len(cfg.Storages) != 0 || cfg.SnippetsStorage != "" {
 		rows, err := client.ClusterResources(ctx, pveclient.ResourceStorage)
 		if err != nil {

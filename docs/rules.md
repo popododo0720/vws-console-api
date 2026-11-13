@@ -20,6 +20,22 @@ Enforced by `TestImageInventoryFieldsAndRestart`, `TestImageInventoryPoolBoundar
 `TestImageInventorySkipsInvalidTemplates`, `TestImageInventoryFiltersAndPaging`,
 `TestImageInventoryFailures` and `TestImageRootSize`.
 
+Proxmox startup checks every distinct pool value in region.yaml and its
+template pool for existence and effective Pool.Audit and VM.Audit at
+`/pool/<id>`. A mapped default project is already included among those values.
+A nested pool `parent/child` (at most three levels) is read with
+`GET /pools?poolid=`, because `GET /pools/{poolid}` cannot name it.
+Global connection tests use current admin project mappings for the requested
+region, including empty pools, and fail if that mapping inventory is unreadable.
+They cannot read node-local region.yaml; the region status step depends on the
+daemon's complete startup check. Pool failures identify the pool and missing
+privilege. Readiness carries only classified typed resource errors across the
+region API and admin health boundary; raw upstream bodies and causes never
+become health messages. Transport failures retain their existing classifications.
+Enforced by `TestManagedPoolChecks`, `TestRegionConnectionChecksMappedPools`,
+`TestReadinessSafeReasonRoundTrip`, `TestAdminHealthFailureMessagesAreSafe`,
+`TestNestedPoolReadsByQuery` and `TestImageInventoryPoolBoundaries`.
+
 Configured Proxmox subnets with mode `static` or an empty mode allocate the
 lowest free IPv4 address in the inclusive `ip_range`, or the usable CIDR
 hosts excluding the gateway. Every allocation reads every QEMU VM's live

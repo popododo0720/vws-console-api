@@ -118,6 +118,9 @@ func (c *Connection) check(ctx context.Context, s registrationSnapshot) (*Backen
 		Region: backend.ProxmoxRegion{Name: s.Region, Zones: s.Zones}, ClusterName: s.ClusterName,
 	}, c.config)
 	if err != nil && resource.AsError(err).Code != resource.CodeConflict {
+		if message := resource.RegistrationFailureMessage(err); message != "" {
+			return nil, &resource.Error{Code: resource.CodeUnavailable, Message: message}
+		}
 		message := "registration self-check failed"
 		var failure *selfCheckError
 		if errors.As(err, &failure) {
