@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -48,15 +49,32 @@ func (c Client) ReadToken(ctx context.Context, fingerprint string) ([]byte, erro
 	if err := c.execute(ctx, nil, &out, "token-read", fingerprint); err != nil {
 		return nil, err
 	}
-	path := filepath.Join(os.Getenv("CREDENTIALS_DIRECTORY"), "region-kek")
-	if c.Root != "" && os.Getenv("CREDENTIALS_DIRECTORY") == "" {
-		path = filepath.Join(c.Root, "etc/vws/credentials/region-kek")
-	}
-	key, err := privateRead(path, true, uint32(os.Geteuid()))
+	key, err := c.readKey(os.Getenv("CREDENTIALS_DIRECTORY"), 0)
 	if err != nil {
 		return nil, err
 	}
 	return Open(key, out.Bytes())
+}
+
+func (c Client) readKey(credentials string, owner uint32) ([]byte, error) {
+	if credentials == "" {
+		path := credentialPath("")
+		if c.Root != "" {
+			path = filepath.Join(c.Root, path)
+		}
+		return privateRead(path, true, uint32(os.Geteuid()))
+	}
+	st, err := os.Lstat(credentials)
+	if err != nil || !st.IsDir() || st.Mode().Perm()&0o022 != 0 {
+		return nil, errors.New("unsafe systemd credential directory")
+	}
+	stat, ok := st.Sys().(*syscall.Stat_t)
+	if !ok || stat.Uid != owner {
+		return nil, errors.New("unsafe systemd credential directory owner")
+	}
+	// systemd's private per-service credential mount uses the group read bit
+	// as the ACL mask granting the daemon access to root-owned credentials.
+	return readFile(credentialPath(credentials), owner, 0o037)
 }
 
 // WriteLease replaces the public lease document.

@@ -40,15 +40,17 @@ func TestPVEFakeCommandRegionInventoryAndRestart(t *testing.T) {
 			t.Fatalf("build %s: %v\n%s", target.name, err, out)
 		}
 	}
-	for _, name := range []string{"etc/pve/vws", "etc/pve/priv/vws", "etc/pve/priv/lock/vws-region"} {
+	for _, name := range []string{
+		"etc/pve/vws", "etc/pve/priv/vws", "etc/pve/priv/lock/vws-region", "etc/vws/credentials",
+	} {
 		if err := os.MkdirAll(filepath.Join(dir, name), 0o700); err != nil {
 			t.Fatal(err)
 		}
 	}
-	writeFixture(t, filepath.Join(dir, "region-kek"), bytes.Repeat([]byte{42}, 32))
+	writeFixture(t, filepath.Join(dir, "etc/vws/credentials/region-kek"), bytes.Repeat([]byte{42}, 32))
 	writeFixture(t, filepath.Join(dir, "admin-kek"), []byte("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="))
 	writeFixture(t, filepath.Join(dir, "region.yaml"), []byte("read_only: true\npools:\n  project: '123456789012'\n"))
-	t.Setenv("CREDENTIALS_DIRECTORY", dir)
+	t.Setenv("CREDENTIALS_DIRECTORY", "")
 	tlsConfig := daemonCertificates(t, dir)
 	transport := &http.Transport{TLSClientConfig: tlsConfig}
 	defer transport.CloseIdleConnections()
