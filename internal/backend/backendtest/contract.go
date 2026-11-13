@@ -28,6 +28,10 @@ func Run(t *testing.T, newSet Harness, caps resource.RegionCapabilities, opts ..
 		t.Fatal(err)
 	}
 	t.Run("Capabilities", func(t *testing.T) { capabilityContract(t, newSet(), caps) })
+	if o.phase2 != nil {
+		runPhase2(t, o.phase2, caps)
+		return
+	}
 	t.Run("Reboot", func(t *testing.T) {
 		requireCapabilities(t, caps,
 			[]resource.Action{
