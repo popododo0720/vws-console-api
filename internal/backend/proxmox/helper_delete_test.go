@@ -58,8 +58,10 @@ func TestTokenDeleteSerializesRegistration(t *testing.T) {
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build helper: %v\n%s", err, out)
 	}
-	for _, name := range []string{"public", "private", "locks"} {
-		if err := os.Mkdir(filepath.Join(dir, name), 0o700); err != nil {
+	for _, name := range []string{
+		"etc/pve/vws", "etc/pve/priv/vws", "etc/pve/priv/lock/vws-region", "etc/vws/credentials",
+	} {
+		if err := os.MkdirAll(filepath.Join(dir, name), 0o700); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -78,7 +80,7 @@ func TestTokenDeleteSerializesRegistration(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer resume.Close()
-	writeFixture(t, filepath.Join(dir, "region-kek"), []byte(strings.Repeat("*", 32)))
+	writeFixture(t, filepath.Join(dir, "etc/vws/credentials/region-kek"), []byte(strings.Repeat("*", 32)))
 	t.Setenv("VWS_HELPER_TEST_ROOT", dir)
 	client := regionhelper.Client{Path: binary}
 	oldFP, newFP := tokenFingerprint("gate-old-secret"), tokenFingerprint("gate-new-secret")
@@ -134,7 +136,7 @@ func TestTokenDeleteSerializesRegistration(t *testing.T) {
 	if err := client.Unlock(t.Context(), "registration"); err != nil {
 		t.Fatal(err)
 	}
-	_, statErr := os.Stat(filepath.Join(dir, "private", "pve-token."+newFP))
+	_, statErr := os.Stat(filepath.Join(dir, "etc/pve/priv/vws", "pve-token."+newFP))
 	t.Logf("deleteErr=%v writerEntered=%v activeTokenMissing=%v", deleteErr, writerErr == nil, os.IsNotExist(statErr))
 	if statErr != nil || writerErr == nil || deleteErr != nil {
 		t.Fatal("token deletion did not serialize with registration publication")
@@ -147,10 +149,10 @@ func TestTokenDeleteSerializesRegistration(t *testing.T) {
 		if err := client.DeleteToken(t.Context(), oldFP); err == nil {
 			t.Fatal("delete accepted a held registration lock")
 		}
-		if _, err := os.Stat(filepath.Join(dir, "private", "pve-token."+oldFP)); err != nil {
+		if _, err := os.Stat(filepath.Join(dir, "etc/pve/priv/vws", "pve-token."+oldFP)); err != nil {
 			t.Fatal("busy delete removed the token:", err)
 		}
-		if _, err := os.Stat(filepath.Join(dir, "locks", "registration")); err != nil {
+		if _, err := os.Stat(filepath.Join(dir, "etc/pve/priv/lock/vws-region", "registration")); err != nil {
 			t.Fatal("busy delete removed the writer's lock:", err)
 		}
 	})
@@ -159,11 +161,11 @@ func TestTokenDeleteSerializesRegistration(t *testing.T) {
 		if (err == nil) != (fp == oldFP) {
 			t.Fatalf("delete active=%v: %v", fp == newFP, err)
 		}
-		if _, err := os.Stat(filepath.Join(dir, "locks", "registration")); !os.IsNotExist(err) {
+		if _, err := os.Stat(filepath.Join(dir, "etc/pve/priv/lock/vws-region", "registration")); !os.IsNotExist(err) {
 			t.Fatal("delete left the registration lock:", err)
 		}
 	}
-	if _, err := os.Stat(filepath.Join(dir, "private", "pve-token."+oldFP)); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(dir, "etc/pve/priv/vws", "pve-token."+oldFP)); !os.IsNotExist(err) {
 		t.Fatal("inactive token remains:", err)
 	}
 }

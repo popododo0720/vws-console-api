@@ -108,3 +108,86 @@ fails on an existing directory. A killed write leaves the old target or the
 complete replacement; an orphan temporary file is never read as a target.
 Daemon integration is #757, lease leadership is #766, and sudo/systemd
 credential delivery and installation are vws-deploy#764.
+
+## Non-root loopback stack
+
+Run `go test -race ./internal/backend/proxmox -run TestPVEFakeCommandRegionInventoryAndRestart -count=1`
+as a non-root user for the complete pvefake, region daemon and console API
+admin lifecycle. It builds the shipped commands, uses loopback listeners,
+registers through the console API, verifies all connection diagnostics,
+reads health, edits zones twice and deletes the region. It restarts the stack
+and repeats with a fresh memory registry and the persisted daemon identity.
+
+For a console e2e job, build `./cmd/pvefake`, `./cmd/vws-region`,
+`./cmd/vws-region-helper` and `./cmd/vws-console-api`. Keep the following
+files and directories in an absolute, clean `$ROOT`, owned by the CI user:
+
+```text
+etc/pve/vws/
+etc/pve/priv/vws/
+etc/pve/priv/lock/vws-region/
+etc/vws/credentials/region-kek
+etc/vws/region-helper-snippets
+snippets/
+```
+
+The helper KEK contains 32 raw bytes with mode 0600.
+`etc/vws/region-helper-snippets` is a non-writable-by-others text file
+containing the absolute path `$ROOT/snippets`. `CREDENTIALS_DIRECTORY`,
+when set, overrides the rooted KEK path for both daemon and helper.
+The global `-admin-kek-file` is a separate base64-encoded 32-byte key.
+Use test certificates with the loopback IP in their subject alternative
+names, a CA trusted by both peers, and server/client authentication usages.
+Keep their private keys at mode 0600.
+
+Start the processes in this order:
+
+1. Start `pvefake -scenario cmd/pvefake/testdata/scenario.yaml -listen 127.0.0.1:0 -ca-file "$ROOT/pve-ca.pem"`.
+   Its single stdout line is the ready HTTPS origin; use it as `$PVE`.
+2. Write `$ROOT/region.yaml` with `read_only: true` and
+   `pools: {project: '123456789012'}`. Start the region:
+
+   ```sh
+   vws-region -config "$ROOT/region.yaml" \
+     -registration-file "$ROOT/etc/pve/vws/registration.json" \
+     -helper-path "$BIN/vws-region-helper" -helper-root "$ROOT" \
+     -pve-endpoint "$PVE" -pve-ca-file "$ROOT/pve-ca.pem" \
+     -tls-cert-file "$ROOT/cert.pem" -tls-key-file "$ROOT/key.pem" \
+     -tls-ca-file "$ROOT/ca.pem" \
+     -region-addr 127.0.0.1:18443 -ops-addr 127.0.0.1:18083
+   ```
+
+   `/healthz` on the ops listener returns 200; `/readyz` returns 503
+   `unregistered` until the console registers the region.
+3. Start the global API:
+
+   ```sh
+   vws-console-api -backend regions -admin-store memory \
+     -admin-kek-file "$ROOT/admin-kek" \
+     -region-mtls-ca-file "$ROOT/ca.pem" \
+     -region-mtls-cert-file "$ROOT/cert.pem" \
+     -region-mtls-key-file "$ROOT/key.pem" \
+     -console-token loopback-token -access-key loopback-key -secret loopback-secret \
+     -console-addr 127.0.0.1:18080 -ec2-addr 127.0.0.1:18081 \
+     -s3-addr 127.0.0.1:18082 -ops-addr 127.0.0.1:18084 -iam-addr 127.0.0.1:18085
+   ```
+
+   Wait for its ops `/readyz` to return 200. Use `Authorization: Bearer
+   loopback-token` for console requests. POST `/api/v1/admin/regions`
+   with `name: pve-test-1`, `clusterName: test`, `pveApiUrl: $PVE`,
+   `caPem` containing `pve-ca.pem`, `tokenId: vws@pve!inventory`,
+   `tokenSecret: fake-secret`, `regionEndpoint: https://127.0.0.1:18443`
+   and `zones: [{"letter":"a","nodes":["pve1"]}]`.
+4. Wait for the region ops `/readyz` to return 200. POST
+   `/api/v1/admin/regions/pve-test-1/test` with `{"tokenSecret":"fake-secret"}`;
+   all five steps return `PASS`. GET the same region's `/health`, PATCH
+   its `zones` using the latest `ETag` as `If-Match`, then DELETE it.
+   Stop the processes with SIGTERM. The global registrations disappear
+   on restart; the daemon's encrypted token and identity remain under `$ROOT`.
+
+`-helper-root` requires `-helper-path`; both daemon and helper refuse the
+override when running as root, and reject empty, relative or unclean roots.
+The daemon sets `VWS_REGION_HELPER_ROOT` only on its direct helper child.
+The installed sudo invocation receives no root override. For a standalone
+helper smoke test, set `VWS_REGION_HELPER_ROOT="$ROOT"` explicitly.
+Without it the production paths and uid 0 credential ownership stay unchanged.

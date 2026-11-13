@@ -30,22 +30,46 @@ const (
 
 type helper struct {
 	public, private, locks, snippets, kek string
+	snippetConfig                         string
 	owner                                 uint32
 }
 
 // Main implements the fixed helper CLI. Contents are read only from stdin.
 func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
-	h := helper{
-		public: publicRoot, private: privateRoot, locks: lockRoot,
-		kek: credentialPath(os.Getenv("CREDENTIALS_DIRECTORY")),
+	root, set := os.LookupEnv("VWS_REGION_HELPER_ROOT")
+	h, err := configuredHelper(root, set, os.Getenv("CREDENTIALS_DIRECTORY"), os.Geteuid())
+	if err == nil {
+		err = h.execute(args, stdin, stdout)
 	}
-	if err := h.execute(args, stdin, stdout); err != nil {
+	if err != nil {
 		if _, writeErr := fmt.Fprintln(stderr, "vws-region-helper: operation refused"); writeErr != nil {
 			return 1
 		}
 		return 1
 	}
 	return 0
+}
+
+func configuredHelper(root string, set bool, credentials string, euid int) (helper, error) {
+	h := helper{
+		public: publicRoot, private: privateRoot, locks: lockRoot,
+		snippetConfig: snippetFile, kek: credentialPath(credentials),
+	}
+	if !set {
+		return h, nil
+	}
+	if euid == 0 || !filepath.IsAbs(root) || filepath.Clean(root) != root {
+		return helper{}, errors.New("invalid unprivileged helper root")
+	}
+	h.public = filepath.Join(root, publicRoot)
+	h.private = filepath.Join(root, privateRoot)
+	h.locks = filepath.Join(root, lockRoot)
+	h.snippetConfig = filepath.Join(root, snippetFile)
+	if credentials == "" {
+		h.kek = filepath.Join(root, h.kek)
+	}
+	h.owner = uint32(euid)
+	return h, nil
 }
 
 func credentialPath(dir string) string {
@@ -59,6 +83,9 @@ func (h helper) execute(args []string, stdin io.Reader, stdout io.Writer) error 
 	if len(args) != 0 && args[0] == "token-read" {
 		if len(args) != 2 || !validFingerprint(args[1]) {
 			return errors.New("unexpected arguments")
+		}
+		if err := confined(h.private, filepath.Join(h.private, "pve-token."+args[1])); err != nil {
+			return err
 		}
 		data, err := privateRead(filepath.Join(h.private, "pve-token."+args[1]), true, h.owner)
 		if err != nil {
@@ -104,6 +131,9 @@ func (h helper) run(args []string, stdin io.Reader) (err error) {
 		root, name = h.private, "pve-token."+args[1]
 		write, encrypt = args[0] == "token-write", args[0] == "token-write"
 		if !write {
+			if err := confined(h.locks, filepath.Join(h.locks, "registration")); err != nil {
+				return err
+			}
 			locks, openErr := os.OpenRoot(h.locks)
 			if openErr != nil {
 				return fmt.Errorf("open registration lock root: %w", openErr)
@@ -146,7 +176,7 @@ func (h helper) run(args []string, stdin io.Reader) (err error) {
 		}
 		root = h.snippets
 		if root == "" {
-			data, err := privateRead(snippetFile, false, h.owner)
+			data, err := privateRead(h.snippetConfig, false, h.owner)
 			if err != nil {
 				return err
 			}
@@ -220,6 +250,9 @@ func confined(root, target string) error {
 	if err != nil {
 		return fmt.Errorf("resolve root: %w", err)
 	}
+	if resolvedRoot != root {
+		return errors.New("symlink root refused")
+	}
 	parent, err := filepath.EvalSymlinks(filepath.Dir(target))
 	if err != nil {
 		return fmt.Errorf("resolve target parent: %w", err)
@@ -241,6 +274,11 @@ func confined(root, target string) error {
 func privateRead(path string, secret bool, uid uint32) (data []byte, err error) {
 	if !filepath.IsAbs(path) {
 		return nil, errors.New("credential or config path is not absolute")
+	}
+	parent := filepath.Dir(path)
+	resolved, err := filepath.EvalSymlinks(parent)
+	if err != nil || resolved != parent {
+		return nil, errors.New("unsafe credential or config directory")
 	}
 	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 	if err != nil {

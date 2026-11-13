@@ -8,12 +8,14 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
 // Client invokes an installed helper binary directly.
 type Client struct {
 	Path string
+	Root string
 }
 
 // WriteRegistration replaces the public registration identity.
@@ -47,6 +49,9 @@ func (c Client) ReadToken(ctx context.Context, fingerprint string) ([]byte, erro
 		return nil, err
 	}
 	path := filepath.Join(os.Getenv("CREDENTIALS_DIRECTORY"), "region-kek")
+	if c.Root != "" && os.Getenv("CREDENTIALS_DIRECTORY") == "" {
+		path = filepath.Join(c.Root, "etc/vws/credentials/region-kek")
+	}
 	key, err := privateRead(path, true, uint32(os.Geteuid()))
 	if err != nil {
 		return nil, err
@@ -96,6 +101,9 @@ func (c Client) run(ctx context.Context, data []byte, args ...string) error {
 }
 
 func (c Client) execute(ctx context.Context, data []byte, stdout io.Writer, args ...string) error {
+	if c.Root != "" && (c.Path == "" || !filepath.IsAbs(c.Root) || filepath.Clean(c.Root) != c.Root || os.Geteuid() == 0) {
+		return errors.New("helper root requires an absolute root, explicit helper path and non-root uid")
+	}
 	path := c.Path
 	if path == "" {
 		path = "/usr/bin/sudo"
@@ -107,6 +115,14 @@ func (c Client) execute(ctx context.Context, data []byte, stdout io.Writer, args
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, path, args...)
+	for _, entry := range os.Environ() {
+		if !strings.HasPrefix(entry, "VWS_REGION_HELPER_ROOT=") {
+			cmd.Env = append(cmd.Env, entry)
+		}
+	}
+	if c.Root != "" {
+		cmd.Env = append(cmd.Env, "VWS_REGION_HELPER_ROOT="+c.Root)
+	}
 	cmd.Stdin = bytes.NewReader(data)
 	cmd.Stdout = stdout
 	if err := cmd.Run(); err != nil {
