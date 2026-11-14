@@ -33,6 +33,64 @@ func inventoryScope() backend.Scope {
 	return backend.Scope{Account: account}
 }
 
+func TestInventoryNameTag(t *testing.T) {
+	for _, tc := range []struct {
+		name, pveName, tags, description string
+		want                             map[string]string
+	}{
+		{
+			name: "PVE name", pveName: "manual",
+			want: map[string]string{"Name": "manual"},
+		},
+		{
+			name: "inline Name", pveName: "manual", tags: "vws.t.+name.explicit",
+			want: map[string]string{"Name": "explicit"},
+		},
+		{
+			name: "description Name", pveName: "manual", description: `vws:tags {"Name":"description"}`,
+			want: map[string]string{"Name": "description"},
+		},
+		{
+			name: "empty inline Name", pveName: "manual", tags: "vws.t.+name.",
+			want: map[string]string{"Name": ""},
+		},
+		{
+			name: "empty description Name", pveName: "manual", description: `vws:tags {"Name":""}`,
+			want: map[string]string{"Name": ""},
+		},
+		{
+			name: "case-sensitive key", pveName: "manual", tags: "vws.t.name.lowercase",
+			want: map[string]string{"Name": "manual", "name": "lowercase"},
+		},
+		{
+			name: "invalid encoded tag", pveName: "manual", tags: "vws.t.+name._zz",
+			want: map[string]string{"Name": "manual"},
+		},
+		{name: "unnamed VM", want: map[string]string{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := inventoryScenario()
+			s.VMs[0].Name = tc.pveName
+			s.VMs[0].Config["tags"] = tc.tags
+			s.VMs[0].Config["description"] = tc.description
+			client, _ := serve(t, s)
+			for range 2 {
+				b, err := New(t.Context(), client, registration(), RegionConfig{})
+				if err != nil {
+					t.Fatal(err)
+				}
+				for range 2 {
+					page, err := b.DescribeInstances(t.Context(), inventoryScope(), resource.InstanceQuery{})
+					if err != nil || len(page.Items) != 1 || !reflect.DeepEqual(page.Items[0].Tags, tc.want) {
+						t.Fatalf("Name tags: page=%+v err=%v, want %v", page, err, tc.want)
+					}
+					page.Items[0].Tags["Name"] = "caller changed copy"
+				}
+			}
+		})
+	}
+}
+
 func TestInventoryOfflineNodeSnapshot(t *testing.T) {
 	for _, state := range []string{"running", "stopped"} {
 		t.Run(state, func(t *testing.T) {
@@ -193,7 +251,8 @@ func TestInventoryInstanceFields(t *testing.T) {
 	got := page.Items[0]
 	if got.ID != id || got.ReservationID != reservation || got.ImageID != unknown ||
 		got.OwnerID != inventoryScope().Account ||
-		got.State != resource.InstanceRunning || got.InstanceType != "vws.small" || len(got.Tags) != 0 ||
+		got.State != resource.InstanceRunning || got.InstanceType != "vws.small" ||
+		len(got.Tags) != 1 || got.Tags["Name"] != "manual" ||
 		got.Zone != "pve-test-1b" || got.LaunchTime.Unix() != 1700000000 {
 		t.Fatalf("instance=%+v", got)
 	}

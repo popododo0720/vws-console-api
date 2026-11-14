@@ -75,6 +75,13 @@ by a space and U+D300 is `vws.t.cost_3acenter.+r_26+d_20_ed_8c_80`. An empty
 value `env=` is `vws.t.env.`. The code is a bijection, and the fuzz test
 `FuzzTagRoundTrip` holds `decode(encode(k, v)) == (k, v)`.
 
+`DescribeInstances` supplies the PVE VM config's `name` as the EC2 `Name`
+tag when no explicit `Name` user tag exists. An explicit `Name` from
+either the encoded tags or the description block wins, including an empty
+value. Tag keys remain case-sensitive: `name` does not override `Name`.
+An unnamed VM gets no synthetic `Name`. This read-time value is not
+written to PVE and follows the VM's current name on each successful read.
+
 System tags are never decoded as user tags: `vws.k.`, `vws.f.`, `vws.n.`,
 `vws.r.`, `vws.ami.`, `vws.kp.`, `vws.dot.`, `vws.d.`, `vws.vt.`,
 `vws.holder` and `vws.live.`. A disk has no tags in Proxmox, so a volume's
