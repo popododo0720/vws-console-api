@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"regexp"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/popododo0720/vws-lib/obs"
@@ -136,8 +135,7 @@ func validateAccount(v store.AWSAccount, external *string, create bool) error {
 	}
 	seen := make(map[string]bool)
 	for _, region := range v.AllowedRegions {
-		if seen[region] || strings.HasPrefix(region, "pve-") ||
-			!regexp.MustCompile(`^(af|ap|ca|cn|eu|il|me|mx|sa|us)(-[a-z]+)+-[1-9][0-9]*$`).MatchString(region) {
+		if seen[region] || !store.ValidAWSRegion(region) {
 			return resource.Invalid("allowedRegions", "must contain unique AWS region names")
 		}
 		seen[region] = true

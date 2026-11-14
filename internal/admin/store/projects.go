@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"regexp"
 	"slices"
 	"strings"
@@ -14,10 +15,42 @@ import (
 
 // Project maps a VWS project to its Proxmox pools and registered AWS accounts.
 type Project struct {
-	Project     string        `json:"project"`
-	Pools       []ProjectPool `json:"pools"`
-	AWSAccounts []string      `json:"awsAccounts"`
-	Version     Version       `json:"-"`
+	Project      string        `json:"project"`
+	Pools        []ProjectPool `json:"pools"`
+	AWSAccounts  []string      `json:"awsAccounts"`
+	BackupTarget *BackupTarget `json:"backupTarget,omitempty"`
+	Version      Version       `json:"-"`
+}
+
+// BackupTarget is the S3 bucket and AWS region that receive the project's
+// cold DR disk exports through one of its mapped AWS accounts.
+type BackupTarget struct {
+	Bucket string `json:"bucket"`
+	Region string `json:"region"`
+}
+
+// ValidAWSRegion reports an AWS region name such as us-east-1.
+func ValidAWSRegion(name string) bool {
+	return regexp.MustCompile(`^(af|ap|ca|cn|eu|il|me|mx|sa|us)(-[a-z]+)+-[1-9][0-9]*$`).MatchString(name)
+}
+
+// validBucket follows the AWS general purpose bucket naming rules.
+func validBucket(name string) bool {
+	if !regexp.MustCompile(`^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$`).MatchString(name) ||
+		strings.Contains(name, "..") || net.ParseIP(name) != nil {
+		return false
+	}
+	for _, prefix := range []string{"xn--", "sthree-", "amzn-s3-demo-"} {
+		if strings.HasPrefix(name, prefix) {
+			return false
+		}
+	}
+	for _, suffix := range []string{"-s3alias", "--ol-s3", ".mrap", "--x-s3", "--table-s3"} {
+		if strings.HasSuffix(name, suffix) {
+			return false
+		}
+	}
+	return true
 }
 
 // ProjectPool is the project's pool in one registered region.
@@ -92,6 +125,14 @@ func ValidateProject(v Project) error {
 		}
 		accounts[id] = true
 	}
+	if t := v.BackupTarget; t != nil {
+		if !validBucket(t.Bucket) || !ValidAWSRegion(t.Region) {
+			return resource.Invalid("backupTarget", "needs a valid S3 bucket name and AWS region")
+		}
+		if len(v.AWSAccounts) == 0 {
+			return resource.Invalid("backupTarget", "requires a mapped AWS account")
+		}
+	}
 	return nil
 }
 
@@ -112,7 +153,9 @@ func (p Projects) Put(ctx context.Context, v Project) (Project, error) {
 	if old.Version != v.Version {
 		return v, ErrConflict
 	}
-	if old.Version != 0 && slices.Equal(old.Pools, v.Pools) && slices.Equal(old.AWSAccounts, v.AWSAccounts) {
+	sameTarget := (old.BackupTarget == nil) == (v.BackupTarget == nil) &&
+		(v.BackupTarget == nil || *old.BackupTarget == *v.BackupTarget)
+	if old.Version != 0 && slices.Equal(old.Pools, v.Pools) && slices.Equal(old.AWSAccounts, v.AWSAccounts) && sameTarget {
 		return old, nil
 	}
 	key, data, err := p.records.encode(&v)

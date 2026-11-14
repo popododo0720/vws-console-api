@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"regexp"
+	"slices"
 	"strconv"
 	"time"
 
@@ -96,9 +97,10 @@ func (h *handler) adminMapProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in *struct {
-		Project     *string              `json:"project"`
-		Pools       *[]store.ProjectPool `json:"pools"`
-		AWSAccounts *[]string            `json:"awsAccounts"`
+		Project      *string              `json:"project"`
+		Pools        *[]store.ProjectPool `json:"pools"`
+		AWSAccounts  *[]string            `json:"awsAccounts"`
+		BackupTarget *store.BackupTarget  `json:"backupTarget"`
 	}
 	if err := decode(w, r, &in); err != nil {
 		writeErr(w, r, err)
@@ -112,7 +114,7 @@ func (h *handler) adminMapProject(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, r, resource.Invalid("project", "must match path"))
 		return
 	}
-	v := store.Project{Project: id, Pools: *in.Pools, AWSAccounts: *in.AWSAccounts}
+	v := store.Project{Project: id, Pools: *in.Pools, AWSAccounts: *in.AWSAccounts, BackupTarget: in.BackupTarget}
 	if err := store.ValidateProject(v); err != nil {
 		writeErr(w, r, err)
 		return
@@ -146,13 +148,24 @@ func (h *handler) adminMapProject(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *handler) validateProjectMapping(ctx context.Context, v store.Project) error {
+	backupAccounts := 0
 	for _, id := range v.AWSAccounts {
-		if _, err := h.registry.AWSAccounts().Get(ctx, id); err != nil {
+		account, err := h.registry.AWSAccounts().Get(ctx, id)
+		if err != nil {
 			if errors.Is(err, store.ErrNotFound) {
 				return resource.Invalid("awsAccounts", "unregistered AWS account "+id)
 			}
 			return (&resource.Error{Code: resource.CodeUnavailable, Message: "AWS account registry unavailable"}).WithCause(err)
 		}
+		if v.BackupTarget != nil && slices.Contains(account.AllowedRegions, v.BackupTarget.Region) {
+			backupAccounts++
+		}
+	}
+	// Exports go through AWS forwarding, which uses the sole mapped account
+	// allowing the region and refuses none or several.
+	if v.BackupTarget != nil && backupAccounts != 1 {
+		return resource.Invalid("backupTarget",
+			"region "+v.BackupTarget.Region+" must be allowed by exactly one mapped AWS account")
 	}
 	for _, pool := range v.Pools {
 		region, err := h.registry.Regions().Get(ctx, pool.Region)
