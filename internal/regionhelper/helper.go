@@ -152,13 +152,14 @@ func (h helper) run(args []string, stdin io.Reader) (err error) {
 				info, statErr := f.Stat()
 				data, readErr := io.ReadAll(io.LimitReader(f, (65<<10)+1))
 				var identity struct {
-					Fingerprint string `json:"fingerprint"`
+					Fingerprint         string `json:"fingerprint"`
+					FirewallFingerprint string `json:"firewallFingerprint"`
 				}
 				if err := errors.Join(statErr, readErr, f.Close()); err != nil || !info.Mode().IsRegular() || len(data) > 65<<10 ||
 					json.Unmarshal(data, &identity) != nil || !validFingerprint(identity.Fingerprint) {
 					return errors.New("invalid registration identity")
 				}
-				if identity.Fingerprint == args[1] {
+				if identity.Fingerprint == args[1] || identity.FirewallFingerprint == args[1] {
 					return errors.New("cannot delete active token")
 				}
 			}

@@ -180,6 +180,42 @@ func checkSDN(ctx context.Context, c *pveclient.Client, cfg RegionConfig, permis
 	return nil
 }
 
+// checkFirewall admits a token that holds Sys.Modify and Sys.Audit on / and
+// nothing else: PVE checks every cluster firewall group write as Sys.Modify on /.
+func checkFirewall(ctx context.Context, c *pveclient.Client, cfg RegionConfig) error {
+	if cfg.ReadOnly {
+		return &selfCheckError{
+			check: "firewall_privileges", cause: errors.New("proxmox: read_only region takes no firewall token"),
+		}
+	}
+	permissions, err := c.AccessPermissions(ctx, "")
+	if err == nil && permissions == nil {
+		err = errors.New("missing or null permission inventory")
+	}
+	if err != nil {
+		return &selfCheckError{
+			check: "firewall_privileges", cause: fmt.Errorf("proxmox: check firewall token permissions: %w", err),
+		}
+	}
+	for path, privileges := range permissions {
+		for privilege := range privileges {
+			if privilege != "Sys.Modify" && privilege != "Sys.Audit" {
+				return &selfCheckError{
+					check: "firewall_privileges", cause: fmt.Errorf("proxmox: firewall token holds %s on %s", privilege, path),
+				}
+			}
+		}
+	}
+	for _, privilege := range []string{"Sys.Modify", "Sys.Audit"} {
+		if _, held := permissions["/"][privilege]; !held {
+			return &selfCheckError{
+				check: "firewall_privileges", cause: fmt.Errorf("proxmox: firewall token lacks %s on /", privilege),
+			}
+		}
+	}
+	return nil
+}
+
 func forbiddenPrivilege(p string) bool {
 	return !strings.HasSuffix(p, ".Audit")
 }

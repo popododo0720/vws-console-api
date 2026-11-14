@@ -22,6 +22,7 @@ func TestStartupMutationTokenScope(t *testing.T) {
 		{"/vms", "VM.Config.Future"},
 		{"/pool/managed", "Permissions.Modify"},
 		{"/pool/managed", "Pool.Allocate"},
+		{"/", "Sys.Modify"},
 		{"/nodes/pve1", "Sys.Modify"},
 		{"/storage/local", "Datastore.Allocate"},
 		{"/pool/managed", "VM.Migrate"},
