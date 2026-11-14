@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"maps"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 
@@ -166,12 +165,12 @@ func (b *Backend) instance(
 	if ip := privateIP(cfg.IPConfig0); ip.IsValid() {
 		inst.PrivateIP = ip.String()
 	}
-	if ctime != "" {
-		seconds, err := strconv.ParseInt(ctime, 10, 64)
-		if err != nil || seconds < 0 {
-			return resource.Instance{}, fmt.Errorf("proxmox: invalid meta.ctime %q", ctime)
-		}
-		inst.LaunchTime = time.Unix(seconds, 0).UTC()
+	marker, found, err := ReadLaunchMarker(cfg.Description)
+	if err != nil {
+		return resource.Instance{}, err
+	}
+	if found && marker.CreatedAt > 0 {
+		inst.LaunchTime = time.Unix(marker.CreatedAt, 0).UTC()
 	}
 	if source != SourceUUID {
 		slog.WarnContext(ctx, "fallback ID", slog.Int("vmid", vm.VMID), slog.String("id_source", string(source)))
@@ -232,9 +231,17 @@ func (b *Backend) DescribeInstances(
 				inst, err = b.instance(ctx, ids, vm, cfg)
 			}
 			if err == nil {
+				b.instanceMu.Lock()
+				if inst.LaunchTime.IsZero() {
+					previous, ok := b.lastInstances[vm.VMID]
+					if ok && previous.pool == vm.Pool && previous.instance.ID == inst.ID {
+						inst.LaunchTime = previous.instance.LaunchTime
+					} else {
+						inst.LaunchTime = b.launchNow().UTC()
+					}
+				}
 				snapshot := inst
 				snapshot.Tags = maps.Clone(inst.Tags)
-				b.instanceMu.Lock()
 				if b.lastInstances == nil {
 					b.lastInstances = map[int]instanceSnapshot{}
 				}
