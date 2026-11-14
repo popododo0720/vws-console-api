@@ -221,6 +221,98 @@ func TestProjectMappingRefusesUnregisteredAccount(t *testing.T) {
 	}
 }
 
+func backupBody(target any, accounts ...string) map[string]any {
+	body := projectBody("shared")
+	body["awsAccounts"] = append([]string{}, accounts...)
+	body["backupTarget"] = target
+	return body
+}
+
+func TestProjectMappingBackupTargetRequiresAWSAccount(t *testing.T) {
+	e, g, auditLog := projectFixture(t)
+	for _, id := range []string{"210987654321", "111111111111"} {
+		if _, err := g.AWSAccounts().Create(t.Context(), store.AWSAccount{
+			ID: id, ExternalID: store.DescribeSecret("external-" + id), AllowedRegions: []string{"us-east-1"},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	target := map[string]string{"bucket": "vws-dr-backups", "region": "us-east-1"}
+	for _, tc := range []struct {
+		body map[string]any
+		want string
+	}{
+		{backupBody(target), "requires a mapped AWS account"},
+		{backupBody(target, "123456789012"), "exactly one mapped AWS account"},
+		{backupBody(target, "210987654321", "111111111111"), "exactly one mapped AWS account"},
+		{backupBody(map[string]string{"bucket": "vws-dr-backups", "region": "pve-lab-1"}, "210987654321"), "AWS region"},
+	} {
+		rec := projectCall(t, e, "PUT", projectPath, tc.body, `"0"`, 400)
+		if !strings.Contains(rec.Body.String(), tc.want) {
+			t.Fatalf("refusal %s, want %q", rec.Body, tc.want)
+		}
+	}
+	for _, bucket := range []string{
+		"", "ab", strings.Repeat("a", 64), "Upper", "-lead", "trail-", "a..b", "192.168.0.1",
+		"xn--bucket", "sthree-bucket", "bucket-s3alias", "bucket--x-s3", "under_score", "../secret",
+	} {
+		projectCall(t, e, "PUT", projectPath,
+			backupBody(map[string]string{"bucket": bucket, "region": "us-east-1"}, "210987654321"), `"0"`, 400)
+	}
+	for _, body := range []string{
+		`{"pools":[],"awsAccounts":["210987654321"],"backupTarget":{}}`,
+		`{"pools":[],"awsAccounts":["210987654321"],"backupTarget":"vws-dr-backups"}`,
+		`{"pools":[],"awsAccounts":["210987654321"],` +
+			`"backupTarget":{"bucket":"vws-dr-backups","region":"us-east-1","prefix":"x"}}`,
+	} {
+		if rec := e.do(t, "PUT", projectPath, body,
+			map[string]string{"Authorization": "Bearer tok", "If-Match": `"0"`}); rec.Code != 400 {
+			t.Fatalf("malformed backup target accepted: %d %s", rec.Code, rec.Body)
+		}
+	}
+	if _, err := g.Projects().Get(t.Context(), "123456789012"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatal("refused backup target saved a mapping")
+	}
+
+	first := projectCall(t, e, "PUT", projectPath, backupBody(target, "210987654321", "123456789012"), `"0"`, 200)
+	if !strings.Contains(first.Body.String(), `"backupTarget":{"bucket":"vws-dr-backups","region":"us-east-1"}`) {
+		t.Fatalf("saved mapping lost the backup target: %s", first.Body)
+	}
+	h := e.h.(*handler)
+	e.h = New(Config{
+		Registry: g, Auth: h.auth, IAM: h.iam, AdminKey: h.adminKey,
+		Audit: h.audit, RegionPool: h.regionPool,
+	})
+	get := projectCall(t, e, "GET", projectPath, nil, "", 200)
+	if get.Body.String() != first.Body.String() || get.Header().Get("ETag") != first.Header().Get("ETag") {
+		t.Fatal("restart changed the backup target")
+	}
+	retry := projectCall(t, e, "PUT", projectPath, backupBody(target, "210987654321", "123456789012"),
+		get.Header().Get("ETag"), 200)
+	if retry.Header().Get("ETag") != get.Header().Get("ETag") {
+		t.Fatal("repeated backup target changed the version")
+	}
+	moved := backupBody(map[string]string{"bucket": "vws-dr-other", "region": "us-east-1"}, "210987654321")
+	changed := projectCall(t, e, "PUT", projectPath, moved, retry.Header().Get("ETag"), 200)
+	if changed.Header().Get("ETag") == retry.Header().Get("ETag") ||
+		!strings.Contains(changed.Body.String(), "vws-dr-other") {
+		t.Fatalf("bucket change was not saved: %s", changed.Body)
+	}
+	cleared := projectCall(t, e, "PUT", projectPath, projectBody("shared"), changed.Header().Get("ETag"), 200)
+	if cleared.Header().Get("ETag") == changed.Header().Get("ETag") ||
+		strings.Contains(cleared.Body.String(), "backupTarget") {
+		t.Fatalf("omitted backup target was kept: %s", cleared.Body)
+	}
+	for _, line := range strings.Split(strings.TrimSpace(auditLog.String()), "\n") {
+		if !strings.Contains(line, `"action":"vws:AdminMapProject"`) {
+			t.Fatalf("backup target write audited as another action: %s", line)
+		}
+	}
+	if got := strings.Count(auditLog.String(), "\n"); got != 25 {
+		t.Fatalf("audit lines=%d, want one per PUT", got)
+	}
+}
+
 func TestProjectMappingPoolIsExclusive(t *testing.T) {
 	e, _, _ := projectFixture(t)
 	first := projectCall(t, e, "PUT", projectPath, projectBody("shared"), `"0"`, 200)
