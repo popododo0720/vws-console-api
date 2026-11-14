@@ -110,8 +110,12 @@ current allocation from live project pools without PVE or registry writes
 or retained snapshots. Failed regions omit allocation and report a fixed
 safe error. Enforced by `TestUsageWindowAndAuthorization`,
 `TestUsageFailureMetadataAndRegistry`, `TestUsageAPIAllocationReadOnlyAcrossRestart`
-and `TestAllocationRequiresPoolVisibility`. The first part excludes AWS
-cost and historical RRD data (`docs/usage.md`).
+and `TestAllocationRequiresPoolVisibility`. AWS rows read account-wide
+UnblendedCost through the private proxy for explicitly mapped accounts,
+sum decimals exactly, and isolate account failures within a bounded deadline.
+Enforced by `TestUsageAWSCostThroughProxyReadOnly`, `TestCostDecimalSum`,
+`TestCostRequestPagingAndFailures`, `TestCostExplorerAccountAndGlobalSigning`
+and `TestCostExplorerRefusals`. Historical RRD data is excluded (`docs/usage.md`).
 
 | Rule | Enforced by |
 | --- | --- |

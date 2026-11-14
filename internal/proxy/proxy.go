@@ -157,7 +157,23 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (p *Proxy) session(
 	ctx context.Context, w http.ResponseWriter, account, principal, region string,
 ) (sigv4.Credential, bool) {
-	a, err := p.accounts.Account(ctx, account, region)
+	return p.accountSession(ctx, w, account, principal, region, "")
+}
+
+func (p *Proxy) accountSession(
+	ctx context.Context, w http.ResponseWriter, account, principal, region, costAccount string,
+) (sigv4.Credential, bool) {
+	var a Account
+	var err error
+	if costAccount == "" {
+		a, err = p.accounts.Account(ctx, account, region)
+	} else if resolver, ok := p.accounts.(interface {
+		CostAccount(context.Context, string, string) (Account, error)
+	}); ok {
+		a, err = resolver.CostAccount(ctx, account, costAccount)
+	} else {
+		err = errors.New("proxy: cost account unavailable")
+	}
 	if err == nil || a.MappingVersion != 0 || errors.Is(err, store.ErrNotFound) {
 		p.mu.Lock()
 		for key := range p.cache {
@@ -167,9 +183,11 @@ func (p *Proxy) session(
 		}
 		p.mu.Unlock()
 	}
-	allowed := false
-	for _, v := range a.Regions {
-		allowed = allowed || v == region
+	allowed := costAccount != "" && a.ID == costAccount
+	if costAccount == "" {
+		for _, v := range a.Regions {
+			allowed = allowed || v == region
+		}
 	}
 	if err != nil || !allowed || a.ExternalID == "" ||
 		!accountID(a.ID) || !strings.HasPrefix(a.RoleARN, "arn:aws:iam::"+a.ID+":role/") {

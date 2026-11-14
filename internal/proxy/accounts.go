@@ -23,6 +23,18 @@ type RegistryAccounts struct {
 
 // Account selects the sole mapped account allowing the requested region.
 func (a RegistryAccounts) Account(ctx context.Context, project, region string) (Account, error) {
+	return a.account(ctx, project, region, "")
+}
+
+// CostAccount selects an explicitly mapped account for the global Cost Explorer service.
+func (a RegistryAccounts) CostAccount(ctx context.Context, project, id string) (Account, error) {
+	if !accountID(id) {
+		return Account{}, errors.New("proxy: account unavailable")
+	}
+	return a.account(ctx, project, "", id)
+}
+
+func (a RegistryAccounts) account(ctx context.Context, project, region, requested string) (Account, error) {
 	if !accountID(project) {
 		return Account{}, errors.New("proxy: account unavailable")
 	}
@@ -36,6 +48,9 @@ func (a RegistryAccounts) Account(ctx context.Context, project, region string) (
 	out := Account{MappingVersion: int64(mapping.Version)}
 	var selected store.AWSAccount
 	for _, id := range mapping.AWSAccounts {
+		if requested != "" && id != requested {
+			continue
+		}
 		if !accountID(id) {
 			return out, errors.New("proxy: account unavailable")
 		}
@@ -43,7 +58,7 @@ func (a RegistryAccounts) Account(ctx context.Context, project, region string) (
 		if err != nil {
 			return out, errors.New("proxy: account unavailable")
 		}
-		if slices.Contains(v.AllowedRegions, region) {
+		if requested == v.ID || requested == "" && slices.Contains(v.AllowedRegions, region) {
 			if selected.ID != "" {
 				return out, errors.New("proxy: ambiguous account mapping")
 			}
