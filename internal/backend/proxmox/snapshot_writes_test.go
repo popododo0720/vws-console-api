@@ -60,7 +60,7 @@ func TestSnapshotWritesRestartReplay(t *testing.T) {
 			if holder {
 				s.VMs[0].Tags = "vws.holder"
 			}
-			s.VMs[0].Config["scsi1"] = "local:vm-100-disk-1,serial=1123456789abcdef0"
+			s.VMs[0].Config["scsi1"] = "local:vm-100-disk-1,serial=1123456789abcdef0,size=12G"
 			s.Storages[0].Content = append(s.Storages[0].Content, pvefake.StorageContent{
 				VolID: "local:vm-100-disk-1", Content: "images", Size: 12 << 30, VMID: 100,
 			})

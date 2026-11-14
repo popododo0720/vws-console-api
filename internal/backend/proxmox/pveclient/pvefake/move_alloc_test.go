@@ -13,7 +13,7 @@ import (
 func (w *taskWorld) targetDisks(t *testing.T) []pvefake.StorageContent {
 	t.Helper()
 	var env struct{ Data []pvefake.StorageContent }
-	w.call(t, "GET", "/nodes/pve1/storage/target/content", auditor, 200, &env)
+	w.call(t, "GET", "/nodes/pve1/storage/target/content", "disk-reader@pve!one", 200, &env)
 	return env.Data
 }
 
@@ -58,7 +58,7 @@ func TestMoveDiskAndAllocationClientRestart(t *testing.T) {
 			t.Fatalf("recreated client config: %+v %v", vm, err)
 		}
 		var env struct{ Data []pvefake.StorageContent }
-		w.call(t, "GET", alloc, auditor, 200, &env)
+		w.call(t, "GET", alloc, "disk-reader@pve!one", 200, &env)
 		if len(env.Data) != 2 || env.Data[1].Size != 512<<20 {
 			t.Fatal(env.Data)
 		}

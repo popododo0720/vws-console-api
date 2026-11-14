@@ -4,9 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"math"
 	"slices"
-	"strconv"
 	"strings"
 
 	"github.com/popododo0720/vws-console-api/internal/backend"
@@ -81,21 +79,7 @@ func imageRootSize(cfg pveclient.VMConfig) int64 {
 			strings.Contains(strings.SplitN(drive, ",", 2)[0], "cloudinit") {
 			continue
 		}
-		size := option(drive, "size")
-		unit := float64(1) / (1 << 30)
-		for i, suffix := range []string{"K", "M", "G", "T", "P"} {
-			if strings.HasSuffix(size, suffix) {
-				size = strings.TrimSuffix(size, suffix)
-				unit = math.Pow(1024, float64(i-2))
-				break
-			}
-		}
-		n, err := strconv.ParseFloat(size, 64)
-		gib := math.Ceil(n * unit)
-		if err == nil && gib > 0 && gib < math.Exp2(63) {
-			return int64(gib)
-		}
-		return 0
+		return driveSizeGiB(drive)
 	}
 	return 0
 }

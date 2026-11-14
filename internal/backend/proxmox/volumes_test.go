@@ -19,8 +19,8 @@ import (
 func volumeScenario() pvefake.Scenario {
 	s := inventoryScenario()
 	s.VMs[0].Tags = "vws.t.+name.web;vws.vt.01234567.+name.root;vws.vt.11234567.env.dev;vws.dot.11234567"
-	s.VMs[0].Config["scsi0"] = "local:vm-100-disk-0,serial=0123456789abcdef0,size=999G"
-	s.VMs[0].Config["scsi1"] = "local:vm-100-disk-1,serial=1123456789abcdef0"
+	s.VMs[0].Config["scsi0"] = "local:vm-100-disk-0,serial=0123456789abcdef0,size=8G"
+	s.VMs[0].Config["scsi1"] = "local:vm-100-disk-1,serial=1123456789abcdef0,size=12G"
 	s.VMs[0].Config["ide2"] = "local:cloudinit,media=cdrom"
 	s.VMs[0].Snapshots = []pvefake.Snapshot{
 		{Name: "backup", Description: "backup\nvws:tags {\"Name\":\"backup\"}"},
@@ -29,7 +29,7 @@ func volumeScenario() pvefake.Scenario {
 	}
 	s.VMs = append(s.VMs, pvefake.VM{
 		VMID: 101, Node: "pve1", Pool: "123456789012", Tags: "vws.holder;vws.vt.21234567.+name.free",
-		Config: map[string]string{"virtio0": "local:vm-101-disk-0,serial=2123456789abcdef0"},
+		Config: map[string]string{"virtio0": "local:vm-101-disk-0,serial=2123456789abcdef0,size=3G"},
 	}, pvefake.VM{
 		VMID: 102, Node: "pve1", Pool: "999999999999",
 		Config:    map[string]string{"scsi0": "local:vm-102-disk-0"},
@@ -60,10 +60,10 @@ func TestVolumeIDsSurviveRestart(t *testing.T) {
 			t.Fatalf("volumes=%+v error=%v", page, err)
 		}
 		root, data, free := page.Items[0], page.Items[1], page.Items[2]
-		if root.ID.String() != "vol-0123456789abcdef0" || root.SizeGiB != 8 || root.Format != "raw" ||
+		if root.ID.String() != "vol-0123456789abcdef0" || root.SizeGiB != 8 || root.Format != "" ||
 			root.State != resource.VolumeInUse || root.Device != "/dev/sda" || root.Tags["Name"] != "root" ||
 			root.AttachState != resource.AttachmentAttached || !root.DeleteOnTermination || root.Type != resource.VolumeGP3 ||
-			data.SizeGiB != 12 || data.Format != "qcow2" || data.Device != "/dev/sdf" || data.Tags["env"] != "dev" ||
+			data.SizeGiB != 12 || data.Format != "" || data.Device != "/dev/sdf" || data.Tags["env"] != "dev" ||
 			!data.DeleteOnTermination || data.InstanceID != root.InstanceID || root.InstanceID.IsZero() ||
 			free.State != resource.VolumeAvailable || !free.InstanceID.IsZero() ||
 			free.Device != "" || free.Tags["Name"] != "free" {
@@ -85,6 +85,75 @@ func TestVolumeIDsSurviveRestart(t *testing.T) {
 			first = page
 		} else if !reflect.DeepEqual(first, page) {
 			t.Fatalf("restart changed volumes: %+v", page)
+		}
+	}
+}
+
+func TestVolumeConfigSizesWithAuditor(t *testing.T) {
+	s := volumeScenario()
+	s.VMs[0].Config["scsi0"] = "local:vm-100-disk-0,serial=0123456789abcdef0,size=1536M"
+	s.VMs[0].Config["scsi1"] = "local:vm-100-disk-1,serial=1123456789abcdef0,size=1.5T"
+	s.VMs[1].Config["virtio0"] = "local:vm-101-disk-0,serial=2123456789abcdef0,size=3221225472"
+	c, _ := serve(t, s)
+	var first resource.Page[resource.Volume]
+	for run := range 2 {
+		b, err := New(t.Context(), c, registration(), RegionConfig{ReadOnly: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		page, err := b.DescribeVolumes(t.Context(), inventoryScope(), resource.VolumeQuery{})
+		if err != nil || len(page.Items) != 3 {
+			t.Fatalf("audit-only volumes=%+v error=%v", page, err)
+		}
+		for i, size := range []int64{2, 1536, 3} {
+			if page.Items[i].SizeGiB != size {
+				t.Fatalf("disk %d size=%d want=%d", i, page.Items[i].SizeGiB, size)
+			}
+		}
+		if run == 0 {
+			first = page
+		} else if !reflect.DeepEqual(first, page) {
+			t.Fatalf("restart changed volumes: %+v", page)
+		}
+	}
+}
+
+func TestVolumeUnknownSizeRemainsListed(t *testing.T) {
+	for _, size := range []string{"", "bad", "0G", "-1G", "NaN", "Inf", "1e100G"} {
+		t.Run(size, func(t *testing.T) {
+			s := volumeScenario()
+			s.VMs[0].Config["scsi0"] = "local:vm-100-disk-0,serial=0123456789abcdef0,size=" + size
+			s.Storages[0].Content = nil
+			b, _ := networkBackend(t, s, RegionConfig{})
+			id, _ := resource.Parse[resource.VolumeID]("vol-0123456789abcdef0")
+			page, err := b.DescribeVolumes(t.Context(), inventoryScope(), resource.VolumeQuery{IDs: []resource.VolumeID{id}})
+			if err != nil || len(page.Items) != 1 || page.Items[0].ID != id || page.Items[0].SizeGiB != 0 {
+				t.Fatalf("unknown size disk=%+v error=%v", page, err)
+			}
+		})
+	}
+}
+
+func TestVolumeStorageMetadataIsOptional(t *testing.T) {
+	b, _ := networkBackend(t, volumeScenario(), RegionConfig{})
+	ids, _ := NewIDs("test")
+	for _, tc := range []struct {
+		size string
+		want int64
+	}{
+		{",size=2G", 2},
+		{"", 8},
+	} {
+		cfg := pveclient.VMConfig{Drives: map[string]string{
+			"scsi0": "local:vm-100-disk-0,serial=0123456789abcdef0" + tc.size,
+		}}
+		content := map[string][]pveclient.StorageContent{"pve1/local": {
+			{VolID: "local:vm-100-disk-0", Content: "images", Format: "raw", Size: 8 << 30},
+		}}
+		vm := inventoryVM{pveclient.ClusterResource{Node: "pve1", VMID: 100}}
+		volumes, err := b.vmVolumes(t.Context(), inventoryScope(), ids, vm, cfg, content)
+		if err != nil || len(volumes) != 1 || volumes[0].SizeGiB != tc.want || volumes[0].Format != "raw" {
+			t.Fatalf("size=%q volumes=%+v error=%v", tc.size, volumes, err)
 		}
 	}
 }
@@ -205,7 +274,7 @@ func TestStoragePaging250VMs(t *testing.T) {
 	}
 }
 
-func TestSnapshotsSkipVMWithUnreadableVolumes(t *testing.T) {
+func TestSnapshotsKeepVMWithUnreadableStorage(t *testing.T) {
 	s := volumeScenario()
 	s.Roles = append(s.Roles, pvefake.Role{ID: "NoAccess"})
 	s.Tokens[0].ACL = append(s.Tokens[0].ACL, pvefake.ACE{Path: "/storage/denied", Role: "NoAccess"})
@@ -220,7 +289,13 @@ func TestSnapshotsSkipVMWithUnreadableVolumes(t *testing.T) {
 	})
 	b, _ := networkBackend(t, s, RegionConfig{})
 	page, err := b.DescribeSnapshots(t.Context(), inventoryScope(), resource.SnapshotQuery{})
-	if err != nil || len(page.Items) != 1 || page.Items[0].Tags["Name"] != "backup" {
+	if err != nil || len(page.Items) != 2 ||
+		!slices.ContainsFunc(page.Items, func(s resource.Snapshot) bool {
+			return s.Tags["Name"] == "backup" && s.VolumeSize == 8
+		}) ||
+		!slices.ContainsFunc(page.Items, func(s resource.Snapshot) bool {
+			return s.VolumeID.String() == "vol-3123456789abcdef0" && s.VolumeSize == 0
+		}) {
 		t.Fatalf("one unreadable VM hid good snapshots: %+v error=%v", page, err)
 	}
 }
@@ -285,9 +360,12 @@ func TestStorageFailuresKeepOtherDisks(t *testing.T) {
 				wantCalls += pveclient.MaxRetries
 			}
 			page, err := b.DescribeVolumes(t.Context(), inventoryScope(), resource.VolumeQuery{})
-			if err != nil || len(page.Items) != 3 || page.Items[0].ID.String() != "vol-1123456789abcdef0" ||
-				page.Items[1].ID.String() != "vol-4123456789abcdef0" ||
-				page.Items[2].ID.String() != "vol-5123456789abcdef0" || calls.Load() != wantCalls {
+			if err != nil || len(page.Items) != 6 || page.Items[0].ID.String() != "vol-0123456789abcdef0" ||
+				page.Items[1].ID.String() != "vol-1123456789abcdef0" || page.Items[1].SizeGiB != 12 ||
+				page.Items[2].ID.String() != "vol-2123456789abcdef0" || page.Items[0].SizeGiB != 0 ||
+				page.Items[3].ID.String() != "vol-3123456789abcdef0" ||
+				page.Items[4].ID.String() != "vol-4123456789abcdef0" ||
+				page.Items[5].ID.String() != "vol-5123456789abcdef0" || calls.Load() != wantCalls {
 				t.Fatalf("storage failure hid good disks or was not cached: %+v calls=%d error=%v", page, calls.Load(), err)
 			}
 			calls.Store(0)

@@ -155,6 +155,15 @@ valid UTF-8 descriptions to 8192 bytes before making any request.
 
 ## Other mappings
 
+Disk size comes from the drive's `size=` option in VM config, readable with
+PVEAuditor, and is rounded up to GiB. Storage content supplies optional format
+and a size when config size is unavailable. PVE filters VM storage content
+by `VM.Config.Disk`, so an audit-only token can receive an empty content list;
+this never hides a configured disk. If neither source gives a positive size,
+the disk remains listed with size zero (unknown) and a structured warning.
+An unavailable format is empty. pvefake applies the same per-VM disk privilege
+filter, including privileges inherited from pools.
+
 | AWS | Proxmox |
 | --- | --- |
 | Region | Cluster |
