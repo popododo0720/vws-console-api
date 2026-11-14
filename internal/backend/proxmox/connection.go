@@ -49,6 +49,10 @@ type registrationSnapshot struct {
 	FirewallTokenID     string           `json:"firewallTokenId,omitempty"`
 	FirewallToken       pveclient.Secret `json:"firewallToken,omitempty"`
 	FirewallFingerprint string           `json:"firewallFingerprint,omitempty"`
+
+	BackupTokenID     string           `json:"backupTokenId,omitempty"`
+	BackupToken       pveclient.Secret `json:"backupToken,omitempty"`
+	BackupFingerprint string           `json:"backupFingerprint,omitempty"`
 }
 
 // Connection loads registration identity and encrypted credentials from pmxcfs.
@@ -90,6 +94,11 @@ func decodeRegistration(data []byte) (registrationSnapshot, error) {
 		s.FirewallTokenID != "" && (!registrationTokenID.MatchString(s.FirewallTokenID) || s.FirewallTokenID == s.TokenID) {
 		return s, resource.Invalid("firewallTokenId", "expected a second user@realm!token")
 	}
+	if s.BackupTokenID == "" && (s.BackupToken != "" || s.BackupFingerprint != "") ||
+		s.BackupTokenID != "" && (!registrationTokenID.MatchString(s.BackupTokenID) ||
+			s.BackupTokenID == s.TokenID || s.BackupTokenID == s.FirewallTokenID) {
+		return s, resource.Invalid("backupTokenId", "expected a separate user@realm!token")
+	}
 	letters, nodes := map[string]bool{}, map[string]bool{}
 	for _, z := range s.Zones {
 		if len(z.Letter) != 1 || z.Letter < "a" || z.Letter > "z" || letters[z.Letter] || len(z.Nodes) > 256 {
@@ -117,6 +126,9 @@ func (c *Connection) check(ctx context.Context, s registrationSnapshot) (*Backen
 	if s.FirewallTokenID != "" && !registrationSecret.MatchString(string(s.FirewallToken)) {
 		return nil, resource.Invalid("firewallToken", "expected 1-512 token characters")
 	}
+	if s.BackupTokenID != "" && !registrationSecret.MatchString(string(s.BackupToken)) {
+		return nil, resource.Invalid("backupToken", "expected 1-512 token characters")
+	}
 	client, err := pveclient.New(pveclient.Config{
 		BaseURL: c.endpoint, TokenID: s.TokenID, Secret: s.Token, HTTPClient: c.transport,
 	})
@@ -142,6 +154,17 @@ func (c *Connection) check(ctx context.Context, s registrationSnapshot) (*Backen
 			b.firewall = firewall
 		}
 	}
+	if err == nil && s.BackupTokenID != "" {
+		var backup *pveclient.Client
+		backup, err = pveclient.New(pveclient.Config{
+			BaseURL: c.endpoint, TokenID: s.BackupTokenID, Secret: s.BackupToken, HTTPClient: c.transport,
+		})
+		if err == nil {
+			if err = checkBackup(ctx, backup, c.config); err == nil {
+				b.backup = backup
+			}
+		}
+	}
 	if err != nil && resource.AsError(err).Code != resource.CodeConflict {
 		if message := resource.RegistrationFailureMessage(err); message != "" {
 			return nil, &resource.Error{Code: resource.CodeUnavailable, Message: message}
@@ -165,14 +188,21 @@ func (c *Connection) Register(ctx context.Context, data json.RawMessage) error {
 	if s.Fingerprint != "" {
 		return resource.Invalid("fingerprint", "server managed")
 	}
+	if s.BackupFingerprint != "" {
+		return resource.Invalid("backupFingerprint", "server managed")
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	reuse := s.Token == ""
 	reuseFirewall := s.FirewallTokenID != "" && s.FirewallToken == ""
-	if reuse || reuseFirewall {
+	reuseBackup := s.BackupTokenID != "" && s.BackupToken == ""
+	if reuse || reuseFirewall || reuseBackup {
 		field := "token"
 		if !reuse {
 			field = "firewallToken"
+			if !reuseFirewall {
+				field = "backupToken"
+			}
 		}
 		data, err := os.ReadFile(c.path)
 		if errors.Is(err, os.ErrNotExist) {
@@ -182,7 +212,7 @@ func (c *Connection) Register(ctx context.Context, data json.RawMessage) error {
 			return errors.New("registration unreadable")
 		}
 		stored, err := decodeRegistration(data)
-		if err != nil || stored.Token != "" || stored.FirewallToken != "" {
+		if err != nil || stored.Token != "" || stored.FirewallToken != "" || stored.BackupToken != "" {
 			return errors.New("invalid registration identity")
 		}
 		if reuse {
@@ -195,6 +225,14 @@ func (c *Connection) Register(ctx context.Context, data json.RawMessage) error {
 				return resource.Invalid("firewallToken", "required for a new firewall token")
 			}
 			if s.FirewallToken, err = c.storedToken(ctx, "firewallToken", stored.FirewallFingerprint); err != nil {
+				return err
+			}
+		}
+		if reuseBackup {
+			if stored.BackupTokenID != s.BackupTokenID {
+				return resource.Invalid("backupToken", "required for a new backup token")
+			}
+			if s.BackupToken, err = c.storedToken(ctx, "backupToken", stored.BackupFingerprint); err != nil {
 				return err
 			}
 		}
@@ -212,7 +250,13 @@ func (c *Connection) Register(ctx context.Context, data json.RawMessage) error {
 			writes[s.FirewallFingerprint] = []byte(s.FirewallToken)
 		}
 	}
-	s.Fingerprint, s.Token, s.FirewallToken = tokenFingerprint(s.Token), "", ""
+	if s.BackupTokenID != "" {
+		s.BackupFingerprint = tokenFingerprint(s.BackupToken)
+		if !reuseBackup {
+			writes[s.BackupFingerprint] = []byte(s.BackupToken)
+		}
+	}
+	s.Fingerprint, s.Token, s.FirewallToken, s.BackupToken = tokenFingerprint(s.Token), "", "", ""
 	identity, err := json.Marshal(s)
 	if err != nil {
 		return fmt.Errorf("encode registration identity: %w", err)
@@ -235,11 +279,13 @@ func (c *Connection) Register(ctx context.Context, data json.RawMessage) error {
 		}
 	}()
 	var old registrationSnapshot
-	if reuse || reuseFirewall {
+	if reuse || reuseFirewall || reuseBackup {
 		if old, _, err = c.registration(); err != nil {
 			return err
 		}
-		if reuse && old.Fingerprint != s.Fingerprint || reuseFirewall && old.FirewallFingerprint != s.FirewallFingerprint {
+		if reuse && old.Fingerprint != s.Fingerprint ||
+			reuseFirewall && old.FirewallFingerprint != s.FirewallFingerprint ||
+			reuseBackup && (old.BackupFingerprint != s.BackupFingerprint || old.BackupTokenID != s.BackupTokenID) {
 			return &resource.Error{Code: resource.CodeConflict, Message: "registration changed during self-check"}
 		}
 	} else {
@@ -261,12 +307,14 @@ func (c *Connection) Register(ctx context.Context, data json.RawMessage) error {
 	err = c.Helper.WriteRegistration(ctx, identity)
 	if err != nil {
 		current, _, readErr := c.registration()
-		if readErr != nil || current.Fingerprint != s.Fingerprint || current.FirewallFingerprint != s.FirewallFingerprint {
+		if readErr != nil || current.Fingerprint != s.Fingerprint || current.FirewallFingerprint != s.FirewallFingerprint ||
+			current.BackupFingerprint != s.BackupFingerprint {
 			return err
 		}
 	}
-	for _, fingerprint := range []string{old.Fingerprint, old.FirewallFingerprint} {
-		if fingerprint != "" && fingerprint != s.Fingerprint && fingerprint != s.FirewallFingerprint {
+	for _, fingerprint := range []string{old.Fingerprint, old.FirewallFingerprint, old.BackupFingerprint} {
+		if fingerprint != "" && fingerprint != s.Fingerprint && fingerprint != s.FirewallFingerprint &&
+			fingerprint != s.BackupFingerprint {
 			cleanup = append(cleanup, fingerprint)
 		}
 	}
@@ -295,7 +343,14 @@ func (c *Connection) readTokens(ctx context.Context, s *registrationSnapshot) er
 	s.Token = pveclient.Secret(token)
 	if s.FirewallFingerprint != "" {
 		token, err = c.Helper.ReadToken(ctx, s.FirewallFingerprint)
+		if err != nil {
+			return err
+		}
 		s.FirewallToken = pveclient.Secret(token)
+	}
+	if s.BackupFingerprint != "" {
+		token, err = c.Helper.ReadToken(ctx, s.BackupFingerprint)
+		s.BackupToken = pveclient.Secret(token)
 	}
 	return err
 }
@@ -314,7 +369,8 @@ func (c *Connection) Check(ctx context.Context) (*Backend, error) {
 		if readErr != nil {
 			return nil, readErr
 		}
-		if next.Fingerprint == s.Fingerprint && next.FirewallFingerprint == s.FirewallFingerprint {
+		if next.Fingerprint == s.Fingerprint && next.FirewallFingerprint == s.FirewallFingerprint &&
+			next.BackupFingerprint == s.BackupFingerprint {
 			return nil, errors.New(tokenUnreadable)
 		}
 		s, data = next, identity
@@ -323,7 +379,8 @@ func (c *Connection) Check(ctx context.Context) (*Backend, error) {
 		}
 	}
 	if s.Fingerprint != tokenFingerprint(s.Token) ||
-		s.FirewallFingerprint != "" && s.FirewallFingerprint != tokenFingerprint(s.FirewallToken) {
+		s.FirewallFingerprint != "" && s.FirewallFingerprint != tokenFingerprint(s.FirewallToken) ||
+		s.BackupTokenID != "" && s.BackupFingerprint != tokenFingerprint(s.BackupToken) {
 		return nil, errors.New("registration token mismatch")
 	}
 	b, err := c.check(ctx, s)
@@ -353,7 +410,7 @@ func (c *Connection) registration() (registrationSnapshot, []byte, error) {
 		return s, nil, errors.New("registration unreadable")
 	}
 	s, err = decodeRegistration(data)
-	if err != nil || s.Token != "" {
+	if err != nil || s.Token != "" || s.FirewallToken != "" || s.BackupToken != "" {
 		return s, nil, errors.New("invalid registration identity")
 	}
 	return s, data, nil

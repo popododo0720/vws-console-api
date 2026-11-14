@@ -7,6 +7,22 @@ it. When you add or change a rule, change its row here and its line in
 
 ## Rules
 
+A Proxmox region may register a separate write-only disk export token:
+`backupTokenId` and `backupTokenSecret` in the admin API, `backupTokenId`
+and `backupToken` to the daemon. Its id must differ from both the region
+and firewall token ids. The `backup_privileges` self-check refuses read_only
+regions and any privilege outside VM.Backup and Datastore.AllocateSpace,
+including VM.Allocate. It requires effective VM.Backup on every configured
+managed `/pool/<id>` and Datastore.AllocateSpace on a `/storage/<id>` path.
+The secret is sealed under its own fingerprint and never returned or logged.
+An omitted secret reuses only the same stored token id. Restart verifies
+the fingerprint pair, removal cleans the old file, and the helper refuses
+deletion of a live backup fingerprint. This registration does not enable
+disk exports; those are the remaining work of #1046.
+Enforced by `TestBackupTokenScope`, `TestBackupTokenRegistration`,
+`TestBackupTokenInput`, `TestAdminRegionBackupToken` and
+`TestTokenDeleteRefusesLiveBackup`.
+
 Proxmox DescribeImages lists only UUID-bearing QEMU templates in the caller's
 current mapped pool, plus unpooled templates for the default project with
 Pool.Audit. Public launch-template configuration does not widen inventory

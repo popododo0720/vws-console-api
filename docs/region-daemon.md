@@ -48,7 +48,8 @@ restart.
 `PUT /internal/v1/registration` requires the global client's mTLS certificate.
 Its JSON fields are `region`, `cluster_name`, `zones` (letter and node groups),
 `tokenId` (`user@realm!name`) and `token` (write-only), plus the optional
-`firewallTokenId` and write-only `firewallToken` of the security group token.
+`firewallTokenId` and write-only `firewallToken` of the security group token,
+and `backupTokenId` and write-only `backupToken` reserved for disk exports.
 See [registration rules](rules.md) for size limits, reloads and recovery.
 No credential value belongs in region.yaml, command arguments or the
 environment. Snapshot decoder errors never echo submitted values.
@@ -61,6 +62,17 @@ inherited allocation. Without the key VPC writes are UnsupportedOperation.
 Security group writes need the firewall token, for example `vws@pve!firewall`
 with a role holding only Sys.Modify and Sys.Audit on /. Without it they are
 UnsupportedOperation; the region token never receives Sys.Modify.
+
+The backup token, for example `vws@pve!backup`, uses a `VWSBackup` role
+containing only `VM.Backup Datastore.AllocateSpace`, scoped to managed pools
+and backup storage. It must differ from both other token ids. Startup requires
+VM.Backup on each configured `/pool/<id>` and Datastore.AllocateSpace on a
+`/storage/<id>` path, refuses any other privilege (including VM.Allocate), and
+refuses backup tokens on read_only regions because a stop-mode export writes
+PVE state. The admin API calls its write-only secret `backupTokenSecret`.
+An omitted secret reuses only the same stored id. Its sealed fingerprint
+survives restart; removing the id cleans the file. The helper protects all
+three live fingerprints. Disk export itself is not enabled by registration.
 
 ## Privileged helper
 

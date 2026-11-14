@@ -332,3 +332,80 @@ func TestAdminRegionFirewallToken(t *testing.T) {
 		t.Fatalf("removed firewall token: pushed=%v region=%+v err=%v", pushed, v, err)
 	}
 }
+
+func TestAdminRegionBackupToken(t *testing.T) {
+	e, g, app, auditLog := accountFixture(t)
+	h := e.h.(*handler)
+	var pushed map[string]any
+	var pushErr error
+	h.regionRegistration = func(_ context.Context, _ string, data json.RawMessage) error {
+		if err := json.Unmarshal(data, &pushed); err != nil {
+			t.Fatal(err)
+		}
+		return pushErr
+	}
+	const secret = "distinctive-backup-canary-1046"
+	for _, tc := range []struct {
+		field string
+		value string
+	}{
+		{"backupTokenId", "bad/id"},
+		{"backupTokenId", "vws@pve!inventory"},
+		{"backupTokenId", "vws@pve!firewall"},
+		{"backupTokenSecret", ""},
+		{"backupTokenSecret", "bad\nsecret"},
+		{"backupTokenSecret", strings.Repeat("a", 513)},
+	} {
+		body := validRegion()
+		body["firewallTokenId"] = "vws@pve!firewall"
+		body["backupTokenId"], body["backupTokenSecret"] = "vws@pve!backup", secret
+		body[tc.field] = tc.value
+		if rec := regionCall(t, e, "POST", body, "", 400); !strings.Contains(rec.Body.String(), `"field":"`+tc.field+`"`) {
+			t.Fatalf("invalid %s accepted: %s", tc.field, rec.Body)
+		}
+	}
+	body := validRegion()
+	body["backupTokenSecret"] = secret
+	regionCall(t, e, "POST", body, "", 400)
+	body["backupTokenId"] = "vws@pve!backup"
+	post := regionCall(t, e, "POST", body, "", 201)
+	responses := post.Body.String()
+	if pushed["backupTokenId"] != "vws@pve!backup" || pushed["backupToken"] != secret ||
+		!strings.Contains(responses, `"backupTokenSecret":{"set":true`) {
+		t.Fatalf("backup registration did not round trip: %s", post.Body)
+	}
+	v, err := g.Regions().Get(t.Context(), "pve-test-1")
+	if err != nil || v.BackupTokenID != "vws@pve!backup" || v.BackupTokenSecret != store.DescribeSecret(secret) {
+		t.Fatalf("backup metadata: %+v %v", v, err)
+	}
+	for _, path := range []string{regionPath, regionPath + "/pve-test-1"} {
+		rec := e.do(t, "GET", path, "", map[string]string{"Authorization": "Bearer tok"})
+		if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"backupTokenId":"vws@pve!backup"`) {
+			t.Fatalf("backup metadata read: %d %s", rec.Code, rec.Body)
+		}
+		responses += rec.Body.String()
+	}
+	pushed = nil
+	patch := regionCall(t, e, "PATCH", map[string]any{}, post.Header().Get("ETag"), 200)
+	responses += patch.Body.String()
+	if _, sent := pushed["backupToken"]; sent || pushed["backupTokenId"] != "vws@pve!backup" {
+		t.Fatalf("omitted secret pushed=%v", pushed)
+	}
+	pushErr = resource.Invalid("backupToken", secret)
+	retry := regionCall(t, e, "PATCH", map[string]any{}, patch.Header().Get("ETag"), 400)
+	responses += retry.Body.String()
+	if !strings.Contains(retry.Body.String(), `"field":"backupTokenSecret"`) {
+		t.Fatalf("daemon refusal did not name backupTokenSecret: %s", retry.Body)
+	}
+	pushErr = nil
+	pushed = nil
+	removed := regionCall(t, e, "PATCH", map[string]any{"backupTokenId": ""}, retry.Header().Get("ETag"), 200)
+	responses += removed.Body.String()
+	v, err = g.Regions().Get(t.Context(), "pve-test-1")
+	record, marshalErr := json.Marshal(v)
+	if _, sent := pushed["backupTokenId"]; sent || err != nil || marshalErr != nil ||
+		v.BackupTokenSecret != (store.SecretMetadata{}) ||
+		strings.Contains(responses+app.String()+auditLog.String()+string(record), secret) {
+		t.Fatal("backup removal retained metadata or the secret escaped")
+	}
+}
