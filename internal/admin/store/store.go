@@ -67,6 +67,10 @@ type Region struct {
 	FirewallTokenID     string         `json:"firewallTokenId,omitempty"`
 	FirewallTokenSecret SecretMetadata `json:"firewallTokenSecret"`
 
+	// BackupTokenID is the optional token reserved for disk exports.
+	BackupTokenID     string         `json:"backupTokenId,omitempty"`
+	BackupTokenSecret SecretMetadata `json:"backupTokenSecret"`
+
 	LastError *resource.RegionStatusError `json:"lastError,omitempty"`
 }
 

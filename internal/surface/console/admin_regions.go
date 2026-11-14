@@ -28,6 +28,8 @@ type regionInput struct {
 
 	FirewallTokenID     *string `json:"firewallTokenId"`
 	FirewallTokenSecret *string `json:"firewallTokenSecret"`
+	BackupTokenID       *string `json:"backupTokenId"`
+	BackupTokenSecret   *string `json:"backupTokenSecret"`
 }
 
 func (h *handler) listRegions(w http.ResponseWriter, r *http.Request) {
@@ -132,6 +134,7 @@ func (h *handler) adminWriteRegion(w http.ResponseWriter, r *http.Request) {
 		{in.TokenID, &v.TokenID},
 		{in.RegionEndpoint, &v.RegionEndpoint},
 		{in.FirewallTokenID, &v.FirewallTokenID},
+		{in.BackupTokenID, &v.BackupTokenID},
 	} {
 		if field.from != nil {
 			*field.to = *field.from
@@ -144,7 +147,7 @@ func (h *handler) adminWriteRegion(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, r, err)
 		return
 	}
-	if err := validateFirewallToken(v, in.FirewallTokenSecret); err != nil {
+	if err := validateExtraTokens(v, in); err != nil {
 		writeErr(w, r, err)
 		return
 	}
@@ -166,6 +169,12 @@ func (h *handler) adminWriteRegion(w http.ResponseWriter, r *http.Request) {
 	}
 	if v.FirewallTokenID == "" {
 		v.FirewallTokenSecret = store.SecretMetadata{}
+	}
+	if in.BackupTokenSecret != nil {
+		v.BackupTokenSecret = store.DescribeSecret(*in.BackupTokenSecret)
+	}
+	if v.BackupTokenID == "" {
+		v.BackupTokenSecret = store.SecretMetadata{}
 	}
 	claimed := oldCluster != v.ClusterName
 	if claimed {
@@ -203,7 +212,7 @@ func (h *handler) adminWriteRegion(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	pushErr := h.pushRegion(r.Context(), v, in.TokenSecret, in.FirewallTokenSecret)
+	pushErr := h.pushRegion(r.Context(), v, in)
 	v.LastError = nil
 	if pushErr != nil {
 		message := resource.RegistrationFailureMessage(pushErr)
@@ -226,12 +235,15 @@ func (h *handler) adminWriteRegion(w http.ResponseWriter, r *http.Request) {
 		case "firewallToken":
 			writeErr(w, r, resource.Invalid("firewallTokenSecret", "resubmit the firewall token for a new credential"))
 			return
+		case "backupToken":
+			writeErr(w, r, resource.Invalid("backupTokenSecret", "resubmit the backup token for a new credential"))
+			return
 		}
 	}
 	writeJSON(w, status, v)
 }
 
-func (h *handler) pushRegion(ctx context.Context, v store.Region, token, firewallToken *string) error {
+func (h *handler) pushRegion(ctx context.Context, v store.Region, in *regionInput) error {
 	data, err := json.Marshal(struct {
 		Region string `json:"region"`
 		//nolint:tagliatelle // The daemon registration protocol names cluster_name.
@@ -241,7 +253,13 @@ func (h *handler) pushRegion(ctx context.Context, v store.Region, token, firewal
 		Zones           []store.Zone `json:"zones"`
 		FirewallTokenID string       `json:"firewallTokenId,omitempty"`
 		FirewallToken   *string      `json:"firewallToken,omitempty"`
-	}{v.Name, v.ClusterName, v.TokenID, token, v.Zones, v.FirewallTokenID, firewallToken})
+		BackupTokenID   string       `json:"backupTokenId,omitempty"`
+		BackupToken     *string      `json:"backupToken,omitempty"`
+	}{
+		Region: v.Name, ClusterName: v.ClusterName, TokenID: v.TokenID, Token: in.TokenSecret,
+		Zones: v.Zones, FirewallTokenID: v.FirewallTokenID, FirewallToken: in.FirewallTokenSecret,
+		BackupTokenID: v.BackupTokenID, BackupToken: in.BackupTokenSecret,
+	})
 	if err != nil {
 		return fmt.Errorf("encode registration: %w", err)
 	}
@@ -257,15 +275,27 @@ func validRegionName(name string) bool {
 	return len(name) <= 63 && regexp.MustCompile(`^pve-[a-z0-9]+(-[a-z0-9]+)*-[0-9]+$`).MatchString(name)
 }
 
-// validateFirewallToken checks the optional security group token; the daemon
-// refuses a new firewall token id without its secret.
-func validateFirewallToken(v store.Region, token *string) error {
+// validateExtraTokens checks the optional write tokens; the daemon refuses a
+// new token id without its secret.
+func validateExtraTokens(v store.Region, in *regionInput) error {
 	tokenID := regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}@[A-Za-z0-9._-]{1,32}![A-Za-z][A-Za-z0-9._-]{0,63}$`)
-	if v.FirewallTokenID != "" && (!tokenID.MatchString(v.FirewallTokenID) || v.FirewallTokenID == v.TokenID) {
-		return resource.Invalid("firewallTokenId", "expected a second user@realm!token")
+	for _, token := range []struct {
+		field, id string
+		secret    *string
+	}{
+		{"firewallToken", v.FirewallTokenID, in.FirewallTokenSecret},
+		{"backupToken", v.BackupTokenID, in.BackupTokenSecret},
+	} {
+		if token.id != "" && (!tokenID.MatchString(token.id) || token.id == v.TokenID) {
+			return resource.Invalid(token.field+"Id", "expected a separate user@realm!token")
+		}
+		if token.secret != nil &&
+			(token.id == "" || !regexp.MustCompile(`^[A-Za-z0-9._-]{1,512}$`).MatchString(*token.secret)) {
+			return resource.Invalid(token.field+"Secret", "expected 1-512 token characters with a "+token.field+"Id")
+		}
 	}
-	if token != nil && (v.FirewallTokenID == "" || !regexp.MustCompile(`^[A-Za-z0-9._-]{1,512}$`).MatchString(*token)) {
-		return resource.Invalid("firewallTokenSecret", "expected 1-512 token characters with a firewallTokenId")
+	if v.BackupTokenID != "" && v.BackupTokenID == v.FirewallTokenID {
+		return resource.Invalid("backupTokenId", "must differ from firewallTokenId")
 	}
 	return nil
 }

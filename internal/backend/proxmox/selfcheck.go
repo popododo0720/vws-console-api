@@ -180,6 +180,59 @@ func checkSDN(ctx context.Context, c *pveclient.Client, cfg RegionConfig, permis
 	return nil
 }
 
+// checkBackup admits only the privileges needed for stop-mode disk exports.
+func checkBackup(ctx context.Context, c *pveclient.Client, cfg RegionConfig) error {
+	if cfg.ReadOnly {
+		return &selfCheckError{
+			check: "backup_privileges", cause: errors.New("proxmox: read_only region takes no backup token"),
+		}
+	}
+	permissions, err := c.AccessPermissions(ctx, "")
+	if err == nil && permissions == nil {
+		err = errors.New("missing or null permission inventory")
+	}
+	if err != nil {
+		return &selfCheckError{
+			check: "backup_privileges", cause: fmt.Errorf("proxmox: check backup token permissions: %w", err),
+		}
+	}
+	storage := false
+	for path, privileges := range permissions {
+		for privilege := range privileges {
+			switch privilege {
+			case "VM.Backup":
+			case "Datastore.AllocateSpace":
+				storage = storage || strings.HasPrefix(path, "/storage/") && len(path) > len("/storage/")
+			default:
+				return &selfCheckError{
+					check: "backup_privileges", cause: fmt.Errorf("proxmox: backup token holds %s on %s", privilege, path),
+				}
+			}
+		}
+	}
+	for _, pool := range cfg.Pools {
+		path := "/pool/" + pool
+		held, err := c.AccessPermissions(ctx, path)
+		if err != nil {
+			return &selfCheckError{
+				check: "backup_privileges", cause: fmt.Errorf("proxmox: check backup pool %s: %w", path, err),
+			}
+		}
+		if _, ok := held[path]["VM.Backup"]; !ok {
+			return &selfCheckError{
+				check: "backup_privileges", cause: fmt.Errorf("proxmox: backup token lacks VM.Backup on %s", path),
+			}
+		}
+	}
+	if !storage {
+		return &selfCheckError{
+			check: "backup_privileges",
+			cause: errors.New("proxmox: backup token lacks Datastore.AllocateSpace on /storage/<id>"),
+		}
+	}
+	return nil
+}
+
 // checkFirewall admits a token that holds Sys.Modify and Sys.Audit on / and
 // nothing else: PVE checks every cluster firewall group write as Sys.Modify on /.
 func checkFirewall(ctx context.Context, c *pveclient.Client, cfg RegionConfig) error {
