@@ -1,8 +1,9 @@
 # Proxmox to AWS mapping
 
 Every AWS id and attribute in a `pve-*` region is computed from Proxmox data
-on each read. Nothing is stored, so a VM made in the Proxmox UI shows up as
-it is. Each formula below names the function in
+on each read or from the in-memory observation described below. Nothing is
+persisted, so a VM made in the Proxmox UI shows up as it is. Each formula below
+names the function in
 `internal/backend/proxmox/ids.go` (#735) or `tags.go` (#736) that implements
 it; those issues pin one input and output pair per formula in a table test.
 
@@ -48,6 +49,24 @@ missing uuid. Two rows that compute the same id are both marked
 
 The bridge VPC named by `default_bridge` is `IsDefault=true` and its subnet
 `DefaultForAz=true`. Templates are listed as images, not instances.
+
+## Instance launch time
+
+`DescribeInstances` uses the VWS launch marker's `created` timestamp when
+present. Otherwise, including legacy markers without `created`, `launchTime`
+is the UTC time of the first successful inventory observation of that VM.
+It stays fixed in the existing pool-bound instance snapshot across repeated
+reads and offline-node display. Restarting the backend, losing visibility of
+the VM, or changing its pool or instance identity starts a new observation.
+This is an estimate of creation time, not the exact clone completion time.
+
+The observation uses `GET /cluster/resources?type=vm` and
+`GET /nodes/{node}/qemu/{vmid}/config`, already readable with the PVEAuditor
+token. It requires no task history, extra privileges or PVE writes.
+`meta.ctime` is excluded from launch time because clones can inherit it from
+their template; it remains an input to fallback instance IDs.
+`TestInventoryLaunchTimeIgnoresInheritedCtime` covers this with pvefake and
+an audit-only token, including repeated reads and restart.
 
 ## Tags
 

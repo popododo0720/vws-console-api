@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/popododo0720/vws-console-api/internal/admin/store"
 	"github.com/popododo0720/vws-console-api/internal/backend"
@@ -91,6 +92,67 @@ func TestInventoryNameTag(t *testing.T) {
 	}
 }
 
+func TestInventoryLaunchTimeIgnoresInheritedCtime(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		marker  bool
+		created int64
+	}{
+		{name: "manual clone"},
+		{name: "legacy marker", marker: true},
+		{name: "timestamped marker", marker: true, created: 1700000100},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := inventoryScenario()
+			s.VMs = append(s.VMs, pvefake.VM{
+				VMID: 900, Node: "pve1", Template: true, Pool: "123456789012",
+				Config: map[string]string{
+					"smbios1": "uuid=5f0c3e9a-8b5d-4b8e-9a51-0c2d6c1f7a11",
+					"meta":    s.VMs[0].Config["meta"],
+				},
+			})
+			if tc.marker {
+				marker := launchMarker(t)
+				marker.CreatedAt = tc.created
+				description, err := WithLaunchMarker("", marker)
+				if err != nil {
+					t.Fatal(err)
+				}
+				s.VMs[0].Config["description"] = description
+			}
+			now := time.Unix(1700000200, 0).UTC()
+			client, _ := serve(t, s)
+			cfg := RegionConfig{Now: func() time.Time { return now }}
+			b, err := New(t.Context(), client, registration(), cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := now
+			if tc.created != 0 {
+				want = time.Unix(tc.created, 0).UTC()
+			}
+			read := func(b *Backend, want time.Time) {
+				t.Helper()
+				page, err := b.DescribeInstances(t.Context(), inventoryScope(), resource.InstanceQuery{})
+				if err != nil || len(page.Items) != 1 || !page.Items[0].LaunchTime.Equal(want) {
+					t.Fatalf("launch time: page=%+v err=%v, want %s", page, err, want)
+				}
+			}
+			read(b, want)
+			now = now.Add(time.Hour)
+			read(b, want)
+			fresh, err := New(t.Context(), client, registration(), cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.created == 0 {
+				want = now
+			}
+			read(fresh, want)
+		})
+	}
+}
+
 func TestInventoryOfflineNodeSnapshot(t *testing.T) {
 	for _, state := range []string{"running", "stopped"} {
 		t.Run(state, func(t *testing.T) {
@@ -98,6 +160,7 @@ func TestInventoryOfflineNodeSnapshot(t *testing.T) {
 			s.VMs[0].Status = state
 			s.VMs[0].Config["tags"] = "vws.t.+name.original"
 			b, f := powerBackend(t, s)
+			b.cfg.Now = func() time.Time { return time.Unix(1700000200, 0).UTC() }
 			page, err := b.DescribeInstances(t.Context(), inventoryScope(), resource.InstanceQuery{})
 			if err != nil || len(page.Items) != 1 || page.Items[0].NodeStatus != "online" {
 				t.Fatalf("online inventory = %+v, %v", page, err)
@@ -233,7 +296,8 @@ func TestInventoryInstanceFields(t *testing.T) {
 	c, _ := serve(t, s)
 	reg := registration()
 	reg.Region.Zones = []backend.Zone{{Letter: "b", Nodes: []string{"pve1"}}}
-	b, err := New(t.Context(), c, reg, RegionConfig{})
+	cfg := RegionConfig{Now: func() time.Time { return time.Unix(1700000200, 0).UTC() }}
+	b, err := New(t.Context(), c, reg, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -253,11 +317,11 @@ func TestInventoryInstanceFields(t *testing.T) {
 		got.OwnerID != inventoryScope().Account ||
 		got.State != resource.InstanceRunning || got.InstanceType != "vws.small" ||
 		len(got.Tags) != 1 || got.Tags["Name"] != "manual" ||
-		got.Zone != "pve-test-1b" || got.LaunchTime.Unix() != 1700000000 {
+		got.Zone != "pve-test-1b" || got.LaunchTime.Unix() != 1700000200 {
 		t.Fatalf("instance=%+v", got)
 	}
 	for range 2 {
-		fresh, err := New(t.Context(), c, reg, RegionConfig{})
+		fresh, err := New(t.Context(), c, reg, cfg)
 		if err != nil {
 			t.Fatal(err)
 		}
