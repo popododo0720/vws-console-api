@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/popododo0720/vws-console-api/internal/backend"
 	"github.com/popododo0720/vws-console-api/internal/backend/proxmox/pveclient"
@@ -57,6 +59,7 @@ func (b *Backend) DescribeImages(
 		items = append(items, resource.Image{
 			ID: id, OwnerID: s.Account, Name: cfg.Name, State: "available",
 			Description: cfg.Description, SizeGiB: imageRootSize(cfg),
+			Architecture: imageArchitecture(cfg.Arch), CreationDate: imageCreationDate(ctx, vm.VMID, cfg.Meta),
 		})
 	}
 	if len(q.IDs) == 1 && len(items) == 0 {
@@ -66,6 +69,33 @@ func (b *Backend) DescribeImages(
 		return resource.Page[resource.Image]{}, resource.ImageNotFound(q.IDs[0])
 	}
 	return networkPage(items, q.Page)
+}
+
+// imageArchitecture maps the PVE arch config to EC2's name; unset is a QEMU
+// x86 guest.
+func imageArchitecture(arch string) string {
+	switch arch {
+	case "", "x86_64":
+		return resource.ArchitectureX86
+	case "aarch64":
+		return resource.ArchitectureARM64
+	}
+	return arch
+}
+
+// imageCreationDate formats meta ctime as EC2 does; a template without a
+// readable ctime has no creation date.
+func imageCreationDate(ctx context.Context, vmid int, meta string) string {
+	ctime := option(meta, "ctime")
+	if ctime == "" {
+		return ""
+	}
+	seconds, err := strconv.ParseInt(ctime, 10, 64)
+	if err != nil || seconds < 0 {
+		slog.WarnContext(ctx, "ignoring invalid template meta.ctime", slog.Int("vmid", vmid), slog.String("ctime", ctime))
+		return ""
+	}
+	return time.Unix(seconds, 0).UTC().Format(resource.AWSTimeLayout)
 }
 
 func imageRootSize(cfg pveclient.VMConfig) int64 {

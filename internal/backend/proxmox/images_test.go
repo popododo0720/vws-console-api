@@ -32,6 +32,7 @@ func TestImageInventoryFieldsAndRestart(t *testing.T) {
 	want := resource.Image{
 		ID: id, OwnerID: inventoryScope().Account, Name: "debian",
 		State: "available", Description: "Debian base", SizeGiB: 9,
+		Architecture: "x86_64", CreationDate: "2023-11-14T22:13:20.000Z",
 	}
 	for range 2 {
 		b, err := New(t.Context(), c, registration(), RegionConfig{ReadOnly: true})
@@ -56,6 +57,45 @@ func TestImageInventoryFieldsAndRestart(t *testing.T) {
 	for _, method := range f.RequestMethods() {
 		if method != http.MethodGet {
 			t.Fatalf("image read issued %s", method)
+		}
+	}
+}
+
+func TestImageArchitectureAndCreationDate(t *testing.T) {
+	s := imageScenario()
+	base := s.VMs[0]
+	s.VMs = nil
+	cases := []struct {
+		arch, meta, wantArch, wantDate string
+	}{
+		{"", "creation-qemu=9.2,ctime=1700000000", "x86_64", "2023-11-14T22:13:20.000Z"},
+		{"x86_64", "ctime=0", "x86_64", "1970-01-01T00:00:00.000Z"},
+		{"aarch64", "ctime=1763112600", "arm64", "2025-11-14T09:30:00.000Z"},
+		{"aarch64", "", "arm64", ""},
+		{"", "creation-qemu=9.2", "x86_64", ""},
+		{"", "ctime=soon", "x86_64", ""},
+		{"", "ctime=-1", "x86_64", ""},
+	}
+	ids, _ := NewIDs("test")
+	want := map[resource.ImageID]resource.Image{}
+	for i, tc := range cases {
+		uuid := fmt.Sprintf("5f0c3e9a-8b5d-4b8e-9a51-%012d", i+1)
+		vm := base
+		vm.VMID = 100 + i
+		vm.Config = map[string]string{"smbios1": "uuid=" + uuid, "meta": tc.meta, "arch": tc.arch}
+		s.VMs = append(s.VMs, vm)
+		id, _ := ids.Image(uuid)
+		want[id] = resource.Image{Architecture: tc.wantArch, CreationDate: tc.wantDate}
+	}
+	b, _ := networkBackend(t, s, RegionConfig{})
+	page, err := b.DescribeImages(t.Context(), inventoryScope(), resource.ImageQuery{})
+	if err != nil || len(page.Items) != len(cases) {
+		t.Fatalf("images = %+v, %v", page, err)
+	}
+	for _, img := range page.Items {
+		if w := want[img.ID]; img.Architecture != w.Architecture || img.CreationDate != w.CreationDate {
+			t.Fatalf("image %s = %q %q; want %q %q", img.ID, img.Architecture, img.CreationDate,
+				w.Architecture, w.CreationDate)
 		}
 	}
 }

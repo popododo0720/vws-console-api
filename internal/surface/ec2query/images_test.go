@@ -9,6 +9,48 @@ import (
 	"github.com/popododo0720/vws-console-api/internal/resource"
 )
 
+func TestDescribeImagesCarriesArchitectureAndCreationDate(t *testing.T) {
+	account, err := resource.Parse[resource.AccountID]("123456789012")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dated, err := resource.Parse[resource.ImageID]("ami-00000000000000002")
+	if err != nil {
+		t.Fatal(err)
+	}
+	undated, err := resource.Parse[resource.ImageID]("ami-00000000000000003")
+	if err != nil {
+		t.Fatal(err)
+	}
+	h, cred, now := harnessWithImages(t, []resource.Image{
+		{
+			ID: dated, OwnerID: account, Name: "arm", State: "available",
+			Architecture: "arm64", CreationDate: "2026-11-14T09:30:00.000Z",
+		},
+		{ID: undated, OwnerID: account, Name: "x86", State: "available", Architecture: "x86_64"},
+	})
+	res := signed(t, h, cred, now, url.Values{"Action": {"DescribeImages"}, "Version": {Version}}.Encode())
+	if res.Code != http.StatusOK {
+		t.Fatalf("%d %s", res.Code, res.Body)
+	}
+	items := map[string]string{}
+	for _, item := range strings.Split(res.Body.String(), "<item>")[1:] {
+		for _, id := range []string{dated.String(), undated.String()} {
+			if strings.Contains(item, "<imageId>"+id+"</imageId>") {
+				items[id] = item
+			}
+		}
+	}
+	if item := items[dated.String()]; !strings.Contains(item, "<architecture>arm64</architecture>") ||
+		!strings.Contains(item, "<creationDate>2026-11-14T09:30:00.000Z</creationDate>") {
+		t.Fatalf("dated image: %s", item)
+	}
+	if item := items[undated.String()]; !strings.Contains(item, "<architecture>x86_64</architecture>") ||
+		strings.Contains(item, "<creationDate>") {
+		t.Fatalf("undated image: %s", item)
+	}
+}
+
 func TestDescribeImagesMapsOwnerAndPublic(t *testing.T) {
 	other, err := resource.Parse[resource.AccountID]("210987654321")
 	if err != nil {

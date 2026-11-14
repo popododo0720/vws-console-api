@@ -13,10 +13,12 @@ Pool.Audit. Public launch-template configuration does not widen inventory
 visibility. Holders, ordinary VMs and the synthetic unknown image are excluded;
 invalid UUIDs are skipped with a warning. Names and descriptions come from
 template configs; root size is unknown unless the configured boot disk has
-a valid size. Owner and ID filters precede stable image-ID paging. A missing
+a valid size. Architecture follows the template's `arch` (`x86_64` when unset,
+`aarch64` as `arm64`); the creation date is `meta: ctime=` in EC2's
+timestamp format, empty when absent or invalid. Owner and ID filters precede stable image-ID paging. A missing
 single requested image is NotFound, or Unavailable if a candidate config
 could not be read. Reads never write PVE state and are stable across restart.
-Enforced by `TestImageInventoryFieldsAndRestart`, `TestImageInventoryPoolBoundaries`,
+Enforced by `TestImageInventoryFieldsAndRestart`, `TestImageArchitectureAndCreationDate`, `TestImageInventoryPoolBoundaries`,
 `TestImageInventorySkipsInvalidTemplates`, `TestImageInventoryFiltersAndPaging`,
 `TestImageInventoryFailures` and `TestImageRootSize`.
 

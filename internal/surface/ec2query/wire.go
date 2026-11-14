@@ -397,6 +397,7 @@ type imageItem struct {
 	State              string `xml:"imageState"`
 	OwnerID            string `xml:"imageOwnerId"`
 	Architecture       string `xml:"architecture"`
+	CreationDate       string `xml:"creationDate,omitempty"`
 	ImageType          string `xml:"imageType"`
 	RootDeviceType     string `xml:"rootDeviceType"`
 	VirtualizationType string `xml:"virtualizationType"`
@@ -877,7 +878,8 @@ func snapshotCreatedXML(requestID string, snap resource.Snapshot) createSnapshot
 func imageXML(img resource.Image) imageItem {
 	return imageItem{
 		ImageID: img.ID.String(), Name: img.Name, State: img.State, OwnerID: img.OwnerID.String(),
-		Public: img.Public, Architecture: "x86_64", ImageType: "machine", RootDeviceType: "ebs",
+		Public: img.Public, Architecture: img.Architecture, CreationDate: img.CreationDate,
+		ImageType: "machine", RootDeviceType: "ebs",
 		VirtualizationType: "hvm", Description: img.Description,
 	}
 }

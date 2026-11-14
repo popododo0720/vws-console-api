@@ -77,6 +77,7 @@ type VMConfig struct {
 	Template    int    `json:"template"`
 	SMBIOS1     string `json:"smbios1"`
 	Meta        string `json:"meta"`
+	Arch        string `json:"arch"`
 	Cores       int    `json:"cores"`
 	Sockets     int    `json:"sockets"`
 	Memory      int    `json:"memory"`
