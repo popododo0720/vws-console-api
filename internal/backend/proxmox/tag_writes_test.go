@@ -258,7 +258,7 @@ func TestTagWritesPropagateWriteFailures(t *testing.T) {
 				t.Fatalf("write failure swallowed or blindly retried: writes=%d err=%v", writes, err)
 			}
 			page, err := b.DescribeInstances(t.Context(), inventoryScope(), resource.InstanceQuery{})
-			if err != nil || len(page.Items) != 1 || len(page.Items[0].Tags) != 0 {
+			if err != nil || len(page.Items) != 1 || !maps.Equal(page.Items[0].Tags, map[string]string{"Name": "manual"}) {
 				t.Fatalf("failed write changed tags: %+v %v", page, err)
 			}
 		})

@@ -123,6 +123,9 @@ func (b *Backend) instance(
 	if err != nil {
 		return resource.Instance{}, err
 	}
+	if _, named := tags.User["Name"]; !named && cfg.Name != "" {
+		tags.User["Name"] = cfg.Name
+	}
 	image, err := ids.UnknownImage()
 	if err != nil {
 		return resource.Instance{}, err
