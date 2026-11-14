@@ -110,7 +110,14 @@ func (f *Fake) storageContent(t *Token, r *http.Request) (any, *failure) {
 	}
 	for _, storage := range f.s.Storages {
 		if storage.Node == node && storage.Name == name {
-			return append([]StorageContent{}, storage.Content...), nil
+			rows := []StorageContent{}
+			for _, row := range storage.Content {
+				if row.VMID != 0 && !f.can(t, "/vms/"+strconv.Itoa(row.VMID), "VM.Config.Disk") {
+					continue
+				}
+				rows = append(rows, row)
+			}
+			return rows, nil
 		}
 	}
 	return nil, &failure{http.StatusInternalServerError, fmt.Sprintf("storage '%s' does not exist", name)}

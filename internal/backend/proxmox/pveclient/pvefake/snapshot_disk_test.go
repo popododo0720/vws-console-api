@@ -19,7 +19,7 @@ func (w *taskWorld) snapshots(t *testing.T) []pvefake.Snapshot {
 func (w *taskWorld) disks(t *testing.T) []pvefake.StorageContent {
 	t.Helper()
 	var env struct{ Data []pvefake.StorageContent }
-	w.call(t, "GET", "/nodes/pve1/storage/ceph/content", auditor, 200, &env)
+	w.call(t, "GET", "/nodes/pve1/storage/ceph/content", "disk-reader@pve!one", 200, &env)
 	return env.Data
 }
 

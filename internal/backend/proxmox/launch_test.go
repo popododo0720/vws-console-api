@@ -51,7 +51,7 @@ func launchBackend(
 	}
 	s.Storages = append(s.Storages, pvefake.Storage{Node: "pve2", Name: "local", MaxDisk: 256 << 30})
 	s.Roles = append(s.Roles,
-		pvefake.Role{ID: "Launch", Privs: []string{"VM.Clone", "VM.Allocate", "VM.Audit", "Pool.Audit"}},
+		pvefake.Role{ID: "Launch", Privs: []string{"VM.Clone", "VM.Allocate", "VM.Audit", "Pool.Audit", "VM.Config.Disk"}},
 		pvefake.Role{ID: "Storage", Privs: []string{"Datastore.AllocateSpace", "Datastore.Audit"}})
 	for _, pool := range s.Pools {
 		s.Tokens[0].ACL = append(s.Tokens[0].ACL, pvefake.ACE{Path: "/pool/" + pool, Role: "Launch"})

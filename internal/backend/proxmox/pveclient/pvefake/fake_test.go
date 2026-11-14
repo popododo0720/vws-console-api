@@ -335,6 +335,11 @@ func TestStorageAndSnapshotReads(t *testing.T) {
 	s.Storages = []pvefake.Storage{{Node: "pve1", Name: "local", Content: []pvefake.StorageContent{
 		{VolID: "local:vm-100-disk-0", Content: "images", Format: "qcow2", Size: 8 << 30, VMID: 100},
 	}}}
+	s.Roles = append(s.Roles, pvefake.Role{ID: "DiskReader", Privs: []string{"Datastore.Audit", "VM.Config.Disk"}})
+	s.Tokens = append(s.Tokens, pvefake.Token{
+		ID: "disk-reader@pve!one", Secret: "k",
+		ACL: []pvefake.ACE{{Path: "/", Role: "DiskReader"}},
+	})
 	_, srv := start(t, s)
 	s.VMs[0].Snapshots[0].Name = "changed"
 	s.Storages[0].Content[0].Size = 1
@@ -343,7 +348,7 @@ func TestStorageAndSnapshotReads(t *testing.T) {
 	if err != nil || len(snaps) != 2 || snaps[0].Name != "current" || snaps[1].Name != "backup" {
 		t.Fatalf("snapshots=%+v error=%v", snaps, err)
 	}
-	rows, err := c.StorageContent(t.Context(), "pve1", "local")
+	rows, err := client(t, srv, "disk-reader@pve!one", "k").StorageContent(t.Context(), "pve1", "local")
 	if err != nil || len(rows) != 1 || rows[0].Format != "qcow2" || rows[0].Size != 8<<30 {
 		t.Fatalf("storage=%+v error=%v", rows, err)
 	}
@@ -353,6 +358,39 @@ func TestStorageAndSnapshotReads(t *testing.T) {
 	}
 	if _, err := limited.Snapshots(t.Context(), pveclient.VM{Node: "pve2", VMID: 101}); status(err) != 403 {
 		t.Fatalf("snapshot without VM.Audit: %v", err)
+	}
+}
+
+func TestStorageContentRequiresVMDiskPrivilege(t *testing.T) {
+	s := scenario(t)
+	s.Storages = []pvefake.Storage{{Node: "pve1", Name: "local", Content: []pvefake.StorageContent{
+		{VolID: "local:vm-100-disk-0", Content: "images", VMID: 100},
+		{VolID: "local:vm-101-disk-0", Content: "images", VMID: 101},
+		{VolID: "local:iso/install.iso", Content: "iso"},
+	}}}
+	s.Roles = append(s.Roles, pvefake.Role{ID: "Disk", Privs: []string{"VM.Config.Disk"}})
+	s.Tokens = append(s.Tokens, pvefake.Token{ID: "disk@pve!one", Secret: "k", ACL: []pvefake.ACE{
+		{Path: "/", Role: "PVEAuditor"}, {Path: "/pool/vws-a", Role: "Disk"},
+	}})
+	_, srv := start(t, s)
+	for _, tc := range []struct {
+		token, secret string
+		want          []string
+	}{
+		{auditor, auditorKey, []string{"local:iso/install.iso"}},
+		{"disk@pve!one", "k", []string{"local:vm-100-disk-0", "local:iso/install.iso"}},
+	} {
+		rows, err := client(t, srv, tc.token, tc.secret).StorageContent(t.Context(), "pve1", "local")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got []string
+		for _, row := range rows {
+			got = append(got, row.VolID)
+		}
+		if !reflect.DeepEqual(got, tc.want) {
+			t.Fatalf("%s content=%v want=%v", tc.token, got, tc.want)
+		}
 	}
 }
 

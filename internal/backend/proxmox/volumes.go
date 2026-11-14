@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"math"
 	"net/url"
 	"slices"
 	"strconv"
@@ -15,6 +16,24 @@ import (
 	"github.com/popododo0720/vws-console-api/internal/backend/proxmox/pveclient"
 	"github.com/popododo0720/vws-console-api/internal/resource"
 )
+
+func driveSizeGiB(drive string) int64 {
+	size := option(drive, "size")
+	unit := float64(1) / (1 << 30)
+	for i, suffix := range []string{"K", "M", "G", "T", "P"} {
+		if strings.HasSuffix(size, suffix) {
+			size = strings.TrimSuffix(size, suffix)
+			unit = math.Pow(1024, float64(i-2))
+			break
+		}
+	}
+	n, err := strconv.ParseFloat(size, 64)
+	gib := math.Ceil(n * unit)
+	if err == nil && gib > 0 && gib < math.Exp2(63) {
+		return int64(gib)
+	}
+	return 0
+}
 
 func diskDevice(key string) string {
 	for _, bus := range []string{"scsi", "virtio", "sata", "ide"} {
@@ -81,24 +100,28 @@ func (b *Backend) vmVolumes(
 				if ctx.Err() != nil {
 					return nil, fmt.Errorf("proxmox: read disk storage content: %w", err)
 				}
-				slog.WarnContext(ctx, "skipping unavailable storage content",
+				slog.WarnContext(ctx, "unavailable storage metadata",
 					slog.String("node", vm.Node), slog.String("storage", storage), slog.Any("error", err))
-				content[cacheKey] = nil
-				continue
 			}
 			content[cacheKey] = rows
 		}
 		index := slices.IndexFunc(rows, func(row pveclient.StorageContent) bool {
-			return row.VolID == volid && row.Content == "images" && row.Size > 0
+			return row.VolID == volid && row.Content == "images"
 		})
-		if index < 0 {
-			slog.WarnContext(ctx, "disk missing storage content", slog.Int("vmid", vm.VMID), slog.String("drive", key))
-			continue
+		size := driveSizeGiB(drive)
+		var format string
+		if index >= 0 {
+			format = rows[index].Format
+			if size == 0 && rows[index].Size > 0 {
+				size = (rows[index].Size-1)/(1<<30) + 1
+			}
 		}
-		row := rows[index]
+		if size == 0 {
+			slog.WarnContext(ctx, "disk size unavailable", slog.Int("vmid", vm.VMID), slog.String("drive", key))
+		}
 		vol := resource.Volume{
 			ID: id, OwnerID: s.Account, State: resource.VolumeAvailable,
-			SizeGiB: (row.Size-1)/(1<<30) + 1, Format: row.Format, IDSource: string(source),
+			SizeGiB: size, Format: format, IDSource: string(source),
 			Zone: b.region + b.nodeLetter(ctx, vm.Node), Type: resource.VolumeStandard,
 		}
 		for name, mapped := range b.cfg.Storages {

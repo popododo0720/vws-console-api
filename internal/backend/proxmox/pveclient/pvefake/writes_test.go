@@ -26,10 +26,12 @@ func newWriteWorld(t *testing.T, privileges ...string) *taskWorld {
 	if len(privileges) > 0 {
 		s.Roles[len(s.Roles)-1].Privs = privileges
 	}
+	s.Roles = append(s.Roles, pvefake.Role{ID: "DiskReader", Privs: []string{"Datastore.Audit", "VM.Config.Disk"}})
 	s.Storages = []pvefake.Storage{{Node: "pve1", Name: "ceph", Content: []pvefake.StorageContent{
 		{VolID: "ceph:vm-100-disk-0", VMID: 100, Size: 8 << 30, Content: "images", Format: "raw"},
 	}}, {Node: "pve1", Name: "target"}}
 	s.Tokens = append(s.Tokens,
+		pvefake.Token{ID: "disk-reader@pve!one", Secret: "k", ACL: []pvefake.ACE{{Path: "/", Role: "DiskReader"}}},
 		pvefake.Token{ID: "writer@pve!one", Secret: "k", ACL: []pvefake.ACE{{Path: "/", Role: "Writer"}}},
 		pvefake.Token{ID: "scoped@pve!one", Secret: "k", ACL: []pvefake.ACE{
 			{Path: "/pool/vws-a", Role: "Writer"}, {Path: "/vms/9000", Role: "Writer"},
@@ -237,7 +239,7 @@ func TestCloneStorageAndInputBounds(t *testing.T) {
 	if cfg := w.config(t, "pve1", 102); !strings.HasPrefix(cfg["scsi0"].(string), "target:") {
 		t.Fatal(cfg)
 	}
-	content, err := client(t, srv, auditor, auditorKey).StorageContent(t.Context(), "pve1", "target")
+	content, err := client(t, srv, "disk-reader@pve!one", "k").StorageContent(t.Context(), "pve1", "target")
 	if err != nil || len(content) != 1 || content[0].VMID != 102 ||
 		content[0].VolID != "target:vm-102-disk-0" {
 		t.Fatalf("target content=%+v %v", content, err)
@@ -252,7 +254,7 @@ func TestCloneCopiesDisksAndConfigACLsAreAtomic(t *testing.T) {
 		t.Fatalf("clone retained source identity: %v", clone)
 	}
 	var content struct{ Data []pvefake.StorageContent }
-	w.call(t, "GET", "/nodes/pve1/storage/ceph/content", auditor, 200, &content)
+	w.call(t, "GET", "/nodes/pve1/storage/ceph/content", "disk-reader@pve!one", 200, &content)
 	if len(content.Data) != 2 || content.Data[1].VMID != 102 || content.Data[1].Size != 8<<30 {
 		t.Fatal(content)
 	}
