@@ -887,6 +887,10 @@ type Image struct {
 	State       string    `json:"state"`
 	Public      bool      `json:"public"`
 	Description string    `json:"description,omitempty"`
+	// Architecture is EC2's value: x86_64 or arm64.
+	Architecture string `json:"architecture"`
+	// CreationDate is in AWSTimeLayout, empty when unknown.
+	CreationDate string `json:"creationDate,omitempty"`
 	// SizeGiB is the smallest root volume the image boots from, and the
 	// root size of a launch that names none. Zero means unknown.
 	SizeGiB int64 `json:"size,omitempty"`
@@ -1136,6 +1140,17 @@ func normalizeCIDR(cidr string) (string, error) {
 // knownImageID is the one machine image this process can launch.
 const knownImageID = "ami-0123456789abcdef0"
 
+const knownImageCreationDate = "2026-01-01T00:00:00.000Z"
+
+// EC2 image architectures VWS serves.
+const (
+	ArchitectureX86   = "x86_64"
+	ArchitectureARM64 = "arm64"
+)
+
+// AWSTimeLayout is EC2's timestamp format: ISO 8601, UTC, milliseconds.
+const AWSTimeLayout = "2006-01-02T15:04:05.000Z"
+
 // KnownImages is the machine image this process can launch. The owner is the
 // caller, so a describe result passes the tenancy check. It is a function so
 // the catalog is not package state.
@@ -1148,6 +1163,7 @@ func KnownImages(owner AccountID) []Image {
 	}
 	return []Image{{
 		ID: id, OwnerID: owner, Name: "vws-1", State: "available", SizeGiB: RootVolumeSizeGiB,
+		Architecture: ArchitectureX86, CreationDate: knownImageCreationDate,
 	}}
 }
 

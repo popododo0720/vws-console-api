@@ -195,6 +195,7 @@ func (c compute) RegisterImage(
 	img := resource.Image{
 		ID: id, OwnerID: m.Account, Name: req.Name, Description: req.Description,
 		State: resource.ImagePending, SizeGiB: snap.VolumeSize,
+		Architecture: resource.ArchitectureX86, CreationDate: c.w.now().UTC().Format(resource.AWSTimeLayout),
 	}
 	targets := []resource.Ref{id.Ref()}
 	op, err := c.w.newOp(m.Account, resource.ServiceCompute, resource.ActionRegisterImage, targets, func(time.Time) {

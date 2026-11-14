@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/popododo0720/vws-console-api/internal/backend"
 	"github.com/popododo0720/vws-console-api/internal/resource"
@@ -53,6 +54,10 @@ func exerciseRegisterImage(ctx context.Context, t *testing.T, set backend.Set, a
 	if err != nil || len(got.Items) != 1 || got.Items[0].Name != req.Name || got.Items[0].Description != "nightly" ||
 		got.Items[0].State != resource.ImageAvailable || got.Items[0].SizeGiB != 12 || got.Items[0].OwnerID != account {
 		t.Fatalf("describe registered image: %v %+v", err, got.Items)
+	}
+	if _, err := time.Parse(resource.AWSTimeLayout, got.Items[0].CreationDate); err != nil ||
+		got.Items[0].Architecture != resource.ArchitectureX86 {
+		t.Fatalf("registered image architecture and creation date: %v %+v", err, got.Items[0])
 	}
 	listed, err := set.Compute.DescribeImages(ctx, scope, resource.ImageQuery{Page: resource.PageRequest{Size: 50}})
 	if err != nil || !hasImage(listed.Items, img.ID) {

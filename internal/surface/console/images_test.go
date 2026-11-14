@@ -11,6 +11,27 @@ import (
 	"github.com/popododo0720/vws-console-api/internal/resource"
 )
 
+func TestListImagesReportsArchitectureAndCreationDate(t *testing.T) {
+	account, err := resource.Parse[resource.AccountID]("123456789012")
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc := cloud.New(cloud.Config{Backends: fake.New(fake.Options{}).Set()})
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v1/images", nil)
+	req.Header.Set("Authorization", "Bearer tok")
+	rec := httptest.NewRecorder()
+	New(rootConfig(svc, account)).ServeHTTP(rec, req)
+	var page struct {
+		Items []map[string]any `json:"items"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &page); err != nil || rec.Code != http.StatusOK || len(page.Items) != 1 {
+		t.Fatalf("%d %s %v", rec.Code, rec.Body, err)
+	}
+	if got := page.Items[0]; got["architecture"] != "x86_64" || got["creationDate"] != "2026-01-01T00:00:00.000Z" {
+		t.Fatalf("catalog image %v", got)
+	}
+}
+
 func TestListImagesReportsOwnerAndPublic(t *testing.T) {
 	account, err := resource.Parse[resource.AccountID]("123456789012")
 	if err != nil {
