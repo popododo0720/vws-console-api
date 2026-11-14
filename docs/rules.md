@@ -57,9 +57,11 @@ other privilege and any firewall token on a read_only region, and still
 refuses Sys.Modify on the main token. Its sealed file is keyed by its own
 fingerprint. An omitted secret reuses the stored token only for the same token
 id, a removed token's file is cleaned up, and the helper never deletes either
-live token. Enforced by `TestFirewallTokenScope`,
-`TestFirewallTokenRegistration`, `TestAdminRegionFirewallToken` and
-`TestStartupMutationTokenScope`.
+live token. pvefake serves cluster firewall group reads under Sys.Audit and
+writes under Sys.Modify on /, so the region token cannot write a group.
+Enforced by `TestFirewallTokenScope`, `TestFirewallTokenRegistration`,
+`TestAdminRegionFirewallToken`, `TestStartupMutationTokenScope` and
+`TestFirewallGroupWritesNeedSysModify`.
 
 Configured Proxmox subnets with mode `static` or an empty mode allocate the
 lowest free IPv4 address in the inclusive `ip_range`, or the usable CIDR

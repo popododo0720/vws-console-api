@@ -35,6 +35,8 @@ type Scenario struct {
 	Networks []Network `yaml:"networks"`
 	SDNZones []string  `yaml:"sdn_zones"`
 	VNets    []VNet    `yaml:"vnets"`
+
+	FirewallGroups []FirewallGroup `yaml:"firewall_groups"`
 }
 
 // VNet holds pending SDN configuration and its seeded subnets.
@@ -220,6 +222,7 @@ func (s Scenario) clone() Scenario {
 	s.Storages = slices.Clone(s.Storages)
 	s.Networks = slices.Clone(s.Networks)
 	s.SDNZones, s.VNets = slices.Clone(s.SDNZones), slices.Clone(s.VNets)
+	s.FirewallGroups = slices.Clone(s.FirewallGroups)
 	for i := range s.VNets {
 		s.VNets[i].Subnets = slices.Clone(s.VNets[i].Subnets)
 	}
