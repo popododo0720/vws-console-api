@@ -29,8 +29,6 @@ func (p *Proxy) ServiceEndpoint(template string) error {
 	return nil
 }
 
-// serveService does not interpret the request: the global API verified and
-// authorized it, and only its signature is replaced.
 func (p *Proxy) serveService(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, resource.MaxObjectBytes))
 	if err != nil {
@@ -39,6 +37,18 @@ func (p *Proxy) serveService(w http.ResponseWriter, r *http.Request) {
 	}
 	account, principal := r.Header.Get("X-Vws-Account"), r.Header.Get("X-Vws-Principal")
 	region, service := r.Header.Get("X-Vws-Target-Region"), r.Header.Get("X-Vws-Target-Service")
+	costAccount := ""
+	if service == "ce" {
+		costAccount = r.Header.Get("X-Vws-Aws-Account")
+		if !accountID(costAccount) || len(r.Header.Values("X-Vws-Aws-Account")) != 1 ||
+			r.Method != http.MethodPost || r.URL.Path != "/" || r.URL.RawQuery != "" ||
+			len(r.Header.Values("X-Amz-Target")) != 1 ||
+			r.Header.Get("X-Amz-Target") != "AWSInsightsIndexService.GetCostAndUsage" {
+			refuse(w, http.StatusForbidden, "UnauthorizedOperation")
+			return
+		}
+		region = "us-east-1"
+	}
 	if p.services == "" || !regexp.MustCompile(`^[a-z0-9-]{1,63}$`).MatchString(service) ||
 		!regexp.MustCompile(`^[0-9]{12}$`).MatchString(account) || !validPrincipal(principal) ||
 		len(r.Header.Values("X-Vws-Principal")) != 1 ||
@@ -67,7 +77,7 @@ func (p *Proxy) serveService(w http.ResponseWriter, r *http.Request) {
 		}
 		header.Del("X-Amz-Decoded-Content-Length")
 	}
-	cred, ok := p.session(r.Context(), w, account, principal, region)
+	cred, ok := p.accountSession(r.Context(), w, account, principal, region, costAccount)
 	if !ok {
 		return
 	}
@@ -86,7 +96,7 @@ func (p *Proxy) serveService(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	p.forward(w, r, target, body, header, cred, service, region,
-		r.Method == http.MethodGet || r.Method == http.MethodHead)
+		service == "ce" || r.Method == http.MethodGet || r.Method == http.MethodHead)
 }
 
 func (p *Proxy) forward(w http.ResponseWriter, r *http.Request, target *url.URL, body []byte,

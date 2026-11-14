@@ -348,6 +348,7 @@ func run(ctx context.Context, args []string) (err error) {
 				return testRegionConnection(ctx, registry, region, token)
 			},
 			AccountConnection: connection.TestConnection,
+			AWSCost:           connection.Cost,
 		})},
 		{Name: "ec2", Addr: *ec2Addr, Handler: route(ec2query.New(ec2query.Config{
 			Service: svc, Verifier: ec2, Authorizer: auth, Requests: requests,

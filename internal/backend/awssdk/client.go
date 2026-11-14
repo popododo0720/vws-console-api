@@ -84,8 +84,10 @@ func New(cfg Config) (*Backend, error) {
 func (b *Backend) Close() { b.transport.CloseIdleConnections() }
 
 type forwardingTransport struct {
-	base *http.Transport
-	cfg  Config
+	base       http.RoundTripper
+	cfg        Config
+	service    string
+	awsAccount string
 }
 
 func (f forwardingTransport) RoundTrip(r *http.Request) (*http.Response, error) {
@@ -94,6 +96,10 @@ func (f forwardingTransport) RoundTrip(r *http.Request) (*http.Response, error) 
 	req.Header.Set("X-Vws-Principal", f.cfg.Principal(r.Context()))
 	req.Header.Set("X-Vws-Target-Region", f.cfg.Region)
 	req.Header.Set("X-Vws-Target-Service", "ec2")
+	if f.service != "" {
+		req.Header.Set("X-Vws-Target-Service", f.service)
+		req.Header.Set("X-Vws-Aws-Account", f.awsAccount)
+	}
 	req.Header.Set("X-Vws-Request-Id", obs.RequestID(r.Context()))
 	resp, err := f.base.RoundTrip(req)
 	if err != nil {

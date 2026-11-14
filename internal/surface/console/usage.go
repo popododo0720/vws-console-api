@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/popododo0720/vws-console-api/internal/admin/store"
@@ -21,6 +22,14 @@ type usageRegion struct {
 type projectUsage struct {
 	Project string        `json:"project"`
 	Regions []usageRegion `json:"regions"`
+	AWS     []usageAWS    `json:"aws"`
+}
+
+type usageAWS struct {
+	Account string `json:"account"`
+	Amount  string `json:"amount,omitempty"`
+	Unit    string `json:"unit,omitempty"`
+	Error   string `json:"error,omitempty"`
 }
 
 func usageWindow(raw string) (string, string, error) {
@@ -65,7 +74,7 @@ func (h *handler) usage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	slices.SortFunc(mapping.Pools, func(a, b store.ProjectPool) int { return strings.Compare(a.Region, b.Region) })
-	view := projectUsage{Project: mapping.Project, Regions: []usageRegion{}}
+	view := projectUsage{Project: mapping.Project, Regions: []usageRegion{}, AWS: []usageAWS{}}
 	for _, pool := range mapping.Pools {
 		c.Region = pool.Region
 		allocation, err := h.svc.GetAllocation(ctx, c)
@@ -78,6 +87,27 @@ func (h *handler) usage(w http.ResponseWriter, r *http.Request) {
 		}
 		view.Regions = append(view.Regions, row)
 	}
+	awsCtx, cancelAWS := context.WithTimeout(ctx, 2*time.Second)
+	defer cancelAWS()
+	slices.Sort(mapping.AWSAccounts)
+	view.AWS = make([]usageAWS, len(mapping.AWSAccounts))
+	var calls sync.WaitGroup
+	for i, account := range mapping.AWSAccounts {
+		calls.Go(func() {
+			row := usageAWS{Account: account, Error: "Unavailable"}
+			if h.awsCost != nil {
+				amount, unit, err := h.awsCost(awsCtx, c, account, from, to)
+				if err == nil {
+					row.Amount, row.Unit, row.Error = amount, unit, ""
+				}
+			}
+			if row.Error != "" {
+				h.log.WarnContext(awsCtx, "usage AWS cost unavailable")
+			}
+			view.AWS[i] = row
+		})
+	}
+	calls.Wait()
 	writeJSON(w, http.StatusOK, struct {
 		From  string         `json:"from"`
 		To    string         `json:"to"`

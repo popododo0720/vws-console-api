@@ -61,6 +61,7 @@ type Config struct {
 	RegionRegistration func(context.Context, string, json.RawMessage) error
 	RegionConnection   func(context.Context, store.Region, string) []resource.ConnectionStep
 	AccountConnection  func(context.Context, resource.AWSConnectionRequest, string) []resource.ConnectionStep
+	AWSCost            func(context.Context, resource.Caller, string, string, string) (string, string, error)
 	// Origins are browser origins allowed besides the console's own host,
 	// such as https://console.vws.example.
 	Origins []string
@@ -111,6 +112,7 @@ func New(cfg Config) http.Handler {
 		regionRegistration: cfg.RegionRegistration,
 		regionConnection:   cfg.RegionConnection,
 		accountConnection:  cfg.AccountConnection,
+		awsCost:            cfg.AWSCost,
 	}
 	h.routes(h.mux)
 	return h
@@ -220,6 +222,7 @@ type handler struct {
 	regionRegistration func(context.Context, string, json.RawMessage) error
 	regionConnection   func(context.Context, store.Region, string) []resource.ConnectionStep
 	accountConnection  func(context.Context, resource.AWSConnectionRequest, string) []resource.ConnectionStep
+	awsCost            func(context.Context, resource.Caller, string, string, string) (string, string, error)
 }
 
 func (h *handler) mutation(action resource.Action) (string, string, http.HandlerFunc) {
