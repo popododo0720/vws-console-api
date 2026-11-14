@@ -3,11 +3,11 @@ package iamquery
 import "github.com/popododo0720/vws-console-api/internal/iam"
 
 type userXML struct {
-	Path       string `xml:"Path,omitempty"`
-	UserName   string `xml:"UserName,omitempty"`
-	UserID     string `xml:"UserId"`
-	Arn        string `xml:"Arn"`
-	CreateDate string `xml:"CreateDate,omitempty"`
+	Path       string `xml:"Path,omitempty" json:"path,omitempty"`
+	UserName   string `xml:"UserName,omitempty" json:"userName,omitempty"`
+	UserID     string `xml:"UserId" json:"userId"`
+	Arn        string `xml:"Arn" json:"arn"`
+	CreateDate string `xml:"CreateDate,omitempty" json:"createDate,omitempty"`
 }
 
 func toUser(u iam.User) userXML {
@@ -163,9 +163,9 @@ type credentialsXML struct {
 }
 
 type loginProfileXML struct {
-	UserName              string `xml:"UserName"`
-	CreateDate            string `xml:"CreateDate"`
-	PasswordResetRequired bool   `xml:"PasswordResetRequired"`
+	UserName              string `xml:"UserName" json:"userName"`
+	CreateDate            string `xml:"CreateDate" json:"createDate"`
+	PasswordResetRequired bool   `xml:"PasswordResetRequired" json:"passwordResetRequired"`
 }
 
 func toLoginProfile(p iam.LoginProfile) loginProfileXML {

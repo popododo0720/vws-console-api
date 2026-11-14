@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/netip"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/popododo0720/vws-lib/obs"
@@ -21,6 +22,7 @@ import (
 	"github.com/popododo0720/vws-console-api/internal/iam"
 	"github.com/popododo0720/vws-console-api/internal/resource"
 	"github.com/popododo0720/vws-console-api/internal/server"
+	"github.com/popododo0720/vws-console-api/internal/surface/iamquery"
 	"github.com/popododo0720/vws-console-api/internal/throttle"
 )
 
@@ -51,6 +53,7 @@ type Config struct {
 	Region       string
 	Auth         Authenticator
 	IAM          iam.Client
+	Admin        iam.Directory
 	Registry     *store.Registry
 	AdminKey     *secret.Key
 	Audit        *audit.Logger
@@ -96,8 +99,9 @@ func New(cfg Config) http.Handler {
 	lim := cfg.LoginLimits.withDefaults()
 	h := &handler{
 		svc: cfg.Service, auth: cfg.Auth, iam: cfg.IAM, log: log, mux: http.NewServeMux(),
-		region:  cfg.Region,
-		origins: cfg.Origins, trusted: cfg.TrustedProxies, now: now,
+		iamRunner: iamquery.NewRunner(iamquery.Config{Admin: cfg.Admin, Authorizer: cfg.IAM}),
+		region:    cfg.Region,
+		origins:   cfg.Origins, trusted: cfg.TrustedProxies, now: now,
 		logins:       newLimiter(lim.IPBurst, lim.IPRefill, lim.MaxKeys),
 		users:        newLimiter(lim.UserBurst, lim.UserRefill, lim.MaxKeys),
 		loginOff:     cfg.LoginDisabled,
@@ -117,7 +121,7 @@ func New(cfg Config) http.Handler {
 }
 
 // ServeHTTP authenticates and authorizes the route before it runs.
-func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) { h.gate(w, r) }
+func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) { h.iamCall(w, r) }
 
 // RoutePattern returns the mux pattern that serves r, such as
 // "GET /api/v1/instances/{id}". Logs and metric labels use it instead of the
@@ -135,6 +139,9 @@ func (h *handler) routes(mux *http.ServeMux) {
 	handle(routeLogin, h.login)
 	handle(routeLogout, h.logout)
 	handle(routeSession, h.session)
+	for pattern := range iamRoutes() {
+		handle(pattern, h.serveIAM)
+	}
 	handle("GET /api/v1/admin/regions", h.adminRegions)
 	handle("GET /api/v1/admin/regions/{name}", h.adminRegion)
 	handle("GET /api/v1/admin/regions/{name}/health", h.adminHealth)
@@ -204,6 +211,8 @@ type handler struct {
 	region       string
 	auth         Authenticator
 	iam          iam.Client
+	iamRunner    *iamquery.Runner
+	iamReplay    iamReplays
 	loginOff     bool
 	log          *slog.Logger
 	mux          *http.ServeMux
@@ -671,6 +680,10 @@ type errorBody struct {
 }
 
 func writeErr(w http.ResponseWriter, r *http.Request, err error) {
+	if strings.HasPrefix(r.URL.Path, "/api/v1/iam/") {
+		writeIAMError(w, r, err)
+		return
+	}
 	e := resource.AsError(err)
 	if statusOf(e.Code) >= http.StatusInternalServerError {
 		server.RecordFailure(w, err)

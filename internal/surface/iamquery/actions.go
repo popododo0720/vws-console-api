@@ -387,9 +387,9 @@ func requireUser(c *exchange) (string, error) {
 }
 
 type usersResult struct {
-	Users       []userXML `xml:"Users>member"`
-	IsTruncated bool      `xml:"IsTruncated"`
-	Marker      string    `xml:"Marker,omitempty"`
+	Users       []userXML `xml:"Users>member" json:"users"`
+	IsTruncated bool      `xml:"IsTruncated" json:"isTruncated"`
+	Marker      string    `xml:"Marker,omitempty" json:"marker,omitempty"`
 }
 
 type groupsResult struct {
@@ -467,14 +467,14 @@ func iamActions() map[string]spec {
 			}
 			u, err := h.cfg.Admin.CreateUser(c.r.Context(), c.caller.Account, c.form("UserName"), c.form("Path"))
 			return struct {
-				User userXML `xml:"User"`
+				User userXML `xml:"User" json:"user"`
 			}{toUser(u)}, err
 		}),
 		"GetUser": admin([]string{"UserName"}, userARN, func(h *handler, c *exchange) (any, error) {
 			name := userName(c)
 			if name == "" { // the root user asking about itself
 				return struct {
-					User userXML `xml:"User"`
+					User userXML `xml:"User" json:"user"`
 				}{userXML{UserID: c.caller.Account.String(), Arn: iam.AWSPartition(c.caller.Principal)}}, nil
 			}
 			// The lookup is read again for the response; a user that moved
@@ -484,7 +484,7 @@ func iamActions() map[string]spec {
 				return nil, err
 			}
 			return struct {
-				User userXML `xml:"User"`
+				User userXML `xml:"User" json:"user"`
 			}{toUser(u)}, nil
 		}),
 		"ListUsers": lister(nil, func(h *handler, c *exchange) (any, error) {
@@ -527,7 +527,7 @@ func iamActions() map[string]spec {
 			p, err := h.cfg.Admin.CreateLoginProfile(
 				c.r.Context(), c.caller.Account, c.form("UserName"), c.form("Password"), reset, c.authorized)
 			return struct {
-				LoginProfile loginProfileXML `xml:"LoginProfile"`
+				LoginProfile loginProfileXML `xml:"LoginProfile" json:"loginProfile"`
 			}{toLoginProfile(p)}, err
 		}),
 		"GetLoginProfile": admin([]string{"UserName"}, userARN, func(h *handler, c *exchange) (any, error) {
@@ -536,7 +536,7 @@ func iamActions() map[string]spec {
 			}
 			p, err := h.cfg.Admin.GetLoginProfile(c.r.Context(), c.caller.Account, c.form("UserName"), c.authorized)
 			return struct {
-				LoginProfile loginProfileXML `xml:"LoginProfile"`
+				LoginProfile loginProfileXML `xml:"LoginProfile" json:"loginProfile"`
 			}{toLoginProfile(p)}, err
 		}),
 		"UpdateLoginProfile": admin([]string{"UserName", "Password", "PasswordResetRequired"}, userARN, func(h *handler, c *exchange) (any, error) {

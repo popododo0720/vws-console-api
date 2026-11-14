@@ -7,6 +7,7 @@ import (
 
 	"github.com/popododo0720/vws-console-api/internal/iam"
 	"github.com/popododo0720/vws-console-api/internal/resource"
+	"github.com/popododo0720/vws-console-api/internal/surface/iamquery"
 )
 
 // authorization is what one route is authorized as: an IAM action and the
@@ -32,6 +33,15 @@ func s3Object(action string) authorization {
 // S3 action and ARN that the S3 API uses. The auth routes are authenticated
 // but not authorized, like sts:GetCallerIdentity.
 func routeAction(pattern string) (authorization, bool) {
+	if action, ok := iamRoutes()[pattern]; ok {
+		return func(r *http.Request) (string, string) {
+			arn := ""
+			if op, ok := r.Context().Value(iamOperationKey{}).(*iamquery.Operation); ok {
+				arn = op.ARN()
+			}
+			return "iam:" + action, arn
+		}, true
+	}
 	for _, a := range resource.Actions() {
 		if m, p, _ := (&handler{}).mutation(a); m+" "+p == pattern && p != "/api/v1/unsupported" {
 			return ec2(a.String()), true
@@ -170,7 +180,7 @@ func (h *handler) gate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if !isAdmin && pattern != routeSession && pattern != routeLogout {
+	if !isAdmin && !strings.HasPrefix(r.URL.Path, "/api/v1/iam/") && pattern != routeSession && pattern != routeLogout {
 		if c.Region == "" {
 			c.Region = h.region
 		}
@@ -211,10 +221,14 @@ func (h *handler) gate(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, r, err)
 			return
 		}
-		if err := iam.Check(r.Context(), h.iam, c, action, arn); err != nil {
-			h.svc.AuditDenied(r.Context(), c, action, err)
-			writeErr(w, r, err)
-			return
+		// IAM resolves and authorizes the ARN after the mux binds path
+		// parameters and the handler parses the body.
+		if !strings.HasPrefix(action, "iam:") {
+			if err := iam.Check(r.Context(), h.iam, c, action, arn); err != nil {
+				h.svc.AuditDenied(r.Context(), c, action, err)
+				writeErr(w, r, err)
+				return
+			}
 		}
 	}
 	h.mux.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), callerKey{}, c)))

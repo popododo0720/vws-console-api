@@ -336,6 +336,7 @@ func run(ctx context.Context, args []string) (err error) {
 			RegionPool:     pool,
 			Auth:           console.BearerTokens{*consoleToken: caller},
 			IAM:            auth,
+			Admin:          admin,
 			Logger:         logger,
 			Origins:        splitList(*consoleOrigins),
 			TrustedProxies: trusted,
