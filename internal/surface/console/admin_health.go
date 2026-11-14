@@ -47,6 +47,9 @@ func (h *handler) adminHealth(w http.ResponseWriter, r *http.Request) {
 	state := "ok"
 	if err != nil {
 		state = "unreachable"
+		if resource.CodeOf(err) == resource.CodeUnavailable {
+			state = "degraded"
+		}
 		message := h.regionFailure(r.Context(), err)
 		status = resource.RegionStatus{
 			Nodes:     []resource.RegionNode{},

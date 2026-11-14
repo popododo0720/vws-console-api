@@ -16,6 +16,7 @@ import (
 	"github.com/popododo0720/vws-console-api/internal/backend/proxmox/pveclient/pvefake"
 	"github.com/popododo0720/vws-console-api/internal/cloud"
 	"github.com/popododo0720/vws-console-api/internal/resource"
+	"github.com/popododo0720/vws-console-api/internal/surface/regionapi"
 )
 
 func TestClusterMetadataFollowsLeaseAndQuorum(t *testing.T) {
@@ -121,22 +122,39 @@ func TestClusterVersionFailureKeepsCapabilities(t *testing.T) {
 }
 
 func TestAdminHealthRegisteredButNotReady(t *testing.T) {
-	config := daemonCertificates(t, t.TempDir())
-	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		http.Error(w, "region not ready", http.StatusServiceUnavailable)
-	}))
-	srv.TLS = config.Clone()
-	srv.TLS.ClientAuth, srv.TLS.ClientCAs = tls.RequireAndVerifyClientCert, config.RootCAs
-	srv.StartTLS()
-	defer srv.Close()
-	admin, counting := healthConsole(t, srv.URL, config)
-	rec := healthRequest(t.Context(), admin, "pve-test-1", "root")
-	var status resource.RegionStatus
-	if err := json.Unmarshal(rec.Body.Bytes(), &status); err != nil {
-		t.Fatal(err)
-	}
-	if rec.Code != http.StatusOK || status.LastError == nil || status.LastError.Message != "not ready" ||
-		counting.writes != 0 {
-		t.Fatalf("readiness health: %d %s; writes=%d", rec.Code, rec.Body, counting.writes)
+	for _, reason := range []string{"", "not ready", `pool "vws-default": missing Pool.Audit`} {
+		t.Run(reason, func(t *testing.T) {
+			config := daemonCertificates(t, t.TempDir())
+			srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				if reason == "" {
+					http.Error(w, "region not ready", http.StatusServiceUnavailable)
+					return
+				}
+				regionapi.WriteNotReady(w, &resource.Error{Code: resource.CodeUnavailable, Message: reason})
+			}))
+			srv.TLS = config.Clone()
+			srv.TLS.ClientAuth, srv.TLS.ClientCAs = tls.RequireAndVerifyClientCert, config.RootCAs
+			srv.StartTLS()
+			defer srv.Close()
+			admin, counting := healthConsole(t, srv.URL, config)
+			wantReason := reason
+			if wantReason == "" {
+				wantReason = "not ready"
+			}
+			for range 2 {
+				rec := healthRequest(t.Context(), admin, "pve-test-1", "root")
+				var status struct {
+					resource.RegionStatus
+					Status string `json:"status"`
+				}
+				if err := json.Unmarshal(rec.Body.Bytes(), &status); err != nil {
+					t.Fatal(err)
+				}
+				if rec.Code != http.StatusOK || status.Status != "degraded" ||
+					status.LastError == nil || status.LastError.Message != wantReason || counting.writes != 0 {
+					t.Fatalf("readiness health: %d %s; writes=%d", rec.Code, rec.Body, counting.writes)
+				}
+			}
+		})
 	}
 }
