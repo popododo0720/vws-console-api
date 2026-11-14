@@ -48,6 +48,19 @@ Enforced by `TestSDNVPCLifecycle`, `TestSDNInventoryAndBoundaries`,
 `TestStartupSDNScope`, `TestSDNCapabilities`, `TestCheckVPCCIDR`,
 `TestCheckSubnetCIDR` and `TestEC2QueryProxmoxRegionalLifecycle`.
 
+A Proxmox region may register a second write-only token for security group
+writes: `firewallTokenId` and `firewallTokenSecret` in the admin API,
+`firewallTokenId` and `firewallToken` to the daemon. PVE checks every cluster
+firewall group write as Sys.Modify on /, so this token holds exactly
+Sys.Modify and Sys.Audit on / and nothing else; the self-check refuses any
+other privilege and any firewall token on a read_only region, and still
+refuses Sys.Modify on the main token. Its sealed file is keyed by its own
+fingerprint. An omitted secret reuses the stored token only for the same token
+id, a removed token's file is cleaned up, and the helper never deletes either
+live token. Enforced by `TestFirewallTokenScope`,
+`TestFirewallTokenRegistration`, `TestAdminRegionFirewallToken` and
+`TestStartupMutationTokenScope`.
+
 Configured Proxmox subnets with mode `static` or an empty mode allocate the
 lowest free IPv4 address in the inclusive `ip_range`, or the usable CIDR
 hosts excluding the gateway. Every allocation reads every QEMU VM's live

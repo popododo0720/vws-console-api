@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -280,5 +281,54 @@ func TestAdminRegionSelfCheckLastError(t *testing.T) {
 	retry := regionCall(t, e, "PATCH", map[string]any{}, `"`+fmt.Sprint(v.Version)+`"`, 200)
 	if strings.Contains(retry.Body.String()+app.String()+auditLog.String(), validRegion()["tokenSecret"].(string)) {
 		t.Fatal("unclassified upstream message exposed the token")
+	}
+}
+
+func TestAdminRegionFirewallToken(t *testing.T) {
+	e, g, _, auditLog := accountFixture(t)
+	h := e.h.(*handler)
+	var pushed map[string]any
+	var pushErr error
+	h.regionRegistration = func(_ context.Context, _ string, data json.RawMessage) error {
+		pushed = nil
+		if err := json.Unmarshal(data, &pushed); err != nil {
+			t.Fatal(err)
+		}
+		return pushErr
+	}
+	const secret = "distinctive-firewall-canary-799"
+	for field, change := range map[string]map[string]any{
+		"firewallTokenSecret": {"firewallTokenSecret": secret},
+		"firewallTokenId":     {"firewallTokenId": "vws@pve!inventory", "firewallTokenSecret": secret},
+	} {
+		body := validRegion()
+		maps.Copy(body, change)
+		if rec := regionCall(t, e, "POST", body, "", 400); !strings.Contains(rec.Body.String(), `"field":"`+field+`"`) {
+			t.Fatalf("invalid %s accepted: %s", field, rec.Body)
+		}
+	}
+	body := validRegion()
+	body["firewallTokenId"], body["firewallTokenSecret"] = "vws@pve!firewall", secret
+	post := regionCall(t, e, "POST", body, "", 201)
+	if pushed["firewallTokenId"] != "vws@pve!firewall" || pushed["firewallToken"] != secret ||
+		strings.Contains(post.Body.String(), secret) ||
+		!strings.Contains(post.Body.String(), `"firewallTokenSecret":{"set":true`) {
+		t.Fatalf("pushed=%v response=%s", pushed, post.Body)
+	}
+	patch := regionCall(t, e, "PATCH", map[string]any{}, post.Header().Get("ETag"), 200)
+	if _, sent := pushed["firewallToken"]; sent || pushed["firewallTokenId"] != "vws@pve!firewall" {
+		t.Fatalf("omitted firewall secret pushed=%v", pushed)
+	}
+	pushErr = resource.Invalid("firewallToken", "required")
+	retry := regionCall(t, e, "PATCH", map[string]any{}, patch.Header().Get("ETag"), 400)
+	if !strings.Contains(retry.Body.String(), `"field":"firewallTokenSecret"`) {
+		t.Fatalf("daemon refusal did not name firewallTokenSecret: %s", retry.Body)
+	}
+	pushErr = nil
+	regionCall(t, e, "PATCH", map[string]any{"firewallTokenId": ""}, retry.Header().Get("ETag"), 200)
+	v, err := g.Regions().Get(t.Context(), "pve-test-1")
+	if _, sent := pushed["firewallTokenId"]; sent || err != nil || v.FirewallTokenSecret.Set ||
+		strings.Contains(auditLog.String(), secret) {
+		t.Fatalf("removed firewall token: pushed=%v region=%+v err=%v", pushed, v, err)
 	}
 }

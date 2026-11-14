@@ -16,6 +16,7 @@ type Backend struct {
 	region          string
 	cluster         string
 	client          *pveclient.Client
+	firewall        *pveclient.Client // only security group writes; nil without a firewall token
 	leader          atomic.Pointer[Leader]
 	cfg             RegionConfig
 	zones           []backend.Zone

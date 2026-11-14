@@ -63,6 +63,10 @@ type Region struct {
 	Zones          []Zone         `json:"zones"`
 	Version        Version        `json:"-"`
 
+	// FirewallTokenID is the optional token used only for security group writes.
+	FirewallTokenID     string         `json:"firewallTokenId,omitempty"`
+	FirewallTokenSecret SecretMetadata `json:"firewallTokenSecret"`
+
 	LastError *resource.RegionStatusError `json:"lastError,omitempty"`
 }
 

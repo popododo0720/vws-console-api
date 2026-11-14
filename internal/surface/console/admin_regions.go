@@ -25,6 +25,9 @@ type regionInput struct {
 	TokenSecret    *string       `json:"tokenSecret"`
 	RegionEndpoint *string       `json:"regionEndpoint"`
 	Zones          *[]store.Zone `json:"zones"`
+
+	FirewallTokenID     *string `json:"firewallTokenId"`
+	FirewallTokenSecret *string `json:"firewallTokenSecret"`
 }
 
 func (h *handler) listRegions(w http.ResponseWriter, r *http.Request) {
@@ -128,6 +131,7 @@ func (h *handler) adminWriteRegion(w http.ResponseWriter, r *http.Request) {
 		{in.CAPEM, &v.CAPEM},
 		{in.TokenID, &v.TokenID},
 		{in.RegionEndpoint, &v.RegionEndpoint},
+		{in.FirewallTokenID, &v.FirewallTokenID},
 	} {
 		if field.from != nil {
 			*field.to = *field.from
@@ -137,6 +141,10 @@ func (h *handler) adminWriteRegion(w http.ResponseWriter, r *http.Request) {
 		v.Zones = *in.Zones
 	}
 	if err := validateRegion(v, in.TokenSecret, r.Method == http.MethodPost); err != nil {
+		writeErr(w, r, err)
+		return
+	}
+	if err := validateFirewallToken(v, in.FirewallTokenSecret); err != nil {
 		writeErr(w, r, err)
 		return
 	}
@@ -152,6 +160,12 @@ func (h *handler) adminWriteRegion(w http.ResponseWriter, r *http.Request) {
 	}
 	if in.TokenSecret != nil {
 		v.TokenSecret = store.DescribeSecret(*in.TokenSecret)
+	}
+	if in.FirewallTokenSecret != nil {
+		v.FirewallTokenSecret = store.DescribeSecret(*in.FirewallTokenSecret)
+	}
+	if v.FirewallTokenID == "" {
+		v.FirewallTokenSecret = store.SecretMetadata{}
 	}
 	claimed := oldCluster != v.ClusterName
 	if claimed {
@@ -189,7 +203,7 @@ func (h *handler) adminWriteRegion(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	pushErr := h.pushRegion(r.Context(), v, in.TokenSecret)
+	pushErr := h.pushRegion(r.Context(), v, in.TokenSecret, in.FirewallTokenSecret)
 	v.LastError = nil
 	if pushErr != nil {
 		message := resource.RegistrationFailureMessage(pushErr)
@@ -204,22 +218,30 @@ func (h *handler) adminWriteRegion(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("ETag", strconv.Quote(strconv.FormatInt(int64(v.Version), 10)))
-	if e := resource.AsError(pushErr); pushErr != nil && e.Code == resource.CodeInvalidArgument && e.Field == "token" {
-		writeErr(w, r, resource.Invalid("tokenSecret", "resubmit token for an unregistered or invalid region credential"))
-		return
+	if e := resource.AsError(pushErr); pushErr != nil && e.Code == resource.CodeInvalidArgument {
+		switch e.Field {
+		case "token":
+			writeErr(w, r, resource.Invalid("tokenSecret", "resubmit token for an unregistered or invalid region credential"))
+			return
+		case "firewallToken":
+			writeErr(w, r, resource.Invalid("firewallTokenSecret", "resubmit the firewall token for a new credential"))
+			return
+		}
 	}
 	writeJSON(w, status, v)
 }
 
-func (h *handler) pushRegion(ctx context.Context, v store.Region, token *string) error {
+func (h *handler) pushRegion(ctx context.Context, v store.Region, token, firewallToken *string) error {
 	data, err := json.Marshal(struct {
 		Region string `json:"region"`
 		//nolint:tagliatelle // The daemon registration protocol names cluster_name.
-		ClusterName string       `json:"cluster_name"`
-		TokenID     string       `json:"tokenId"`
-		Token       *string      `json:"token,omitempty"`
-		Zones       []store.Zone `json:"zones"`
-	}{v.Name, v.ClusterName, v.TokenID, token, v.Zones})
+		ClusterName     string       `json:"cluster_name"`
+		TokenID         string       `json:"tokenId"`
+		Token           *string      `json:"token,omitempty"`
+		Zones           []store.Zone `json:"zones"`
+		FirewallTokenID string       `json:"firewallTokenId,omitempty"`
+		FirewallToken   *string      `json:"firewallToken,omitempty"`
+	}{v.Name, v.ClusterName, v.TokenID, token, v.Zones, v.FirewallTokenID, firewallToken})
 	if err != nil {
 		return fmt.Errorf("encode registration: %w", err)
 	}
@@ -233,6 +255,19 @@ func (h *handler) pushRegion(ctx context.Context, v store.Region, token *string)
 
 func validRegionName(name string) bool {
 	return len(name) <= 63 && regexp.MustCompile(`^pve-[a-z0-9]+(-[a-z0-9]+)*-[0-9]+$`).MatchString(name)
+}
+
+// validateFirewallToken checks the optional security group token; the daemon
+// refuses a new firewall token id without its secret.
+func validateFirewallToken(v store.Region, token *string) error {
+	tokenID := regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}@[A-Za-z0-9._-]{1,32}![A-Za-z][A-Za-z0-9._-]{0,63}$`)
+	if v.FirewallTokenID != "" && (!tokenID.MatchString(v.FirewallTokenID) || v.FirewallTokenID == v.TokenID) {
+		return resource.Invalid("firewallTokenId", "expected a second user@realm!token")
+	}
+	if token != nil && (v.FirewallTokenID == "" || !regexp.MustCompile(`^[A-Za-z0-9._-]{1,512}$`).MatchString(*token)) {
+		return resource.Invalid("firewallTokenSecret", "expected 1-512 token characters with a firewallTokenId")
+	}
+	return nil
 }
 
 func validateRegion(v store.Region, token *string, create bool) error {

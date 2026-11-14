@@ -47,7 +47,8 @@ migration: re-register the region with its token (a PUT that includes
 restart.
 `PUT /internal/v1/registration` requires the global client's mTLS certificate.
 Its JSON fields are `region`, `cluster_name`, `zones` (letter and node groups),
-`tokenId` (`user@realm!name`) and `token` (write-only).
+`tokenId` (`user@realm!name`) and `token` (write-only), plus the optional
+`firewallTokenId` and write-only `firewallToken` of the security group token.
 See [registration rules](rules.md) for size limits, reloads and recovery.
 No credential value belongs in region.yaml, command arguments or the
 environment. Snapshot decoder errors never echo submitted values.
@@ -56,6 +57,10 @@ Optional `sdn_zone` in region.yaml selects an existing PVE SDN zone for
 VPC writes when `read_only` is false. Grant SDN.Allocate on that zone and
 on /sdn without propagation; startup probes foreign zones and refuses
 inherited allocation. Without the key VPC writes are UnsupportedOperation.
+
+Security group writes need the firewall token, for example `vws@pve!firewall`
+with a role holding only Sys.Modify and Sys.Audit on /. Without it they are
+UnsupportedOperation; the region token never receives Sys.Modify.
 
 ## Privileged helper
 
