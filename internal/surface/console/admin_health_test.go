@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -66,6 +67,19 @@ func TestAdminHealthFailureMessagesAreSafe(t *testing.T) {
 			strings.Contains(rec.Body.String(), endpoint) || strings.Contains(rec.Body.String(), certPath) ||
 			strings.Contains(rec.Body.String(), keyPath) {
 			t.Fatalf("unsafe or missing health failure: %d %s", rec.Code, rec.Body)
+		}
+		var result struct {
+			Status string `json:"status"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &result); err != nil {
+			t.Fatal(err)
+		}
+		wantState := "unreachable"
+		if resource.CodeOf(tc.err) == resource.CodeUnavailable {
+			wantState = "degraded"
+		}
+		if result.Status != wantState {
+			t.Fatalf("health state: got %q, want %q for %v", result.Status, wantState, tc.err)
 		}
 	}
 	if !strings.Contains(logs.String(), "credential file missing") ||
