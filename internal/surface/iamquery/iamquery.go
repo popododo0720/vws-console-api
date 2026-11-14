@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
-	"slices"
 	"strings"
 	"time"
 
@@ -40,7 +39,7 @@ type Config struct {
 
 // New returns the handler.
 func New(cfg Config) http.Handler {
-	h := &handler{cfg: cfg, actions: actionTable()}
+	h := NewRunner(cfg).h
 	return http.HandlerFunc(h.serve)
 }
 
@@ -95,72 +94,12 @@ func (h *handler) serve(w http.ResponseWriter, r *http.Request) {
 		c.fail(resource.Unauthenticated("The security token included in the request is invalid."))
 		return
 	}
-	if err := r.ParseForm(); err != nil {
-		c.fail(resource.Invalid("body", "malformed form"))
+	op, err := h.prepare(r.Context(), c)
+	if err != nil {
+		c.fail(err)
 		return
 	}
-	for k, vs := range r.Form {
-		if len(vs) > 1 {
-			c.fail(resource.Invalid(k, "repeated"))
-			return
-		}
-	}
-	for _, k := range [...]string{"PolicyArn", "RoleArn", "SerialNumber"} {
-		if vs := r.Form[k]; len(vs) == 1 {
-			vs[0] = iam.VWSPartition(vs[0])
-		}
-	}
-	for _, k := range [...]string{"PolicyDocument", "AssumeRolePolicyDocument"} {
-		if arn, ok := awsARNIn(r.Form.Get(k)); ok {
-			c.fail(resource.Invalid("PolicyDocument", `Partition "aws" is not valid for resource "`+arn+
-				`": policies are evaluated in the vws partition (#681).`))
-			return
-		}
-	}
-	want := IAMVersion
-	if c.service == sigv4.ServiceSTS {
-		want = STSVersion
-	}
-	if r.Form.Get("Version") != want {
-		c.fail(resource.Invalid("Version", "unsupported API version"))
-		return
-	}
-	c.action = r.Form.Get("Action")
-	spec, ok := h.actions[c.service][c.action]
-	if !ok || (h.cfg.Admin == nil && spec.needsAdmin) {
-		c.fail(resource.Unimplemented("Could not find operation " + c.action))
-		return
-	}
-	for k := range r.Form {
-		if k == "Action" || k == "Version" || spec.allows(k) {
-			continue
-		}
-		c.fail(resource.Invalid(k, "Parameter "+k+" is not supported"))
-		return
-	}
-	if slices.Contains(spec.params, "UserName") {
-		if err := validateUserName(c); err != nil {
-			c.fail(err)
-			return
-		}
-	}
-	arn := "*"
-	if spec.resource != nil {
-		arn = spec.resource(h, c)
-		if c.resourceErr != nil {
-			c.fail(c.resourceErr)
-			return
-		}
-	}
-	if !spec.public {
-		authorized, err := iam.Authorize(r.Context(), h.cfg.Authorizer, c.caller, string(c.service)+":"+c.action, arn)
-		if err != nil {
-			c.fail(err)
-			return
-		}
-		c.authorized = authorized
-	}
-	result, err := spec.run(h, c)
+	result, err := op.Run()
 	if err != nil {
 		c.fail(err)
 		return
