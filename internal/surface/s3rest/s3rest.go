@@ -28,8 +28,9 @@ type Config struct {
 	Verifier *sigv4.Verifier
 }
 
-// New returns the object handler. It verifies the signature, then answers
-// 501 NotImplemented in S3's error shape without reading the body.
+// New returns the object handler. It verifies the signature, which reads the
+// body to check its payload hash, then answers 501 NotImplemented in S3's
+// error shape.
 func New(cfg Config) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if cfg.Verifier == nil {
