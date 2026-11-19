@@ -38,7 +38,7 @@ func TestInventoryStaleHeaderAndPartialSurviveTransport(t *testing.T) {
 			&resource.Page[resource.Snapshot]{}, &resource.Page[resource.Vpc]{},
 			&resource.Page[resource.Subnet]{}, &resource.Page[resource.SecurityGroup]{},
 			&resource.Page[resource.Address]{}, &resource.Page[resource.KeyPair]{},
-			&resource.Page[resource.Image]{}, &resource.Page[resource.Bucket]{},
+			&resource.Page[resource.Image]{},
 		}
 		for _, header := range []string{"true", "", "false", "TRUE", "token-canary"} {
 			scope := testScope(t)

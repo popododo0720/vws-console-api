@@ -125,9 +125,8 @@ func checkVolumeSize(t VolumeType, sizeGiB int64) error {
 // for the other types. A new size or type is checked against the target
 // type's size range, and a new type or performance like a new volume
 // (CheckVolumeShape), so a retype to io1 under 60 GiB is refused, as EC2
-// refuses it. A size-only grow keeps the stored performance unchecked, as
-// vws-storage does (vws-storage#87), so a volume stored before the
-// performance rules still grows. A volume never shrinks.
+// refuses it. A size-only grow keeps the stored performance unchecked, so a
+// volume stored before the performance rules still grows. A volume never shrinks.
 //
 // A volume stored above its type's maximum (#427: a standard volume grown
 // past 1,024 GiB under the old flat 16,384 GiB cap) has no target size at or

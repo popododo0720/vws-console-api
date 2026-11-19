@@ -23,7 +23,8 @@ func TestAdminAuditFileIsSeparate(t *testing.T) {
 	t.Cleanup(func() { slog.SetDefault(previous) })
 	t.Cleanup(func() {
 		data, err := os.ReadFile(path)
-		const warning = `"level":"WARN","msg":"in-memory admin registry: registrations are lost on restart"`
+		const warning = `"level":"WARN",` +
+			`"msg":"in-memory admin registry: registrations are lost on restart; not recommended for production"`
 		if err != nil || strings.Count(string(data), `"action":"AdminRegisterAwsAccount"`) != 1 ||
 			!strings.Contains(app.String(), warning) ||
 			strings.Contains(app.String(), "AdminRegisterAwsAccount") {

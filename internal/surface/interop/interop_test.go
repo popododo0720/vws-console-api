@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/popododo0720/vws-console-api/internal/backend"
-	"github.com/popododo0720/vws-console-api/internal/backend/backendtest"
 	"github.com/popododo0720/vws-console-api/internal/backend/fake"
 	"github.com/popododo0720/vws-console-api/internal/cloud"
 	"github.com/popododo0720/vws-console-api/internal/iam"
@@ -326,46 +325,6 @@ func xmlText(t *testing.T, body, tag string) string {
 	return body[start+len(open) : end]
 }
 
-func TestS3ObjectRoundTrip(t *testing.T) {
-	now := time.Date(2026, 10, 9, 10, 0, 0, 0, time.UTC)
-	account := mustParse[resource.AccountID](t, "123456789012")
-	world := fake.New(fake.Options{Now: func() time.Time { return now }})
-	svc := cloud.New(cloud.Config{Backends: world.Set()})
-	cred := sigv4.Credential{AccessKey: "AKIDEXAMPLE", Secret: "secret", Account: account}
-	s3 := s3rest.New(s3rest.Config{Service: svc, Authorizer: iam.NewStatic(cred.AccessKey, cred.Secret, cred.Account), Verifier: verifier(cred, sigv4.ServiceS3, now)})
-
-	bucket := "build-logs.example.com"
-	bucketRes := serveSigned(t, s3, cred, sigv4.ServiceS3, now, http.MethodPut, "http://127.0.0.1:8082/"+bucket, "")
-	if bucketRes.Code != http.StatusOK {
-		t.Fatalf("bucket %d %s", bucketRes.Code, bucketRes.Body)
-	}
-	putRes := serveSigned(t, s3, cred, sigv4.ServiceS3, now, http.MethodPut,
-		"http://127.0.0.1:8082/"+bucket+"/a.txt", "hello")
-	if putRes.Code != http.StatusOK {
-		t.Fatalf("put %d %s", putRes.Code, putRes.Body)
-	}
-	getRes := serveSigned(t, s3, cred, sigv4.ServiceS3, now, http.MethodGet, "http://127.0.0.1:8082/"+bucket+"/a.txt", "")
-	if getRes.Code != http.StatusOK || getRes.Body.String() != "hello" {
-		t.Fatalf("get %d %s", getRes.Code, getRes.Body)
-	}
-
-	ui := console.New(console.Config{
-		Service: svc,
-		IAM:     iam.NewStatic("AKIDEXAMPLE", "secret", account),
-		Auth:    console.BearerTokens{"tok-console": {Account: account, Subject: "console", Principal: iam.RootARN(account), Root: true}},
-	})
-	listed := call(t, ui, http.MethodGet, "/api/v1/buckets", "", map[string]string{"Authorization": "Bearer tok-console"})
-	if listed.Code != http.StatusOK || !strings.Contains(listed.Body.String(), bucket) {
-		t.Fatalf("console list %d %s", listed.Code, listed.Body)
-	}
-	object := call(t, ui, http.MethodGet, "/api/v1/buckets/"+bucket+"/objects/a.txt", "", map[string]string{
-		"Authorization": "Bearer tok-console",
-	})
-	if object.Code != http.StatusOK || !strings.Contains(object.Body.String(), "aGVsbG8=") {
-		t.Fatalf("console object %d %s", object.Code, object.Body)
-	}
-}
-
 func TestMissingResourceStatusIsPerSurface(t *testing.T) {
 	now := time.Date(2026, 10, 9, 10, 0, 0, 0, time.UTC)
 	account := mustParse[resource.AccountID](t, "123456789012")
@@ -385,11 +344,7 @@ func TestMissingResourceStatusIsPerSurface(t *testing.T) {
 		Authorizer: iam.NewStatic(cred.AccessKey, cred.Secret, account),
 		Verifier:   verifier(cred, sigv4.ServiceEC2, now),
 	})
-	objects := s3rest.New(s3rest.Config{
-		Service:    svc,
-		Authorizer: iam.NewStatic(cred.AccessKey, cred.Secret, account),
-		Verifier:   verifier(cred, sigv4.ServiceS3, now),
-	})
+	objects := s3rest.New(s3rest.Config{Verifier: verifier(cred, sigv4.ServiceS3, now)})
 	directory := iam.NewFake()
 	directory.Now = func() time.Time { return now }
 	identity := iamquery.New(iamquery.Config{
@@ -413,18 +368,11 @@ func TestMissingResourceStatusIsPerSurface(t *testing.T) {
 		t.Fatalf("ec2 %d %s", ami.Code, ami.Body)
 	}
 
+	// VWS hosts no buckets, so S3 has no missing resource to name: every
+	// signed request outside an AWS region is NotImplemented.
 	bucket := serveSigned(t, objects, cred, sigv4.ServiceS3, now, http.MethodGet, "http://127.0.0.1:8082/missing-logs", "")
-	if bucket.Code != http.StatusNotFound || !strings.Contains(bucket.Body.String(), "<Code>NoSuchBucket</Code>") {
+	if bucket.Code != http.StatusNotImplemented || !strings.Contains(bucket.Body.String(), "<Code>NotImplemented</Code>") {
 		t.Fatalf("s3 bucket %d %s", bucket.Code, bucket.Body)
-	}
-	made := serveSigned(t, objects, cred, sigv4.ServiceS3, now, http.MethodPut, "http://127.0.0.1:8082/build-logs", "")
-	if made.Code != http.StatusOK {
-		t.Fatalf("bucket %d %s", made.Code, made.Body)
-	}
-	keyURL := "http://127.0.0.1:8082/build-logs/missing.txt"
-	key := serveSigned(t, objects, cred, sigv4.ServiceS3, now, http.MethodGet, keyURL, "")
-	if key.Code != http.StatusNotFound || !strings.Contains(key.Body.String(), "<Code>NoSuchKey</Code>") {
-		t.Fatalf("s3 key %d %s", key.Code, key.Body)
 	}
 
 	user := serveSigned(t, identity, cred, sigv4.ServiceIAM, now, http.MethodPost, "http://127.0.0.1:8084/", url.Values{
@@ -484,70 +432,6 @@ func mustParse[T any, PT interface {
 		t.Fatal(err)
 	}
 	return v
-}
-
-// An object a cookie session uploads in the console keeps its Content-Type,
-// and S3 GetObject and HeadObject answer it (#224).
-func TestCookieUploadContentTypeOnS3(t *testing.T) {
-	now := time.Date(2026, 10, 9, 10, 0, 0, 0, time.UTC)
-	account := mustParse[resource.AccountID](t, "123456789012")
-	svc := cloud.New(cloud.Config{Backends: fake.New(fake.Options{Now: func() time.Time { return now }}).Set()})
-	cred := sigv4.Credential{AccessKey: "AKIDEXAMPLE", Secret: "secret", Account: account}
-	root := iam.NewStatic(cred.AccessKey, cred.Secret, account)
-	s3 := s3rest.New(s3rest.Config{Service: svc, Authorizer: root, Verifier: verifier(cred, sigv4.ServiceS3, now)})
-	rec := serveSigned(t, s3, cred, sigv4.ServiceS3, now, http.MethodPut, "http://127.0.0.1:8082/b224", "")
-	if rec.Code != http.StatusOK {
-		t.Fatalf("bucket %d %s", rec.Code, rec.Body)
-	}
-
-	users := iam.NewFake()
-	ctx := t.Context()
-	if _, err := users.CreateUser(ctx, account, "bob", "/"); err != nil {
-		t.Fatal(err)
-	}
-	grant := backendtest.UserGrant(ctx, t, users, account, "bob")
-	if _, err := users.CreateLoginProfile(ctx, account, "bob", "correct horse 1", false, grant); err != nil {
-		t.Fatal(err)
-	}
-	if err := users.PutInlinePolicy(ctx, account, iam.EntityUser, "bob", "put",
-		`{"Statement":[{"Effect":"Allow","Action":"s3:PutObject","Resource":"*"}]}`,
-		backendtest.EntityGrant(ctx, t, users, account, iam.EntityUser, "bob"),
-	); err != nil {
-		t.Fatal(err)
-	}
-	ui := console.New(console.Config{Service: svc, IAM: iam.WithRoot(root, users)})
-	const origin = "http://127.0.0.1:8080"
-	login := httptest.NewRequestWithContext(ctx, http.MethodPost, origin+"/api/v1/auth/login",
-		strings.NewReader(`{"account":"123456789012","userName":"bob","password":"correct horse 1"}`))
-	login.Header.Set("Content-Type", "application/json")
-	login.Header.Set("Origin", origin)
-	signedIn := httptest.NewRecorder()
-	ui.ServeHTTP(signedIn, login)
-	if signedIn.Code != http.StatusOK {
-		t.Fatalf("login %d %s", signedIn.Code, signedIn.Body)
-	}
-	put := httptest.NewRequestWithContext(ctx, http.MethodPut, origin+"/api/v1/buckets/b224/objects/logo.png",
-		strings.NewReader("\x89PNG"))
-	put.Header.Set("Content-Type", "image/png")
-	put.Header.Set("Origin", origin)
-	for _, c := range signedIn.Result().Cookies() {
-		put.AddCookie(c)
-		if c.Name == console.CSRFCookie {
-			put.Header.Set(console.CSRFHeader, c.Value)
-		}
-	}
-	uploaded := httptest.NewRecorder()
-	ui.ServeHTTP(uploaded, put)
-	if uploaded.Code != http.StatusOK {
-		t.Fatalf("cookie upload %d %s", uploaded.Code, uploaded.Body)
-	}
-
-	for _, method := range []string{http.MethodGet, http.MethodHead} {
-		rec := serveSigned(t, s3, cred, sigv4.ServiceS3, now, method, "http://127.0.0.1:8082/b224/logo.png", "")
-		if rec.Code != http.StatusOK || rec.Header().Get("Content-Type") != "image/png" {
-			t.Errorf("%s %d Content-Type %q", method, rec.Code, rec.Header().Get("Content-Type"))
-		}
-	}
 }
 
 // TestConsoleAndQueryDeleteTheSameTags deletes a VPC tag through each surface

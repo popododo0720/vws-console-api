@@ -18,11 +18,6 @@ type network struct {
 	r *router
 }
 
-type storage struct {
-	backend.Storage
-	r *router
-}
-
 func (c compute) DescribeInstances(ctx context.Context, s backend.Scope,
 	q resource.InstanceQuery,
 ) (resource.Page[resource.Instance], error) {
@@ -114,14 +109,4 @@ func (n network) DescribeAddresses(ctx context.Context, s backend.Scope,
 		req.Page = p
 		return req
 	}, "Network", "DescribeAddresses")
-}
-
-func (s storage) ListBuckets(ctx context.Context, scope backend.Scope,
-	q resource.BucketQuery,
-) (resource.Page[resource.Bucket], error) {
-	return list[resource.Bucket](ctx, s.r, scope, q.Page, func(p resource.PageRequest) any {
-		req := q
-		req.Page = p
-		return req
-	}, "Storage", "ListBuckets")
 }

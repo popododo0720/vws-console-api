@@ -76,18 +76,12 @@ func TestFakeProcessSmoke(t *testing.T) {
 		t.Fatalf("AllocateAddress %d %s", code, body)
 	}
 
-	code, body = signedStatus(t, cred, sigv4.ServiceS3, now, http.MethodPut, "http://"+p.s3+"/build-logs", "", "")
-	if code != http.StatusOK {
-		t.Fatalf("bucket %d %s", code, body)
-	}
+	// VWS hosts no buckets: the S3 listener verifies the signature, then
+	// answers NotImplemented for a region that is not an AWS region.
 	code, body = signedStatus(t, cred, sigv4.ServiceS3, now, http.MethodPut,
 		"http://"+p.s3+"/build-logs/a.txt", "hello", "text/plain")
-	if code != http.StatusOK || strings.Contains(body, "object field mask") {
+	if code != http.StatusNotImplemented || !strings.Contains(body, "<Code>NotImplemented</Code>") {
 		t.Fatalf("put %d %s", code, body)
-	}
-	code, body = signedStatus(t, cred, sigv4.ServiceS3, now, http.MethodGet, "http://"+p.s3+"/build-logs/a.txt", "", "")
-	if code != http.StatusOK || body != "hello" {
-		t.Fatalf("get %d %s", code, body)
 	}
 }
 

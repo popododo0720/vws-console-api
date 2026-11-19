@@ -2,7 +2,6 @@ package proxmox
 
 import (
 	"context"
-	"io"
 	"sync"
 	"sync/atomic"
 
@@ -33,7 +32,7 @@ type Backend struct {
 
 // Set returns the services sharing this backend.
 func (b *Backend) Set() backend.Set {
-	return backend.Set{Compute: b, Storage: b, Network: b, Console: b, Usage: b}
+	return backend.Set{Compute: b, Network: b, Console: b, Usage: b}
 }
 
 // RegionCapabilities declares regional action support.
@@ -177,52 +176,6 @@ func (b *Backend) RegisterImage(
 	ctx context.Context, m backend.Mutation, req resource.RegisterImageRequest,
 ) (resource.Accepted[resource.Image], error) {
 	return resource.Accepted[resource.Image]{}, resource.Unsupported("RegisterImage", "read-only")
-}
-
-// CreateBucket is unavailable in the phase-one backend.
-func (b *Backend) CreateBucket(context.Context, backend.Scope, resource.BucketName) (resource.Bucket, error) {
-	return resource.Bucket{}, resource.Unsupported("CreateBucket", "read-only")
-}
-
-// GetBucket reports a missing resource in the empty inventory.
-func (b *Backend) GetBucket(ctx context.Context, s backend.Scope, name resource.BucketName) (resource.Bucket, error) {
-	return resource.Bucket{}, resource.NotFound(resource.KindBucket, name.String())
-}
-
-// ListBuckets answers the phase-one empty inventory.
-func (b *Backend) ListBuckets(
-	ctx context.Context, s backend.Scope, q resource.BucketQuery,
-) (resource.Page[resource.Bucket], error) {
-	return resource.Page[resource.Bucket]{}, nil
-}
-
-// DeleteBucket is unavailable in the phase-one backend.
-func (b *Backend) DeleteBucket(context.Context, backend.Scope, resource.BucketName) error {
-	return resource.Unsupported("DeleteBucket", "read-only")
-}
-
-// PutObject is unavailable in the phase-one backend.
-func (b *Backend) PutObject(
-	ctx context.Context, s backend.Scope, req resource.PutObjectRequest, body io.Reader,
-) (resource.Object, error) {
-	return resource.Object{}, resource.Unsupported("PutObject", "read-only")
-}
-
-// GetObject reports a missing resource in the empty inventory.
-func (b *Backend) GetObject(
-	ctx context.Context, s backend.Scope, req resource.GetObjectRequest,
-) (resource.Object, io.ReadCloser, error) {
-	return resource.Object{}, nil, resource.NotFound(resource.KindObject, req.Key.String())
-}
-
-// DeleteObject is unavailable in the phase-one backend.
-func (b *Backend) DeleteObject(context.Context, backend.Scope, resource.BucketName, resource.ObjectKey) error {
-	return resource.Unsupported("DeleteObject", "read-only")
-}
-
-// ListObjects answers the phase-one empty inventory.
-func (b *Backend) ListObjects(context.Context, backend.Scope, resource.ObjectQuery) (resource.ObjectListing, error) {
-	return resource.ObjectListing{}, nil
 }
 
 // CreateSubnet is unavailable in the phase-one backend.

@@ -1,5 +1,6 @@
-// Package backend is the contract with the internal compute, storage, and
-// network services. The interfaces speak resource types, never protobuf.
+// Package backend is the contract with a region's compute and network
+// backends (Proxmox VE, AWS, or the fake). The interfaces speak resource
+// types, never protobuf.
 //
 // The backend is the source of truth. This process keeps nothing between calls.
 // A method that takes a Mutation returns as soon as the work is accepted.
@@ -13,7 +14,6 @@ package backend
 import (
 	"context"
 	"fmt"
-	"io"
 	"slices"
 	"time"
 
@@ -42,18 +42,15 @@ type Mutation struct {
 }
 
 // ClientTokenWindow is how long a client token is remembered: a retry with
-// the same token and parameters within it returns the original result. It
-// is the vws-compute request_id window (vws-proto operation.proto, "A
-// request_id is remembered for 24 hours"), so a record console-api keeps
-// for a retry, such as a DetachVolume record, never outlives the request id
-// compute would replay. This is the one definition; ClientTokenReplayable
-// bounds a resend by request id inside it (#305).
+// the same token and parameters within it returns the original result. A
+// record a backend keeps for a retry, such as a DetachVolume record, lives
+// this long. This is the one definition (#305).
 const ClientTokenWindow = 24 * time.Hour
 
 // ClientTokenGrace is how much longer than ClientTokenWindow a record is
-// kept. A record's stamp is read from the clock before the compute call that
-// starts compute's window, so the record outlives the request id by at most
-// this, never the other way round (PR #316 review).
+// kept. A record's stamp is read from the clock before the backend write it
+// describes, so the record outlives the window by at most this, never the
+// other way round (PR #316 review).
 const ClientTokenGrace = time.Minute
 
 // ClientTokenExpired reports whether a record stamped at is no longer
@@ -61,16 +58,6 @@ const ClientTokenGrace = time.Minute
 // passed. A stamp ahead of now is clock skew and has not expired.
 func ClientTokenExpired(at, now time.Time) bool {
 	return now.Sub(at) > ClientTokenWindow+ClientTokenGrace
-}
-
-// ClientTokenReplayable reports whether compute still remembers the request
-// id of a record stamped at, so a resend by that request id replays the
-// original request: less than ClientTokenWindow less ClientTokenGrace has
-// passed. The stamp is rounded up to the second and read on console-api's
-// clock, so the grace covers that rounding and clock skew with compute.
-// Past it a resend would be a new request answered as the original (#305).
-func ClientTokenReplayable(at, now time.Time) bool {
-	return now.Sub(at) < ClientTokenWindow-ClientTokenGrace
 }
 
 // MaxDetachReplays is how many DetachVolume requests with a client token
@@ -96,7 +83,7 @@ type Operations interface {
 	GetOperation(ctx context.Context, s Scope, id resource.OperationID) (resource.Operation, error)
 }
 
-// Compute is the internal compute service.
+// Compute is a region's compute backend.
 type Compute interface {
 	Operations
 	RunInstances(ctx context.Context, m Mutation, req resource.RunInstancesRequest) (resource.Accepted[resource.Instance], error)
@@ -140,22 +127,7 @@ type Compute interface {
 	) (resource.Accepted[resource.Image], error)
 }
 
-// Storage is the internal storage service. Bucket and object calls finish
-// before they return, so they take a Scope rather than a Mutation.
-type Storage interface {
-	CreateBucket(ctx context.Context, s Scope, name resource.BucketName) (resource.Bucket, error)
-	GetBucket(ctx context.Context, s Scope, name resource.BucketName) (resource.Bucket, error)
-	ListBuckets(ctx context.Context, s Scope, q resource.BucketQuery) (resource.Page[resource.Bucket], error)
-	DeleteBucket(ctx context.Context, s Scope, name resource.BucketName) error
-	PutObject(ctx context.Context, s Scope, req resource.PutObjectRequest, body io.Reader) (resource.Object, error)
-	GetObject(ctx context.Context, s Scope, req resource.GetObjectRequest) (resource.Object, io.ReadCloser, error)
-	DeleteObject(ctx context.Context, s Scope, bucket resource.BucketName, key resource.ObjectKey) error
-	// ListObjects returns one page of keys. Prefix and delimiter grouping
-	// match resource.PageObjects, including common prefixes.
-	ListObjects(ctx context.Context, s Scope, q resource.ObjectQuery) (resource.ObjectListing, error)
-}
-
-// Network is the internal network service.
+// Network is a region's network backend.
 type Network interface {
 	Operations
 	CreateSubnet(ctx context.Context, m Mutation, req resource.CreateSubnetRequest) (resource.Accepted[resource.Subnet], error)
@@ -191,11 +163,10 @@ type Console interface {
 	) (resource.ConsoleSession, error)
 }
 
-// Set is the services one process talks to. A nil Console means the set
+// Set is the backends one process talks to. A nil Console means the set
 // offers no instance consoles.
 type Set struct {
 	Compute Compute
-	Storage Storage
 	Network Network
 	Console Console
 	Usage   Usage

@@ -2,10 +2,8 @@
 package backendtest
 
 import (
-	"bytes"
 	"context"
 	"errors"
-	"io"
 	"maps"
 	"strings"
 	"testing"
@@ -101,7 +99,6 @@ func Run(t *testing.T, newSet Harness, caps resource.RegionCapabilities, opts ..
 			})
 		stopped = contractLifecycle(ctx, t, set, account, other, img, subnet, caps)
 	})
-	t.Run("Objects", func(t *testing.T) { contractObjects(ctx, t, set, account, other) })
 	t.Run("EC2", func(t *testing.T) {
 		requireCapabilities(t, caps,
 			[]resource.Action{
@@ -496,111 +493,6 @@ func contractLifecycle(
 	}
 
 	return first.Items[0].ID
-}
-
-func contractObjects(ctx context.Context, t *testing.T, set backend.Set, account, other resource.AccountID) {
-	t.Helper()
-	name, err := resource.Parse[resource.BucketName]("build-logs")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := set.Storage.CreateBucket(ctx, backend.Scope{Account: account}, name); err != nil {
-		// Region capabilities describe EC2 only; S3 support is reported by storage.
-		if resource.IsUnsupported(resource.AsError(err)) {
-			t.Skipf("s3:CreateBucket: %v", err)
-		}
-		t.Fatal(err)
-	}
-	if _, err := set.Storage.CreateBucket(ctx, backend.Scope{Account: account}, name); !resource.OwnedByCaller(err) {
-		t.Fatalf("owner creates again: %v", err)
-	}
-	_, err = set.Storage.CreateBucket(ctx, backend.Scope{Account: other}, name)
-	if resource.CodeOf(err) != resource.CodeAlreadyExists || resource.OwnedByCaller(err) {
-		t.Fatalf("bucket owner: %v", err)
-	}
-	key, err := resource.Parse[resource.ObjectKey]("a/b.txt")
-	if err != nil {
-		t.Fatal(err)
-	}
-	body := strings.NewReader("hello")
-	obj, err := set.Storage.PutObject(ctx, backend.Scope{Account: account}, resource.PutObjectRequest{
-		Bucket: name, Key: key, ContentType: "text/plain", Size: 5,
-	}, body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if obj.Size != 5 || obj.OwnerID != account {
-		t.Fatalf("object %+v", obj)
-	}
-	replaced, err := set.Storage.PutObject(ctx, backend.Scope{Account: account}, resource.PutObjectRequest{
-		Bucket: name, Key: key, ContentType: "text/plain", Size: 6,
-	}, strings.NewReader("hello!"))
-	if err != nil || replaced.Size != 6 || replaced.ETag == obj.ETag {
-		t.Fatalf("overwrite: %v %+v", err, replaced)
-	}
-	// If-None-Match: * fails on an existing key, even with the same bytes.
-	for _, again := range []string{"hello!", "other"} {
-		if _, err := set.Storage.PutObject(ctx, backend.Scope{Account: account}, resource.PutObjectRequest{
-			Bucket: name, Key: key, Size: int64(len(again)), IfNoneMatch: true,
-		}, strings.NewReader(again)); resource.CodeOf(err) != resource.CodeAlreadyExists || resource.AsError(err).Kind != resource.KindObject {
-			t.Fatalf("if-none-match %q on an existing key: %v", again, err)
-		}
-	}
-	onceKey, err := resource.Parse[resource.ObjectKey]("once.txt")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if once, err := set.Storage.PutObject(ctx, backend.Scope{Account: account}, resource.PutObjectRequest{
-		Bucket: name, Key: onceKey, Size: 4, IfNoneMatch: true,
-	}, strings.NewReader("once")); err != nil || once.Size != 4 {
-		t.Fatalf("if-none-match on a new key: %v %+v", err, once)
-	}
-	if err := set.Storage.DeleteObject(ctx, backend.Scope{Account: account}, name, onceKey); err != nil {
-		t.Fatal(err)
-	}
-	meta, rc, err := set.Storage.GetObject(ctx, backend.Scope{Account: account}, resource.GetObjectRequest{Bucket: name, Key: key})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() {
-		if err := rc.Close(); err != nil {
-			t.Error(err)
-		}
-	}()
-	if meta.ETag != replaced.ETag || meta.Size != replaced.Size {
-		t.Fatalf("etag %s size %d", meta.ETag, meta.Size)
-	}
-	// sha256("hello!"), the value S3 returns as ChecksumSHA256.
-	const helloBangSHA256 = "ce06092fb948d9ffac7d1a376e404b26b7575bcc11ee05a4615fef4fec3a308b"
-	if replaced.SHA256 != helloBangSHA256 || meta.SHA256 != helloBangSHA256 {
-		t.Fatalf("sha256 put %q get %q, want %s", replaced.SHA256, meta.SHA256, helloBangSHA256)
-	}
-	if got, err := io.ReadAll(rc); err != nil || string(got) != "hello!" {
-		t.Fatalf("body %q: %v", got, err)
-	}
-	if _, err := set.Storage.PutObject(ctx, backend.Scope{Account: account}, resource.PutObjectRequest{
-		Bucket: name, Key: key, Size: 1,
-	}, strings.NewReader("hello")); resource.CodeOf(err) != resource.CodeInvalidArgument {
-		t.Fatalf("size mismatch: %v", err)
-	}
-	bigKey, err := resource.Parse[resource.ObjectKey]("big.bin")
-	if err != nil {
-		t.Fatal(err)
-	}
-	big := bytes.Repeat([]byte{'x'}, resource.MaxObjectBytes)
-	stored, err := set.Storage.PutObject(ctx, backend.Scope{Account: account}, resource.PutObjectRequest{
-		Bucket: name, Key: bigKey, Size: int64(len(big)),
-	}, bytes.NewReader(big))
-	if err != nil || stored.Size != int64(len(big)) {
-		t.Fatalf("cap: %v %+v", err, stored)
-	}
-	_, err = set.Storage.PutObject(ctx, backend.Scope{Account: account}, resource.PutObjectRequest{
-		Bucket: name, Key: bigKey, Size: int64(len(big) + 1),
-	}, bytes.NewReader(append(big, 'y')))
-	if resource.CodeOf(err) != resource.CodePayloadTooLarge {
-		t.Fatalf("over cap: %v", err)
-	}
-	exerciseObjectList(ctx, t, set, account, other)
 }
 
 // exerciseImageRegion checks that a launch refuses an image the process cannot

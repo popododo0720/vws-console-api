@@ -84,7 +84,7 @@ func (c *Client) Call(ctx context.Context, iface, method string, scope, req, dst
 	if err != nil {
 		return fmt.Errorf("encode region request: %w", err)
 	}
-	if len(data) > requestLimit(iface, method) {
+	if len(data) > maxRequestBytes {
 		return resource.TooLarge("body exceeds the limit")
 	}
 	return c.do(ctx, http.MethodPost, "/internal/v1/"+iface+"/"+method, data, dst)

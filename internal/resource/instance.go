@@ -264,8 +264,8 @@ type RunInstancesRequest struct {
 }
 
 // MaxNetworkInterfaces is the most interfaces one instance takes, device
-// indexes 0 to MaxNetworkInterfaces-1. vws-compute sets no limit; 8 is the
-// EC2 limit of the smaller instance types.
+// indexes 0 to MaxNetworkInterfaces-1: 8, the EC2 limit of the smaller
+// instance types.
 const MaxNetworkInterfaces = 8
 
 // NetworkInterfaceSpec is one interface of a launch. Device index 0 is the
@@ -488,8 +488,8 @@ func normalizeInterfaces(in []NetworkInterfaceSpec) ([]NetworkInterfaceSpec, err
 	if _, ok := seen[0]; !ok {
 		return nil, Invalid("deviceIndex", "a network interface with device index 0 is required")
 	}
-	// vws-compute wires every interface only when one is direct; with overlay
-	// interfaces alone it wires the first and drops the rest (vws-compute#55).
+	// Several interfaces are served only when one is direct; overlay
+	// interfaces alone would leave all but the first unwired.
 	if len(in) > 1 && !slices.ContainsFunc(in, func(n NetworkInterfaceSpec) bool { return IsDirectSubnet(n.SubnetID) }) {
 		return nil, Invalid("networkInterfaces", "more than one network interface requires one on a direct subnet")
 	}
@@ -617,15 +617,15 @@ func (q InstanceQuery) Normalize() (InstanceQuery, error) {
 	return q, nil
 }
 
-// InstanceType is one machine type vws-compute runs.
+// InstanceType is one machine type of the default catalog.
 type InstanceType struct {
 	Name      string `json:"instanceType"`
 	VCPUs     int    `json:"vcpus"`
 	MemoryMiB int    `json:"memoryMiB"`
 }
 
-// InstanceTypes is the vws-compute machine catalog, smallest first.
-// vws-compute has no RPC that lists it; keep it in step with ComputeInstanceType.
+// InstanceTypes is the default machine catalog, smallest first. A region's
+// capability document narrows it; keep it in step with ComputeInstanceType.
 func InstanceTypes() []InstanceType {
 	return []InstanceType{
 		{Name: "vws.small", VCPUs: 1, MemoryMiB: 1024},
@@ -635,10 +635,9 @@ func InstanceTypes() []InstanceType {
 	}
 }
 
-// ComputeInstanceType maps an EC2 instance type to the vws-compute machine type
-// nearest by vCPU and memory. vws-compute accepts only vws.small (1 vCPU,
-// 1 GiB), vws.medium (2, 4 GiB), vws.large (4, 8 GiB), and vws.xlarge
-// (8, 16 GiB). Nearest is the least |log2 vCPU ratio| + |log2 memory ratio|;
+// ComputeInstanceType maps an EC2 instance type to the catalog machine type
+// nearest by vCPU and memory: vws.small (1 vCPU, 1 GiB), vws.medium (2,
+// 4 GiB), vws.large (4, 8 GiB) or vws.xlarge (8, 16 GiB). Nearest is the least |log2 vCPU ratio| + |log2 memory ratio|;
 // a tie takes the smaller type. A vws name maps to itself.
 func ComputeInstanceType(s string) (string, bool) {
 	switch s {

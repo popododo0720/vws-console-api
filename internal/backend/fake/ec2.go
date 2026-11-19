@@ -433,7 +433,7 @@ func (c compute) ModifyVolume(ctx context.Context, m backend.Mutation, req resou
 		return resource.Accepted[resource.Volume]{}, err
 	}
 	// An operation lands only what its request changed, and a size only
-	// grows, as vws-storage stores max(stored, target): two modifies pending
+	// grows, stored as max(stored, target): two modifies pending
 	// at once must not undo each other or shrink the volume.
 	id := vol.ID
 	reshaped := item.Type != vol.Type || item.Iops != vol.Iops || item.Throughput != vol.Throughput

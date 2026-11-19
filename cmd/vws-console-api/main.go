@@ -1,5 +1,6 @@
 // Command vws-console-api serves the console JSON API, an EC2 Query entry
-// point, and an S3-style object entry point. It stores nothing.
+// point, and an S3 entry point that forwards AWS-region requests. It stores
+// nothing.
 package main
 
 import (
@@ -79,12 +80,14 @@ func run(ctx context.Context, args []string) (err error) {
 	auditLog := fs.String("audit-log", "", "append-only audit stream path; empty uses stderr")
 	awsProxySocket := fs.String("aws-proxy-socket", "/run/vws/aws-proxy.sock", "AWS inventory and test proxy socket")
 	globalConfig := fs.String("global-config", "", "global.yaml bootstrap path for the admin registry; "+
-		"required for regions unless -admin-store memory; empty uses memory with fake and proxmox")
+		"required for regions unless -admin-store memory; empty uses memory with fake and proxmox "+
+		"(memory is not recommended for production)")
 	var bootstrap adminBootstrap
 	bootstrap.flags(fs)
 	consoleAddr := fs.String("console-addr", "127.0.0.1:8080", "console listen address")
 	ec2Addr := fs.String("ec2-addr", "127.0.0.1:8081", "query listen address")
-	s3Addr := fs.String("s3-addr", "127.0.0.1:8082", "object listen address")
+	s3Addr := fs.String("s3-addr", "127.0.0.1:8082",
+		"S3 listen address; requests for AWS regions are forwarded, others are NotImplemented")
 	opsAddr := fs.String("ops-addr", "127.0.0.1:8083", "address for /healthz, /readyz, and /metrics; empty disables it")
 	accountRaw := fs.String("account", "123456789012", "account id for the static credential")
 	consoleToken := fs.String("console-token", "dev-token", "deprecated: bearer token accepted on the console; use VWS_CONSOLE_TOKEN or VWS_CONSOLE_TOKEN_FILE")
@@ -93,7 +96,7 @@ func run(ctx context.Context, args []string) (err error) {
 	iamMode := fs.String("iam", "static", "static: only the -access-key root key, no IAM/STS management; "+
 		"fake: in-memory IAM users, groups, roles, policies and STS sessions, lost on restart; "+
 		"grpc: vws-iam at -iam-endpoint authenticates keys, authorizes requests and serves console sign-in and STS AssumeRole")
-	iamEndpoint := fs.String("iam-endpoint", "", "vws-iam gRPC address for -iam=grpc, such as vws-iam.vws-system:9095")
+	iamEndpoint := fs.String("iam-endpoint", "", "vws-iam gRPC address for -iam=grpc, such as 127.0.0.1:9095")
 	iamTLS := iamclient.TLSFiles{}
 	fs.StringVar(&iamTLS.CAFile, "iam-tls-ca-file", "", "PEM CA bundle that verifies the vws-iam server certificate; "+
 		"setting it turns on TLS to vws-iam (empty: plaintext)")
@@ -107,7 +110,7 @@ func run(ctx context.Context, args []string) (err error) {
 	consoleOrigins := fs.String("console-origins", "", "comma-separated browser origins allowed to sign in and send cookie writes besides the console's own host, such as https://console.vws.example")
 	trustedProxies := fs.String("trusted-proxies", "", "comma-separated CIDRs of L7 proxies in front of the console whose X-Forwarded-For is trusted for the sign-in client address; empty uses the TCP peer")
 	rootPasswordFile := fs.String("root-password-file", "",
-		"file holding the account root's console password with -iam fake (mount it from a Secret); "+
+		"file holding the account root's console password with -iam fake (a root-owned file or systemd credential); "+
 			"empty disables fake root sign-in; ignored with a warning in static and grpc modes")
 	limits := console.DefaultLoginLimits()
 	fs.IntVar(&limits.IPBurst, "login-ip-burst", limits.IPBurst,
@@ -218,7 +221,7 @@ func run(ctx context.Context, args []string) (err error) {
 	}
 	defer func() { err = errors.Join(err, closeRegistry()) }()
 	if bootstrap.store == "memory" {
-		logger.WarnContext(ctx, "in-memory admin registry: registrations are lost on restart",
+		logger.WarnContext(ctx, "in-memory admin registry: registrations are lost on restart; not recommended for production",
 			slog.String("admin_store", bootstrap.store))
 	}
 	files, err := regionMTLSFiles(*globalConfig, bootstrap.mtls)
@@ -358,7 +361,7 @@ func run(ctx context.Context, args []string) (err error) {
 			Forward: forward.Handler(sigv4.ServiceEC2, ec2query.WriteError),
 		}), ec2query.WriteError)},
 		{Name: "s3", Addr: *s3Addr, Handler: route(
-			s3rest.New(s3rest.Config{Service: svc, Verifier: s3, Authorizer: auth}), nil, s3rest.WriteError)},
+			s3rest.New(s3rest.Config{Verifier: s3}), nil, s3rest.WriteError)},
 		{Name: "iam", Addr: *iamAddr, Handler: iamquery.New(iamquery.Config{
 			Admin: admin, Authorizer: auth, IAM: verifier(sigv4.ServiceIAM), STS: verifier(sigv4.ServiceSTS),
 		})},

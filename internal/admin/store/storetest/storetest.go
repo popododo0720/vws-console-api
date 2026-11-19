@@ -40,7 +40,6 @@ func Run(t *testing.T, newBackend func(t *testing.T) store.Backend) {
 	t.Run("lifecycle", func(t *testing.T) { lifecycle(t, newBackend(t)) })
 	t.Run("region deletion dependencies", func(t *testing.T) { regionDeletionDependencies(t, newBackend(t)) })
 	t.Run("region deletion mapping race", func(t *testing.T) { regionDeletionMappingRace(t, newBackend(t)) })
-	t.Run("RGW credentials", func(t *testing.T) { rgwCredentials(t, newBackend(t)) })
 	t.Run("one writer wins", func(t *testing.T) { oneWriterWins(t, newBackend(t)) })
 	t.Run("project pool claims", func(t *testing.T) { projectClaims(t, newBackend(t)) })
 	t.Run("project list", func(t *testing.T) { projectList(t, newBackend(t)) })

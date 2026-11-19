@@ -8,7 +8,7 @@ on:
     paths:
       - docs/formal/iamauth.*
       - scripts/tla-iam.sh
-      - scripts/tla-detach.sh
+      - scripts/tla-instance.sh
       - .github/workflows/tla-iam.yml
       - internal/iam/authorized.go
       - internal/surface/iamquery/iamquery.go
@@ -19,7 +19,7 @@ on:
     paths:
       - docs/formal/iamauth.*
       - scripts/tla-iam.sh
-      - scripts/tla-detach.sh
+      - scripts/tla-instance.sh
       - .github/workflows/tla-iam.yml
       - internal/iam/authorized.go
       - internal/surface/iamquery/iamquery.go
@@ -43,9 +43,9 @@ jobs:
         with:
           distribution: temurin
           java-version: "21"
-      # scripts/tla-iam.sh reads the jar pin from scripts/tla-detach.sh.
+      # scripts/tla-iam.sh reads the jar pin from scripts/tla-instance.sh.
       - id: pin
-        run: grep -E '^TLA_SHA256=[0-9a-f]{64}$' scripts/tla-detach.sh >>"$GITHUB_OUTPUT"
+        run: grep -E '^TLA_SHA256=[0-9a-f]{64}$' scripts/tla-instance.sh >>"$GITHUB_OUTPUT"
       - uses: actions/cache@v4
         with:
           path: ~/.cache/vws

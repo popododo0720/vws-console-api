@@ -20,7 +20,8 @@ type adminBootstrap struct {
 
 func (b *adminBootstrap) flags(fs *flag.FlagSet) {
 	fs.StringVar(&b.store, "admin-store", "",
-		"admin registry override: memory loses registrations on restart; empty uses the backend default")
+		"admin registry override: memory loses registrations on restart and is not recommended for production; "+
+			"empty uses the backend default")
 	fs.StringVar(&b.kekFile, "admin-kek-file", "", "admin KEK file with -admin-store memory; empty disables admin writes")
 	fs.StringVar(&b.mtls.CAFile, "region-mtls-ca-file", "",
 		"region mTLS CA file; requires cert and key files, conflicts with -global-config")

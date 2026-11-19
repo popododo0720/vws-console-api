@@ -3,7 +3,6 @@ package regionclient_test
 import (
 	"context"
 	"errors"
-	"io"
 	"reflect"
 	"strings"
 	"testing"
@@ -27,7 +26,7 @@ func services(set backend.Set) []struct {
 	return []struct {
 		name  string
 		value any
-	}{{"Compute", set.Compute}, {"Storage", set.Storage}, {"Network", set.Network}}
+	}{{"Compute", set.Compute}, {"Network", set.Network}}
 }
 
 func isRead(method string) bool {
@@ -102,44 +101,6 @@ func TestReadHonorsCancellation(t *testing.T) {
 	_, err = set.Compute.DescribeInstances(ctx, backend.Scope{}, resource.InstanceQuery{})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("read error = %v, want cancellation", err)
-	}
-}
-
-func TestStorageMutationDeadline(t *testing.T) {
-	calls := 0
-	set, err := regionclient.New(transportFunc(func(
-		ctx context.Context, _, _ string, _ backend.Scope, _, _ any,
-	) error {
-		deadline, ok := ctx.Deadline()
-		if !ok || time.Until(deadline) > 60*time.Second || time.Until(deadline) < 55*time.Second {
-			t.Fatal("storage write has no 60 s mutation deadline")
-		}
-		calls++
-		return nil
-	}))
-	if err != nil {
-		t.Fatal(err)
-	}
-	value := reflect.ValueOf(set.Storage)
-	for _, name := range []string{"CreateBucket", "DeleteBucket", "PutObject", "DeleteObject"} {
-		t.Run(name, func(t *testing.T) {
-			fn := value.MethodByName(name)
-			args := []reflect.Value{reflect.ValueOf(t.Context())}
-			for j := 1; j < fn.Type().NumIn(); j++ {
-				arg := reflect.Zero(fn.Type().In(j))
-				if fn.Type().In(j) == reflect.TypeFor[io.Reader]() {
-					arg = reflect.ValueOf(strings.NewReader(""))
-				}
-				args = append(args, arg)
-			}
-			result := fn.Call(args)
-			if !result[len(result)-1].IsNil() {
-				t.Fatalf("write error = %v", result[len(result)-1])
-			}
-		})
-	}
-	if calls != 4 {
-		t.Fatalf("transport calls = %d, want 4", calls)
 	}
 }
 

@@ -11,8 +11,6 @@ import (
 	"github.com/popododo0720/vws-lib/obs"
 
 	"github.com/popododo0720/vws-console-api/internal/backend"
-	"github.com/popododo0720/vws-console-api/internal/backend/fake"
-	"github.com/popododo0720/vws-console-api/internal/cloud"
 	"github.com/popododo0720/vws-console-api/internal/iam"
 	"github.com/popododo0720/vws-console-api/internal/resource"
 	"github.com/popododo0720/vws-console-api/internal/sigv4"
@@ -69,11 +67,7 @@ func TestSigV4FailuresUseS3ErrorCodes(t *testing.T) {
 		AccessKey: "ASIAOLD", Secret: "oldsecret", SessionToken: "tok-old", Expires: now.Add(-time.Minute),
 		Principal: iam.Principal{Account: account, ARN: roleARN},
 	})
-	for _, arn := range []string{bobARN, roleARN} {
-		f.AddStatement(arn, iam.Statement{Effect: iam.Allow, Actions: []string{"s3:*"}, Resources: []string{"*"}})
-	}
-	svc := cloud.New(cloud.Config{Backends: fake.New(fake.Options{Now: func() time.Time { return now }}).Set()})
-	h := New(Config{Service: svc, Authorizer: f, Verifier: sigv4.NewVerifier(sigv4.Verifier{
+	h := New(Config{Verifier: sigv4.NewVerifier(sigv4.Verifier{
 		Service: sigv4.ServiceS3, Regions: backend.DefaultRegions(), Now: func() time.Time { return now },
 		Auth: iam.Authenticator(f),
 	})})
@@ -103,8 +97,11 @@ func TestSigV4FailuresUseS3ErrorCodes(t *testing.T) {
 		code   string
 		msg    string
 	}{
-		{name: "signed by bob", sign: &ok, status: http.StatusOK},
-		{name: "temporary credential", sign: ptr(with(func(s *signing) { s.cred = temp })), status: http.StatusOK},
+		{name: "signed by bob", sign: &ok, status: http.StatusNotImplemented, code: "NotImplemented", msg: notServed},
+		{
+			name: "temporary credential", sign: ptr(with(func(s *signing) { s.cred = temp })),
+			status: http.StatusNotImplemented, code: "NotImplemented", msg: notServed,
+		},
 		{
 			name: "AUTH-002 a flipped signature digit", sign: &ok, after: flipSignature,
 			status: http.StatusForbidden, code: "SignatureDoesNotMatch", msg: msgSignature,

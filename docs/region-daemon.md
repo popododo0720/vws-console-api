@@ -6,8 +6,8 @@ on `:8083`. EC2, S3 and console listeners are disabled; phase one exposes
 no flags to enable them. The backend lists pool-scoped instances, template
 images, volumes, VM snapshots and tags, plus availability zones and instance
 types. VPCs and subnets expose bridge inventory; SDN inventory is not yet
-served. Key pairs, route tables, volume modifications and S3 inventory remain
-empty. Templates without a valid SMBIOS UUID are skipped with a warning;
+served. Key pairs, route tables and volume modifications remain
+empty; a Proxmox region has no S3. Templates without a valid SMBIOS UUID are skipped with a warning;
 images use the template name and description, with root size when the boot
 disk configuration supplies it.
 
@@ -187,7 +187,9 @@ Start the processes in this order:
 
    `/healthz` on the ops listener returns 200; `/readyz` returns 503
    `unregistered` until the console registers the region.
-3. Start the global API:
+3. Start the global API. `-admin-store memory` is for this loopback trial
+   only: registrations are lost on restart and it is not recommended for
+   production, where etcd is the store:
 
    ```sh
    vws-console-api -backend regions -admin-store memory \

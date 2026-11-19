@@ -3,8 +3,6 @@ package resource
 import (
 	"crypto/rand"
 	"encoding/hex"
-	"strings"
-	"unicode"
 )
 
 // rule marks a validated string type. Only this package declares rules.
@@ -16,13 +14,11 @@ type rule interface {
 type (
 	accountRule     struct{}
 	clientTokenRule struct{}
-	objectKeyRule   struct{}
 	regionRule      struct{}
 )
 
 func (accountRule) kind() Kind     { return KindUnspecified }
 func (clientTokenRule) kind() Kind { return KindUnspecified }
-func (objectKeyRule) kind() Kind   { return KindObject }
 func (regionRule) kind() Kind      { return KindUnspecified }
 
 func (accountRule) valid(s string) bool {
@@ -53,18 +49,6 @@ func (clientTokenRule) valid(s string) bool {
 	return true
 }
 
-func (objectKeyRule) valid(s string) bool {
-	if len(s) < 1 || len(s) > 1024 || strings.ContainsRune(s, 0) || strings.HasPrefix(s, "/") {
-		return false
-	}
-	for _, r := range s {
-		if unicode.IsControl(r) {
-			return false
-		}
-	}
-	return true
-}
-
 func (regionRule) valid(s string) bool { return s == RegionName }
 
 // RegionName is the only region this process routes. Both surfaces use it.
@@ -81,8 +65,6 @@ type (
 	AccountID = Text[accountRule]
 	// ClientToken is the caller's idempotency key for one mutation.
 	ClientToken = Text[clientTokenRule]
-	// ObjectKey is the key of an object inside a bucket.
-	ObjectKey = Text[objectKeyRule]
 	// Region is the region name. Only RegionName is valid.
 	Region = Text[regionRule]
 )

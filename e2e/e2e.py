@@ -454,8 +454,7 @@ def key_launch():
     step("RunInstances root BlockDeviceMapping VolumeType=gp3 reads back as gp3", root_gp3, "vm")
 
     def extra_volume():
-        """#423 AC2 and AC3: a kept non-root mapping is a new volume at its device, available after terminate.
-        Kept, so it launches on a compute before vws-compute#173 too."""
+        """#423 AC2 and AC3: a kept non-root mapping is a new volume at its device, available after terminate."""
         inst = run_instances(
             ImageId="ami-0123456789abcdef0", InstanceType="t3.micro", MinCount=1, MaxCount=1,
             SubnetId=S["subnet"], ClientToken="tok-extra-volume",
@@ -675,120 +674,11 @@ def addresses():
 
 
 def objects():
-    # AWS allows periods in a general purpose bucket name (#222).
-    b = "bucket-one.example.com"
-    step("S3 CreateBucket", lambda: s3.create_bucket(Bucket=b))
-    step("S3 HeadBucket", lambda: s3.head_bucket(Bucket=b))
-    dotted = "console-one.example.com"
-    bearer = {"Authorization": "Bearer " + os.environ.get("VWS_E2E_CONSOLE_TOKEN", "dev-token")}
-    step("console CreateBucket with a dotted name", lambda: check(
-        console_call("PUT", f"/api/v1/buckets/{dotted}", headers=bearer)[0] == 200, "console create"))
-    step("console GetBucket with a dotted name", lambda: check(
-        console_get(f"/api/v1/buckets/{dotted}")["name"] == dotted, "console get"))
-    step("console DeleteBucket with a dotted name", lambda: check(
-        console_call("DELETE", f"/api/v1/buckets/{dotted}", headers=bearer)[0] == 204, "console delete"))
-    # VWS's region is not us-east-1, so an owned name is 409 (#315).
-    step("S3 CreateBucket again is BucketAlreadyOwnedByYou", lambda: s3_error(
-        "BucketAlreadyOwnedByYou", 409, lambda: s3.create_bucket(Bucket=b)))
-    for key, body in [("a/k", b"hello"), ("a/j", b"x"), ("top", b"y")]:
-        step(f"S3 PutObject {key}", lambda key=key, body=body: s3.put_object(Bucket=b, Key=key, Body=body))
-
-    def get(key, want):
-        got = s3.get_object(Bucket=b, Key=key)["Body"].read()
-        check(got == want, f"body {got!r} != {want!r}")
-    step("S3 GetObject returns the bytes", lambda: get("a/k", b"hello"))
-    step("S3 HeadObject", lambda: check(s3.head_object(Bucket=b, Key="a/k")["ContentLength"] == 5, "length"))
-    step("S3 Overwrite", lambda: s3.put_object(Bucket=b, Key="a/k", Body=b"world!"))
-    step("S3 GetObject after overwrite", lambda: get("a/k", b"world!"))
-
-    def checksum_mode(op, call):
-        # Raw header instead of ChecksumMode=, and the raw response header
-        # instead of ChecksumSHA256, so older botocore releases work too.
-        def add(request, **_):
-            # Newer botocore already sets it on GetObject; headers append.
-            del request.headers["x-amz-checksum-mode"]
-            request.headers["x-amz-checksum-mode"] = "ENABLED"
-        event = f"before-sign.s3.{op}"
-        s3.meta.events.register_first(event, add)
-        try:
-            got = call(Bucket=b, Key="a/k")["ResponseMetadata"]["HTTPHeaders"]
-        finally:
-            s3.meta.events.unregister(event, add)
-        want = "cR6WCTOekrA93AohGCfbpCHzj57YudgG4f/djBX/oD0="  # base64(sha256(b"world!"))
-        check(got.get("x-amz-checksum-sha256") == want, f"x-amz-checksum-sha256 {got.get('x-amz-checksum-sha256')!r} != {want!r}")
-    step("S3 HeadObject x-amz-checksum-mode ENABLED returns SHA-256", lambda: checksum_mode("HeadObject", s3.head_object))
-    step("S3 GetObject x-amz-checksum-mode ENABLED returns SHA-256", lambda: checksum_mode("GetObject", s3.get_object))
-
-    def missing(code, status, call):
-        try:
-            call()
-        except s3.exceptions.ClientError as exc:
-            err = exc.response
-            got = (err["Error"]["Code"], err["ResponseMetadata"]["HTTPStatusCode"])
-            check(got == (code, status), f"{got} != {(code, status)}")
-            return
-        raise AssertionError("no error")
-    step("S3 GetObject missing key is NoSuchKey", lambda: missing(
-        "NoSuchKey", 404, lambda: s3.get_object(Bucket=b, Key="no/such")))
-    # HEAD has no body, so botocore reports the status as the code.
-    step("S3 HeadObject missing key is 404", lambda: missing(
-        "404", 404, lambda: s3.head_object(Bucket=b, Key="no/such")))
-    step("S3 GetObject missing bucket is NoSuchBucket", lambda: missing(
-        "NoSuchBucket", 404, lambda: s3.get_object(Bucket="no-such-bucket", Key="a/k")))
-    step("S3 DeleteObject missing key succeeds", lambda: s3.delete_object(Bucket=b, Key="no/such"))
-    step("S3 ListObjectsV2 prefix", lambda: check(
-        [o["Key"] for o in s3.list_objects_v2(Bucket=b, Prefix="a/")["Contents"]] == ["a/j", "a/k"], "keys"))
-    step("S3 ListObjectsV2 delimiter", lambda: check(
-        [p["Prefix"] for p in s3.list_objects_v2(Bucket=b, Delimiter="/")["CommonPrefixes"]] == ["a/"], "prefixes"))
-    step("S3 ListObjects prefix", lambda: check(
-        [o["Key"] for o in s3.list_objects(Bucket=b, Prefix="a/")["Contents"]] == ["a/j", "a/k"], "keys"))
-    step("S3 ListObjects delimiter", lambda: check(
-        [p["Prefix"] for p in s3.list_objects(Bucket=b, Delimiter="/")["CommonPrefixes"]] == ["a/"], "prefixes"))
-
-    def v1_pages():
-        pages = s3.get_paginator("list_objects").paginate(Bucket=b, PaginationConfig={"PageSize": 1})
-        keys = [o["Key"] for page in pages for o in page.get("Contents", [])]
-        check(keys == sorted(keys) and len(keys) == len(set(keys)) >= 3, f"keys {keys}")
-    step("S3 ListObjects marker pages", v1_pages)
-    def put_once(body):
-        # Set the header on the wire instead of passing IfNoneMatch=, which
-        # only botocore releases from late 2024 accept. Signed like any header.
-        def add(request, **_):
-            request.headers["If-None-Match"] = "*"
-        s3.meta.events.register_first("before-sign.s3.PutObject", add)
-        try:
-            return s3.put_object(Bucket=b, Key="once", Body=body)
-        finally:
-            s3.meta.events.unregister("before-sign.s3.PutObject", add)
-    step("S3 PutObject If-None-Match * new key", lambda: put_once(b"1"))
-    for body in (b"1", b"2"):
-        step(f"S3 PutObject If-None-Match * existing key ({body!r}) is 412", lambda body=body: missing(
-            "PreconditionFailed", 412, lambda: put_once(body)))
-    step("S3 GetObject after refused put", lambda: get("once", b"1"))
-
-    def put_sha256(key, body, checksum):
-        # Raw header, like put_once: ChecksumSHA256= needs a botocore that
-        # knows flexible checksums, and newer ones also add their own CRC32.
-        def add(request, **_):
-            request.headers["x-amz-checksum-sha256"] = checksum
-        s3.meta.events.register_first("before-sign.s3.PutObject", add)
-        try:
-            return s3.put_object(Bucket=b, Key=key, Body=body)
-        finally:
-            s3.meta.events.unregister("before-sign.s3.PutObject", add)
-    hello_sha256 = base64.b64encode(hashlib.sha256(b"hello").digest()).decode()
-    empty_sha256 = base64.b64encode(hashlib.sha256(b"").digest()).decode()
-    step("S3 PutObject wrong x-amz-checksum-sha256 is BadDigest", lambda: missing(
-        "BadDigest", 400, lambda: put_sha256("bad", b"hello", empty_sha256)))
-    step("S3 GetObject after BadDigest is NoSuchKey", lambda: missing(
-        "NoSuchKey", 404, lambda: s3.get_object(Bucket=b, Key="bad")))
-    step("S3 PutObject matching x-amz-checksum-sha256", lambda: put_sha256("sha", b"hello", hello_sha256))
-    step("S3 DeleteObject sha", lambda: s3.delete_object(Bucket=b, Key="sha"))
-    step("S3 DeleteObject once", lambda: s3.delete_object(Bucket=b, Key="once"))
-    step("S3 DeleteObject", lambda: s3.delete_object(Bucket=b, Key="top"))
-    for key in ("a/k", "a/j"):
-        step(f"S3 DeleteObject {key}", lambda key=key: s3.delete_object(Bucket=b, Key=key))
-    step("S3 DeleteBucket", lambda: s3.delete_bucket(Bucket=b))
+    # VWS stores no objects. The S3 listener forwards a request signed for an
+    # AWS region and answers every other signed request NotImplemented.
+    step("S3 ListBuckets is NotImplemented", lambda: s3_error("NotImplemented", 501, s3.list_buckets))
+    step("S3 PutObject is NotImplemented", lambda: s3_error(
+        "NotImplemented", 501, lambda: s3.put_object(Bucket="e2e-none", Key="a/k", Body=b"hello")))
 
 
 def aws_error(code, call):

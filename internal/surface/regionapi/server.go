@@ -2,11 +2,9 @@
 package regionapi
 
 import (
-	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -25,14 +23,6 @@ import (
 )
 
 const maxRequestBytes = 1 << 20
-
-func requestLimit(iface, method string) int {
-	if iface == "Storage" && method == "PutObject" {
-		// JSON base64 must carry the existing 4 MiB object contract.
-		return maxRequestBytes + base64.StdEncoding.EncodedLen(resource.MaxObjectBytes)
-	}
-	return maxRequestBytes
-}
 
 // Gate admits a local mutation or names the peer holding the lease.
 type Gate interface {
@@ -64,20 +54,14 @@ type Config struct {
 	}
 }
 
-// ObjectResult keeps the object metadata and bytes together on the JSON wire.
-type ObjectResult struct {
-	Object resource.Object `json:"object"`
-	Body   []byte          `json:"body"`
-}
-
 type errorBody struct {
 	Error *resource.Error `json:"error"`
 }
 
 // New returns the region's backend HTTP handler.
 func New(cfg Config) (http.Handler, error) {
-	if cfg.Backend.Compute == nil || cfg.Backend.Storage == nil || cfg.Backend.Network == nil {
-		return nil, fmt.Errorf("new region API: compute, storage and network backends are required")
+	if cfg.Backend.Compute == nil || cfg.Backend.Network == nil {
+		return nil, fmt.Errorf("new region API: compute and network backends are required")
 	}
 	if cfg.Capabilities == nil || cfg.Region == "" {
 		return nil, fmt.Errorf("new region API: capabilities and region are required")
@@ -87,7 +71,7 @@ func New(cfg Config) (http.Handler, error) {
 	}
 	mux := http.NewServeMux()
 	registerConsole(mux, cfg)
-	c, s, n := cfg.Backend.Compute, cfg.Backend.Storage, cfg.Backend.Network
+	c, n := cfg.Backend.Compute, cfg.Backend.Network
 	if cfg.Backend.Usage != nil {
 		register(mux, cfg, "Usage", "GetAllocation", cfg.Backend.Usage.GetAllocation)
 	}
@@ -137,49 +121,6 @@ func New(cfg Config) (http.Handler, error) {
 	register(mux, cfg, "Network", "DescribeSecurityGroups", n.DescribeSecurityGroups)
 	register(mux, cfg, "Network", "DescribeAddresses", n.DescribeAddresses)
 	register(mux, cfg, "Network", "GetOperation", n.GetOperation)
-	register(mux, cfg, "Storage", "GetBucket", s.GetBucket)
-	register(mux, cfg, "Storage", "ListBuckets", s.ListBuckets)
-	register(mux, cfg, "Storage", "ListObjects", s.ListObjects)
-	register(mux, cfg, "Storage", "CreateBucket", s.CreateBucket, true)
-	register(mux, cfg, "Storage", "DeleteBucket", func(ctx context.Context, scope backend.Scope,
-		name resource.BucketName,
-	) (struct{}, error) {
-		return struct{}{}, s.DeleteBucket(ctx, scope, name)
-	}, true)
-	register(mux, cfg, "Storage", "DeleteObject", func(ctx context.Context, scope backend.Scope, req struct {
-		Bucket resource.BucketName `json:"bucket"`
-		Key    resource.ObjectKey  `json:"key"`
-	},
-	) (struct{}, error) {
-		return struct{}{}, s.DeleteObject(ctx, scope, req.Bucket, req.Key)
-	}, true)
-	register(mux, cfg, "Storage", "PutObject", func(ctx context.Context, scope backend.Scope, req struct {
-		Request resource.PutObjectRequest `json:"request"`
-		Body    []byte                    `json:"body"`
-	},
-	) (resource.Object, error) {
-		if len(req.Body) > resource.MaxObjectBytes {
-			return resource.Object{}, resource.TooLarge("object exceeds 4 MiB")
-		}
-		return s.PutObject(ctx, scope, req.Request, bytes.NewReader(req.Body))
-	}, true)
-	register(mux, cfg, "Storage", "GetObject", func(ctx context.Context, scope backend.Scope,
-		req resource.GetObjectRequest,
-	) (ObjectResult, error) {
-		obj, body, err := s.GetObject(ctx, scope, req)
-		if err != nil {
-			return ObjectResult{}, err
-		}
-		data, readErr := io.ReadAll(io.LimitReader(body, resource.MaxObjectBytes+1))
-		closeErr := body.Close()
-		if err := errors.Join(readErr, closeErr); err != nil {
-			return ObjectResult{}, resource.Internal(err)
-		}
-		if len(data) > resource.MaxObjectBytes {
-			return ObjectResult{}, resource.TooLarge("object exceeds 4 MiB")
-		}
-		return ObjectResult{Object: obj, Body: data}, nil
-	})
 	mux.HandleFunc("GET /internal/v1/version", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, cfg.Version, nil)
 	})
@@ -223,7 +164,7 @@ func New(cfg Config) (http.Handler, error) {
 }
 
 func register[S backend.Scope | backend.Mutation, Q, R any](mux *http.ServeMux, cfg Config, iface, method string,
-	call func(context.Context, S, Q) (R, error), writes ...bool,
+	call func(context.Context, S, Q) (R, error),
 ) {
 	mux.HandleFunc("POST /internal/v1/"+iface+"/"+method, func(w http.ResponseWriter, r *http.Request) {
 		var input struct {
@@ -231,7 +172,7 @@ func register[S backend.Scope | backend.Mutation, Q, R any](mux *http.ServeMux, 
 			Mutation *S `json:"mutation"`
 			Req      *Q `json:"req"`
 		}
-		dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, int64(requestLimit(iface, method))))
+		dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRequestBytes))
 		dec.DisallowUnknownFields()
 		err := dec.Decode(&input)
 		if err == nil {
@@ -241,7 +182,7 @@ func register[S backend.Scope | backend.Mutation, Q, R any](mux *http.ServeMux, 
 			}
 		}
 		var scope backend.Scope
-		mutation := len(writes) > 0 && writes[0]
+		mutation := false
 		param := input.Scope
 		if _, ok := any(*new(S)).(backend.Mutation); ok {
 			param = input.Mutation

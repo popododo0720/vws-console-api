@@ -15,8 +15,7 @@ import (
 
 // #393: console EC2 routes spend the same (account, IAM action) buckets as
 // the EC2 Query surface. Past the burst a route is 429 ResourceExhausted
-// with Retry-After, the console's throttle answer; S3 routes are not limited
-// here.
+// with Retry-After, the console's throttle answer.
 func TestConsoleSharesTheEC2RequestLimit(t *testing.T) {
 	account, err := resource.Parse[resource.AccountID]("123456789012")
 	if err != nil {
@@ -50,10 +49,5 @@ func TestConsoleSharesTheEC2RequestLimit(t *testing.T) {
 	}
 	if rec := get("/api/v1/subnets"); rec.Code != http.StatusOK {
 		t.Errorf("another action: %d %s", rec.Code, rec.Body)
-	}
-	for range 200 {
-		if rec := get("/api/v1/buckets"); rec.Code != http.StatusOK {
-			t.Fatalf("s3 route throttled: %d %s", rec.Code, rec.Body)
-		}
 	}
 }

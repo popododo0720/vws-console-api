@@ -19,7 +19,6 @@ func TestInvalidConfigDoesNotPanic(t *testing.T) {
 	for _, clear := range []func(*Config){
 		func(c *Config) { c.Backend.Compute = nil },
 		func(c *Config) { c.Backend.Network = nil },
-		func(c *Config) { c.Backend.Storage = nil },
 		func(c *Config) { c.Capabilities = nil },
 		func(c *Config) { c.Region = "" },
 		func(c *Config) { c.Version.ReleaseLine = "" },

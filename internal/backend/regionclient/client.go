@@ -2,10 +2,8 @@
 package regionclient
 
 import (
-	"bytes"
 	"context"
 	"fmt"
-	"io"
 	"time"
 
 	"github.com/popododo0720/vws-console-api/internal/backend"
@@ -23,7 +21,7 @@ func New(transport Transport) (backend.Set, error) {
 		return backend.Set{}, resource.Invalid("transport", "region transport is required")
 	}
 	set := backend.Set{
-		Compute: compute{transport}, Storage: storage{transport}, Network: network{transport}, Usage: usage{transport},
+		Compute: compute{transport}, Network: network{transport}, Usage: usage{transport},
 	}
 	if console, ok := transport.(backend.Console); ok {
 		set.Console = console
@@ -32,8 +30,6 @@ func New(transport Transport) (backend.Set, error) {
 }
 
 type compute struct{ transport Transport }
-
-type storage struct{ transport Transport }
 
 type network struct{ transport Transport }
 
@@ -49,12 +45,6 @@ func call[T any](
 	timeout := 5 * time.Second
 	if _, ok := scope.(backend.Mutation); ok {
 		timeout = 60 * time.Second
-	}
-	if service == "Storage" {
-		switch method {
-		case "CreateBucket", "DeleteBucket", "PutObject", "DeleteObject":
-			timeout = 60 * time.Second
-		}
 	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -214,70 +204,6 @@ func (c compute) GetOperation(
 	ctx context.Context, s backend.Scope, id resource.OperationID,
 ) (resource.Operation, error) {
 	return call[resource.Operation](ctx, c.transport, "Compute", "GetOperation", s, id)
-}
-
-func (c storage) CreateBucket(ctx context.Context, s backend.Scope, name resource.BucketName) (resource.Bucket, error) {
-	return call[resource.Bucket](ctx, c.transport, "Storage", "CreateBucket", s, name)
-}
-
-func (c storage) GetBucket(ctx context.Context, s backend.Scope, name resource.BucketName) (resource.Bucket, error) {
-	return call[resource.Bucket](ctx, c.transport, "Storage", "GetBucket", s, name)
-}
-
-func (c storage) ListBuckets(
-	ctx context.Context, s backend.Scope, q resource.BucketQuery,
-) (resource.Page[resource.Bucket], error) {
-	return call[resource.Page[resource.Bucket]](ctx, c.transport, "Storage", "ListBuckets", s, q)
-}
-
-func (c storage) DeleteBucket(ctx context.Context, s backend.Scope, name resource.BucketName) error {
-	_, err := call[struct{}](ctx, c.transport, "Storage", "DeleteBucket", s, name)
-	return err
-}
-
-func (c storage) PutObject(
-	ctx context.Context, s backend.Scope, req resource.PutObjectRequest, body io.Reader,
-) (resource.Object, error) {
-	data, err := io.ReadAll(io.LimitReader(body, resource.MaxObjectBytes+1))
-	if err != nil {
-		return resource.Object{}, fmt.Errorf("read region object: %w", err)
-	}
-	if len(data) > resource.MaxObjectBytes {
-		return resource.Object{}, resource.TooLarge("object exceeds 4 MiB")
-	}
-	return call[resource.Object](ctx, c.transport, "Storage", "PutObject", s, struct {
-		Request resource.PutObjectRequest `json:"request"`
-		Body    []byte                    `json:"body"`
-	}{req, data})
-}
-
-func (c storage) GetObject(
-	ctx context.Context, s backend.Scope, req resource.GetObjectRequest,
-) (resource.Object, io.ReadCloser, error) {
-	result, err := call[struct {
-		Object resource.Object `json:"object"`
-		Body   []byte          `json:"body"`
-	}](ctx, c.transport, "Storage", "GetObject", s, req)
-	if err != nil {
-		return resource.Object{}, nil, err
-	}
-	return result.Object, io.NopCloser(bytes.NewReader(result.Body)), nil
-}
-
-func (c storage) DeleteObject(
-	ctx context.Context, s backend.Scope, bucket resource.BucketName, key resource.ObjectKey,
-) error {
-	_, err := call[struct{}](ctx, c.transport, "Storage", "DeleteObject", s, struct {
-		Bucket resource.BucketName `json:"bucket"`
-		Key    resource.ObjectKey  `json:"key"`
-	}{bucket, key})
-	return err
-}
-
-func (c storage) ListObjects(
-	ctx context.Context, s backend.Scope, q resource.ObjectQuery,
-) (resource.ObjectListing, error) {
-	return call[resource.ObjectListing](ctx, c.transport, "Storage", "ListObjects", s, q)
 }
 
 func (c network) CreateSubnet(

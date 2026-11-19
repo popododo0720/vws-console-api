@@ -178,7 +178,7 @@ func TestReadOnlyBackendEveryMethod(t *testing.T) {
 				t.Fatal(r)
 			}
 		}
-		for _, service := range []any{b.Set().Compute, b.Set().Network, b.Set().Storage} {
+		for _, service := range []any{b.Set().Compute, b.Set().Network} {
 			value := reflect.ValueOf(service)
 			for i := 0; i < value.NumMethod(); i++ {
 				name := value.Type().Method(i).Name

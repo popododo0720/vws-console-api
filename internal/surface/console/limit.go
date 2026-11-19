@@ -283,9 +283,8 @@ func retryAfter(w http.ResponseWriter, d time.Duration) {
 
 // browserWriteOK enforces, on sign-in and on every state-changing cookie
 // request, an Origin that is the console's own host or one in Config.Origins
-// and, when needJSON, a JSON Content-Type (no HTML form can send one). An
-// object upload skips the JSON rule to keep the object's Content-Type; the
-// Origin check and the X-CSRF-Token header that authenticate requires still
+// and, when needJSON, a JSON Content-Type (no HTML form can send one). The
+// Origin check and the X-CSRF-Token header that authenticate requires
 // refuse a cross-site request (#224).
 func (h *handler) browserWriteOK(w http.ResponseWriter, r *http.Request, needJSON bool) bool {
 	if needJSON {

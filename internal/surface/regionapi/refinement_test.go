@@ -19,8 +19,6 @@ func TestErrorRefinementsRoundTrip(t *testing.T) {
 		resource.DuplicatePermission("sg-0123456789abcdef0"),
 		resource.RulesPerSecurityGroupLimitExceeded("sg-0123456789abcdef0"),
 		resource.PermissionNotFound("sg-0123456789abcdef0"),
-		resource.BucketAlreadyOwned("bucket"),
-		resource.BucketDeleting("bucket"),
 	} {
 		t.Run(want.Message, func(t *testing.T) {
 			set := fake.New(fake.Options{}).Set()

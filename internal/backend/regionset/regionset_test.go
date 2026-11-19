@@ -59,11 +59,11 @@ func TestEveryInventoryListRoutesAndPreservesQueries(t *testing.T) {
 				items.Set(reflect.MakeSlice(items.Type(), 1, 1))
 				return nil
 			})
-			for _, svc := range []any{set.Compute, set.Network, set.Storage} {
+			for _, svc := range []any{set.Compute, set.Network} {
 				v := reflect.ValueOf(svc)
 				for i := 0; i < v.NumMethod(); i++ {
 					name := v.Type().Method(i).Name
-					if !strings.HasPrefix(name, "Describe") && name != "ListBuckets" {
+					if !strings.HasPrefix(name, "Describe") {
 						continue
 					}
 					t.Run(name, func(t *testing.T) {
@@ -342,7 +342,7 @@ func TestConcreteRegionFailureIsPublic(t *testing.T) {
 		if resource.CodeOf(failure) == resource.CodeInvalidArgument && !errors.Is(err, failure) {
 			t.Fatalf("lost public validation error: %v", err)
 		}
-		_, err = set.Storage.GetBucket(t.Context(), backend.Scope{Region: "pve-a-1"}, resource.BucketName{})
+		_, err = set.Compute.GetOperation(t.Context(), backend.Scope{Region: "pve-a-1"}, resource.OperationID{})
 		if strings.Contains(err.Error(), "credential") ||
 			(resource.CodeOf(failure) != resource.CodeInvalidArgument && resource.CodeOf(err) != resource.CodeUnavailable) {
 			t.Fatalf("unsafe detail failure: %v", err)
@@ -377,17 +377,17 @@ func TestCancellationBoundsUncooperativeTransport(t *testing.T) {
 func TestCatalogRefreshAndNonListReads(t *testing.T) {
 	cat := backend.NewStaticRegions(nil, nil)
 	set := newSet(t, cat, func(_ context.Context, service, method string, s backend.Scope, _, _ any) error {
-		if s.Region != "pve-new-1" || service != "Storage" || method != "GetBucket" {
+		if s.Region != "pve-new-1" || service != "Compute" || method != "GetOperation" {
 			return fmt.Errorf("wrong route: %s.%s %+v", service, method, s)
 		}
 		return nil
 	})
 	cat.AddProxmoxRegion(backend.ProxmoxRegion{Name: "pve-new-1"})
-	_, err := set.Storage.GetBucket(t.Context(), backend.Scope{Region: "pve-new-1"}, resource.BucketName{})
+	_, err := set.Compute.GetOperation(t.Context(), backend.Scope{Region: "pve-new-1"}, resource.OperationID{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = set.Storage.GetBucket(t.Context(), backend.Scope{Region: "all"}, resource.BucketName{})
+	_, err = set.Compute.GetOperation(t.Context(), backend.Scope{Region: "all"}, resource.OperationID{})
 	if resource.CodeOf(err) != resource.CodeInvalidArgument {
 		t.Fatalf("unscoped detail read = %v", err)
 	}

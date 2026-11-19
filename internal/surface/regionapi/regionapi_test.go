@@ -10,7 +10,6 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
-	"io"
 	"math/big"
 	"net"
 	"net/http"
@@ -109,23 +108,6 @@ func TestEveryReadRoundTrips(t *testing.T) {
 	set := fake.New(fake.Options{}).Set()
 	scope := testScope(t)
 	ops := seedReads(t, set, scope)
-	bucket, err := resource.Parse[resource.BucketName]("test-bucket")
-	if err != nil {
-		t.Fatal(err)
-	}
-	key, err := resource.Parse[resource.ObjectKey]("hello")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := set.Storage.CreateBucket(ctx, scope, bucket); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := set.Storage.PutObject(ctx, scope, resource.PutObjectRequest{
-		Bucket: bucket, Key: key,
-		Size: 5,
-	}, strings.NewReader("hello")); err != nil {
-		t.Fatal(err)
-	}
 	c, _ := loopback(t, config(set))
 	remote, err := regionclient.New(c)
 	if err != nil {
@@ -138,7 +120,6 @@ func TestEveryReadRoundTrips(t *testing.T) {
 		remote any
 	}{
 		{"Compute", reflect.TypeFor[backend.Compute](), set.Compute, remote.Compute},
-		{"Storage", reflect.TypeFor[backend.Storage](), set.Storage, remote.Storage},
 		{"Network", reflect.TypeFor[backend.Network](), set.Network, remote.Network},
 	} {
 		for i := 0; i < service.typ.NumMethod(); i++ {
@@ -154,14 +135,7 @@ func TestEveryReadRoundTrips(t *testing.T) {
 						page.Set(reflect.ValueOf(resource.PageRequest{Size: 100}))
 					}
 				}
-				switch method.Name {
-				case "GetBucket":
-					q.Set(reflect.ValueOf(bucket))
-				case "GetObject":
-					q.Set(reflect.ValueOf(resource.GetObjectRequest{Bucket: bucket, Key: key}))
-				case "ListObjects":
-					q.Set(reflect.ValueOf(resource.ObjectQuery{Bucket: bucket}))
-				case "GetOperation":
+				if method.Name == "GetOperation" {
 					q.Set(reflect.ValueOf(ops[service.name]))
 				}
 				out := reflect.ValueOf(service.value).MethodByName(method.Name).Call([]reflect.Value{
@@ -173,21 +147,6 @@ func TestEveryReadRoundTrips(t *testing.T) {
 				}
 				dst := reflect.New(method.Type.Out(0)).Interface()
 				want := out[0].Interface()
-				if method.Name == "GetObject" && directErr == nil {
-					body, ok := out[1].Interface().(io.ReadCloser)
-					if !ok {
-						t.Fatal("GetObject returned no stream")
-					}
-					data, err := io.ReadAll(body)
-					if err != nil {
-						t.Fatal(err)
-					}
-					if err := body.Close(); err != nil {
-						t.Fatal(err)
-					}
-					want = ObjectResult{Object: out[0].Interface().(resource.Object), Body: data}
-					dst = &ObjectResult{}
-				}
 				wire := reflect.ValueOf(service.remote).MethodByName(method.Name).Call([]reflect.Value{
 					reflect.ValueOf(ctx), reflect.ValueOf(scope), q,
 				})
@@ -195,19 +154,7 @@ func TestEveryReadRoundTrips(t *testing.T) {
 				if !wire[len(wire)-1].IsNil() {
 					err = wire[len(wire)-1].Interface().(error)
 				}
-				if method.Name == "GetObject" && err == nil {
-					body := wire[1].Interface().(io.ReadCloser)
-					data, readErr := io.ReadAll(body)
-					if readErr != nil {
-						t.Fatal(readErr)
-					}
-					if err := body.Close(); err != nil {
-						t.Fatal(err)
-					}
-					dst = &ObjectResult{Object: wire[0].Interface().(resource.Object), Body: data}
-				} else {
-					reflect.ValueOf(dst).Elem().Set(wire[0])
-				}
+				reflect.ValueOf(dst).Elem().Set(wire[0])
 				if resource.CodeOf(err) != resource.CodeOf(directErr) {
 					t.Fatalf("wire %v, direct %v", err, directErr)
 				}
