@@ -58,7 +58,7 @@ func TestManagedPoolChecks(t *testing.T) {
 func TestPoolSelfCheckDoesNotExposeUpstreamBody(t *testing.T) {
 	for _, failPath := range []string{"/access/permissions", "/pools/managed"} {
 		t.Run(failPath, func(t *testing.T) {
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
 				path := strings.TrimPrefix(r.URL.Path, "/api2/json")
 				if path == failPath && (path != "/access/permissions" || r.URL.Query().Get("path") != "") {
@@ -75,9 +75,10 @@ func TestPoolSelfCheckDoesNotExposeUpstreamBody(t *testing.T) {
 			c := &Connection{
 				config: RegionConfig{ReadOnly: true, Pools: map[string]string{"project": "managed"}},
 			}
+			defer c.Close() // idle TLS connections end here, not after the test
 			_, err := c.check(t.Context(), registrationSnapshot{
 				Region: "pve-test-1", ClusterName: "test", TokenID: "vws@pve!inventory", Token: "fake-secret",
-				PVEAPIURLs: []string{srv.URL}, CAPEM: anyCA(),
+				PVEAPIURLs: []string{srv.URL}, CAPEM: serverCA(srv),
 			})
 			e := resource.AsError(err)
 			if e == nil || e.Code != resource.CodeUnavailable || !strings.Contains(e.Message, `pool "managed"`) ||

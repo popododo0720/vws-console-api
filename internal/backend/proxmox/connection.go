@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -32,6 +33,8 @@ var errNoEndpoints = errors.New("registration has no valid pveApiUrls and caPem;
 const (
 	maxRegistrationBytes = 65 << 10
 	registrationFile     = "registration.json"
+	// dialTimeout bounds the connect and the TLS handshake to one address.
+	dialTimeout = time.Second
 )
 
 var (
@@ -69,6 +72,9 @@ type Connection struct {
 	config      RegionConfig
 	region, dir string
 	client      *http.Client // pinned to clientCA
+	base        *http.Transport
+	endpoints   *pveclient.Endpoints // shared by every check of one address list and CA
+	endpointsID string
 	clientCA    string
 	current     *Backend
 	digest      [32]byte
@@ -116,12 +122,34 @@ func (c *Connection) httpClient(caPEM string) (*http.Client, error) {
 	if c.client != nil {
 		c.client.CloseIdleConnections()
 	}
+	c.base = &http.Transport{
+		TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: pool},
+		// A dead address must not use up the call's budget before the next is tried.
+		DialContext:         (&net.Dialer{Timeout: dialTimeout}).DialContext,
+		TLSHandshakeTimeout: dialTimeout,
+	}
 	c.client, c.clientCA = &http.Client{
-		Transport:     &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: pool}},
+		Transport:     c.base,
 		Timeout:       10 * time.Second,
 		CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse },
 	}, caPEM
 	return c.client, nil
+}
+
+// endpointsFor returns the failover transport of s. Repeated checks of the
+// same list and CA share one, so the current address survives a reload and
+// a dead first address costs one failed dial, not one per check.
+func (c *Connection) endpointsFor(s registrationSnapshot) (*pveclient.Endpoints, error) {
+	key := s.CAPEM + "\n" + strings.Join(s.PVEAPIURLs, "\n")
+	if c.endpoints != nil && c.endpointsID == key && c.endpoints.Transport() == c.base {
+		return c.endpoints, nil
+	}
+	endpoints, err := pveclient.NewEndpoints(c.base, s.PVEAPIURLs, errNoQuorum())
+	if err != nil {
+		return nil, fmt.Errorf("proxmox: endpoints: %w", err)
+	}
+	c.endpoints, c.endpointsID = endpoints, key
+	return endpoints, nil
 }
 
 func decodeRegistration(data []byte) (registrationSnapshot, error) {
@@ -180,12 +208,17 @@ func (c *Connection) check(ctx context.Context, s registrationSnapshot) (*Backen
 	if s.BackupTokenID != "" && !registrationSecret.MatchString(string(s.BackupToken)) {
 		return nil, resource.Invalid("backupToken", "expected 1-512 token characters")
 	}
-	transport, err := c.httpClient(s.CAPEM)
+	pinned, err := c.httpClient(s.CAPEM)
 	if err != nil {
 		return nil, err
 	}
-	// The first address serves for now; failing over between them is a later step.
-	endpoint := s.PVEAPIURLs[0]
+	// One ordered list and one current index serve all three tokens' clients.
+	endpoints, err := c.endpointsFor(s)
+	if err != nil {
+		return nil, errors.New("invalid PVE connection")
+	}
+	transport := &http.Client{Transport: endpoints, Timeout: pinned.Timeout, CheckRedirect: pinned.CheckRedirect}
+	endpoint := s.PVEAPIURLs[0] // only the path root; the transport picks the address
 	client, err := pveclient.New(pveclient.Config{
 		BaseURL: endpoint, TokenID: s.TokenID, Secret: pveclient.Secret(s.Token), HTTPClient: transport,
 	})
@@ -206,6 +239,9 @@ func (c *Connection) check(ctx context.Context, s registrationSnapshot) (*Backen
 	b, err := New(ctx, client, Registration{
 		Region: backend.ProxmoxRegion{Name: s.Region, Zones: s.Zones}, ClusterName: s.ClusterName,
 	}, c.config)
+	if err == nil {
+		b.endpoints = endpoints
+	}
 	if err == nil && firewall != nil {
 		if err = checkFirewall(ctx, firewall, c.config); err == nil {
 			b.firewall = firewall
@@ -256,8 +292,6 @@ func (c *Connection) Register(ctx context.Context, data json.RawMessage) error {
 		}
 		// A stored secret goes only to the destination that already held it.
 		unchanged := sameTrust(stored, s)
-		// Firewall and backup tokens only ever went to the first address.
-		sameFirst := unchanged && endpointKey(stored.PVEAPIURLs[0]) == endpointKey(s.PVEAPIURLs[0])
 		if s.Token == "" {
 			if stored.TokenID != s.TokenID || stored.Token == "" {
 				return resource.Invalid("token", "required for first registration")
@@ -268,8 +302,8 @@ func (c *Connection) Register(ctx context.Context, data json.RawMessage) error {
 			s.Token = stored.Token
 		}
 		if s.FirewallTokenID != "" && s.FirewallToken == "" {
-			if !sameFirst {
-				return resource.Invalid("firewallToken", "required when caPem or the first pveApiUrl change")
+			if !unchanged {
+				return resource.Invalid("firewallToken", "required when caPem or pveApiUrls change")
 			}
 			if stored.FirewallTokenID != s.FirewallTokenID || stored.FirewallToken == "" {
 				return resource.Invalid("firewallToken", "required for a new firewall token")
@@ -277,8 +311,8 @@ func (c *Connection) Register(ctx context.Context, data json.RawMessage) error {
 			s.FirewallToken = stored.FirewallToken
 		}
 		if s.BackupTokenID != "" && s.BackupToken == "" {
-			if !sameFirst {
-				return resource.Invalid("backupToken", "required when caPem or the first pveApiUrl change")
+			if !unchanged {
+				return resource.Invalid("backupToken", "required when caPem or pveApiUrls change")
 			}
 			if stored.BackupTokenID != s.BackupTokenID || stored.BackupToken == "" {
 				return resource.Invalid("backupToken", "required for a new backup token")

@@ -107,7 +107,7 @@ func TestConnectionHonorsConsoleMode(t *testing.T) {
 	s.Roles = append(s.Roles, pvefake.Role{ID: "Console", Privs: []string{"VM.Console", "VM.Audit", "Pool.Audit"}})
 	s.Tokens[0].ACL = append(s.Tokens[0].ACL, pvefake.ACE{Path: "/pool/123456789012", Role: "Console"})
 	_, f := serve(t, s)
-	srv := httptest.NewServer(f)
+	srv := httptest.NewTLSServer(f)
 	defer srv.Close()
 	for _, mode := range []string{"true", "false"} {
 		path := filepath.Join(t.TempDir(), "region.yaml")
@@ -120,8 +120,9 @@ func TestConnectionHonorsConsoleMode(t *testing.T) {
 		}
 		_, err = c.check(t.Context(), registrationSnapshot{
 			Region: "pve-test-1", ClusterName: "test", TokenID: s.Tokens[0].ID, Token: s.Tokens[0].Secret,
-			PVEAPIURLs: []string{srv.URL}, CAPEM: anyCA(),
+			PVEAPIURLs: []string{srv.URL}, CAPEM: serverCA(srv),
 		})
+		c.Close() // idle TLS connections end here, not after the test
 		if (err != nil) != (mode == "true") {
 			t.Fatalf("read_only=%s: %v", mode, err)
 		}

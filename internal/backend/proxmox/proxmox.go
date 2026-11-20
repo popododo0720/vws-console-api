@@ -14,8 +14,9 @@ type Backend struct {
 	region          string
 	cluster         string
 	client          *pveclient.Client
-	firewall        *pveclient.Client // only security group writes; nil without a firewall token
-	backup          *pveclient.Client // reserved for disk exports; nil without a backup token
+	firewall        *pveclient.Client    // only security group writes; nil without a firewall token
+	backup          *pveclient.Client    // reserved for disk exports; nil without a backup token
+	endpoints       *pveclient.Endpoints // the address list the clients fail over across; nil in single-address tests
 	cfg             RegionConfig
 	zones           []backend.Zone
 	statusMu        sync.Mutex
