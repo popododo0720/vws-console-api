@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -253,19 +254,30 @@ func (c *Connection) Register(ctx context.Context, data json.RawMessage) error {
 		if err != nil && err.Error() != "unregistered" && !errors.Is(err, errNoEndpoints) {
 			return err
 		}
+		// A stored secret goes only to the destination that already held it.
+		unchanged := sameTrust(stored, s)
 		if s.Token == "" {
 			if stored.TokenID != s.TokenID || stored.Token == "" {
 				return resource.Invalid("token", "required for first registration")
 			}
+			if !unchanged {
+				return resource.Invalid("token", "required when caPem or pveApiUrls change")
+			}
 			s.Token = stored.Token
 		}
 		if s.FirewallTokenID != "" && s.FirewallToken == "" {
+			if !unchanged {
+				return resource.Invalid("firewallToken", "required when caPem or pveApiUrls change")
+			}
 			if stored.FirewallTokenID != s.FirewallTokenID || stored.FirewallToken == "" {
 				return resource.Invalid("firewallToken", "required for a new firewall token")
 			}
 			s.FirewallToken = stored.FirewallToken
 		}
 		if s.BackupTokenID != "" && s.BackupToken == "" {
+			if !unchanged {
+				return resource.Invalid("backupToken", "required when caPem or pveApiUrls change")
+			}
 			if stored.BackupTokenID != s.BackupTokenID || stored.BackupToken == "" {
 				return resource.Invalid("backupToken", "required for a new backup token")
 			}
@@ -291,18 +303,42 @@ func (c *Connection) Register(ctx context.Context, data json.RawMessage) error {
 	return nil
 }
 
-// verifyOtherEndpoints asks the addresses after the first, which check
-// already queried, for the cluster name before the registration is stored: a
-// mixed set must not be accepted, and an address that cannot answer is a typo
-// to fix now.
+// sameTrust reports whether s sends a stored secret nowhere new: the stored
+// registration has the same CA and every address of s. A registration with no
+// recorded addresses or CA is changed.
+func sameTrust(stored, s registrationSnapshot) bool {
+	if len(stored.PVEAPIURLs) == 0 || stored.CAPEM == "" || stored.CAPEM != s.CAPEM {
+		return false
+	}
+	held := make(map[string]bool, len(stored.PVEAPIURLs))
+	for _, u := range stored.PVEAPIURLs {
+		held[endpointKey(u)] = true
+	}
+	for _, u := range s.PVEAPIURLs {
+		if !held[endpointKey(u)] {
+			return false
+		}
+	}
+	return true
+}
+
+func endpointKey(raw string) string { return strings.TrimSuffix(strings.ToLower(raw), "/") }
+
+// verifyOtherEndpoints asks every address for the cluster name before the
+// registration is stored, when there is more than one: a mixed set must not
+// be accepted, an address that cannot answer is a typo to fix now, and a
+// standalone node, which has no cluster row, cannot stand in a list.
 func (c *Connection) verifyOtherEndpoints(ctx context.Context, s registrationSnapshot) error {
+	if len(s.PVEAPIURLs) < 2 {
+		return nil
+	}
 	transport, err := c.httpClient(s.CAPEM)
 	if err != nil {
 		return err
 	}
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	for _, endpoint := range s.PVEAPIURLs[1:] {
+	for _, endpoint := range s.PVEAPIURLs {
 		client, err := pveclient.New(pveclient.Config{
 			BaseURL: endpoint, TokenID: s.TokenID, Secret: pveclient.Secret(s.Token), HTTPClient: transport,
 		})
@@ -313,7 +349,7 @@ func (c *Connection) verifyOtherEndpoints(ctx context.Context, s registrationSna
 		if err != nil {
 			return &resource.Error{Code: resource.CodeUnavailable, Message: "registration self-check failed: pveApiUrls"}
 		}
-		if err := checkClusterName(rows, s.ClusterName); err != nil {
+		if err := checkClusterNameInList(rows, s.ClusterName); err != nil {
 			return err
 		}
 	}

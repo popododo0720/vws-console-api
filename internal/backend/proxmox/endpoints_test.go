@@ -66,6 +66,12 @@ func foreignCA(t *testing.T) string {
 
 func clusterServer(t *testing.T, cluster string) *httptest.Server {
 	t.Helper()
+	srv, _ := clusterFake(t, cluster)
+	return srv
+}
+
+func clusterFake(t *testing.T, cluster string) (*httptest.Server, *pvefake.Fake) {
+	t.Helper()
 	s := scenario()
 	s.Cluster = cluster
 	f, err := pvefake.New(s)
@@ -74,7 +80,7 @@ func clusterServer(t *testing.T, cluster string) *httptest.Server {
 	}
 	srv := httptest.NewTLSServer(f)
 	t.Cleanup(srv.Close)
-	return srv
+	return srv, f
 }
 
 func openFixture(t *testing.T) (*Connection, string) {
@@ -217,23 +223,119 @@ func TestConnectionTestChecksEveryAddress(t *testing.T) {
 	}
 }
 
-func TestRegistrationReplacesAStateFileWithoutAddresses(t *testing.T) {
-	pve := clusterServer(t, "test")
-	c, state := openFixture(t)
-	writeFixture(t, filepath.Join(state, registrationFile), []byte(`{"region":"pve-test-1","cluster_name":"test",`+
-		`"tokenId":"vws@pve!inventory","token":"fake-secret"}`))
-	// The admin push after an edit omits the token; the old file's token is reused.
-	data, err := json.Marshal(map[string]any{
-		"region": "pve-test-1", "cluster_name": "test", "pveApiUrls": []string{pve.URL}, "caPem": serverCA(pve),
+func registerFields(t *testing.T, urls []string, ca string, token string) []byte {
+	t.Helper()
+	fields := map[string]any{
+		"region": "pve-test-1", "cluster_name": "test", "pveApiUrls": urls, "caPem": ca,
 		"tokenId": "vws@pve!inventory",
-	})
+	}
+	if token != "" {
+		fields["token"] = token
+	}
+	data, err := json.Marshal(fields)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := c.Register(t.Context(), data); err != nil {
-		t.Fatalf("re-registration over a pre-pveApiUrls file: %v", err)
+	return data
+}
+
+func TestRegistrationReplacesAStateFileWithoutAddresses(t *testing.T) {
+	pve, fake := clusterFake(t, "test")
+	c, state := openFixture(t)
+	writeFixture(t, filepath.Join(state, registrationFile), []byte(`{"region":"pve-test-1","cluster_name":"test",`+
+		`"tokenId":"vws@pve!inventory","token":"fake-secret"}`))
+	// Legacy state records no destination, so the stored secret is not sent anywhere.
+	err := c.Register(t.Context(), registerFields(t, []string{pve.URL}, serverCA(pve), ""))
+	if e := resource.AsError(err); err == nil || e.Code != resource.CodeInvalidArgument || e.Field != "token" {
+		t.Fatalf("legacy state with the token omitted: %v", err)
+	}
+	if n := len(fake.Requests()); n != 0 {
+		t.Fatalf("legacy state: %d requests reached PVE", n)
+	}
+	if err := c.Register(t.Context(), registerFields(t, []string{pve.URL}, serverCA(pve), "fake-secret")); err != nil {
+		t.Fatalf("re-registration with the secret: %v", err)
 	}
 	if _, err := c.Check(t.Context()); err != nil {
 		t.Fatalf("check after re-registration: %v", err)
+	}
+}
+
+func TestOmittedTokenIsReusedOnlyForTheSameTrust(t *testing.T) {
+	a, fa := clusterFake(t, "test")
+	b, fb := clusterFake(t, "test")
+	extra, fe := clusterFake(t, "test")
+	requests := func() int { return len(fa.Requests()) + len(fb.Requests()) + len(fe.Requests()) }
+	c, _ := openFixture(t)
+	ca := serverCA(a)
+	if err := c.Register(t.Context(), registerFields(t, []string{a.URL, b.URL}, ca, "fake-secret")); err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range map[string][]byte{
+		"changed CA":       registerFields(t, []string{a.URL, b.URL}, foreignCA(t), ""),
+		"added address":    registerFields(t, []string{a.URL, b.URL, extra.URL}, ca, ""),
+		"replaced address": registerFields(t, []string{extra.URL}, ca, ""),
+	} {
+		before := requests()
+		err := c.Register(t.Context(), body)
+		if e := resource.AsError(err); err == nil || e.Code != resource.CodeInvalidArgument || e.Field != "token" {
+			t.Errorf("%s: %v, want 400 on token", name, err)
+		}
+		if n := requests() - before; n != 0 {
+			t.Errorf("%s: %d requests reached PVE", name, n)
+		}
+	}
+	// In order: the subset narrows the stored set, so it goes last.
+	for _, tc := range []struct {
+		name string
+		urls []string
+	}{{"unchanged", []string{a.URL, b.URL}}, {"subset", []string{b.URL}}} {
+		if err := c.Register(t.Context(), registerFields(t, tc.urls, ca, "")); err != nil {
+			t.Errorf("%s with the token omitted: %v", tc.name, err)
+		}
+	}
+	if _, err := c.Check(t.Context()); err != nil {
+		t.Fatalf("stored secret was lost: %v", err)
+	}
+}
+
+func TestStandaloneNodeCannotJoinAnAddressList(t *testing.T) {
+	member, alone := clusterServer(t, "test"), clusterServer(t, "")
+	second := clusterServer(t, "test")
+	for name, urls := range map[string][]string{
+		"standalone last":  {member.URL, alone.URL},
+		"standalone first": {alone.URL, member.URL},
+		"two standalone":   {alone.URL, clusterServer(t, "").URL},
+	} {
+		c, state := openFixture(t)
+		err := c.Register(t.Context(), registerBody(t, urls, serverCA(member)))
+		if e := resource.AsError(err); err == nil || e.Code != resource.CodeConflict {
+			t.Errorf("%s: %v, want conflict", name, err)
+		}
+		if _, err := os.Stat(filepath.Join(state, registrationFile)); !os.IsNotExist(err) {
+			t.Errorf("%s: a refused registration reached the state file", name)
+		}
+	}
+	c, _ := openFixture(t)
+	if err := c.Register(t.Context(), registerBody(t, []string{alone.URL}, serverCA(alone))); err != nil {
+		t.Fatalf("single standalone address: %v", err)
+	}
+	if err := c.Register(t.Context(), registerBody(t, []string{member.URL, second.URL}, serverCA(member))); err != nil {
+		t.Fatalf("clustered list: %v", err)
+	}
+	for name, tc := range map[string]struct {
+		urls []string
+		want resource.ConnectionResult
+	}{
+		"single standalone": {[]string{alone.URL}, resource.ConnectionPass},
+		"mixed":             {[]string{member.URL, alone.URL}, resource.ConnectionFail},
+		"standalone first":  {[]string{alone.URL, member.URL}, resource.ConnectionFail},
+	} {
+		steps := TestConnection(t.Context(), ConnectionConfig{
+			URLs: tc.urls, CAPEM: serverCA(member), ClusterName: "test",
+			TokenID: "vws@pve!inventory", TokenSecret: "fake-secret",
+		})
+		if steps[2].Result != tc.want {
+			t.Errorf("connection test %s: %+v, want cluster_name %s", name, steps, tc.want)
+		}
 	}
 }

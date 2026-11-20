@@ -92,7 +92,11 @@ func TestConnection(ctx context.Context, cfg ConnectionConfig) []resource.Connec
 			return steps
 		}
 		rows, err := other.ClusterStatus(ctx)
-		if err != nil || checkClusterName(rows, cfg.ClusterName) != nil {
+		check := checkClusterName
+		if len(cfg.URLs) > 1 {
+			check = checkClusterNameInList
+		}
+		if err != nil || check(rows, cfg.ClusterName) != nil {
 			return steps
 		}
 	}

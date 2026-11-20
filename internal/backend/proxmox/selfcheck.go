@@ -282,6 +282,18 @@ func forbiddenMutationPrivilege(path, privilege string) bool {
 	}
 }
 
+// checkClusterNameInList is checkClusterName for a registration with several
+// addresses: every address must report the cluster row, so a standalone node
+// cannot be mixed with a clustered one.
+func checkClusterNameInList(status []pveclient.ClusterStatus, registered string) error {
+	for _, row := range status {
+		if row.Type == "cluster" {
+			return checkClusterName(status, registered)
+		}
+	}
+	return &resource.Error{Code: resource.CodeConflict, Message: "cluster_name differs from registration"}
+}
+
 // Standalone PVE has no cluster row and keeps the registered identity.
 func checkClusterName(status []pveclient.ClusterStatus, registered string) error {
 	for _, row := range status {
