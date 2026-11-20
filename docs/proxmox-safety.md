@@ -26,7 +26,8 @@ admin's permission change), `Sys.Modify`, `Datastore.Allocate`, `VM.Migrate`,
 
 ## The pool check before every mutation
 
-Every mutation in `internal/backend/proxmox` starts by reading the target VM
+Every mutation in `internal/backend/proxmox`, which only the `vws-region`
+daemon runs, starts by reading the target VM
 fresh from `GET /cluster/resources`, never from the cache (#769). It
 recomputes the instance id, and a VM that's missing, a template, or in a pool
 other than the caller's is `NotFound` with the AWS message, so the answer

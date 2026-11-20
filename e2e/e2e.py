@@ -1,7 +1,7 @@
 """End-to-end suite. Drives the EC2 Query and S3 entry points with boto3.
 
 Environment:
-   VWS_E2E_BACKEND  fake (default), regions or proxmox behind the entry points.
+   VWS_E2E_BACKEND  fake (default) or regions behind the entry points.
   VWS_E2E_EC2      EC2 Query endpoint. Default http://127.0.0.1:8081.
   VWS_E2E_S3       S3 endpoint. Default http://127.0.0.1:8082.
   VWS_E2E_IAM      IAM and STS Query endpoint (one listener). Default http://127.0.0.1:8084.

@@ -132,7 +132,7 @@ func TestAdminBootstrapRejectsInvalidFlags(t *testing.T) {
 }
 
 func TestAdminMemoryRegistryForEveryBackend(t *testing.T) {
-	for _, kind := range []string{"fake", "proxmox", "regions"} {
+	for _, kind := range []string{"fake", "regions"} {
 		t.Run(kind, func(t *testing.T) {
 			g, key, closeRegistry, err := (adminBootstrap{store: "memory"}).open(t.Context(), "", kind)
 			if err != nil {
@@ -201,9 +201,9 @@ func TestRegionsNamesOnlyMissingCredentials(t *testing.T) {
 func TestRetiredAndUnknownBackendsAreRejected(t *testing.T) {
 	clearCredentialEnv(t)
 	t.Setenv("VWS_SECRET_KEY_FILE", filepath.Join(t.TempDir(), "missing"))
-	for _, kind := range []string{"grpc", "", "bogus", "GRPC"} {
+	for _, kind := range []string{"grpc", "", "bogus", "GRPC", "proxmox"} {
 		err := run(t.Context(), []string{"-backend=" + kind})
-		want := `unknown -backend "` + kind + `": valid values are fake|regions|proxmox`
+		want := `unknown -backend "` + kind + `": valid values are fake|regions`
 		if err == nil || err.Error() != want {
 			t.Fatalf("%q: got %v, want %s", kind, err, want)
 		}

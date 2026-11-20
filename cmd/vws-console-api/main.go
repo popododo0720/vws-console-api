@@ -25,7 +25,6 @@ import (
 	"github.com/popododo0720/vws-console-api/internal/backend/awssdk"
 	"github.com/popododo0720/vws-console-api/internal/backend/fake"
 	"github.com/popododo0720/vws-console-api/internal/backend/grpcclient/iamclient"
-	"github.com/popododo0720/vws-console-api/internal/backend/proxmox"
 	"github.com/popododo0720/vws-console-api/internal/cloud"
 	"github.com/popododo0720/vws-console-api/internal/globalconfig"
 	"github.com/popododo0720/vws-console-api/internal/iam"
@@ -70,17 +69,12 @@ func serve(ctx context.Context, args []string) (err error) {
 func run(ctx context.Context, args []string) (err error) {
 	fs := flag.NewFlagSet("vws-console-api", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
-	backendKind := fs.String("backend", "fake", "fake, regions or proxmox")
+	backendKind := fs.String("backend", "fake", "fake or regions")
 	defaultRegion := fs.String("default-region", resource.RegionName, "default console region")
-	regionConfig := fs.String("region-config", "/etc/vws/region.yaml", "node-local Proxmox configuration")
-	registrationFile := fs.String("registration-file", "/etc/pve/vws/registration.json", "public Proxmox registration")
-	pveEndpoint := fs.String("pve-endpoint", "https://127.0.0.1:8006", "local pveproxy HTTPS origin")
-	pveCA := fs.String("pve-ca-file", "/etc/pve/pve-root-ca.pem", "PVE CA bundle")
-	helperPath := fs.String("helper-path", "", "region helper executable override")
 	auditLog := fs.String("audit-log", "", "append-only audit stream path; empty uses stderr")
 	awsProxySocket := fs.String("aws-proxy-socket", "/run/vws/aws-proxy.sock", "AWS inventory and test proxy socket")
 	globalConfig := fs.String("global-config", "", "global.yaml bootstrap path for the admin registry; "+
-		"required for regions unless -admin-store memory; empty uses memory with fake and proxmox "+
+		"required for regions unless -admin-store memory; empty uses memory with fake "+
 		"(memory is not recommended for production)")
 	var bootstrap adminBootstrap
 	bootstrap.flags(fs)
@@ -150,9 +144,9 @@ func run(ctx context.Context, args []string) (err error) {
 		return fmt.Errorf("flags: %w", err)
 	}
 	switch *backendKind {
-	case "fake", "regions", "proxmox":
+	case "fake", "regions":
 	default:
-		return fmt.Errorf("unknown -backend %q: valid values are fake|regions|proxmox", *backendKind)
+		return fmt.Errorf("unknown -backend %q: valid values are fake|regions", *backendKind)
 	}
 	if err := bootstrap.validate(*globalConfig); err != nil {
 		return err
@@ -187,7 +181,6 @@ func run(ctx context.Context, args []string) (err error) {
 	var set backend.Set
 	var caps backend.Capabilities
 	var discovery func(context.Context, backend.ProxmoxRegion) (resource.RegionCapabilities, error)
-	var localRegions backend.RegionCatalog
 	switch *backendKind {
 	case "fake":
 		direct, parseErr := resource.Parse[resource.SubnetID]("subnet-direct-prod")
@@ -196,20 +189,8 @@ func run(ctx context.Context, args []string) (err error) {
 		}
 		set = fake.New(fake.Options{Direct: []fake.DirectNetwork{{ID: direct, Cidr: "192.168.200.0/24"}}}).Set()
 	case "regions":
-	case "proxmox":
-		b, closeBackend, openErr := standaloneBackend(
-			ctx, *regionConfig, *registrationFile, *pveEndpoint, *pveCA, *helperPath,
-		)
-		if openErr != nil {
-			return openErr
-		}
-		defer closeBackend()
-		set, caps = b.Set(), b
-		identity := proxmox.Identity(b)
-		localRegions = backend.NewStaticRegions([]backend.ProxmoxRegion{identity.Region}, nil)
-		caller.Region = identity.Region.Name
 	}
-	if *backendKind == "regions" || *backendKind == "proxmox" {
+	if *backendKind == "regions" {
 		if err := requireExplicit(creds, *backendKind); err != nil {
 			return err
 		}
@@ -234,9 +215,6 @@ func run(ctx context.Context, args []string) (err error) {
 	var regions backend.RegionCatalog = backend.DefaultRegions()
 	if *backendKind != "fake" {
 		regions = registry.Catalog()
-	}
-	if localRegions != nil {
-		regions = localRegions
 	}
 	// The static key remains the account root for SigV4. With -iam=grpc,
 	// vws-iam owns console passwords and sessions for every identity.
@@ -372,7 +350,7 @@ func openRegistry(
 	ctx context.Context, path, backendKind string,
 ) (*store.Registry, *adminsecret.Key, func() error, error) {
 	if path == "" {
-		if backendKind != "fake" && backendKind != "proxmox" {
+		if backendKind != "fake" {
 			return nil, nil, nil, fmt.Errorf("-global-config is required for the admin registry with -backend=%s", backendKind)
 		}
 		return store.New(store.NewMemory()), nil, func() error { return nil }, nil

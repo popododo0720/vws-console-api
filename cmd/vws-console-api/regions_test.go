@@ -481,13 +481,6 @@ func TestRegisteredBackendsWireIAMKeyPairs(t *testing.T) {
 	}
 }
 
-func TestProxmoxRequiresRegionConfig(t *testing.T) {
-	err := run(t.Context(), []string{"-backend=proxmox", "-region-config=" + filepath.Join(t.TempDir(), "missing")})
-	if err == nil || !strings.Contains(err.Error(), "region.yaml") {
-		t.Fatalf("missing region.yaml: %v", err)
-	}
-}
-
 func TestRegionsRefusesDefaultCredentials(t *testing.T) {
 	err := run(t.Context(), []string{"-backend=regions"})
 	if err == nil || !strings.Contains(err.Error(), "-backend=regions needs") {
