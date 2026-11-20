@@ -2,7 +2,7 @@
 // and VM mutations and console tasks, answered in the api-viewer shapes, behind API
 // tokens whose ACLs are checked as PVE checks them (design.md 8.1). Console
 // tickets open one websocket carrying an RFB banner. Quorum gates power
-// submissions and writes to the shared in-memory pmxcfs. A Fake is an
+// submissions and writes. A Fake is an
 // http.Handler that tests serve with httptest.
 package pvefake
 

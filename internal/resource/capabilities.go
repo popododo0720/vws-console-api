@@ -24,7 +24,7 @@ type RegionCluster struct {
 	Name       string `json:"name"`
 	PVERelease string `json:"pveRelease"`
 	Quorate    bool   `json:"quorate"`
-	Leader     string `json:"leader"`
+	APINode    string `json:"apiNode"`
 }
 
 // RegionZone is one zone of a region.

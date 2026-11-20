@@ -121,10 +121,10 @@ func run(ctx context.Context, args []string) (err error) {
 	daemonCtx := ctx
 	var initialized atomic.Bool
 	var state atomic.Pointer[http.Handler]
-	var elected atomic.Pointer[proxmox.Leader]
-	var leaderBackend *proxmox.Backend
-	var leaderCancel context.CancelFunc
-	var leaderDone chan struct{}
+	var gated atomic.Pointer[proxmox.QuorumGate]
+	var gateBackend *proxmox.Backend
+	var gateCancel context.CancelFunc
+	var gateDone chan struct{}
 	probe := &readiness{check: func(ctx context.Context) error {
 		b, err := conn.Check(ctx)
 		if err != nil {
@@ -133,24 +133,20 @@ func run(ctx context.Context, args []string) (err error) {
 			}
 			return err
 		}
-		if b == leaderBackend && state.Load() != nil {
+		if b == gateBackend && state.Load() != nil {
 			return nil
 		}
 		identity := proxmox.Identity(b)
-		if b != leaderBackend {
-			leader, err := proxmox.NewLeader(ctx, b, conn.Helper, filepath.Join(filepath.Dir(*registration), "leader"))
-			if err != nil {
-				state.Store(nil)
-				return err
+		if b != gateBackend {
+			if gateCancel != nil {
+				gateCancel()
+				<-gateDone
 			}
-			if leaderCancel != nil {
-				leaderCancel()
-				<-leaderDone
-			}
-			leaderCtx, stopLeader := context.WithCancel(daemonCtx)
-			leaderCancel, leaderDone, leaderBackend = stopLeader, make(chan struct{}), b
-			elected.Store(leader)
-			done := leaderDone
+			gate := proxmox.NewQuorumGate(b)
+			gateCtx, stopGate := context.WithCancel(daemonCtx)
+			gateCancel, gateDone, gateBackend = stopGate, make(chan struct{}), b
+			gated.Store(gate)
+			done := gateDone
 			go func() {
 				defer close(done)
 				finalized := make(chan struct{})
@@ -158,15 +154,15 @@ func run(ctx context.Context, args []string) (err error) {
 					defer close(finalized)
 					ticker := time.NewTicker(5 * time.Second)
 					defer ticker.Stop()
-					finalizeLaunches(leaderCtx, leader.Admit, b.FinalizeLaunches, ticker.C)
+					finalizeLaunches(gateCtx, gate.Admit, b.FinalizeLaunches, ticker.C)
 				}()
-				leader.Run(leaderCtx)
+				gate.Run(gateCtx)
 				<-finalized
 			}()
 		}
 		h, err := regionapi.New(regionapi.Config{
 			Backend: b.Set(), Capabilities: b, Region: identity.Region.Name, Status: b, Pools: b,
-			Gate: elected.Load(), CheckScope: proxmox.ScopeCheck(b),
+			Gate: gated.Load(), CheckScope: proxmox.ScopeCheck(b),
 			Version: regionapi.Version{ReleaseLine: "1.0", ClusterName: identity.ClusterName},
 		})
 		if err == nil {
@@ -178,9 +174,9 @@ func run(ctx context.Context, args []string) (err error) {
 	go func() {
 		opsDone <- server.Serve(ctx, server.Options{
 			Logger: slog.Default(), OpsAddr: *opsAddr,
-			RegionLeader: func() string {
-				if leader := elected.Load(); leader != nil {
-					return leader.Current()
+			RegionAPINode: func() string {
+				if gate := gated.Load(); gate != nil {
+					return gate.APINode()
 				}
 				return ""
 			},
@@ -237,9 +233,9 @@ func run(ctx context.Context, args []string) (err error) {
 	<-ctx.Done()
 	<-reloadDone
 	probe.mu.Lock()
-	if leaderCancel != nil {
-		leaderCancel()
-		<-leaderDone
+	if gateCancel != nil {
+		gateCancel()
+		<-gateDone
 	}
 	probe.mu.Unlock()
 	initialized.Store(false)
@@ -253,25 +249,18 @@ func run(ctx context.Context, args []string) (err error) {
 }
 
 func finalizeLaunches(
-	ctx context.Context, admit func(context.Context) (string, error),
+	ctx context.Context, admit func(context.Context) error,
 	finalize func(context.Context, func(context.Context) error) error, ticks <-chan time.Time,
 ) {
-	fence := func(ctx context.Context) error {
-		peer, err := admit(ctx)
-		if peer != "" {
-			return errors.New("finalize requires local leadership")
-		}
-		return err
-	}
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticks:
-			if err := fence(ctx); err != nil {
+			if err := admit(ctx); err != nil {
 				continue
 			}
-			if err := finalize(ctx, fence); err != nil && ctx.Err() == nil {
+			if err := finalize(ctx, admit); err != nil && ctx.Err() == nil {
 				if resource.IsUnsupported(resource.AsError(err)) {
 					return
 				}

@@ -80,9 +80,8 @@ func healthRequest(ctx context.Context, h http.Handler, name, token string) *htt
 }
 
 func TestAdminHealthReadsRegionWithoutWrites(t *testing.T) {
-	leader, fake, _ := testLeader(t, scenario())
-	acquireLeader(t, leader)
-	b := leader.backend
+	gate, fake, _ := testGate(t, scenario())
+	b := gate.backend
 	h, err := regionapi.New(regionapi.Config{
 		Backend: b.Set(), Capabilities: b, Region: "pve-test-1", Status: b,
 		Version: regionapi.Version{ReleaseLine: "1.0", ClusterName: "test"},
@@ -99,7 +98,6 @@ func TestAdminHealthReadsRegionWithoutWrites(t *testing.T) {
 	admin, counting := healthConsole(t, srv.URL, config)
 	for _, quorum := range []bool{true, false, false} {
 		fake.SetQuorate(quorum)
-		leader.checkQuorum(t.Context())
 		rec := healthRequest(t.Context(), admin, "pve-test-1", "root")
 		var result struct {
 			resource.RegionStatus
@@ -114,9 +112,8 @@ func TestAdminHealthReadsRegionWithoutWrites(t *testing.T) {
 			result.PVERelease != "9.2" || result.LastError != nil || result.CheckedAt.IsZero() {
 			t.Fatalf("health: %d %s", rec.Code, rec.Body)
 		}
-		if quorum && (result.Leader == nil || *result.Leader != "pve1") ||
-			!quorum && result.Leader != nil {
-			t.Fatalf("health leader: %s", rec.Body)
+		if result.APINode != "pve1" || strings.Contains(rec.Body.String(), "leader") {
+			t.Fatalf("health apiNode: %s", rec.Body)
 		}
 		if !strings.Contains(rec.Body.String(), `"lastError":null`) || rec.Header().Get("Cache-Control") != "no-store" {
 			t.Fatalf("health wire: %s", rec.Body)

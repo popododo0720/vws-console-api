@@ -23,9 +23,9 @@ States == {"pending", "running", "stopping", "stopped",
 Kinds == {"clone", "config", "start", "stop", "reboot", "destroy"}
 Statuses == {"idle", "running", "ok", "failed"}
 
-VARIABLES state, exists, owner, upid, status, leader, quorum, request,
+VARIABLES state, exists, owner, upid, status, quorum, request,
           scanned, legal, fenced
-vars == <<state, exists, owner, upid, status, leader, quorum, request,
+vars == <<state, exists, owner, upid, status, quorum, request,
           scanned, legal, fenced>>
 
 Init ==
@@ -34,7 +34,6 @@ Init ==
     /\ owner = [v \in VMs |-> None]
     /\ upid = [v \in VMs |-> None]
     /\ status = [v \in VMs |-> "idle"]
-    /\ leader = TRUE
     /\ quorum = TRUE
     /\ request = None
     /\ scanned = FALSE
@@ -43,12 +42,12 @@ Init ==
 
 \* Each (VM, kind) denotes a UPID; attempts with the same outcome are
 \* equivalent here. PVE serializes tasks on a VM, including across terms.
-Gate == ~FixFence \/ (leader /\ quorum)
+Gate == ~FixFence \/ quorum
 Submit(v, kind) ==
     /\ Gate
     /\ upid' = [upid EXCEPT ![v] = <<v, kind>>]
     /\ status' = [status EXCEPT ![v] = "running"]
-    /\ fenced' = (fenced /\ leader /\ quorum)
+    /\ fenced' = (fenced /\ quorum)
 
 \* legal records every edge, rather than constraining Next with the oracle.
 Change(v, s) ==
@@ -59,7 +58,7 @@ Change(v, s) ==
 Lookup(t) ==
     /\ request' = t
     /\ scanned' = TRUE
-    /\ UNCHANGED <<state, exists, owner, upid, status, leader, quorum, legal, fenced>>
+    /\ UNCHANGED <<state, exists, owner, upid, status, quorum, legal, fenced>>
 
 Clone(v) ==
     /\ scanned
@@ -70,13 +69,13 @@ Clone(v) ==
     /\ exists' = exists \cup {v}
     /\ state' = [state EXCEPT ![v] = "pending"]
     /\ scanned' = FALSE
-    /\ UNCHANGED <<leader, quorum, request, legal>>
+    /\ UNCHANGED <<quorum, request, legal>>
 
 Configure(v) ==
     /\ v \in exists
     /\ upid[v] = <<v, "clone">> /\ status[v] = "ok"
     /\ Submit(v, "config")
-    /\ UNCHANGED <<state, exists, owner, leader, quorum, request, scanned, legal>>
+    /\ UNCHANGED <<state, exists, owner, quorum, request, scanned, legal>>
 
 Start(v) ==
     /\ v \in exists
@@ -87,7 +86,7 @@ Start(v) ==
     /\ IF state[v] = "stopped"
        THEN Change(v, IF FixStart THEN "pending" ELSE "running")
        ELSE UNCHANGED <<state, legal>>
-    /\ UNCHANGED <<exists, owner, leader, quorum, request, scanned>>
+    /\ UNCHANGED <<exists, owner, quorum, request, scanned>>
 
 Stop(v) ==
     /\ v \in exists
@@ -95,12 +94,12 @@ Stop(v) ==
     /\ status[v] # "running"
     /\ Submit(v, "stop")
     /\ Change(v, "stopping")
-    /\ UNCHANGED <<exists, owner, leader, quorum, request, scanned>>
+    /\ UNCHANGED <<exists, owner, quorum, request, scanned>>
 
 Reboot(v) ==
     /\ v \in exists /\ state[v] = "running" /\ status[v] # "running"
     /\ Submit(v, "reboot")
-    /\ UNCHANGED <<state, exists, owner, leader, quorum, request, scanned, legal>>
+    /\ UNCHANGED <<state, exists, owner, quorum, request, scanned, legal>>
 
 \* A failed launch is undone by the same destroy path as Terminate.
 \* A failed stop/destroy remains transitional until retried; task failure
@@ -109,9 +108,9 @@ Terminate(v) ==
     /\ v \in exists /\ status[v] # "running"
     /\ Submit(v, "destroy")
     /\ Change(v, "shutting-down")
-    /\ UNCHANGED <<exists, owner, leader, quorum, request, scanned>>
+    /\ UNCHANGED <<exists, owner, quorum, request, scanned>>
 
-\* Already submitted tasks finish even after quorum/leader loss or restart.
+\* Already submitted tasks finish even after quorum loss or restart.
 Finish(v, success) ==
     /\ status[v] = "running"
     /\ status' = [status EXCEPT ![v] = IF success THEN "ok" ELSE "failed"]
@@ -125,18 +124,15 @@ Finish(v, success) ==
             IN /\ Change(v, next)
                /\ exists' = IF kind = "destroy" /\ FixDestroy
                             THEN exists \ {v} ELSE exists
-    /\ UNCHANGED <<owner, upid, leader, quorum, request, scanned, fenced>>
+    /\ UNCHANGED <<owner, upid, quorum, request, scanned, fenced>>
 
-\* Lease expiry drops authority; acquisition represents the next term,
-\* after the previous lease expires. Quorum loss fences immediately.
-Authority ==
-    /\ leader' \in BOOLEAN
+\* One region daemon per cluster needs no lease; the only authority is a
+\* recent quorum check, so quorum loss fences immediately.
+QuorumChange ==
     /\ quorum' \in BOOLEAN
-    /\ (leader' => quorum')
     /\ UNCHANGED <<state, exists, owner, upid, status, request, scanned, legal, fenced>>
 
 Restart ==
-    /\ leader' = FALSE
     /\ scanned' = FALSE
     /\ request' = None
     /\ UNCHANGED <<state, exists, owner, upid, status, quorum, legal, fenced>>
@@ -145,7 +141,7 @@ Next ==
     \/ \E t \in Tokens : Lookup(t)
     \/ \E v \in VMs : Clone(v) \/ Configure(v) \/ Start(v) \/ Stop(v)
                       \/ Reboot(v) \/ Terminate(v) \/ Finish(v, TRUE) \/ Finish(v, FALSE)
-    \/ Authority
+    \/ QuorumChange
     \/ Restart
 
 Spec == Init /\ [][Next]_vars
@@ -158,7 +154,7 @@ TypeOK ==
     /\ status \in [VMs -> Statuses]
     /\ request \in Tokens \cup {None}
     /\ scanned \in BOOLEAN /\ (scanned => request \in Tokens)
-    /\ leader \in BOOLEAN /\ quorum \in BOOLEAN
+    /\ quorum \in BOOLEAN
     /\ legal \in BOOLEAN /\ fenced \in BOOLEAN
 OneVMPerClientToken ==
     \A t \in Tokens : Cardinality({v \in exists : owner[v] = t}) <= 1

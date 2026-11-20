@@ -12,29 +12,27 @@ import (
 )
 
 type mutationGate struct {
-	peer  string
 	err   error
 	calls int
 }
 
-func (g *mutationGate) Admit(context.Context) (string, error) {
+func (g *mutationGate) Admit(context.Context) error {
 	g.calls++
-	return g.peer, g.err
+	return g.err
 }
 
-func TestMutationRegistrationDerivesLeaderGate(t *testing.T) {
+func TestMutationRegistrationDerivesQuorumGate(t *testing.T) {
 	for _, test := range []struct {
-		name, peer string
-		err        error
-		status     int
+		name   string
+		err    error
+		status int
 	}{
-		{"leader", "", nil, http.StatusOK},
-		{"follower", "pve2", nil, http.StatusServiceUnavailable},
-		{"unknown", "", &resource.Error{Code: resource.CodeUnavailable}, http.StatusServiceUnavailable},
+		{"quorum", nil, http.StatusOK},
+		{"no quorum", &resource.Error{Code: resource.CodeUnavailable}, http.StatusServiceUnavailable},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			mux := http.NewServeMux()
-			gate := &mutationGate{peer: test.peer, err: test.err}
+			gate := &mutationGate{err: test.err}
 			calls := 0
 			register(mux, Config{Gate: gate}, "Compute", "Mutation", func(
 				_ context.Context, _ backend.Mutation, _ struct{},

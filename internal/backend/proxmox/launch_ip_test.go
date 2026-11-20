@@ -185,7 +185,7 @@ func TestStaticLaunchRefusesIncompleteInventory(t *testing.T) {
 	}
 }
 
-func TestStaticLaunchLeaderHandoverFencesDelayedWrite(t *testing.T) {
+func TestStaticLaunchRestartFencesDelayedWrite(t *testing.T) {
 	w, m, req := staticLaunchBackend(t)
 	req.Count = 1
 	_, err := w.b.RunInstances(t.Context(), m, req)
@@ -194,24 +194,9 @@ func TestStaticLaunchLeaderHandoverFencesDelayedWrite(t *testing.T) {
 	second.Pool, second.Key = "images", strings.Repeat("b", 64)
 	_, err = w.b.RunInstances(t.Context(), second, req)
 	checkLaunch(t, err)
-	fs := w.f.PMXCFS()
-	for _, dir := range []string{"/etc/pve/vws", "/etc/pve/priv", "/etc/pve/priv/lock", "/etc/pve/priv/lock/vws-region"} {
-		checkLaunch(t, fs.Mkdir(dir))
-	}
-	first, err := NewLeader(t.Context(), w.b, leaseHelper{fs}, leaderPath)
-	checkLaunch(t, err)
-	clock := &leaseClock{at: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
-	first.now, first.read = clock.now, fs.ReadFile
-	acquireLeader(t, first)
-	fence := func(leader *Leader) func(context.Context) error {
-		return func(ctx context.Context) error {
-			peer, err := leader.Admit(ctx)
-			if peer != "" {
-				return fmt.Errorf("not local leader")
-			}
-			return err
-		}
-	}
+	first, _ := gateFor(w.b)
+	first.check(t.Context())
+	checkLaunch(t, first.Admit(t.Context()))
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 	held, release := make(chan struct{}), make(chan struct{})
@@ -233,18 +218,23 @@ func TestStaticLaunchLeaderHandoverFencesDelayedWrite(t *testing.T) {
 		return false
 	}
 	oldDone := make(chan error, 1)
-	go func() { oldDone <- w.b.FinalizeLaunches(ctx, fence(first)) }()
+	go func() { oldDone <- w.b.FinalizeLaunches(ctx, first.Admit) }()
 	select {
 	case <-held:
 	case <-ctx.Done():
-		t.Fatal("old leader did not choose an address")
+		t.Fatal("old daemon did not choose an address")
 	}
-	next := leaderFollower(t, first, "pve2", clock)
-	clock.advance(21 * time.Second)
-	acquireLeader(t, next)
+	// The old daemon loses quorum while its PUT is in flight; a restarted
+	// daemon regains it and takes over.
+	w.f.SetQuorate(false)
+	first.check(ctx)
+	w.f.SetQuorate(true)
 	fresh, err := New(ctx, w.b.client, Identity(w.b), w.b.cfg)
 	checkLaunch(t, err)
-	// Reverse pool order so the new leader allocates another VM before the delayed target.
+	next, _ := gateFor(fresh)
+	next.check(ctx)
+	checkLaunch(t, next.Admit(ctx))
+	// Reverse pool order so the new daemon allocates another VM before the delayed target.
 	fresh.cfg.Pools = map[string]string{"a": "images", "z": "managed"}
 	calls := 0
 	checkLaunch(t, fresh.FinalizeLaunches(ctx, func(ctx context.Context) error {
@@ -254,13 +244,13 @@ func TestStaticLaunchLeaderHandoverFencesDelayedWrite(t *testing.T) {
 			select {
 			case err := <-oldDone:
 				if err == nil {
-					t.Error("old leader completed after takeover")
+					t.Error("old daemon completed after takeover")
 				}
 			case <-ctx.Done():
 				return ctx.Err()
 			}
 		}
-		return fence(next)(ctx)
+		return next.Admit(ctx)
 	}))
 	for i, want := range []string{"192.0.2.3", "192.0.2.2"} {
 		cfg, err := fresh.client.VMConfig(ctx, launchVM(t, w, i))

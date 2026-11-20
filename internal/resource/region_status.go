@@ -5,7 +5,7 @@ import "time"
 // RegionStatus is a live observation of the region, never a stored record.
 type RegionStatus struct {
 	Quorate    bool               `json:"quorate"`
-	Leader     *string            `json:"leader"`
+	APINode    string             `json:"apiNode"`
 	PVERelease string             `json:"pveRelease"`
 	Nodes      []RegionNode       `json:"nodes"`
 	LastError  *RegionStatusError `json:"lastError"`

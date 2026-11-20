@@ -36,10 +36,28 @@ Invalid YAML or certificates fail startup; failed self-checks or shared files fa
 Interrupt and SIGTERM drain both listeners. `/metrics` uses the shared
 server exporter; regionapi uses the existing HTTP telemetry middleware.
 
-The daemon holds `/etc/pve/vws/leader` under the helper's named `leader` mkdir lock: 20 s leases renewed every 5 s,
-quorum checked every 2 s and fresh for 5 s (standalone: the local node's online state). Mutations need fresh quorum and
-more than 5 s of lease; a restarted process waits for its old lease to expire. `vws_region_leader{node}` and obs logs show
-leader changes. This first part of #766 fences followers with 503; forwarding, peer certificates and stale-read headers follow.
+One daemon serves one cluster, and its in-process locks already serialize
+launch placement and the finishing loop, so there is no leader lease. A quorum
+gate checks PVE `/cluster/status` every 2 s (standalone: the local node's online
+state). Mutations and the launch finishing loop pass only while the last check
+found quorum and is at most 5 s old; otherwise they return 503, before any PVE
+call. Reads stay available. Status, capabilities and `/metrics`
+(`vws_region_api_node{node}`) name `apiNode`, the PVE node the daemon is
+connected to, and no leader. A region with quorum reports `available`.
+Once the daemon's poller stops (shutdown or a registration reload), the gate
+closes for good and a handler still in flight is refused.
+
+### Rollout prerequisites
+
+- Exactly one active `vws-region` per cluster. The gate is not a lock: the
+  in-process locks and the TLA model assume a single writer. This release must
+  not run with the old per-node layout (a daemon on every PVE node behind a
+  VIP). Stop and disable every old per-node daemon, then start the single new
+  one. The per-cluster placement belongs to vws-deploy #849; until it ships,
+  do not roll this release out through the current per-node packaging.
+- Status now carries `apiNode` and no `leader`. The deploy CLI
+  (`vws region health`) and the console admin regions view must accept
+  `apiNode` before this ships (deploy #849, console #216).
 
 ## Registration
 
@@ -82,7 +100,7 @@ three live fingerprints. Disk export itself is not enabled by registration.
 
 ## Privileged helper
 
-`cmd/vws-region-helper` provides `registration-write` and `lease-write`,
+`cmd/vws-region-helper` provides `registration-write`,
 taking contents on stdin (at most 1 MiB) and no arguments.
 `token-write <fp>`, `token-read <fp>` and `token-delete <fp>` require a full
 lowercase SHA-256 fingerprint matching `^[0-9a-f]{64}$`, checked by both
@@ -93,9 +111,8 @@ envelope. token-delete acquires the registration lock across the identity check
 and removal, refuses the current fingerprint, and releases its lock on success
 or error. A busy lock refuses deletion without removing any file or that lock;
 an absent inactive file is already deleted.
-Identity and lease writes atomically replace `/etc/pve/vws/registration.json`
-and `/etc/pve/vws/leader`.
-Public identity and lease files use mode 0640 (pmxcfs owns them as root:www-data);
+Identity writes atomically replace `/etc/pve/vws/registration.json`.
+The public identity file uses mode 0640 (pmxcfs owns it as root:www-data);
 token and snippet files use 0600. Token files contain a versioned AES-256-GCM envelope
 authenticated with the raw 32-byte `$CREDENTIALS_DIRECTORY/region-kek`.
 The credential must be a root-owned regular file with no group/other access.
@@ -123,7 +140,7 @@ recovery. `TestTokenFingerprintGrammar`, `TestTokenWriteEncrypted` and
 `TestTokenDeleteSerializesRegistration` enforces deletion/publication
 serialization, busy-lock refusal and lock release after success or refusal.
 
-`lock NAME` uses mkdir under `/etc/pve/priv/lock/vws-region/`; a duplicate
+`lock NAME` (used only for the registration lock) uses mkdir under `/etc/pve/priv/lock/vws-region/`; a duplicate
 lock fails. `unlock NAME` removes an empty directory; an absent lock succeeds.
 Names are 1-64 letters, digits, `_` or `-`, starting with a letter or digit.
 `snippet-write NAME` and `snippet-delete NAME` operate only on
@@ -140,7 +157,7 @@ failure on stderr and a nonzero exit code; no submitted contents are echoed.
 File replacement and deletion can be retried; lock acquisition deliberately
 fails on an existing directory. A killed write leaves the old target or the
 complete replacement; an orphan temporary file is never read as a target.
-Daemon integration is #757, lease leadership is #766, and sudo/systemd
+Daemon integration is #757, and sudo/systemd
 credential delivery and installation are vws-deploy#764.
 
 ## Non-root loopback stack
