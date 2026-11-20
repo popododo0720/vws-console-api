@@ -19,7 +19,7 @@ func snapshot(t *testing.T, dir string) string {
 }
 
 func TestConnectionRequiresConfigRegistrationAndSelfCheck(t *testing.T) {
-	dir := t.TempDir()
+	dir := privateDir(t)
 	reg := snapshot(t, dir)
 	config := filepath.Join(dir, "region.yaml")
 	if _, err := Open(config, "pve-test-1", dir, "https://unused", nil); err == nil {
@@ -64,7 +64,7 @@ func TestConnectionRequiresConfigRegistrationAndSelfCheck(t *testing.T) {
 }
 
 func TestRegistrationIdentityIsBounded(t *testing.T) {
-	dir := t.TempDir()
+	dir := privateDir(t)
 	config := filepath.Join(dir, "region.yaml")
 	if err := os.WriteFile(config, []byte("read_only: true\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -117,7 +117,7 @@ func TestConnectionRejectsMutationTokenEvenWithoutReadOnlyConfig(t *testing.T) {
 	_, fake := serve(t, s)
 	pve := httptest.NewServer(fake)
 	defer pve.Close()
-	dir := t.TempDir()
+	dir := privateDir(t)
 	config := filepath.Join(dir, "region.yaml")
 	if err := os.WriteFile(config, []byte("read_only: false\n"), 0o600); err != nil {
 		t.Fatal(err)

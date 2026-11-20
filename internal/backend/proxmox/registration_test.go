@@ -22,7 +22,7 @@ func registrationZones(count int) []backend.Zone {
 }
 
 func TestUnregisteredConnection(t *testing.T) {
-	dir := t.TempDir()
+	dir := privateDir(t)
 	config := filepath.Join(dir, "region.yaml")
 	writeFixture(t, config, []byte("read_only: true\n"))
 	conn, err := Open(config, "pve-test-1", dir, "https://unused", nil)
@@ -50,7 +50,7 @@ func TestRegistrationRejectsInvalidInput(t *testing.T) {
 }
 
 func TestRegistrationForAnotherRegionIsInvalid(t *testing.T) {
-	dir := t.TempDir()
+	dir := privateDir(t)
 	config := filepath.Join(dir, "region.yaml")
 	writeFixture(t, config, []byte("read_only: true\n"))
 	conn, err := Open(config, "pve-test-1", filepath.Join(dir, "state"), "https://unused", nil)

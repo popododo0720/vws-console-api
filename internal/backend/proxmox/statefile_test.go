@@ -145,3 +145,13 @@ func TestOpenCreatesNestedStateDirectoryPrivately(t *testing.T) {
 		t.Fatalf("reopening an existing private directory: %v", err)
 	}
 }
+
+// privateDir is t.TempDir with mode 0700; t.TempDir's own mode follows the umask.
+func privateDir(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
