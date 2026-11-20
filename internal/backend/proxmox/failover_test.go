@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -22,9 +24,89 @@ import (
 // TLS address. cutWrites makes it read a POST, apply it and then drop the
 // connection without answering.
 type member struct {
-	srv       *httptest.Server
-	fake      *pvefake.Fake
-	cutWrites atomic.Bool
+	srv        *httptest.Server
+	fake       *pvefake.Fake
+	front      *tcpFront // the address registered for the first member; nil for the others
+	cutWrites  atomic.Bool
+	stallReads atomic.Bool // GETs get no answer: TLS is up, headers never come
+	release    chan struct{}
+}
+
+// down makes the address refuse connections.
+func (m *member) down() {
+	if m.front != nil {
+		m.front.close()
+	}
+	m.srv.Close()
+}
+
+// tcpFront forwards TCP to a TLS server and can instead accept connections
+// and never answer, so the TLS handshake stalls.
+type tcpFront struct {
+	ln     net.Listener
+	target string
+	stall  atomic.Bool
+	mu     sync.Mutex
+	conns  []net.Conn
+}
+
+func newFront(t *testing.T, target string) *tcpFront {
+	t.Helper()
+	lc := net.ListenConfig{}
+	ln, err := lc.Listen(t.Context(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := &tcpFront{ln: ln, target: target}
+	go f.serve()
+	t.Cleanup(f.close)
+	return f
+}
+
+func (f *tcpFront) serve() {
+	for {
+		c, err := f.ln.Accept()
+		if err != nil {
+			return
+		}
+		f.mu.Lock()
+		f.conns = append(f.conns, c)
+		f.mu.Unlock()
+		if f.stall.Load() {
+			continue // held open, never answered
+		}
+		d := net.Dialer{}
+		up, err := d.DialContext(context.Background(), "tcp", f.target)
+		if err != nil {
+			_ = c.Close()
+			continue
+		}
+		f.mu.Lock()
+		f.conns = append(f.conns, up)
+		f.mu.Unlock()
+		go func() { _, _ = io.Copy(up, c); _ = up.Close() }()
+		go func() { _, _ = io.Copy(c, up); _ = c.Close() }()
+	}
+}
+
+// startStalling drops the live connections and holds every new one.
+func (f *tcpFront) startStalling() {
+	f.stall.Store(true)
+	f.dropConns()
+}
+
+func (f *tcpFront) dropConns() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, c := range f.conns {
+		_ = c.Close()
+	}
+	f.conns = nil
+}
+
+func (f *tcpFront) close() {
+	_ = f.ln.Close()
+	f.dropConns()
 }
 
 func (m *member) posts() int {
@@ -50,8 +132,15 @@ func newCluster(t *testing.T, size int) ([]*member, *Connection) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		m := &member{fake: f}
+		m := &member{fake: f, release: make(chan struct{})}
 		m.srv = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodGet && m.stallReads.Load() {
+				select {
+				case <-r.Context().Done():
+				case <-m.release:
+				}
+				return
+			}
 			if r.Method == http.MethodPost && m.cutWrites.Load() {
 				// PVE applies the write, then the answer is lost.
 				f.ServeHTTP(httptest.NewRecorder(), r)
@@ -62,8 +151,13 @@ func newCluster(t *testing.T, size int) ([]*member, *Connection) {
 			}
 			f.ServeHTTP(w, r)
 		}))
+		t.Cleanup(func() { close(m.release) })
 		t.Cleanup(m.srv.Close)
 		members[i], urls[i] = m, m.srv.URL
+		if i == 0 {
+			m.front = newFront(t, m.srv.Listener.Addr().String())
+			urls[i] = "https://" + m.front.ln.Addr().String()
+		}
 	}
 	dir := privateDir(t)
 	writeFixture(t, filepath.Join(dir, "region.yaml"),
@@ -94,10 +188,11 @@ func TestFailoverSkipsAFirstAddressThatIsDown(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	members[0].srv.Close()
+	members[0].down()
 	if _, err := b.client.Nodes(t.Context()); err != nil {
 		t.Fatalf("read with the first address down: %v", err)
 	}
+	NewQuorumGate(b).check(t.Context()) // the address now in use reports quorum
 	if err := b.firewall.CreateFirewallGroup(t.Context(), "failover", "test"); err != nil {
 		t.Fatalf("mutation with the first address down: %v", err)
 	}
@@ -115,6 +210,7 @@ func TestFailoverNeverResendsAWriteThatWasSent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	NewQuorumGate(b).check(t.Context())
 	members[0].cutWrites.Store(true)
 	if err := b.firewall.CreateFirewallGroup(t.Context(), "once", "test"); err == nil {
 		t.Fatal("a write whose answer was lost reported success")
@@ -179,7 +275,7 @@ func TestGateLeavesAnAddressThatIsDown(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	members[0].srv.Close()
+	members[0].down()
 	gate := NewQuorumGate(b)
 	gate.check(t.Context())
 	if err := gate.Admit(t.Context()); err != nil || gate.APINode() != "pve2" {
@@ -236,9 +332,12 @@ func TestFailoverKeepsTheConsoleOnTheAddressThatIssuedTheTicket(t *testing.T) {
 		t.Fatal("httptest client transport is not an *http.Transport")
 	}
 	t.Cleanup(base.CloseIdleConnections) // before the servers close, so no connection ends after the test
-	endpoints, err := pveclient.NewEndpoints(base, urls)
+	endpoints, err := pveclient.NewEndpoints(base, urls, errNoQuorum())
 	if err != nil {
 		t.Fatal(err)
+	}
+	for i := range urls {
+		endpoints.MarkQuorate(i, time.Now()) // the console ticket is a POST
 	}
 	client, err := pveclient.New(pveclient.Config{
 		BaseURL: urls[0], TokenID: s.Tokens[0].ID, Secret: pveclient.Secret(s.Tokens[0].Secret),
@@ -268,5 +367,103 @@ func TestFailoverKeepsTheConsoleOnTheAddressThatIssuedTheTicket(t *testing.T) {
 	}
 	if banner, err := io.ReadAll(reader); err != nil || string(banner) != "RFB 003.008\n" {
 		t.Fatalf("banner %q: %v", banner, err)
+	}
+}
+
+func startGate(t *testing.T, b *Backend) (gate *QuorumGate, stop func()) {
+	t.Helper()
+	gate = NewQuorumGate(b)
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		gate.Run(ctx)
+	}()
+	return gate, func() {
+		cancel()
+		<-done // no probe may still hold a TLS connection when the test ends
+	}
+}
+
+func TestGateReachesAHealthyAddressPastAStalledOne(t *testing.T) {
+	for name, stall := range map[string]func(*member){
+		"immediate refusal":     func(m *member) { m.down() },
+		"stalled TLS handshake": func(m *member) { m.front.startStalling() },
+		"stalled HTTP response": func(m *member) { m.stallReads.Store(true) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			members, conn := newCluster(t, 3)
+			b, err := conn.Check(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			stall(members[0])
+			started := time.Now()
+			gate, stop := startGate(t, b)
+			defer stop()
+			for gate.Admit(t.Context()) != nil {
+				if time.Since(started) > 5*time.Second {
+					t.Fatal("the gate did not open within 5 s")
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+			if gate.APINode() != "pve2" || b.endpoints.Index() != 1 {
+				t.Fatalf("apiNode %q, address %d, want pve2 and the second", gate.APINode(), b.endpoints.Index())
+			}
+			if err := b.firewall.CreateFirewallGroup(t.Context(), "stalled", "test"); err != nil {
+				t.Fatalf("write after the walk: %v", err)
+			}
+			if members[1].posts() != 1 || members[0].posts()+members[2].posts() != 0 {
+				t.Fatal("the write did not go to the one address with quorum")
+			}
+		})
+	}
+}
+
+func TestAdmissionClosesWhenTheIndexMovesToAnUncheckedAddress(t *testing.T) {
+	members, conn := newCluster(t, 3)
+	b, err := conn.Check(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	gate := NewQuorumGate(b)
+	gate.check(t.Context())
+	if err := gate.Admit(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	// A read fails over from the quorate address to one nobody has checked.
+	members[0].down()
+	if _, err := b.client.Nodes(t.Context()); err != nil || b.endpoints.Index() != 1 {
+		t.Fatalf("read: %v, address %d", err, b.endpoints.Index())
+	}
+	wantUnavailable(t, gate.Admit(t.Context()), "an unchecked address")
+	err = b.firewall.CreateFirewallGroup(t.Context(), "unchecked", "test")
+	if resource.CodeOf(err) != resource.CodeUnavailable {
+		t.Fatalf("write to an unchecked address: %v", err)
+	}
+	if members[1].posts() != 0 {
+		t.Fatal("a write reached an address with no quorum result")
+	}
+	gate.check(t.Context())
+	if err := gate.Admit(t.Context()); err != nil {
+		t.Fatalf("after the gate checked the new address: %v", err)
+	}
+}
+
+func TestWriteRetryNeverReachesAnUncheckedAddress(t *testing.T) {
+	members, conn := newCluster(t, 3)
+	b, err := conn.Check(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The check stops at the first quorate address, so only the first is marked.
+	NewQuorumGate(b).check(t.Context())
+	members[0].down()
+	err = b.firewall.CreateFirewallGroup(t.Context(), "retry", "test")
+	if resource.CodeOf(err) != resource.CodeUnavailable {
+		t.Fatalf("write: %v, want Unavailable", err)
+	}
+	if members[1].posts()+members[2].posts() != 0 {
+		t.Fatal("the pre-connect retry reached an unchecked address")
 	}
 }

@@ -34,7 +34,7 @@ const (
 	maxRegistrationBytes = 65 << 10
 	registrationFile     = "registration.json"
 	// dialTimeout bounds the connect and the TLS handshake to one address.
-	dialTimeout = 3 * time.Second
+	dialTimeout = time.Second
 )
 
 var (
@@ -144,7 +144,7 @@ func (c *Connection) endpointsFor(s registrationSnapshot) (*pveclient.Endpoints,
 	if c.endpoints != nil && c.endpointsID == key && c.endpoints.Transport() == c.base {
 		return c.endpoints, nil
 	}
-	endpoints, err := pveclient.NewEndpoints(c.base, s.PVEAPIURLs)
+	endpoints, err := pveclient.NewEndpoints(c.base, s.PVEAPIURLs, errNoQuorum())
 	if err != nil {
 		return nil, fmt.Errorf("proxmox: endpoints: %w", err)
 	}

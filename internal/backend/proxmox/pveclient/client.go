@@ -135,7 +135,8 @@ func retryable(err error) bool {
 	return !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded)
 }
 
-// get reads path under ReadTimeout into the data field of PVE's envelope.
+// get reads path under ReadTimeout (a request pinned to one address by
+// WithEndpoint is not retried: its caller moves on to the next address) into the data field of PVE's envelope.
 func get[T any](ctx context.Context, c *Client, path string, q url.Values) (T, error) {
 	ctx, cancel := context.WithTimeout(ctx, ReadTimeout)
 	defer cancel()
@@ -143,7 +144,7 @@ func get[T any](ctx context.Context, c *Client, path string, q url.Values) (T, e
 	backoff := c.backoff
 	for retry := 0; ; retry++ {
 		err := c.once(ctx, path, q, &out)
-		if err == nil || retry == MaxRetries || !retryable(err) {
+		if err == nil || retry == MaxRetries || !retryable(err) || ctx.Value(pinnedKey{}) != nil {
 			return out, err
 		}
 		c.log.LogAttrs(ctx, slog.LevelWarn, "pve call retried",

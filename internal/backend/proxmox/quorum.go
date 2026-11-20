@@ -5,12 +5,13 @@ import (
 	"sync"
 	"time"
 
+	"github.com/popododo0720/vws-console-api/internal/backend/proxmox/pveclient"
 	"github.com/popododo0720/vws-console-api/internal/resource"
 )
 
 const (
-	quorumFresh    = 5 * time.Second // A mutation needs a quorum check no older than this.
-	quorumInterval = 2 * time.Second // The 2 s check timeout leaves room before the window ends.
+	quorumFresh    = pveclient.QuorumFresh // A mutation needs a quorum check no older than this.
+	quorumInterval = 2 * time.Second       // The 2 s check timeout leaves room before the window ends.
 )
 
 // QuorumGate admits mutations only while a recent /cluster/status check
@@ -54,39 +55,56 @@ func (g *QuorumGate) stop() {
 	g.stopped, g.quorate = true, false
 }
 
-// check probes /cluster/status. When the current address fails or reports no
-// quorum, it moves to the next address and probes again, at most once per
-// address, and stops at the first one that reports quorum. A minority node
-// is thus left within one check, not parked on. The recorded time is the
-// start of the last probe, so a long walk never extends the freshness of a
-// reading.
+// quorumWalk stops a check from starting a probe of another address after
+// this long.
+const quorumWalk = pveclient.FailoverBudget
+
+func errNoQuorum() error {
+	return &resource.Error{Code: resource.CodeUnavailable, Message: "region has no quorum"}
+}
+
+// check probes /cluster/status address by address, starting at the current
+// one, each probe pinned to its address under its own 2 s timeout. The first
+// address that reports quorum becomes the current one and is marked as
+// quorate, so writes may go to it; addresses that fail or report no quorum
+// lose their mark. A minority node is thus left within one check. The
+// recorded time is the start of the last probe, so a long walk never extends
+// the freshness of a reading.
 func (g *QuorumGate) check(ctx context.Context) {
 	endpoints := g.backend.endpoints
-	probes := 1
+	probes, start := 1, 0
 	if endpoints != nil {
-		probes = endpoints.Len()
+		probes, start = endpoints.Len(), endpoints.Index()
 	}
 	var (
 		at     time.Time
 		status resource.RegionStatus
 		err    error
 	)
-	for i := range probes {
-		from := 0
+	began := time.Now()
+	for k := range probes {
+		if k > 0 && time.Since(began) > quorumWalk {
+			break
+		}
+		probe, idx := ctx, (start+k)%probes
+		marked := time.Now()
 		if endpoints != nil {
-			from = endpoints.Index()
+			probe = pveclient.WithEndpoint(ctx, idx)
 		}
 		at = g.now()
-		status, err = g.backend.clusterStatus(ctx)
+		status, err = g.backend.clusterStatus(probe)
 		if ctx.Err() != nil {
 			return
 		}
-		if err == nil && status.Quorate || i == probes-1 {
+		if endpoints == nil {
 			break
 		}
-		// Another request may have moved the index already; Advance then does
-		// nothing and the next probe goes where that request went.
-		endpoints.Advance(from)
+		if err == nil && status.Quorate {
+			endpoints.MarkQuorate(idx, marked)
+			endpoints.Use(idx)
+			break
+		}
+		endpoints.ClearQuorum(idx)
 	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -99,12 +117,16 @@ func (g *QuorumGate) check(ctx context.Context) {
 	}
 }
 
-// Admit refuses unless the last quorum check found quorum within quorumFresh.
+// Admit refuses unless the last quorum check found quorum within quorumFresh
+// and the address requests now go to is the one that reported it.
 func (g *QuorumGate) Admit(ctx context.Context) error {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
 	if ctx.Err() != nil || !g.quorate || g.now().Sub(g.checked) > quorumFresh {
-		return &resource.Error{Code: resource.CodeUnavailable, Message: "region has no quorum"}
+		return errNoQuorum()
+	}
+	if endpoints := g.backend.endpoints; endpoints != nil && !endpoints.Quorate(endpoints.Index()) {
+		return errNoQuorum()
 	}
 	return nil
 }

@@ -27,8 +27,16 @@ Code: `internal/backend/proxmox/pveclient/endpoints.go`.
 - Concurrent failures rotate the index once: only a caller that still sees
   the failed address as current moves it.
 - A console websocket goes to the address that issued its ticket.
-- Each connect and TLS handshake is capped at 3 s so a dead address does not
-  use the call's 10 s budget.
+- Each attempt is bounded: connect and TLS handshake 1 s, and a GET with
+  another address left to try waits 1 s for response headers. A request starts
+  no new attempt on another address after 4 s. A stalled address therefore
+  costs about 1 s, not the whole call.
+- A write goes to an address only while that address itself has a positive
+  quorum result no older than 5 s (the gate marks it). This holds for the first
+  attempt and for every pre-connect retry; otherwise the write is not sent and
+  the call returns the Unavailable refusal. Moving the index, for example after
+  a failed read, therefore never sends a write to an unchecked address. The
+  console ticket POST follows the same rule.
 
 Tests: `TestEndpointsRetryOnlyWhatNeverReachedTheServer`,
 `TestEndpointsNeverResendASentWrite`,
@@ -38,6 +46,10 @@ Tests: `TestEndpointsRetryOnlyWhatNeverReachedTheServer`,
 `TestEndpointsAllAddressesDownIsAnError`, `TestNewEndpointsRefusesNonOrigins`,
 `TestFailoverSkipsAFirstAddressThatIsDown`,
 `TestFailoverNeverResendsAWriteThatWasSent`,
+`TestEndpointsWriteNeedsFreshQuorumOfItsOwnAddress`,
+`TestEndpointsRetryOfAWriteSkipsAddressesWithoutQuorum`,
+`TestEndpointsPinnedRequestNeverFailsOver`,
+`TestEndpointsStalledAttemptsAreBounded`,
 `TestFailoverKeepsTheConsoleOnTheAddressThatIssuedTheTicket`.
 
 ## Quorum gate
@@ -49,11 +61,14 @@ Code: `internal/backend/proxmox/quorum.go`.
 - Quorum is read from `/cluster/status` every 2 s with a 2 s timeout. A
   standalone node (no cluster row) counts as quorate while the local node is
   online.
-- When the current address fails or reports no quorum, the check moves to the
-  next address and probes again, at most once per address, and stops at the
-  first that reports quorum. An address without quorum is therefore left
-  within one check. The gate stays closed when no address has quorum. The
-  freshness time is the start of the last probe.
+- The check probes each address pinned to it (no failover inside a probe),
+  starting at the current one, under its own 2 s timeout, and starts no new
+  probe after 4 s. The first address that reports quorum becomes the current
+  one and is marked quorate; an address that fails or reports no quorum loses
+  its mark. A stalled or minority address is therefore left within one check.
+  The gate stays closed when no address has quorum, and `Admit` also refuses
+  while the current address has no fresh mark. The freshness time is the start
+  of the last probe.
 - `Admit` makes no PVE call. It returns `Unavailable` ("region has no
   quorum") until the first check, when the last check found no quorum or
   failed, or when the last check is older than 5 s. Otherwise it admits.
@@ -74,7 +89,10 @@ Tests: `TestQuorumGateStartsClosed`, `TestQuorumGateFreshness`,
 `TestQuorumGateStopsFinalizeWrites`,
 `TestGateLeavesAnAddressWithoutQuorumWithinFiveSeconds`,
 `TestGateLeavesAnAddressThatIsDown`,
-`TestGateWithNoQuorumAnywhereStaysClosedAndTriesEachAddressOnce`.
+`TestGateWithNoQuorumAnywhereStaysClosedAndTriesEachAddressOnce`,
+`TestGateReachesAHealthyAddressPastAStalledOne`,
+`TestAdmissionClosesWhenTheIndexMovesToAnUncheckedAddress`,
+`TestWriteRetryNeverReachesAnUncheckedAddress`.
 
 ## Unavailable and X-Vws-Stale
 

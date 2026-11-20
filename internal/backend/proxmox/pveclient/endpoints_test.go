@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -37,6 +38,8 @@ func newHostServer(t *testing.T, h http.HandlerFunc) *hostServer {
 	return s
 }
 
+var errNoQuorum = errors.New("no quorum")
+
 func ok(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, `{"data":null}`) }
 
 // cut reads the whole request and closes the connection without an answer.
@@ -61,9 +64,12 @@ func failoverClient(t *testing.T, ref *httptest.Server, urls ...string) (*Client
 	pool.AddCert(ref.Certificate())
 	base := &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: pool}}
 	t.Cleanup(base.CloseIdleConnections)
-	eps, err := NewEndpoints(base, urls)
+	eps, err := NewEndpoints(base, urls, errNoQuorum)
 	if err != nil {
 		t.Fatal(err)
+	}
+	for i := range urls {
+		eps.MarkQuorate(i, time.Now()) // writes need a fresh quorum result per address
 	}
 	c, err := New(Config{
 		BaseURL: urls[0], TokenID: testTokenID, Secret: testSecret, Backoff: time.Millisecond,
@@ -182,11 +188,90 @@ func TestEndpointsAllAddressesDownIsAnError(t *testing.T) {
 func TestNewEndpointsRefusesNonOrigins(t *testing.T) {
 	base := &http.Transport{}
 	for _, bad := range []string{"http://h:8006", "https://h:8006/api", "https://u:p@h:8006", "https://h?x=1", "://"} {
-		if _, err := NewEndpoints(base, []string{bad}); err == nil {
+		if _, err := NewEndpoints(base, []string{bad}, errNoQuorum); err == nil {
 			t.Errorf("%q accepted", bad)
 		}
 	}
-	if _, err := NewEndpoints(base, nil); err == nil {
+	if _, err := NewEndpoints(base, nil, errNoQuorum); err == nil {
 		t.Error("empty list accepted")
+	}
+}
+
+func TestEndpointsWriteNeedsFreshQuorumOfItsOwnAddress(t *testing.T) {
+	first := newHostServer(t, ok)
+	second := newHostServer(t, ok)
+	c, eps := failoverClient(t, first.Server, first.URL, second.URL)
+	now := time.Now()
+	eps.now = func() time.Time { return now }
+	eps.MarkQuorate(0, now)
+	eps.ClearQuorum(1)
+	if err := writeGroup(t, c); err != nil || first.hits.Load() != 1 {
+		t.Fatalf("write to the quorate address: %v, hits %d", err, first.hits.Load())
+	}
+	now = now.Add(QuorumFresh + time.Nanosecond)
+	if err := writeGroup(t, c); !errors.Is(err, errNoQuorum) {
+		t.Fatalf("write on a stale result: %v, want the refusal", err)
+	}
+	eps.MarkQuorate(1, now)
+	eps.Use(1)
+	if err := writeGroup(t, c); err != nil || second.hits.Load() != 1 {
+		t.Fatalf("write after the result moved: %v, hits %d", err, second.hits.Load())
+	}
+	if first.hits.Load() != 1 {
+		t.Fatalf("a refused write reached an address: %d hits", first.hits.Load())
+	}
+	// A read needs no quorum result.
+	eps.ClearQuorum(0)
+	eps.ClearQuorum(1)
+	if _, err := c.Nodes(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestEndpointsRetryOfAWriteSkipsAddressesWithoutQuorum(t *testing.T) {
+	second := newHostServer(t, ok)
+	third := newHostServer(t, ok)
+	c, eps := failoverClient(t, second.Server, deadURL(t), second.URL, third.URL)
+	eps.ClearQuorum(1)
+	if err := writeGroup(t, c); err != nil {
+		t.Fatal(err)
+	}
+	if second.hits.Load() != 0 || third.hits.Load() != 1 {
+		t.Fatalf("hits unchecked=%d checked=%d, want 0 and 1", second.hits.Load(), third.hits.Load())
+	}
+	eps.Use(0)
+	eps.ClearQuorum(2)
+	if err := writeGroup(t, c); !errors.Is(err, errNoQuorum) {
+		t.Fatalf("write with no checked address left: %v, want the refusal", err)
+	}
+	if second.hits.Load() != 0 || third.hits.Load() != 1 {
+		t.Fatal("the pre-connect retry reached an address without a quorum result")
+	}
+}
+
+func TestEndpointsPinnedRequestNeverFailsOver(t *testing.T) {
+	healthy := newHostServer(t, ok)
+	c, eps := failoverClient(t, healthy.Server, deadURL(t), healthy.URL)
+	if _, err := c.Nodes(WithEndpoint(t.Context(), 0)); err == nil {
+		t.Fatal("a pinned read fell back to another address")
+	}
+	if eps.Index() != 0 || healthy.hits.Load() != 0 {
+		t.Fatalf("index %d, hits %d after a pinned failure", eps.Index(), healthy.hits.Load())
+	}
+}
+
+func TestEndpointsStalledAttemptsAreBounded(t *testing.T) {
+	healthy := newHostServer(t, func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, `{"data":[]}`) })
+	stalled := newHostServer(t, func(_ http.ResponseWriter, r *http.Request) { <-r.Context().Done() })
+	c, eps := failoverClient(t, healthy.Server, stalled.URL, healthy.URL)
+	began := time.Now()
+	if _, err := c.Nodes(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if took := time.Since(began); took > 2*time.Second {
+		t.Fatalf("a stalled response held the call for %s", took)
+	}
+	if eps.Index() != 1 {
+		t.Fatalf("index %d, want 1", eps.Index())
 	}
 }
