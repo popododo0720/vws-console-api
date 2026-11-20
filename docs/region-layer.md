@@ -61,14 +61,16 @@ Code: `internal/backend/proxmox/quorum.go`.
 - Quorum is read from `/cluster/status` every 2 s with a 2 s timeout. A
   standalone node (no cluster row) counts as quorate while the local node is
   online.
-- The check probes each address pinned to it (no failover inside a probe),
-  starting at the current one, under its own 2 s timeout, and starts no new
-  probe after 4 s. The first address that reports quorum becomes the current
-  one and is marked quorate; an address that fails or reports no quorum loses
-  its mark. A stalled or minority address is therefore left within one check.
+- The check probes every registered address (at most 16) at once, each
+  pinned to its address (no failover inside a probe) and bounded by its own
+  attempt limits, all under one shared 2 s deadline. Stalled addresses cost
+  that one deadline in total and never hide a healthy one. A quorate address
+  is marked; one that fails or reports no quorum loses its mark. The current
+  address stays when it is quorate; otherwise the first quorate address in
+  list order becomes current. The index does not move when none is quorate.
   The gate stays closed when no address has quorum, and `Admit` also refuses
   while the current address has no fresh mark. The freshness time is the start
-  of the last probe.
+  of the check.
 - `Admit` makes no PVE call. It returns `Unavailable` ("region has no
   quorum") until the first check, when the last check found no quorum or
   failed, or when the last check is older than 5 s. Otherwise it admits.
@@ -92,7 +94,9 @@ Tests: `TestQuorumGateStartsClosed`, `TestQuorumGateFreshness`,
 `TestGateWithNoQuorumAnywhereStaysClosedAndTriesEachAddressOnce`,
 `TestGateReachesAHealthyAddressPastAStalledOne`,
 `TestAdmissionClosesWhenTheIndexMovesToAnUncheckedAddress`,
-`TestWriteRetryNeverReachesAnUncheckedAddress`.
+`TestWriteRetryNeverReachesAnUncheckedAddress`,
+`TestGateWalkReachesTheHealthyAddressPastTwoStalledOnes`,
+`TestGateKeepsAQuorateCurrentAddressAndHoldsWhenNoneIs`.
 
 ## Unavailable and X-Vws-Stale
 

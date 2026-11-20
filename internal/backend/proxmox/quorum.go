@@ -55,65 +55,84 @@ func (g *QuorumGate) stop() {
 	g.stopped, g.quorate = true, false
 }
 
-// quorumWalk stops a check from starting a probe of another address after
-// this long.
-const quorumWalk = pveclient.FailoverBudget
+// quorumProbe is the one deadline all probes of a check share.
+const quorumProbe = 2 * time.Second
 
 func errNoQuorum() error {
 	return &resource.Error{Code: resource.CodeUnavailable, Message: "region has no quorum"}
 }
 
-// check probes /cluster/status address by address, starting at the current
-// one, each probe pinned to its address under its own 2 s timeout. The first
-// address that reports quorum becomes the current one and is marked as
-// quorate, so writes may go to it; addresses that fail or report no quorum
-// lose their mark. A minority node is thus left within one check. The
-// recorded time is the start of the last probe, so a long walk never extends
-// the freshness of a reading.
+type probeResult struct {
+	status resource.RegionStatus
+	err    error
+}
+
+func (r probeResult) quorate() bool { return r.err == nil && r.status.Quorate }
+
+// check probes /cluster/status on every registered address at once (at most
+// 16), each pinned to its address and bounded by its own attempt limits, all
+// under one shared deadline, so stalled addresses cost one deadline in total
+// and never hide a healthy one. Each address's result is recorded: quorate
+// ones are marked so writes may go to them, the others lose their mark. The
+// current address stays when it is quorate; otherwise the first quorate
+// address in list order becomes current. When none is quorate the index does
+// not move. The recorded time is the start of the check.
 func (g *QuorumGate) check(ctx context.Context) {
 	endpoints := g.backend.endpoints
-	probes, start := 1, 0
-	if endpoints != nil {
-		probes, start = endpoints.Len(), endpoints.Index()
+	if endpoints == nil {
+		at := g.now()
+		status, err := g.backend.clusterStatus(ctx)
+		if ctx.Err() == nil {
+			g.record(at, probeResult{status, err})
+		}
+		return
 	}
-	var (
-		at     time.Time
-		status resource.RegionStatus
-		err    error
-	)
-	began := time.Now()
-	for k := range probes {
-		if k > 0 && time.Since(began) > quorumWalk {
-			break
+	at, marked := g.now(), time.Now()
+	probeCtx, cancel := context.WithTimeout(ctx, quorumProbe)
+	defer cancel()
+	results := make([]probeResult, endpoints.Len())
+	var wg sync.WaitGroup
+	for idx := range results {
+		wg.Go(func() {
+			status, err := g.backend.clusterStatus(pveclient.WithEndpoint(probeCtx, idx))
+			results[idx] = probeResult{status, err}
+		})
+	}
+	wg.Wait()
+	if ctx.Err() != nil {
+		return
+	}
+	chosen := endpoints.Index()
+	if !results[chosen].quorate() {
+		for idx, r := range results {
+			if r.quorate() {
+				chosen = idx
+				break
+			}
 		}
-		probe, idx := ctx, (start+k)%probes
-		marked := time.Now()
-		if endpoints != nil {
-			probe = pveclient.WithEndpoint(ctx, idx)
-		}
-		at = g.now()
-		status, err = g.backend.clusterStatus(probe)
-		if ctx.Err() != nil {
-			return
-		}
-		if endpoints == nil {
-			break
-		}
-		if err == nil && status.Quorate {
+	}
+	for idx, r := range results {
+		if r.quorate() {
 			endpoints.MarkQuorate(idx, marked)
-			endpoints.Use(idx)
-			break
+		} else {
+			endpoints.ClearQuorum(idx)
 		}
-		endpoints.ClearQuorum(idx)
 	}
+	if results[chosen].quorate() {
+		endpoints.Use(chosen)
+	}
+	g.record(at, results[chosen])
+}
+
+func (g *QuorumGate) record(at time.Time, r probeResult) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if g.stopped {
 		return
 	}
-	g.quorate, g.checked = err == nil && status.Quorate, at
-	if err == nil {
-		g.apiNode = status.APINode
+	g.quorate, g.checked = r.quorate(), at
+	if r.err == nil {
+		g.apiNode = r.status.APINode
 	}
 }
 

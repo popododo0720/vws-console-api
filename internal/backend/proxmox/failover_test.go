@@ -154,10 +154,8 @@ func newCluster(t *testing.T, size int) ([]*member, *Connection) {
 		t.Cleanup(func() { close(m.release) })
 		t.Cleanup(m.srv.Close)
 		members[i], urls[i] = m, m.srv.URL
-		if i == 0 {
-			m.front = newFront(t, m.srv.Listener.Addr().String())
-			urls[i] = "https://" + m.front.ln.Addr().String()
-		}
+		m.front = newFront(t, m.srv.Listener.Addr().String())
+		urls[i] = "https://" + m.front.ln.Addr().String()
 	}
 	dir := privateDir(t)
 	writeFixture(t, filepath.Join(dir, "region.yaml"),
@@ -426,6 +424,8 @@ func TestAdmissionClosesWhenTheIndexMovesToAnUncheckedAddress(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	members[1].fake.SetQuorate(false)
+	members[2].fake.SetQuorate(false)
 	gate := NewQuorumGate(b)
 	gate.check(t.Context())
 	if err := gate.Admit(t.Context()); err != nil {
@@ -444,6 +444,7 @@ func TestAdmissionClosesWhenTheIndexMovesToAnUncheckedAddress(t *testing.T) {
 	if members[1].posts() != 0 {
 		t.Fatal("a write reached an address with no quorum result")
 	}
+	members[1].fake.SetQuorate(true)
 	gate.check(t.Context())
 	if err := gate.Admit(t.Context()); err != nil {
 		t.Fatalf("after the gate checked the new address: %v", err)
@@ -456,7 +457,9 @@ func TestWriteRetryNeverReachesAnUncheckedAddress(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The check stops at the first quorate address, so only the first is marked.
+	// Only the first address reports quorum, so only it is marked.
+	members[1].fake.SetQuorate(false)
+	members[2].fake.SetQuorate(false)
 	NewQuorumGate(b).check(t.Context())
 	members[0].down()
 	err = b.firewall.CreateFirewallGroup(t.Context(), "retry", "test")
@@ -466,4 +469,57 @@ func TestWriteRetryNeverReachesAnUncheckedAddress(t *testing.T) {
 	if members[1].posts()+members[2].posts() != 0 {
 		t.Fatal("the pre-connect retry reached an unchecked address")
 	}
+}
+
+func TestGateWalkReachesTheHealthyAddressPastTwoStalledOnes(t *testing.T) {
+	for name, stall := range map[string]func(*member){
+		"stalled HTTP responses": func(m *member) { m.stallReads.Store(true) },
+		"stalled TLS handshakes": func(m *member) { m.front.startStalling() },
+	} {
+		t.Run(name, func(t *testing.T) {
+			members, conn := newCluster(t, 3)
+			b, err := conn.Check(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			stall(members[0])
+			stall(members[1])
+			before := len(members[2].fake.Requests())
+			started := time.Now()
+			gate := NewQuorumGate(b)
+			gate.check(t.Context()) // the first walk
+			if took := time.Since(started); took > 5*time.Second {
+				t.Fatalf("the first walk took %s", took)
+			}
+			if err := gate.Admit(t.Context()); err != nil {
+				t.Fatalf("the gate stayed closed after one walk: %v", err)
+			}
+			if gate.APINode() != "pve3" || b.endpoints.Index() != 2 || len(members[2].fake.Requests()) == before {
+				t.Fatalf("apiNode %q, address %d, healthy requests %d",
+					gate.APINode(), b.endpoints.Index(), len(members[2].fake.Requests())-before)
+			}
+		})
+	}
+}
+
+func TestGateKeepsAQuorateCurrentAddressAndHoldsWhenNoneIs(t *testing.T) {
+	members, conn := newCluster(t, 3)
+	b, err := conn.Check(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.endpoints.Use(1)
+	gate := NewQuorumGate(b)
+	gate.check(t.Context())
+	if b.endpoints.Index() != 1 || gate.APINode() != "pve2" {
+		t.Fatalf("a quorate current address was left: address %d, apiNode %q", b.endpoints.Index(), gate.APINode())
+	}
+	for _, m := range members {
+		m.fake.SetQuorate(false)
+	}
+	gate.check(t.Context())
+	if b.endpoints.Index() != 1 {
+		t.Fatalf("the index moved to %d with no quorate address", b.endpoints.Index())
+	}
+	wantUnavailable(t, gate.Admit(t.Context()), "no quorate address")
 }
