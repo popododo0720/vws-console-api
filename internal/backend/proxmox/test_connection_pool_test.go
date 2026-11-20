@@ -36,7 +36,7 @@ func TestConnectionManagedPools(t *testing.T) {
 			ca := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: upstream.Certificate().Raw}))
 			for range 2 {
 				steps := TestConnection(t.Context(), ConnectionConfig{
-					URL: upstream.URL, CAPEM: ca, ClusterName: "test",
+					URLs: []string{upstream.URL}, CAPEM: ca, ClusterName: "test",
 					TokenID: s.Tokens[0].ID, TokenSecret: s.Tokens[0].Secret,
 					Pools: []string{"first", "second", "first"},
 				})

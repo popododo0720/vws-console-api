@@ -4,8 +4,28 @@ The supported resource backends are `fake` and `regions`. The in-process
 `-backend=proxmox` mode and its node-local flags (`-region-config`,
 `-registration-file`, `-pve-endpoint`, `-pve-ca-file`, `-helper-path`) are
 removed. The `vws-region` daemon has no helper either: `-helper-path`,
-`-helper-root` and `-registration-file` are gone, and its state is one 0600
-file under `-state-dir`. Reach Proxmox through a `vws-region` daemon deployed as
+`-helper-root`, `-registration-file`, `-pve-endpoint` and `-pve-ca-file` are
+gone. Its PVE addresses and CA come from the registration (`pveApiUrls`,
+`caPem`), and its state is one 0600 file under `-state-dir`.
+
+Upgrading stored data. Etcd records: a registry record with the old single
+`pveApiUrl` loads as a one-address list and is rewritten on its next edit; an
+edit also needs a `caPem`, which is now required. Daemon state files: one
+written before this change has no addresses or CA, so `/readyz` stays 503
+until the region is registered again with an explicit `tokenSecret`. The
+daemon reuses a stored secret only when the registration keeps the same
+`caPem` and only addresses it already holds, so a legacy file, a changed CA
+or a new address needs the secret in the request and otherwise gets 400
+before any PVE request. A firewall or backup secret additionally needs the
+same first address, because those tokens were only used there.
+
+Rollout prerequisite, separate from the read migration above: the clients
+that write regions must send `pveApiUrls` before anyone re-saves a region.
+The deploy CLI (`vws region add/edit`, vws-deploy #850, `--pve-api-url`
+repeated) and the console region form (vws-console #216) still send
+`pveApiUrl`, which this API now refuses with 400. Upgrade them first.
+
+Reach Proxmox through a `vws-region` daemon deployed as
 `docs/region-daemon.md` describes today, and register it with the admin API.
 Running one daemon per Proxmox cluster on the global host is follow-up work
 (#1053 and later).

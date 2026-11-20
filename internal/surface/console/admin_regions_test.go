@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"maps"
@@ -27,10 +28,18 @@ const regionPath = "/api/v1/admin/regions"
 
 func validRegion() map[string]any {
 	return map[string]any{
-		"name": "pve-test-1", "clusterName": "test", "pveApiUrl": "https://pve.example:8006",
-		"tokenId": "vws@pve!inventory", "tokenSecret": "distinctive-canary-token-760",
+		"name": "pve-test-1", "clusterName": "test", "caPem": testCA(),
+		"pveApiUrls": []string{"https://pve1.example:8006", "https://pve2.example:8006"},
+		"tokenId":    "vws@pve!inventory", "tokenSecret": "distinctive-canary-token-760",
 		"regionEndpoint": "https://region.example", "zones": []store.Zone{{Letter: "a", Nodes: []string{"pve1"}}},
 	}
+}
+
+// testCA is a valid PEM bundle; the stub servers here never complete a handshake with PVE.
+func testCA() string {
+	srv := httptest.NewTLSServer(nil)
+	defer srv.Close()
+	return string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw}))
 }
 
 func regionCall(t *testing.T, e loginEnv, method string, body any, match string, want int) *httptest.ResponseRecorder {
@@ -104,6 +113,15 @@ func TestAdminRegionLifecycleAndCanary(t *testing.T) {
 	if pushes[0]["token"] != validRegion()["tokenSecret"] || pushes[1]["token"] != nil {
 		t.Fatal("incorrect token forwarding")
 	}
+	for _, push := range pushes {
+		if !reflect.DeepEqual(push["pveApiUrls"], []any{"https://pve1.example:8006", "https://pve2.example:8006"}) ||
+			push["caPem"] != validRegion()["caPem"] || push["pveApiUrl"] != nil {
+			t.Fatalf("registration push lacks pveApiUrls or caPem: %v", push)
+		}
+	}
+	if !reflect.DeepEqual(updated.PVEAPIURLs, []string{"https://pve1.example:8006", "https://pve2.example:8006"}) {
+		t.Fatalf("stored addresses: %v", updated.PVEAPIURLs)
+	}
 	regionCall(t, e, "DELETE", nil, post.Header().Get("ETag"), 409)
 	regionCall(t, e, "DELETE", nil, "", 204)
 	if _, err := g.Regions().Get(t.Context(), original.Name); !errors.Is(err, store.ErrNotFound) {
@@ -163,6 +181,14 @@ func TestAdminRegionDeleteRefusesProjectMappings(t *testing.T) {
 	}
 }
 
+func pveURLs(n int) []string {
+	urls := make([]string, n)
+	for i := range urls {
+		urls[i] = fmt.Sprintf("https://pve%d.example:8006", i)
+	}
+	return urls
+}
+
 func TestAdminRegionValidationAndRetry(t *testing.T) {
 	for _, tc := range []struct {
 		field string
@@ -170,7 +196,15 @@ func TestAdminRegionValidationAndRetry(t *testing.T) {
 	}{
 		{"name", "bad"},
 		{"clusterName", "bad/name"},
-		{"pveApiUrl", "http://insecure"},
+		{"pveApiUrls", []string{"http://insecure:8006"}},
+		{"pveApiUrls", []string{}},
+		{"pveApiUrls", []string{"https://user:secret@pve:8006"}},
+		{"pveApiUrls", []string{"https://pve:8006?x=1"}},
+		{"pveApiUrls", []string{"https://pve:8006#frag"}},
+		{"pveApiUrls", []string{"https://pve:8006/api"}},
+		{"pveApiUrls", []string{"https://pve:8006", "https://PVE:8006/"}},
+		{"pveApiUrls", pveURLs(17)},
+		{"caPem", ""},
 		{"regionEndpoint", "https://user:secret@region"},
 		{"caPem", "bad"},
 		{"tokenId", "bad"},
@@ -185,6 +219,20 @@ func TestAdminRegionValidationAndRetry(t *testing.T) {
 		if rec := regionCall(t, e, "POST", body, "", 400); !strings.Contains(rec.Body.String(), `"field":"`+tc.field+`"`) {
 			t.Fatalf("missing field %s: %s", tc.field, rec.Body)
 		}
+	}
+	{
+		e, g, _, _ := accountFixture(t)
+		body := validRegion()
+		body["pveApiUrls"] = pveURLs(16)
+		regionCall(t, e, "POST", body, "", 201)
+		if stored, err := g.Regions().Get(t.Context(), "pve-test-1"); err != nil || len(stored.PVEAPIURLs) != 16 {
+			t.Fatalf("16 addresses: %v %v", stored.PVEAPIURLs, err)
+		}
+		legacy := validRegion()
+		legacy["pveApiUrl"] = "https://pve.example:8006"
+		delete(legacy, "pveApiUrls")
+		e, _, _, _ = accountFixture(t)
+		regionCall(t, e, "POST", legacy, "", 400)
 	}
 	e, g, _, auditLog := accountFixture(t)
 	h := e.h.(*handler)

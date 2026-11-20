@@ -114,12 +114,13 @@ func TestConnectionHonorsConsoleMode(t *testing.T) {
 		if err := os.WriteFile(path, []byte("read_only: "+mode+"\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		c, err := Open(path, "pve-test-1", privateDir(t), srv.URL, srv.Client())
+		c, err := Open(path, "pve-test-1", privateDir(t))
 		if err != nil {
 			t.Fatal(err)
 		}
 		_, err = c.check(t.Context(), registrationSnapshot{
 			Region: "pve-test-1", ClusterName: "test", TokenID: s.Tokens[0].ID, Token: s.Tokens[0].Secret,
+			PVEAPIURLs: []string{srv.URL}, CAPEM: anyCA(),
 		})
 		if (err != nil) != (mode == "true") {
 			t.Fatalf("read_only=%s: %v", mode, err)

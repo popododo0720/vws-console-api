@@ -18,7 +18,7 @@ func Region(name string) store.Region {
 	return store.Region{
 		Name:           name,
 		ClusterName:    "seoul",
-		PVEAPIURL:      "https://10.0.0.10:8006",
+		PVEAPIURLs:     []string{"https://10.0.0.10:8006"},
 		TokenID:        "vws@pve!region",
 		RegionEndpoint: "https://10.0.0.20:8443",
 		Zones:          []store.Zone{{Letter: "a", Nodes: []string{"pve1", "pve2"}}},

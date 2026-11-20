@@ -36,7 +36,7 @@ func listProjectsCall(t *testing.T, e loginEnv, want int) ([]projectView, string
 func TestListProjectsMappedAndDefault(t *testing.T) {
 	e, g := adminFixture(t)
 	if _, err := g.Regions().Create(t.Context(), store.Region{
-		Name: "pve-other-1", ClusterName: "other", PVEAPIURL: "https://10.20.30.40:8006",
+		Name: "pve-other-1", ClusterName: "other", PVEAPIURLs: []string{"https://10.20.30.40:8006"},
 		TokenID: "vws@pve!canary-token-id", TokenSecret: store.DescribeSecret("pve-other-secret"),
 	}); err != nil {
 		t.Fatal(err)

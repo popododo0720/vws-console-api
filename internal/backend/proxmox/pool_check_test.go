@@ -73,11 +73,11 @@ func TestPoolSelfCheckDoesNotExposeUpstreamBody(t *testing.T) {
 			}))
 			defer srv.Close()
 			c := &Connection{
-				config:   RegionConfig{ReadOnly: true, Pools: map[string]string{"project": "managed"}},
-				endpoint: srv.URL, transport: srv.Client(),
+				config: RegionConfig{ReadOnly: true, Pools: map[string]string{"project": "managed"}},
 			}
 			_, err := c.check(t.Context(), registrationSnapshot{
 				Region: "pve-test-1", ClusterName: "test", TokenID: "vws@pve!inventory", Token: "fake-secret",
+				PVEAPIURLs: []string{srv.URL}, CAPEM: anyCA(),
 			})
 			e := resource.AsError(err)
 			if e == nil || e.Code != resource.CodeUnavailable || !strings.Contains(e.Message, `pool "managed"`) ||

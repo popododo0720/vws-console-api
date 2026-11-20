@@ -12,7 +12,6 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -55,8 +54,6 @@ func run(ctx context.Context, args []string) (err error) {
 	kind := fs.String("backend", "proxmox", "proxmox")
 	region := fs.String("region", "", "region name this instance serves (required)")
 	stateDir := fs.String("state-dir", "", "state directory; default /var/lib/vws-region/<region>")
-	endpoint := fs.String("pve-endpoint", "https://127.0.0.1:8006", "local pveproxy HTTPS origin")
-	pveCA := fs.String("pve-ca-file", "/etc/pve/pve-root-ca.pem", "node CA bundle")
 	certFile := fs.String("tls-cert-file", "/etc/vws/region.crt", "region server certificate")
 	keyFile := fs.String("tls-key-file", "/etc/vws/region.key", "region server private key")
 	caFile := fs.String("tls-ca-file", "/etc/vws/global-ca.pem", "CA for global client certificates")
@@ -75,27 +72,14 @@ func run(ctx context.Context, args []string) (err error) {
 			return errors.New("PVE token environment variables are forbidden; use registration")
 		}
 	}
-	u, err := url.Parse(*endpoint)
-	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil ||
-		u.RawQuery != "" || u.Fragment != "" || (u.Path != "" && u.Path != "/") {
-		return errors.New("pve-endpoint requires an HTTPS origin without credentials")
-	}
-	pool, err := loadCA(*pveCA)
-	if err != nil {
-		return err
-	}
-	transport := &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: pool}}
-	defer transport.CloseIdleConnections()
 	if *stateDir == "" && *region != "" {
 		*stateDir = filepath.Join("/var/lib/vws-region", *region)
 	}
-	conn, err := proxmox.Open(*config, *region, *stateDir, *endpoint, &http.Client{
-		Transport: transport, Timeout: 10 * time.Second,
-		CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse },
-	})
+	conn, err := proxmox.Open(*config, *region, *stateDir)
 	if err != nil {
 		return err
 	}
+	defer conn.Close()
 	cert, err := tls.LoadX509KeyPair(*certFile, *keyFile)
 	if err != nil {
 		return fmt.Errorf("region certificate: %w", err)
