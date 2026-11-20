@@ -90,3 +90,61 @@ func ValidAWSConnectionSteps(steps []ConnectionStep) bool {
 			"STS unavailable", "STS returned an unusable response",
 		}, last.Message)
 }
+
+// PVEConnectionStepNames returns the four PVE checks the region daemon runs,
+// in order. The console adds the regionapi step after them.
+func PVEConnectionStepNames() []string {
+	return []string{"tls", "version", "cluster_name", "privileges"}
+}
+
+var pvePoolMessage = regexp.MustCompile(`^pool "[A-Za-z0-9][A-Za-z0-9._-]{0,63}": ` +
+	`(missing (Pool\.Audit|VM\.Audit)|does not exist|privileges could not be verified|existence could not be verified)$`)
+
+// pveStepMessage reports whether message is one the daemon writes for step i
+// with that result.
+func pveStepMessage(i int, result ConnectionResult, message string) bool {
+	passed := [4]string{
+		"PVE TLS certificate verified", "PVE version read succeeded", "cluster_name accepted",
+		"token privileges are read-only",
+	}
+	failed := [4][]string{
+		{"PVE TLS handshake failed"},
+		{"PVE version read failed"},
+		{"cluster_name differs or could not be verified"},
+		{"token permissions could not be verified", "token holds a privilege outside PVEAuditor read-only access"},
+	}
+	if result == ConnectionPass {
+		return message == passed[i]
+	}
+	return slices.Contains(failed[i], message) || i == 3 && pvePoolMessage.MatchString(message)
+}
+
+// ValidPVEConnectionSteps accepts only the daemon's ordered result: passes,
+// then at most one failure, then skips, each with a fixed or classified
+// message. A reply that fails this cannot publish upstream text.
+func ValidPVEConnectionSteps(steps []ConnectionStep) bool {
+	names := PVEConnectionStepNames()
+	if len(steps) != len(names) {
+		return false
+	}
+	failed := false
+	for i, step := range steps {
+		if step.Name != names[i] {
+			return false
+		}
+		switch {
+		case failed:
+			if step.Result != ConnectionSkipped || step.Message != "previous step failed" {
+				return false
+			}
+		case step.Result == ConnectionPass || step.Result == ConnectionFail:
+			failed = step.Result == ConnectionFail
+			if !pveStepMessage(i, step.Result, step.Message) {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
+}

@@ -21,6 +21,9 @@ type ConnectionConfig struct {
 	CAPEM, ClusterName, TokenID string
 	TokenSecret                 string `json:"-"`
 	Pools                       []string
+	// dial replaces the network dialer; tests use it to make PVE reachable
+	// from the daemon alone.
+	dial func(ctx context.Context, network, addr string) (net.Conn, error)
 }
 
 // TestConnection checks PVE without constructing a backend or persisting credentials.
@@ -51,9 +54,19 @@ func TestConnection(ctx context.Context, cfg ConnectionConfig) []resource.Connec
 	}
 	dialTLS := tlsConfig.Clone()
 	dialTLS.ServerName = u.Hostname()
-	dialer := tls.Dialer{NetDialer: &net.Dialer{Timeout: 3 * time.Second}, Config: dialTLS}
-	conn, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(u.Hostname(), port))
+	dial := cfg.dial
+	if dial == nil {
+		dial = (&net.Dialer{Timeout: 3 * time.Second}).DialContext
+	}
+	handshakeCtx, stopHandshake := context.WithTimeout(ctx, 3*time.Second)
+	defer stopHandshake()
+	raw, err := dial(handshakeCtx, "tcp", net.JoinHostPort(u.Hostname(), port))
 	if err != nil {
+		return steps
+	}
+	conn := tls.Client(raw, dialTLS)
+	if err := conn.HandshakeContext(handshakeCtx); err != nil {
+		_ = conn.Close() //nolint:errcheck // the handshake already failed; only the fixed step is reported.
 		return steps
 	}
 	if err := conn.Close(); err != nil {
@@ -62,7 +75,7 @@ func TestConnection(ctx context.Context, cfg ConnectionConfig) []resource.Connec
 	steps[0].Result, steps[0].Message = resource.ConnectionPass, "PVE TLS certificate verified"
 	transport := &http.Transport{
 		TLSClientConfig: tlsConfig, TLSHandshakeTimeout: 3 * time.Second,
-		DialContext:           (&net.Dialer{Timeout: 3 * time.Second}).DialContext,
+		DialContext:           dial,
 		ResponseHeaderTimeout: 5 * time.Second, IdleConnTimeout: 30 * time.Second,
 	}
 	defer transport.CloseIdleConnections()
@@ -115,7 +128,9 @@ func TestConnection(ctx context.Context, cfg ConnectionConfig) []resource.Connec
 		}
 	}
 	if err := checkPools(ctx, client, cfg.Pools); err != nil {
-		steps[3].Message = resource.AsError(err).Message
+		if message := resource.RegistrationFailureMessage(err); message != "" {
+			steps[3].Message = message
+		}
 		return steps
 	}
 	steps[3].Result, steps[3].Message = resource.ConnectionPass, "token privileges are read-only"

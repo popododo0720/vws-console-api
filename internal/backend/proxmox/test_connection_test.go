@@ -95,16 +95,18 @@ func TestAdminProxmoxConnectionSteps(t *testing.T) {
 				ca = foreignCA(t)
 			}
 			var regionCalls atomic.Int32
-			region := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				regionCalls.Add(1)
-				if r.Method != http.MethodGet || r.URL.Path != "/internal/v1/status" {
-					t.Errorf("unexpected region request: %s %s", r.Method, r.URL.Path)
-				}
-				w.WriteHeader(tc.regionStatus)
-				if _, err := fmt.Fprint(w, `{"quorum":true}`); err != nil {
-					t.Error(err)
-				}
-			}))
+			daemon, _ := openFixture(t)
+			region := httptest.NewUnstartedServer(regionapi.WithConnectionTest(daemon.TestConnection,
+				http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					regionCalls.Add(1)
+					if r.Method != http.MethodGet || r.URL.Path != "/internal/v1/status" {
+						t.Errorf("unexpected region request: %s %s", r.Method, r.URL.Path)
+					}
+					w.WriteHeader(tc.regionStatus)
+					if _, err := fmt.Fprint(w, `{"quorum":true}`); err != nil {
+						t.Error(err)
+					}
+				})))
 			region.TLS = &tls.Config{MinVersion: tls.VersionTLS12, ClientAuth: tls.RequireAnyClientCert}
 			region.StartTLS()
 			defer region.Close()
@@ -131,11 +133,13 @@ func TestAdminProxmoxConnectionSteps(t *testing.T) {
 			cfg := console.Config{
 				Registry: g, AdminKey: key, Logger: slog.New(slog.NewJSONHandler(&logs, nil)),
 				Auth: console.BearerTokens{"root": {Root: true}},
-				RegionConnection: func(ctx context.Context, v store.Region, token string) []resource.ConnectionStep {
-					return TestConnection(ctx, ConnectionConfig{
-						URLs: v.PVEAPIURLs, CAPEM: v.CAPEM, ClusterName: v.ClusterName,
-						TokenID: v.TokenID, TokenSecret: token,
-					})
+				RegionConnection: func(
+					ctx context.Context, endpoint string, data json.RawMessage,
+				) ([]resource.ConnectionStep, error) {
+					if endpoint != region.URL {
+						t.Errorf("wrong region endpoint: %s", endpoint)
+					}
+					return rc.TestConnection(ctx, data)
 				},
 				RegionStatus: func(ctx context.Context, endpoint string) (resource.RegionStatus, error) {
 					if endpoint != region.URL {

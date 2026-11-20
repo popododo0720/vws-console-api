@@ -132,6 +132,16 @@ linters:
           deny:
             - pkg: github.com/popododo0720/vws-console-api/internal/backend/proxmox/pveclient
               desc: PVE API types stay inside internal/backend/proxmox
+        only-the-daemon-connects-to-pve:
+          files:
+            - "$all"
+            - "!$test"
+            - "!**/internal/backend/proxmox/**"
+            - "!**/cmd/vws-region/**"
+            - "!**/cmd/pvefake/**"
+          deny:
+            - pkg: github.com/popododo0720/vws-console-api/internal/backend/proxmox
+              desc: only the region daemon connects to PVE; console-api reaches it through regionapi
         etcd-stays-in-etcdstore:
           files:
             - "$all"

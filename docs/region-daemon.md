@@ -15,11 +15,29 @@ disk configuration supplies it.
 vws-region -config /etc/vws/region.yaml -region <name>
 ```
 
-The daemon is the only process that sends Proxmox resource requests to PVE.
-console-api has no in-process Proxmox backend (`-backend` is `fake` or
-`regions`); it reaches the daemon over regionapi through `-backend regions`.
-The one exception is the admin Proxmox connection test, which makes read-only
-PVE checks (TLS, version, cluster, privileges) from console-api itself.
+The daemon is the only process that connects to PVE. console-api has no
+in-process Proxmox backend (`-backend` is `fake` or `regions`) and imports no
+Proxmox code; it reaches the daemon over regionapi through `-backend regions`.
+This includes the admin Proxmox connection test: console-api forwards the
+candidate registration (`pveApiUrls`, `caPem`, token id and secret, and the
+region's mapped pools) to `POST /internal/v1/connection-test` on the daemon,
+and the daemon runs the read-only PVE checks (TLS, version, cluster,
+privileges) and returns the four steps. console-api adds the regionapi step.
+
+The route works before the region is registered or ready, so an operator can
+test a candidate first. It shares the registration listener, so only a client
+with a certificate from the global CA reaches it. It probes only the
+addresses in the request, with the registration checks (HTTPS origins, at
+most 16, one CA that must sign them) and no redirects; the token goes only
+over connections whose server certificate chains to that CA. It GETs only, writes no
+file and does not touch the live registration, its state file or the quorum
+gate. The token is sent only over this channel, held for the call and never
+logged. At most two tests run at once, each within 12 s.
+
+A region that has no daemon yet, such as a new region before install, has
+nothing to answer: the test fails the `tls` step with "PVE checks run in the
+region daemon, which did not answer" and a classified reason, and skips the
+rest. Install and start `vws-region` for the region, then run the test again.
 
 `-region` names the one region this instance serves; it is required and a
 registration for any other region is refused with 400. The daemon talks to

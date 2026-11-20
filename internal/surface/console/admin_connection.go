@@ -2,6 +2,7 @@ package console
 
 import (
 	"context"
+	"encoding/json"
 	"mime"
 	"net/http"
 	"regexp"
@@ -171,7 +172,7 @@ func (h *handler) adminTestRegion(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, r, &resource.Error{Code: resource.CodeUnavailable, Message: "PVE connection test unavailable"})
 			return
 		}
-		steps = h.regionConnection(ctx, v, *in.TokenSecret)
+		steps = h.testPVE(ctx, v, *in.TokenSecret)
 	}
 	last := resource.ConnectionStep{Name: "regionapi", Result: resource.ConnectionSkipped, Message: "previous step failed"}
 	failed := false
@@ -191,4 +192,60 @@ func (h *handler) adminTestRegion(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, struct {
 		Steps []resource.ConnectionStep `json:"steps"`
 	}{Steps: append(steps, last)})
+}
+
+// testPVE has the region daemon run the PVE checks. console-api opens no
+// connection to a PVE address; it sends the candidate registration, the token
+// and the managed pools of the region over the authenticated regionapi channel.
+// A daemon that cannot be reached or answers badly fails the first step with a
+// fixed diagnostic, since no PVE check ran.
+func (h *handler) testPVE(ctx context.Context, v store.Region, token string) []resource.ConnectionStep {
+	failed := func(name, message string) []resource.ConnectionStep {
+		steps := make([]resource.ConnectionStep, 0, len(resource.PVEConnectionStepNames()))
+		for _, step := range resource.PVEConnectionStepNames() {
+			result, text := resource.ConnectionSkipped, "previous step failed"
+			if step == name {
+				result, text = resource.ConnectionFail, message
+			}
+			steps = append(steps, resource.ConnectionStep{Name: step, Result: result, Message: text})
+		}
+		return steps
+	}
+	projects, skipped, err := h.registry.Projects().List(ctx)
+	if err != nil || len(skipped) != 0 {
+		steps := failed("privileges", "managed project pools could not be read")
+		for i := range steps[:3] {
+			steps[i].Message = "managed project pools could not be read"
+		}
+		return steps
+	}
+	pools := []string{}
+	for _, project := range projects {
+		for _, binding := range project.Pools {
+			if binding.Region == v.Name {
+				pools = append(pools, binding.Pool)
+			}
+		}
+	}
+	data, err := json.Marshal(struct {
+		Region string `json:"region"`
+		//nolint:tagliatelle // The daemon protocol names cluster_name.
+		ClusterName string   `json:"cluster_name"`
+		PVEAPIURLs  []string `json:"pveApiUrls"`
+		CAPEM       string   `json:"caPem"`
+		TokenID     string   `json:"tokenId"`
+		Token       string   `json:"token"`
+		Pools       []string `json:"pools"`
+	}{v.Name, v.ClusterName, v.PVEAPIURLs, v.CAPEM, v.TokenID, token, pools})
+	if err != nil {
+		return failed("tls", "region daemon request could not be built")
+	}
+	steps, err := h.regionConnection(ctx, v.RegionEndpoint, data)
+	if err != nil {
+		if e := resource.AsError(err); e.Code == resource.CodeInvalidArgument {
+			return failed("tls", "region daemon refused the test request")
+		}
+		return failed("tls", "PVE checks run in the region daemon, which did not answer: "+h.regionFailure(ctx, err))
+	}
+	return steps
 }

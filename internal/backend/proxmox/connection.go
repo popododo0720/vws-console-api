@@ -78,6 +78,9 @@ type Connection struct {
 	clientCA    string
 	current     *Backend
 	digest      [32]byte
+	// dialPVE replaces the network dialer of connection tests; tests use it
+	// to make PVE reachable from this process alone.
+	dialPVE func(ctx context.Context, network, addr string) (net.Conn, error)
 }
 
 // Open loads node-local configuration; registration may arrive after startup.
