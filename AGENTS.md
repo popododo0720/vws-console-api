@@ -5,7 +5,7 @@ plane. One stateless process serves the console JSON API, an EC2 Query entry
 point and an S3 REST entry point that forwards AWS-region requests and stores
 no objects itself. Proxmox VE and AWS hold the state; this
 process keeps no copy (`docs/hybrid.md`). The supported backends are `fake` and
-`regions`; Proxmox is reached only through `vws-region` daemons. IAM continues to use vws-iam over gRPC. Protocol
+`regions`; Proxmox resource requests go only through `vws-region` daemons (the admin Proxmox connection test still makes read-only PVE checks). IAM continues to use vws-iam over gRPC. Protocol
 compatibility is behavioral: no logos, image assets or text that claims this
 project is someone else's cloud.
 

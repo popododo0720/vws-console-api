@@ -3,8 +3,10 @@
 The supported resource backends are `fake` and `regions`. The in-process
 `-backend=proxmox` mode and its node-local flags (`-region-config`,
 `-registration-file`, `-pve-endpoint`, `-pve-ca-file`, `-helper-path`) are
-removed; run one `vws-region` daemon per cluster and register it with the
-admin API.
+removed. Reach Proxmox through a `vws-region` daemon deployed as
+`docs/region-daemon.md` describes today, and register it with the admin API.
+Running one daemon per Proxmox cluster on the global host is follow-up work
+(#1053 and later).
 The Kubernetes compute, storage and network backend is removed in #784.
 Its ConfigMap launch records and detach-label reservation rollout rules
 do not apply to current builds. The historical detach model is
