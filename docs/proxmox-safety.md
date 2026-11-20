@@ -5,16 +5,17 @@
 VWS calls Proxmox as the user `vws@pve`, which can't log in. Every token has
 `privsep=1`, so its rights are the user's rights cut down by the token's own
 ACL. Tokens expire after a year and are rotated from the region edit page of
-the admin API. The secret is write-only, kept encrypted under
-`/etc/pve/priv/vws/` on its own cluster, and never shows up in a log, a
-config file, `/metrics` or an API answer.
+the admin API. The secret is write-only, kept in the
+region daemon's own 0600 state file (`registration.json` under its state
+directory, no encryption layer and no sudo helper), and never shows up in a
+log, a config file, `/metrics` or an API answer.
 
 | Phase | Token | Role | ACL path | Start-up self-check |
 | --- | --- | --- | --- | --- |
 | 1, read only | `vws@pve!inventory` | built-in `PVEAuditor` | `/`, propagated | The daemon refuses to start if `GET /access/permissions` shows any of `VM.Allocate`, `VM.PowerMgmt`, `VM.Config.*`, `VM.Snapshot`, `VM.Console`, `Permissions.Modify`, `Pool.Allocate`, `Sys.Modify`, `Datastore.Allocate`. With `read_only: true` the mutation paths are off. |
 | 2 to 4, mutations | `vws@pve!region` | `VWSRegionOperator`: `VM.Audit VM.Allocate VM.Clone VM.PowerMgmt VM.Config.CPU VM.Config.Memory VM.Config.Disk VM.Config.Network VM.Config.Cloudinit VM.Config.Options VM.Config.HWType VM.Snapshot VM.Console VM.GuestAgent.Audit Pool.Audit` | `/pool/<pool>` for each managed pool | The daemon refuses to start if the token holds a `VM.*` right outside its managed pools (`/` or `/vms`). |
 | | same token | `VWSTemplateReader`: `VM.Audit VM.Clone` | the template pool `/pool/vws-images` | |
-| | same token | `VWSStorageUser`: `Datastore.Audit Datastore.AllocateSpace` | each configured `/storage/<id>` and the snippets storage | |
+| | same token | `VWSStorageUser`: `Datastore.Audit Datastore.AllocateSpace` | each configured `/storage/<id>` | |
 | | same token | `VWSNetUser`: `SDN.Use SDN.Audit` | the zones and bridges in use | |
 | | same token | `PVEAuditor` | `/` | |
 | 5, DR backup | `vws@pve!backup` | `VM.Backup Datastore.AllocateSpace` | managed pools, backup storage | Kept apart from the mutation token. |
@@ -50,8 +51,7 @@ observed in the audit log and never undone.
   check found no quorum, sends no mutation to Proxmox.
 - Every Proxmox call has a timeout and bounded retries.
 - If any start-up self-check fails (token rights, cluster name, region
-  configuration, storages and bridges, snippets content, a writable
-  `/etc/pve/vws/`), `/readyz` fails and the daemon stays not ready.
+  configuration, storages and bridges, the state file), `/readyz` fails and the daemon stays not ready.
 
 ## Test safety
 

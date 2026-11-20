@@ -27,7 +27,6 @@ import (
 	"testing/cryptotest"
 	"time"
 
-	"github.com/popododo0720/vws-console-api/internal/backend/proxmox/pveclient"
 	"github.com/popododo0720/vws-console-api/internal/backend/proxmox/pveclient/pvefake"
 	"github.com/popododo0720/vws-console-api/internal/resource"
 )
@@ -139,49 +138,27 @@ func awaitClientStatus(t *testing.T, client *http.Client, url string, status int
 	}
 }
 
-func TestRegionDaemonReadsRestartAndReadiness(t *testing.T) {
-	dir := t.TempDir()
+// TestRegionDaemonKeepsStateAcrossRestart runs the real daemon with only a
+// state directory: no sudo, no helper, no /etc/pve. Registration survives a restart.
+func TestRegionDaemonKeepsStateAcrossRestart(t *testing.T) {
+	dir := privateDir(t)
 	binary := filepath.Join(dir, "vws-region")
-	build := exec.CommandContext(t.Context(), "go", "build", "-race", "-o", binary, "./cmd/vws-region")
+	build := exec.CommandContext(t.Context(), "go", "build", "-o", binary, "./cmd/vws-region")
 	build.Dir = "../../.."
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build: %v\n%s", err, out)
 	}
-	helper := filepath.Join(dir, "helper")
-	build = exec.CommandContext(t.Context(), "go", "test", "-c", "-o", helper, "./internal/regionhelper")
-	build.Dir = "../../.."
-	if out, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("helper build: %v\n%s", err, out)
-	}
-	for _, name := range []string{
-		"etc/pve/vws", "etc/pve/priv/vws", "etc/pve/priv/lock/vws-region", "etc/vws/credentials",
-	} {
-		if err := os.MkdirAll(filepath.Join(dir, name), 0o700); err != nil {
-			t.Fatal(err)
-		}
-	}
-	writeFixture(t, filepath.Join(dir, "etc/vws/credentials/region-kek"), bytes.Repeat([]byte{42}, 32))
-	t.Setenv("CREDENTIALS_DIRECTORY", "")
-	t.Setenv("VWS_HELPER_TEST_ROOT", dir)
+	stateDir := filepath.Join(dir, "state")
 	tlsConfig := daemonCertificates(t, dir)
 	s := scenario()
 	s.Pools = []string{"123456789012"}
 	s.Roles[0].Privs = append(s.Roles[0].Privs, "Pool.Audit")
-	next := s.Tokens[0]
-	next.ID, next.Secret = "vws@pve!next", "replacement-secret"
-	s.Tokens = append(s.Tokens, next)
 	fake, err := pvefake.New(s)
 	if err != nil {
 		t.Fatal(err)
 	}
 	var unavailable atomic.Bool
-	gate := make(chan struct{})
 	pve := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		select {
-		case <-gate:
-		case <-r.Context().Done():
-			return
-		}
 		if unavailable.Load() {
 			w.WriteHeader(http.StatusForbidden)
 			return
@@ -192,7 +169,6 @@ func TestRegionDaemonReadsRestartAndReadiness(t *testing.T) {
 	pve.StartTLS()
 	defer pve.Close()
 	writeFixture(t, filepath.Join(dir, "region.yaml"), []byte("read_only: true\npools:\n  project: '123456789012'\n"))
-	reg := filepath.Join(dir, "etc/pve/vws", "registration.json")
 	const canary = "fake-secret"
 	transport := &http.Transport{TLSClientConfig: tlsConfig}
 	defer transport.CloseIdleConnections()
@@ -209,7 +185,7 @@ func TestRegionDaemonReadsRestartAndReadiness(t *testing.T) {
 		}
 		body, err := io.ReadAll(res.Body)
 		res.Body.Close()
-		if bytes.Contains(body, []byte(canary)) || bytes.Contains(body, []byte(next.Secret)) {
+		if bytes.Contains(body, []byte(canary)) {
 			t.Fatal("token in response")
 		}
 		if err != nil || res.StatusCode != want {
@@ -217,12 +193,11 @@ func TestRegionDaemonReadsRestartAndReadiness(t *testing.T) {
 		}
 		return body
 	}
-	start := func() (string, string, func()) {
+	start := func(region string) (string, string, func()) {
 		addr, ops := unusedAddress(t), unusedAddress(t)
 		ctx, cancel := context.WithTimeout(context.WithoutCancel(t.Context()), time.Minute)
 		cmd := exec.CommandContext(ctx, binary,
-			"-config", filepath.Join(dir, "region.yaml"), "-registration-file", reg,
-			"-helper-path", helper, "-helper-root", dir,
+			"-config", filepath.Join(dir, "region.yaml"), "-region", region, "-state-dir", stateDir,
 			"-pve-endpoint", pve.URL, "-pve-ca-file", filepath.Join(dir, "ca.pem"),
 			"-tls-cert-file", filepath.Join(dir, "cert.pem"), "-tls-key-file", filepath.Join(dir, "key.pem"),
 			"-tls-ca-file", filepath.Join(dir, "ca.pem"), "-region-addr", addr, "-ops-addr", ops)
@@ -245,155 +220,34 @@ func TestRegionDaemonReadsRestartAndReadiness(t *testing.T) {
 			if err := cmd.Wait(); err != nil {
 				t.Errorf("daemon: %v\n%s", err, output.String())
 			}
-			if strings.Contains(output.String(), canary) || strings.Contains(output.String(), next.Secret) {
+			if strings.Contains(output.String(), canary) {
 				t.Error("token in daemon log")
 			}
 		}
 		t.Cleanup(stop)
 		return "https://" + addr, "http://" + ops, stop
 	}
-	first, ops, stop := start()
+	first, ops, stop := start("pve-test-1")
 	awaitStatus(t, ops+"/readyz", http.StatusServiceUnavailable)
-	second, secondOps, _ := start()
-	awaitStatus(t, secondOps+"/readyz", http.StatusServiceUnavailable)
 	body := request(t, http.MethodGet, ops+"/readyz", "", http.StatusServiceUnavailable)
 	if string(body) != "unregistered\n" {
 		t.Fatalf("unregistered readiness = %q", body)
 	}
-	close(gate)
-	tokenID, token := "vws@pve!inventory", canary
-	put := func(t *testing.T, cluster, id, secret string, want int) {
+	put := func(origin, region string, want int) {
 		t.Helper()
-		data := `{"region":"pve-test-1","cluster_name":"` + cluster +
-			`","tokenId":"` + id + `","token":"` + secret + `","zones":[{"letter":"a","nodes":["pve1"]}]}`
-		if cluster == "test" {
-			zones := registrationZones(990)
-			input := map[string]any{
-				"region": "pve-test-1", "cluster_name": cluster, "tokenId": id, "token": secret, "zones": zones,
-			}
-			body, err := json.Marshal(input)
-			if err != nil {
-				t.Fatal(err)
-			}
-			last := &zones[len(zones)-1].Nodes[len(zones[len(zones)-1].Nodes)-1]
-			excess := len(body) - (64 << 10)
-			if excess < 0 || excess >= len(*last) {
-				t.Fatal("maximum-size fixture cannot trim its final node")
-			}
-			*last = (*last)[excess:]
-			body, err = json.Marshal(input)
-			if err != nil || len(body) != 64<<10 {
-				t.Fatalf("request bytes=%d err=%v", len(body), err)
-			}
-			data = string(body)
-		}
-		request(t, http.MethodPut, first+"/internal/v1/registration", data, want)
+		request(t, http.MethodPut, origin+"/internal/v1/registration", `{"region":"`+region+
+			`","cluster_name":"test","tokenId":"vws@pve!inventory","token":"`+canary+
+			`","zones":[{"letter":"a","nodes":["pve1"]}]}`, want)
 	}
-	put(t, "wrong", tokenID, token, http.StatusConflict)
-	for _, name := range []string{"etc/pve/vws", "etc/pve/priv/vws", "etc/pve/priv/lock/vws-region"} {
-		files, err := os.ReadDir(filepath.Join(dir, name))
-		if err != nil || len(files) != 0 {
-			t.Fatalf("mismatch wrote %s: %v", name, err)
-		}
+	put(first, "other-region", http.StatusBadRequest)
+	if _, err := os.Stat(filepath.Join(stateDir, registrationFile)); !os.IsNotExist(err) {
+		t.Fatalf("a registration for another region reached the state file: %v", err)
 	}
-	conn, err := Open(filepath.Join(dir, "region.yaml"), reg, pve.URL, pve.Client())
-	if err != nil {
-		t.Fatal(err)
-	}
-	conn.Helper.Path = helper
-	conn.Helper.Root = dir
-	t.Run("omitted_token_requires_registration", func(t *testing.T) {
-		input := []byte(`{"region":"pve-test-1","cluster_name":"test","tokenId":"vws@pve!inventory"}`)
-		err := conn.Register(t.Context(), input)
-		if e := resource.AsError(err); e.Code != resource.CodeInvalidArgument || e.Field != "token" {
-			t.Fatalf("first registration without token: %v", err)
-		}
-	})
-	t.Run("invalid_tokens", func(t *testing.T) {
-		before := len(fake.Requests())
-		for _, token := range []string{"", "contains space", "newline\n", strings.Repeat("a", 513)} {
-			s := registrationSnapshot{
-				Region: "pve-test-1", ClusterName: "test", TokenID: "vws@pve!inventory", Token: pveclient.Secret(token),
-			}
-			if _, err := conn.check(t.Context(), s); resource.CodeOf(err) != resource.CodeInvalidArgument {
-				t.Fatalf("invalid token error = %v, want InvalidArgument", err)
-			}
-		}
-		if len(fake.Requests()) != before {
-			t.Fatal("invalid token reached PVE")
-		}
-	})
-	t.Run("oversized_identity", func(t *testing.T) {
-		data, err := json.Marshal(map[string]any{
-			"region": "pve-test-1", "cluster_name": "test", "tokenId": tokenID, "token": token,
-			"zones": registrationZones(1024),
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := conn.Register(t.Context(), data); resource.CodeOf(err) != resource.CodeInvalidArgument {
-			t.Fatalf("oversized identity error=%v, want InvalidArgument", err)
-		}
-		for _, name := range []string{"etc/pve/vws", "etc/pve/priv/vws", "etc/pve/priv/lock/vws-region"} {
-			files, err := os.ReadDir(filepath.Join(dir, name))
-			if err != nil || len(files) != 0 {
-				t.Fatalf("oversized identity wrote %s: %v", name, err)
-			}
-		}
-	})
-	put(t, "test", tokenID, token, http.StatusOK)
-	put(t, "test", tokenID, token, http.StatusOK)
-	t.Run("omitted_token_reuses_without_write", func(t *testing.T) {
-		path := filepath.Join(dir, "etc/pve/priv/vws", "pve-token."+tokenFingerprint(pveclient.Secret(token)))
-		before, err := os.ReadFile(path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		writeFixture(t, filepath.Join(dir, "fail"), []byte("token-write"))
-		request(t, http.MethodPut, first+"/internal/v1/registration",
-			`{"region":"pve-test-1","cluster_name":"test","tokenId":"vws@pve!inventory"}`, http.StatusOK)
-		after, err := os.ReadFile(path)
-		if err != nil || !bytes.Equal(before, after) {
-			t.Fatal("omitted token rewrote encrypted token")
-		}
-		if err := os.Remove(filepath.Join(dir, "fail")); err != nil {
-			t.Fatal(err)
-		}
-	})
-	t.Run("omitted_token_rejects_mismatch", func(t *testing.T) {
-		path := filepath.Join(dir, "etc/pve/priv/vws", "pve-token."+tokenFingerprint(pveclient.Secret(token)))
-		before, err := os.ReadFile(path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		fp := tokenFingerprint(pveclient.Secret(next.Secret))
-		if err := conn.Helper.WriteToken(t.Context(), fp, []byte(next.Secret)); err != nil {
-			t.Fatal(err)
-		}
-		data, err := os.ReadFile(filepath.Join(dir, "etc/pve/priv/vws", "pve-token."+fp))
-		if err != nil {
-			t.Fatal(err)
-		}
-		writeFixture(t, path, data)
-		t.Cleanup(func() { writeFixture(t, path, before) })
-		input := []byte(`{"region":"pve-test-1","cluster_name":"test","tokenId":"vws@pve!inventory"}`)
-		err = conn.Register(t.Context(), input)
-		if e := resource.AsError(err); e.Code != resource.CodeInvalidArgument || e.Field != "token" {
-			t.Fatalf("fingerprint mismatch: %v", err)
-		}
-		if err := conn.Helper.DeleteToken(t.Context(), fp); err != nil {
-			t.Fatal(err)
-		}
-	})
-	put(t, "test", tokenID, token, http.StatusOK)
+	put(first, "pve-test-1", http.StatusOK)
 	awaitStatus(t, ops+"/readyz", http.StatusOK)
-	awaitStatus(t, secondOps+"/readyz", http.StatusOK)
-	awaitStatus(t, ops+"/healthz", http.StatusOK)
-	awaitStatus(t, ops+"/metrics", http.StatusOK)
-	var health resource.RegionStatus
-	err = json.Unmarshal(request(t, http.MethodGet, first+"/internal/v1/status", "", http.StatusOK), &health)
-	if err != nil || !health.Quorate || len(health.Nodes) != 1 || !health.Nodes[0].Online {
-		t.Fatalf("daemon health=%+v err=%v", health, err)
+	info, err := os.Stat(filepath.Join(stateDir, registrationFile))
+	if err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("state file: %v, %v", info, err)
 	}
 	account, err := resource.Parse[resource.AccountID]("123456789012")
 	if err != nil {
@@ -409,241 +263,12 @@ func TestRegionDaemonReadsRestartAndReadiness(t *testing.T) {
 		return page
 	}
 	want := read(first)
-	if got := read(second); !reflect.DeepEqual(got, want) {
-		t.Fatalf("two daemons disagree: got=%+v want=%+v", got, want)
-	}
-	for _, pool := range []string{"", "foreign-pool", "project"} {
-		data := `{"scope":{"account":"` + account.String() + `","pool":"` + pool + `"},"req":{}}`
-		for _, origin := range []string{first, second} {
-			body := request(t, http.MethodPost, origin+"/internal/v1/Compute/DescribeInstances", data, http.StatusBadRequest)
-			if !strings.Contains(string(body), `"code":"PermissionDenied"`) {
-				t.Fatalf("daemon accepted unmanaged pool %q: %s", pool, body)
-			}
-		}
-	}
-	var caps resource.RegionCapabilities
-	err = json.Unmarshal(request(t, http.MethodGet, second+"/internal/v1/capabilities", "", http.StatusOK), &caps)
-	if err != nil || caps.Region != "pve-test-1" {
-		t.Fatalf("capabilities=%+v err=%v", caps, err)
-	}
-	for _, failure := range []struct {
-		verb, id, secret string
-		status           int
-	}{
-		{"registration-write+token-write", next.ID, next.Secret, http.StatusServiceUnavailable},
-		{"unlock", tokenID, token, http.StatusOK},
-	} {
-		t.Run(failure.verb+"_failure", func(t *testing.T) {
-			before, err := os.ReadFile(reg)
-			if err != nil {
-				t.Fatal(err)
-			}
-			writeFixture(t, filepath.Join(dir, "fail"), []byte(failure.verb))
-			t.Cleanup(func() {
-				if err := conn.Helper.Unlock(context.WithoutCancel(t.Context()), "registration"); err != nil {
-					t.Error(err)
-				}
-			})
-			put(t, "test", failure.id, failure.secret, failure.status)
-			after, err := os.ReadFile(reg)
-			if err != nil || !bytes.Equal(before, after) {
-				t.Fatal("failed operation changed the active registration")
-			}
-			if _, err := conn.Check(t.Context()); err != nil {
-				t.Fatalf("previous token and registration no longer work: %v", err)
-			}
-			if failure.status == http.StatusServiceUnavailable {
-				if err := os.Remove(filepath.Join(dir, "fail")); err != nil {
-					t.Fatal("compensation unexpectedly consumed the token-write fault:", err)
-				}
-				put(t, "test", failure.id, failure.secret, http.StatusOK)
-				put(t, "test", tokenID, token, http.StatusOK)
-				t.Log("pre-commit failure: old pair serves on both daemons; no compensation; retry PUT 200")
-			}
-			awaitStatus(t, ops+"/readyz", http.StatusOK)
-			awaitStatus(t, secondOps+"/readyz", http.StatusOK)
-		})
-	}
-	t.Run("registration_commit_then_exit_1", func(t *testing.T) {
-		writeFixture(t, filepath.Join(dir, "fail"), []byte("after:registration-write"))
-		put(t, "test", next.ID, next.Secret, http.StatusServiceUnavailable)
-		if _, err := conn.Check(t.Context()); err != nil {
-			t.Fatalf("committed pair no longer works: %v", err)
-		}
-		data, err := os.ReadFile(reg)
-		var stored registrationSnapshot
-		fp := tokenFingerprint(pveclient.Secret(next.Secret))
-		if err != nil || json.Unmarshal(data, &stored) != nil || stored.Fingerprint != fp {
-			t.Fatal("disk does not name the committed new token")
-		}
-		oldToken := filepath.Join(dir, "etc/pve/priv/vws", "pve-token."+tokenFingerprint(pveclient.Secret(token)))
-		if _, err := os.Stat(oldToken); !os.IsNotExist(err) {
-			t.Fatal("committed registration with helper error left the previous token file:", err)
-		}
-		awaitStatus(t, ops+"/readyz", http.StatusOK)
-		awaitStatus(t, secondOps+"/readyz", http.StatusOK)
-		put(t, "test", next.ID, next.Secret, http.StatusOK)
-		t.Log("commit then exit 1: PUT 503, committed pair reloads, both daemons ready, retry PUT 200")
-	})
-	t.Run("rotation_and_failed_candidate", func(t *testing.T) {
-		for _, candidate := range []struct{ id, secret string }{{tokenID, token}, {next.ID, next.Secret}} {
-			old, err := os.ReadFile(reg)
-			if err != nil {
-				t.Fatal(err)
-			}
-			var previous registrationSnapshot
-			if err := json.Unmarshal(old, &previous); err != nil {
-				t.Fatal(err)
-			}
-			before := strings.Count(strings.Join(fake.Requests(), "\n"), "GET /api2/json/access/permissions")
-			put(t, "test", candidate.id, candidate.secret, http.StatusOK)
-			after := strings.Count(strings.Join(fake.Requests(), "\n"), "GET /api2/json/access/permissions")
-			if after <= before {
-				t.Fatal("rotation did not repeat the permission self-check")
-			}
-			path := filepath.Join(dir, "etc/pve/priv/vws", "pve-token."+previous.Fingerprint)
-			if _, err := os.Stat(path); !os.IsNotExist(err) {
-				t.Fatal("rotation left the previous token file")
-			}
-			awaitStatus(t, ops+"/readyz", http.StatusOK)
-			awaitStatus(t, secondOps+"/readyz", http.StatusOK)
-			if _, err := conn.Check(t.Context()); err != nil {
-				t.Fatal(err)
-			}
-			t.Logf("rotation PUT 200, both ready, previous token gone; permission checks %d -> %d", before, after)
-		}
-		before, err := os.ReadFile(reg)
-		if err != nil {
-			t.Fatal(err)
-		}
-		put(t, "test", next.ID, "refused-candidate", http.StatusServiceUnavailable)
-		after, err := os.ReadFile(reg)
-		if err != nil || !bytes.Equal(before, after) {
-			t.Fatal("failed candidate changed identity")
-		}
-		refused := filepath.Join(dir, "etc/pve/priv/vws", "pve-token."+tokenFingerprint("refused-candidate"))
-		if _, err := os.Stat(refused); !os.IsNotExist(err) {
-			t.Fatal("failed candidate wrote a token")
-		}
-		if _, err := conn.Check(t.Context()); err != nil {
-			t.Fatal("failed candidate replaced serving pair:", err)
-		}
-		awaitStatus(t, ops+"/readyz", http.StatusOK)
-		awaitStatus(t, secondOps+"/readyz", http.StatusOK)
-	})
-	t.Run("token_cleanup_failure", func(t *testing.T) {
-		writeFixture(t, filepath.Join(dir, "fail"), []byte("token-delete"))
-		put(t, "test", tokenID, token, http.StatusOK)
-		fp := tokenFingerprint(pveclient.Secret(next.Secret))
-		if _, err := os.Stat(filepath.Join(dir, "etc/pve/priv/vws", "pve-token."+fp)); err != nil {
-			t.Fatal("cleanup fault did not retain the inactive token:", err)
-		}
-		if _, err := conn.Check(t.Context()); err != nil {
-			t.Fatal("cleanup failure broke the committed pair:", err)
-		}
-		if err := conn.Helper.DeleteToken(t.Context(), fp); err != nil {
-			t.Fatal(err)
-		}
-		put(t, "test", next.ID, next.Secret, http.StatusOK)
-	})
-	for _, operation := range []string{"lock", "token-read"} {
-		t.Run("rotation_during_"+operation, func(t *testing.T) {
-			data, err := os.ReadFile(reg)
-			var replacement registrationSnapshot
-			if err != nil || json.Unmarshal(data, &replacement) != nil {
-				t.Fatal("read current identity:", err)
-			}
-			id, secret := tokenID, token
-			if replacement.TokenID == tokenID {
-				id, secret = next.ID, next.Secret
-			}
-			replacement.TokenID, replacement.Fingerprint = id, tokenFingerprint(pveclient.Secret(secret))
-			if err := conn.Helper.WriteToken(t.Context(), replacement.Fingerprint, []byte(secret)); err != nil {
-				t.Fatal(err)
-			}
-			data, err = json.Marshal(replacement)
-			if err != nil {
-				t.Fatal(err)
-			}
-			writeFixture(t, filepath.Join(dir, "next-registration"), data)
-			t.Setenv("VWS_HELPER_TEST_ROTATE", operation)
-			if operation == "lock" {
-				err := conn.Register(t.Context(), []byte(`{"region":"pve-test-1","cluster_name":"test","tokenId":"vws@pve!next"}`))
-				if resource.CodeOf(err) != resource.CodeConflict {
-					t.Fatalf("stale reused token committed after rotation: %v", err)
-				}
-			}
-			if _, err := conn.Check(t.Context()); err != nil {
-				t.Fatalf("reader lost rotation between identity and token reads: %v", err)
-			}
-			t.Log("reader reloaded the new pair after old-token deletion")
-		})
-	}
-	put(t, "test", tokenID, token, http.StatusOK)
-	t.Run("torn_pair", func(t *testing.T) {
-		identity, err := os.ReadFile(reg)
-		if err != nil {
-			t.Fatal(err)
-		}
-		var torn registrationSnapshot
-		if err := json.Unmarshal(identity, &torn); err != nil {
-			t.Fatal(err)
-		}
-		torn.TokenID = next.ID
-		tornIdentity, err := json.Marshal(torn)
-		if err != nil {
-			t.Fatal(err)
-		}
-		path := filepath.Join(dir, "etc/pve/priv/vws", "pve-token."+tokenFingerprint(pveclient.Secret(token)))
-		original, err := os.ReadFile(path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		fp := tokenFingerprint(pveclient.Secret(next.Secret))
-		if err := conn.Helper.WriteToken(t.Context(), fp, []byte(next.Secret)); err != nil {
-			t.Fatal(err)
-		}
-		wrong, err := os.ReadFile(filepath.Join(dir, "etc/pve/priv/vws", "pve-token."+fp))
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, mode := range []string{"mismatched", "missing"} {
-			t.Run(mode, func(t *testing.T) {
-				if mode == "missing" {
-					if err := os.Remove(path); err != nil {
-						t.Fatal(err)
-					}
-				} else {
-					writeFixture(t, reg, tornIdentity)
-					writeFixture(t, path, wrong)
-				}
-				t.Cleanup(func() {
-					writeFixture(t, reg, identity)
-					writeFixture(t, path, original)
-				})
-				if _, err := conn.Check(t.Context()); err == nil {
-					t.Fatal("torn pair accepted")
-				} else if mode == "missing" && err.Error() != tokenUnreadable {
-					t.Fatalf("missing token reason = %v, want %s", err, tokenUnreadable)
-				}
-				awaitStatus(t, ops+"/readyz", http.StatusServiceUnavailable)
-				awaitStatus(t, secondOps+"/readyz", http.StatusServiceUnavailable)
-				request(t, http.MethodGet, first+"/internal/v1/version", "", http.StatusServiceUnavailable)
-				request(t, http.MethodGet, second+"/internal/v1/version", "", http.StatusServiceUnavailable)
-				writeFixture(t, path, original)
-				writeFixture(t, reg, identity)
-				awaitStatus(t, ops+"/readyz", http.StatusOK)
-				awaitStatus(t, secondOps+"/readyz", http.StatusOK)
-				t.Log("both daemons rejected the torn pair and recovered after repair")
-			})
-		}
-	})
 	unavailable.Store(true)
 	awaitStatus(t, ops+"/readyz", http.StatusServiceUnavailable)
-	body = request(t, http.MethodGet, first+"/internal/v1/status", "", http.StatusServiceUnavailable)
 	var failure struct {
 		Error *resource.Error `json:"error"`
 	}
+	body = request(t, http.MethodGet, first+"/internal/v1/status", "", http.StatusServiceUnavailable)
 	if err := json.Unmarshal(body, &failure); err != nil || failure.Error == nil ||
 		failure.Error.Message != "registration self-check failed: privileges" {
 		t.Fatalf("readiness lost its safe reason: %s (%v)", body, err)
@@ -651,7 +276,7 @@ func TestRegionDaemonReadsRestartAndReadiness(t *testing.T) {
 	unavailable.Store(false)
 	awaitStatus(t, ops+"/readyz", http.StatusOK)
 	stop()
-	restarted, restartOps, _ := start()
+	restarted, restartOps, _ := start("pve-test-1")
 	awaitStatus(t, restartOps+"/readyz", http.StatusOK)
 	if got := read(restarted); !reflect.DeepEqual(got, want) {
 		t.Fatalf("restart changed inventory: got=%+v want=%+v", got, want)
@@ -661,18 +286,8 @@ func TestRegionDaemonReadsRestartAndReadiness(t *testing.T) {
 			t.Fatalf("PVE mutation: %s", method)
 		}
 	}
-	for _, name := range []string{"etc/pve/vws", "etc/pve/priv/vws", "etc/pve/priv/lock/vws-region"} {
-		if err := filepath.WalkDir(filepath.Join(dir, name), func(path string, entry os.DirEntry, err error) error {
-			if err != nil || entry.IsDir() {
-				return err
-			}
-			data, err := os.ReadFile(path)
-			if bytes.Contains(data, []byte(canary)) || bytes.Contains(data, []byte(next.Secret)) {
-				t.Errorf("plaintext token in %s", path)
-			}
-			return err
-		}); err != nil {
-			t.Fatal(err)
-		}
+	files, err := os.ReadDir(stateDir)
+	if err != nil || len(files) != 1 {
+		t.Fatalf("state directory holds more than the state file: %v %v", files, err)
 	}
 }

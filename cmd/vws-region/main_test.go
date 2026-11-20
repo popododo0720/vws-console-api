@@ -81,16 +81,16 @@ func TestTokenInputsAreRefused(t *testing.T) {
 	}
 }
 
-func TestHelperRootRequiresExplicitPath(t *testing.T) {
+func TestRegionNameIsRequiredAndRemovedFlagsAreRefused(t *testing.T) {
 	for _, args := range [][]string{
-		{"-helper-root", "/fixture"},
-		{"-helper-root", ""},
-		{"-helper-root", "relative", "-helper-path", "/helper"},
-		{"-helper-root", "/fixture/../escape", "-helper-path", "/helper"},
+		nil,
+		{"-region", "Not_A_Label"},
+		{"-region", "pve-test-1", "-helper-path", "/helper"},
+		{"-region", "pve-test-1", "-helper-root", "/fixture"},
+		{"-region", "pve-test-1", "-registration-file", "/etc/pve/vws/registration.json"},
 	} {
-		if err := run(t.Context(), args); err == nil ||
-			!strings.Contains(err.Error(), "helper-root requires") {
-			t.Fatalf("invalid helper-root flags %q: %v", args, err)
+		if err := run(t.Context(), args); err == nil {
+			t.Fatalf("accepted %q", args)
 		}
 	}
 }

@@ -26,11 +26,10 @@ func TestPVEFakeCommandRegionInventoryAndRestart(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("loopback stack requires a non-root user")
 	}
-	dir := t.TempDir()
+	dir := privateDir(t)
 	for _, target := range []struct{ name, path string }{
 		{"pvefake", "./cmd/pvefake"},
 		{"vws-region", "./cmd/vws-region"},
-		{"helper", "./cmd/vws-region-helper"},
 		{"vws-console-api", "./cmd/vws-console-api"},
 	} {
 		args := []string{"build", "-race", "-o", filepath.Join(dir, target.name), target.path}
@@ -40,17 +39,8 @@ func TestPVEFakeCommandRegionInventoryAndRestart(t *testing.T) {
 			t.Fatalf("build %s: %v\n%s", target.name, err, out)
 		}
 	}
-	for _, name := range []string{
-		"etc/pve/vws", "etc/pve/priv/vws", "etc/pve/priv/lock/vws-region", "etc/vws/credentials",
-	} {
-		if err := os.MkdirAll(filepath.Join(dir, name), 0o700); err != nil {
-			t.Fatal(err)
-		}
-	}
-	writeFixture(t, filepath.Join(dir, "etc/vws/credentials/region-kek"), bytes.Repeat([]byte{42}, 32))
 	writeFixture(t, filepath.Join(dir, "admin-kek"), []byte("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="))
 	writeFixture(t, filepath.Join(dir, "region.yaml"), []byte("read_only: true\npools:\n  project: '123456789012'\n"))
-	t.Setenv("CREDENTIALS_DIRECTORY", "")
 	tlsConfig := daemonCertificates(t, dir)
 	transport := &http.Transport{TLSClientConfig: tlsConfig}
 	defer transport.CloseIdleConnections()
@@ -164,8 +154,7 @@ func TestPVEFakeCommandRegionInventoryAndRestart(t *testing.T) {
 		addr, ops := unusedAddress(t), unusedAddress(t)
 		region := exec.CommandContext(ctx, filepath.Join(dir, "vws-region"),
 			"-backend", "proxmox", "-config", filepath.Join(dir, "region.yaml"),
-			"-registration-file", filepath.Join(dir, "etc/pve/vws", "registration.json"),
-			"-helper-path", filepath.Join(dir, "helper"), "-helper-root", dir, "-pve-endpoint", endpoint,
+			"-region", "pve-test-1", "-state-dir", filepath.Join(dir, "state"), "-pve-endpoint", endpoint,
 			"-pve-ca-file", filepath.Join(dir, "pve-ca.pem"),
 			"-tls-cert-file", filepath.Join(dir, "cert.pem"), "-tls-key-file", filepath.Join(dir, "key.pem"),
 			"-tls-ca-file", filepath.Join(dir, "ca.pem"), "-region-addr", addr, "-ops-addr", ops)
@@ -258,7 +247,7 @@ func TestPVEFakeCommandRegionInventoryAndRestart(t *testing.T) {
 			if !bytes.Contains(data, []byte(`"letter":"b"`)) || bytes.Contains(data, []byte(`"lastError":{`)) {
 				t.Fatalf("zone update: %s", data)
 			}
-			identity, err := os.ReadFile(filepath.Join(dir, "etc/pve/vws/registration.json"))
+			identity, err := os.ReadFile(filepath.Join(dir, "state", registrationFile))
 			if err != nil || !bytes.Contains(identity, []byte(`"letter":"b"`)) {
 				t.Fatalf("daemon did not persist zones: %s %v", identity, err)
 			}

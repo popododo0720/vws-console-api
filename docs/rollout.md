@@ -3,7 +3,9 @@
 The supported resource backends are `fake` and `regions`. The in-process
 `-backend=proxmox` mode and its node-local flags (`-region-config`,
 `-registration-file`, `-pve-endpoint`, `-pve-ca-file`, `-helper-path`) are
-removed. Reach Proxmox through a `vws-region` daemon deployed as
+removed. The `vws-region` daemon has no helper either: `-helper-path`,
+`-helper-root` and `-registration-file` are gone, and its state is one 0600
+file under `-state-dir`. Reach Proxmox through a `vws-region` daemon deployed as
 `docs/region-daemon.md` describes today, and register it with the admin API.
 Running one daemon per Proxmox cluster on the global host is follow-up work
 (#1053 and later).

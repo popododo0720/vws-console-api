@@ -23,7 +23,6 @@ type RegionConfig struct {
 	DefaultBridge   string                        `yaml:"default_bridge"`
 	DefaultProject  string                        `yaml:"default_project"`
 	Pools           map[string]string             `yaml:"pools"`
-	SnippetsStorage string                        `yaml:"snippets_storage"`
 	Scheduler       SchedulerConfig               `yaml:"scheduler"`
 	LinkedClones    bool                          `yaml:"linked_clones"`
 	LiveTests       bool                          `yaml:"live_tests"`

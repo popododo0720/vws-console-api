@@ -1,12 +1,10 @@
 package proxmox
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"net/http/httptest"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -95,7 +93,6 @@ func TestBackupTokenInput(t *testing.T) {
 		{"backupTokenId", "", "backupTokenId"},
 		{"backupToken", "bad\nsecret", "backupToken"},
 		{"backupToken", strings.Repeat("a", 513), "backupToken"},
-		{"backupFingerprint", strings.Repeat("a", 64), "backupFingerprint"},
 	} {
 		t.Run(tc.field+"/"+tc.value, func(t *testing.T) {
 			fields := map[string]string{
@@ -106,7 +103,7 @@ func TestBackupTokenInput(t *testing.T) {
 			fields[tc.field] = tc.value
 			data, err := json.Marshal(fields)
 			checkLaunch(t, err)
-			c := &Connection{}
+			c := &Connection{region: "pve-test-1", dir: privateDir(t)}
 			if err := c.Register(t.Context(), data); resource.AsError(err).Field != tc.want {
 				t.Fatalf("invalid input: %v, want field %s", err, tc.want)
 			}
@@ -115,21 +112,7 @@ func TestBackupTokenInput(t *testing.T) {
 }
 
 func TestBackupTokenRegistration(t *testing.T) {
-	dir := t.TempDir()
-	helper := filepath.Join(dir, "helper")
-	build := exec.CommandContext(t.Context(), "go", "test", "-c", "-o", helper, "./internal/regionhelper")
-	build.Dir = "../../.."
-	if out, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("helper build: %v\n%s", err, out)
-	}
-	for _, name := range []string{
-		"etc/pve/vws", "etc/pve/priv/vws", "etc/pve/priv/lock/vws-region", "etc/vws/credentials",
-	} {
-		checkLaunch(t, os.MkdirAll(filepath.Join(dir, name), 0o700))
-	}
-	writeFixture(t, filepath.Join(dir, "etc/vws/credentials/region-kek"), bytes.Repeat([]byte{42}, 32))
-	t.Setenv("CREDENTIALS_DIRECTORY", "")
-	t.Setenv("VWS_HELPER_TEST_ROOT", dir)
+	dir := privateDir(t)
 	s := backupScenario()
 	s.Roles = append(s.Roles, pvefake.Role{ID: "Broad", Privs: []string{"VM.Allocate"}})
 	s.Tokens = append(s.Tokens, pvefake.Token{
@@ -141,11 +124,11 @@ func TestBackupTokenRegistration(t *testing.T) {
 	defer pve.Close()
 	config := filepath.Join(dir, "region.yaml")
 	writeFixture(t, config, []byte("read_only: false\npools: {project: managed, nested: parent/child}\n"))
-	reg := filepath.Join(dir, "etc/pve/vws/registration.json")
+	state := filepath.Join(dir, "state")
+	reg := filepath.Join(state, registrationFile)
 	open := func() *Connection {
-		conn, err := Open(config, reg, pve.URL, pve.Client())
+		conn, err := Open(config, "pve-test-1", state, pve.URL, pve.Client())
 		checkLaunch(t, err)
-		conn.Helper.Path, conn.Helper.Root = helper, dir
 		return conn
 	}
 	conn := open()
@@ -158,16 +141,12 @@ func TestBackupTokenRegistration(t *testing.T) {
 		checkLaunch(t, err)
 		return conn.Register(t.Context(), data)
 	}
-	tokens := func() int {
-		files, err := os.ReadDir(filepath.Join(dir, "etc/pve/priv/vws"))
-		checkLaunch(t, err)
-		return len(files)
-	}
 	err = register(map[string]string{
 		"token": "fake-secret", "backupTokenId": "vws@pve!broad", "backupToken": "broad-secret",
 	})
-	if resource.AsError(err).Message != "registration self-check failed: backup_privileges" || tokens() != 0 {
-		t.Fatalf("broad backup token: %v, files=%d", err, tokens())
+	if _, statErr := os.Stat(reg); resource.AsError(err).Message != "registration self-check failed: backup_privileges" ||
+		!os.IsNotExist(statErr) {
+		t.Fatalf("broad backup token: %v, state: %v", err, statErr)
 	}
 	err = register(map[string]string{"token": "fake-secret", "backupTokenId": "vws@pve!backup"})
 	if resource.AsError(err).Field != "backupToken" {
@@ -180,44 +159,28 @@ func TestBackupTokenRegistration(t *testing.T) {
 	for range 2 {
 		checkLaunch(t, register(fields))
 		b, err := open().Check(t.Context())
-		if err != nil || b.backup == nil || b.firewall == nil || tokens() != 3 {
-			t.Fatalf("restart: backend=%v err=%v files=%d", b, err, tokens())
+		if err != nil || b.backup == nil || b.firewall == nil {
+			t.Fatalf("restart: backend=%v err=%v", b, err)
 		}
 	}
-	identity, err := os.ReadFile(reg)
+	good, err := os.ReadFile(reg)
 	checkLaunch(t, err)
-	path := filepath.Join(dir, "etc/pve/priv/vws", "pve-token."+tokenFingerprint(backupSecret))
-	sealed, err := os.ReadFile(path)
-	checkLaunch(t, err)
-	if bytes.Contains(identity, []byte(backupSecret)) || bytes.Contains(sealed, []byte(backupSecret)) {
-		t.Fatal("backup secret persisted as plaintext")
-	}
-	for _, broken := range []string{"missing file", "mismatched file", "missing fingerprint", "plaintext identity"} {
+	for _, broken := range []string{"missing token", "id without token"} {
 		t.Run(broken, func(t *testing.T) {
-			switch broken {
-			case "missing file":
-				checkLaunch(t, os.Remove(path))
-			case "mismatched file":
-				other, err := os.ReadFile(filepath.Join(dir, "etc/pve/priv/vws", "pve-token."+tokenFingerprint("fake-secret")))
-				checkLaunch(t, err)
-				writeFixture(t, path, other)
-			case "missing fingerprint", "plaintext identity":
-				var snapshot registrationSnapshot
-				checkLaunch(t, json.Unmarshal(identity, &snapshot))
-				if broken == "missing fingerprint" {
-					snapshot.BackupFingerprint = ""
-				} else {
-					snapshot.BackupToken = backupSecret
-				}
-				data, err := json.Marshal(snapshot)
-				checkLaunch(t, err)
-				writeFixture(t, reg, data)
+			var snapshot registrationSnapshot
+			checkLaunch(t, json.Unmarshal(good, &snapshot))
+			if broken == "missing token" {
+				snapshot.BackupToken = ""
+			} else {
+				snapshot.BackupTokenID = ""
 			}
+			data, err := json.Marshal(snapshot)
+			checkLaunch(t, err)
+			writeFixture(t, reg, data)
 			if _, err := open().Check(t.Context()); err == nil {
 				t.Fatal("torn backup credential accepted")
 			}
-			writeFixture(t, path, sealed)
-			writeFixture(t, reg, identity)
+			writeFixture(t, reg, good)
 		})
 	}
 	conn = open()
@@ -233,8 +196,8 @@ func TestBackupTokenRegistration(t *testing.T) {
 	for range 2 {
 		checkLaunch(t, register(map[string]string{"firewallTokenId": "vws@pve!firewall"}))
 		b, err := open().Check(t.Context())
-		if err != nil || b.backup != nil || b.firewall == nil || tokens() != 2 {
-			t.Fatalf("removed backup token: backend=%v err=%v files=%d", b, err, tokens())
+		if err != nil || b.backup != nil || b.firewall == nil {
+			t.Fatalf("removed backup token: backend=%v err=%v", b, err)
 		}
 	}
 }

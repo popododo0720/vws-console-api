@@ -80,7 +80,9 @@ func TestRegistrationSelfCheckDiagnostics(t *testing.T) {
 				}
 			}))
 			defer pve.Close()
-			c := &Connection{config: tc.config, endpoint: pve.URL, transport: pve.Client()}
+			c := &Connection{
+				region: "pve-test-1", dir: t.TempDir(), config: tc.config, endpoint: pve.URL, transport: pve.Client(),
+			}
 			daemon := httptest.NewTLSServer(regionapi.WithRegistration(c.Register, http.NotFoundHandler()))
 			defer daemon.Close()
 			tlsConfig := daemon.Client().Transport.(*http.Transport).TLSClientConfig.Clone()
