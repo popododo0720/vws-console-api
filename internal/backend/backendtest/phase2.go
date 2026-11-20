@@ -22,8 +22,8 @@ type MutationWorld struct {
 	// allocated), or W4 (configured, before start). It returns the IDs already
 	// allocated, so recovery cannot silently replace a partial launch.
 	Interrupt func(window string) []resource.InstanceID
-	// Denied returns a set using the real admission gate in the named state.
-	Denied    func(state string) backend.Set
+	// NoQuorum returns a set behind the real quorum gate after quorum is lost.
+	NoQuorum  func() backend.Set
 	Calls     func() int
 	Writes    func() int
 	CheckTask func(resource.OperationID, resource.InstanceID) error
@@ -45,8 +45,7 @@ func runPhase2(t *testing.T, world func(*testing.T) MutationWorld, caps resource
 		}{
 			{"RestartIdempotency", restartIdempotency},
 			{"PoolTenancy", poolTenancy},
-			{"NotLeader", func(t *testing.T, w MutationWorld) { admissionRefusal(t, w, "leader") }},
-			{"NoQuorum", func(t *testing.T, w MutationWorld) { admissionRefusal(t, w, "quorum") }},
+			{"NoQuorum", noQuorum},
 			{"UPIDOperation", taskRoundTrip},
 			{"Mutations", phase2Mutations},
 			{"StorageMutations", phase2Storage},
@@ -170,19 +169,19 @@ func poolTenancy(t *testing.T, w MutationWorld) {
 	}
 }
 
-func admissionRefusal(t *testing.T, w MutationWorld, state string) {
+func noQuorum(t *testing.T, w MutationWorld) {
 	t.Helper()
 	first := phase2Launch(t, w, w.Connect())
 	if err := w.Finalize(); err != nil {
 		t.Fatal(err)
 	}
-	set := w.Denied(state)
+	set := w.NoQuorum()
 	before := w.Calls()
 	_, err := set.Compute.CreateTags(t.Context(), w.Mutation, resource.CreateTagsRequest{
 		IDs: []resource.InstanceID{first.Items[0].ID}, Tags: map[string]string{"denied": "write"},
 	})
 	if resource.CodeOf(err) != resource.CodeUnavailable || w.Calls() != before {
-		t.Fatalf("%s admission reached PVE or succeeded: %v; calls %d -> %d", state, err, before, w.Calls())
+		t.Fatalf("quorum admission reached PVE or succeeded: %v; calls %d -> %d", err, before, w.Calls())
 	}
 }
 

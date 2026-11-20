@@ -125,8 +125,8 @@ func (r *staticRange) free(used map[netip.Addr]bool, count int) (netip.Addr, err
 	return netip.Addr{}, resource.InsufficientFreeAddressesInSubnet()
 }
 
-// Fence every pending config before allocating anywhere. An old leader's
-// admitted PUT can outlive its lease; its digest must lose to this barrier,
+// Fence every pending config before allocating anywhere. A mutation
+// admitted before quorum was lost can still be in flight; its digest must lose to this barrier,
 // or its address must already be visible to the subsequent cluster scan.
 func (b *Backend) fenceStaticLaunches(ctx context.Context, fence func(context.Context) error) error {
 	static := false

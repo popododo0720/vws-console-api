@@ -34,39 +34,41 @@ unknown and duplicate model rows and checks terminal-state boundaries.
 | `Configure`, `Start` | clone UPID completes, config UPID completes, start UPID completes; pending persists until start succeeds |
 | `Stop`, `Reboot`, `Terminate` | per-VM task submission; stop enters stopping, reboot stays running, destroy enters shutting-down |
 | `Finish` | PVE task finishes OK or fails independently of the daemon; only successful destroy removes the VM and reports terminated |
-| `Authority`, `Gate` | lease expiry/loss, next-term acquisition and quorum loss/recovery; every submission checks current authority |
-| `Restart`, `Lookup` | local lookup and leadership are lost; PVE markers and UPIDs survive, and the same token can be retried |
+| `QuorumChange`, `Gate` | quorum loss and recovery; every submission checks that quorum was reported recently |
+| `Restart`, `Lookup` | the local lookup is lost; PVE markers and UPIDs survive, and the same token can be retried |
 
 | Invariant | Seed that breaks it |
 | --- | --- |
 | `OneVMPerClientToken`: at most one existing VM per token | `FixReplay=FALSE`: allocate again instead of reusing its marker |
 | `AllowedEdges`: every changed state follows the table | `FixStart=FALSE`: stopped goes directly to running |
 | `NoOrphanAfterTerminate`: terminated implies no physical VM | `FixDestroy=FALSE`: publish terminated without deleting the VM |
-| `MutationsFenced`: every submission had leader and quorum | `FixFence=FALSE`: submit after authority loss |
+| `MutationsFenced`: every submission had quorum | `FixFence=FALSE`: submit after quorum loss |
 
 Bounds: two VM identities and two tokens, all interleavings, unlimited
-retries, task failures, authority changes and restarts within that finite
+retries, task failures, quorum changes and restarts within that finite
 state space. A token represents one RunInstances index; multi-instance
 reservations need one such key/index pair per VM. UPIDs are abstract
 `(VM, task kind)` pairs; repeat attempts are equivalent for these safety
 properties. Failed launch tasks retain their marker and use the destroy
 path for undo. Failed stop/destroy tasks stay transitional and can retry.
 No liveness is claimed under perpetual task failure or absent quorum.
-Local TLC result: 11,433 distinct states, depth 21, no violations; all four
-seeded bugs produce their named counterexample.
+The leader variable was removed with the pmxcfs lease (#1053), so the earlier
+count of 11,433 distinct states no longer applies; the model was edited
+without a TLC run (no Java in the authoring environment), so CI's `tla` job is
+the check.
 
-Assumptions required of the future handlers: one lease holder at a time,
-per-VM serialization across terms, and serialized marker lookup plus clone
-submission, with the marker visible before another leader may allocate.
-The model abstracts lease time and fencing margin into current authority;
-it does not prove the pmxcfs lock protocol or network-delayed POST fencing.
+Assumptions required of the handlers: one region daemon per cluster,
+per-VM serialization across restarts, and serialized marker lookup plus clone
+submission, with the marker visible before a restarted daemon may allocate.
+The model abstracts the five-second freshness window into current quorum;
+it does not prove network-delayed POST fencing.
 It does not cover pools, fingerprint mismatch, disk preservation, snippets,
 or guest-initiated changes. Go boundary tests cover invalid table input;
 there is no new API input parser here.
 
 Uniqueness counts existing VMs, not historical allocations. The documented
 design gap remains: after Terminate removes PVE markers and a restart
-loses the leader cache, the same token may launch a new VM. There is no
+loses the daemon-local cache, the same token may launch a new VM. There is no
 persistent tombstone in this model. Terminated is a proof state for
 successful destroy; the planned Describe API returns NotFound afterward.
 

@@ -31,7 +31,7 @@ func TestRegionDiscoveryHealthAndReadBound(t *testing.T) {
 	catalog := backend.NewStaticRegions([]backend.ProxmoxRegion{
 		{Name: "pve-healthy-1"},
 		{Name: "pve-noquorum-1"},
-		{Name: "pve-leaderless-1"},
+		{Name: "pve-noapinode-1"},
 		{Name: "pve-noversion-1"},
 		{Name: "pve-stalled-1"},
 		{Name: "pve-stalled-2"},
@@ -54,9 +54,9 @@ func TestRegionDiscoveryHealthAndReadBound(t *testing.T) {
 		doc := resource.RegionCapabilities{Region: name, Kind: resource.RegionKindAWS}
 		if strings.HasPrefix(name, "pve-") {
 			doc.Kind = resource.RegionKindProxmox
-			doc.Cluster = &resource.RegionCluster{Quorate: name != "pve-noquorum-1", Leader: "pve1", PVERelease: "9.2"}
-			if name == "pve-leaderless-1" {
-				doc.Cluster.Leader = ""
+			doc.Cluster = &resource.RegionCluster{Quorate: name != "pve-noquorum-1", APINode: "pve1", PVERelease: "9.2"}
+			if name == "pve-noapinode-1" {
+				doc.Cluster.APINode = ""
 			}
 			if name == "pve-noversion-1" {
 				doc.Cluster.PVERelease = ""
@@ -70,7 +70,7 @@ func TestRegionDiscoveryHealthAndReadBound(t *testing.T) {
 	elapsed := time.Since(start)
 	want := `{"items":[` +
 		`{"name":"pve-healthy-1","kind":"pve","state":"available"},` +
-		`{"name":"pve-leaderless-1","kind":"pve","state":"degraded"},` +
+		`{"name":"pve-noapinode-1","kind":"pve","state":"available"},` +
 		`{"name":"pve-noquorum-1","kind":"pve","state":"degraded"},` +
 		`{"name":"pve-noversion-1","kind":"pve","state":"degraded"},` +
 		`{"name":"pve-stalled-1","kind":"pve","state":"unavailable"},` +
@@ -91,7 +91,7 @@ func TestRegionCapabilitiesUnchangedAndRetry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	doc.Cluster = &resource.RegionCluster{Name: "test", PVERelease: "9.0", Quorate: true, Leader: "pve1"}
+	doc.Cluster = &resource.RegionCluster{Name: "test", PVERelease: "9.0", Quorate: true, APINode: "pve1"}
 	doc.Zones = []resource.RegionZone{{
 		ZoneName: "pve-test-1a", ZoneID: "test-a", State: "available", Nodes: []string{"pve1"},
 	}}

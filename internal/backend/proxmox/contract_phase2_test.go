@@ -11,7 +11,6 @@ import (
 	"slices"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/popododo0720/vws-console-api/internal/backend"
 	"github.com/popododo0720/vws-console-api/internal/backend/backendtest"
@@ -76,28 +75,15 @@ func phase2World(t *testing.T, broken string) backendtest.MutationWorld {
 			}
 			return ids
 		},
-		Denied: func(state string) backend.Set {
-			fs := w.f.PMXCFS()
-			for _, dir := range []string{
-				"/etc/pve/vws", "/etc/pve/priv", "/etc/pve/priv/lock", "/etc/pve/priv/lock/vws-region",
-			} {
-				checkLaunch(t, fs.Mkdir(dir))
-			}
-			leader, err := NewLeader(t.Context(), w.b, leaseHelper{fs}, leaderPath)
-			checkLaunch(t, err)
-			clock := &leaseClock{at: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
-			leader.now, leader.read = clock.now, fs.ReadFile
-			acquireLeader(t, leader)
-			if state == "quorum" {
-				w.f.SetQuorate(false)
-				leader.checkQuorum(t.Context())
-			} else {
-				clock.advance(21 * time.Second)
-				leader.checkQuorum(t.Context())
-			}
+		NoQuorum: func() backend.Set {
+			gate, _ := gateFor(w.b)
+			gate.check(t.Context())
+			checkLaunch(t, gate.Admit(t.Context()))
+			w.f.SetQuorate(false)
+			gate.check(t.Context())
 			set := w.b.Set()
 			if broken != "quorum" {
-				set.Compute = phase2Compute{Compute: set.Compute, admit: leader.Admit}
+				set.Compute = phase2Compute{Compute: set.Compute, admit: gate.Admit}
 			}
 			return set
 		},
@@ -136,7 +122,7 @@ func phase2World(t *testing.T, broken string) backendtest.MutationWorld {
 // calls this same Admit method before dispatch, outside backend.Set.
 type phase2Compute struct {
 	backend.Compute
-	admit     func(context.Context) (string, error)
+	admit     func(context.Context) error
 	unguarded *Backend
 	target    func() tagWriteTarget
 }
@@ -145,7 +131,7 @@ func (c phase2Compute) CreateTags(
 	ctx context.Context, m backend.Mutation, req resource.CreateTagsRequest,
 ) (resource.Accepted[resource.Instance], error) {
 	if c.admit != nil {
-		if _, err := c.admit(ctx); err != nil {
+		if err := c.admit(ctx); err != nil {
 			return resource.Accepted[resource.Instance]{}, err
 		}
 	}

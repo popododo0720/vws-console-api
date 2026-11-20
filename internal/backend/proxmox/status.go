@@ -22,11 +22,6 @@ func (b *Backend) Status(ctx context.Context) (resource.RegionStatus, error) {
 	if ctx.Err() != nil {
 		return resource.RegionStatus{}, ctx.Err()
 	}
-	if leader := b.leader.Load(); leader != nil {
-		if node := leader.Current(); node != "" {
-			result.Leader = &node
-		}
-	}
 	return result, nil
 }
 
@@ -46,7 +41,7 @@ func (b *Backend) clusterStatus(ctx context.Context) (resource.RegionStatus, err
 		case "node":
 			result.Nodes = append(result.Nodes, resource.RegionNode{Name: row.Name, Online: row.Online == 1})
 			if row.Local == 1 {
-				localOnline = row.Online == 1
+				localOnline, result.APINode = row.Online == 1, row.Name
 			}
 		}
 	}

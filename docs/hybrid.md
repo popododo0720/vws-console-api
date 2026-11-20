@@ -60,8 +60,9 @@ the AWS API as the common language.
 
 - A `.deb` on every PVE node behind one VIP. Any node answers a read the same
   way.
-- One leader makes every mutation (placement included). A node outside the
-  cluster quorum refuses mutations.
+- One `vws-region` daemon per cluster makes every mutation (placement
+  included), serialized by its in-process locks. A daemon without a quorum
+  check from the last 5 s refuses mutations.
 - The PVE API may be called on any node in the cluster; a dead node is
   replaced by another.
 - Proxmox has no placement scheduler, so the region layer picks a node for

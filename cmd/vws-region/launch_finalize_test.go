@@ -37,13 +37,13 @@ func TestLaunchFinalizerUnsupportedStopsWithoutReporting(t *testing.T) {
 				ticks <- time.Time{}
 			}
 			admissions, calls := 0, 0
-			finalizeLaunches(ctx, func(context.Context) (string, error) {
+			finalizeLaunches(ctx, func(context.Context) error {
 				admissions++
 				if admissions == 3 {
 					cancel()
-					return "", context.Canceled
+					return context.Canceled
 				}
-				return "", nil
+				return nil
 			}, func(context.Context, func(context.Context) error) error {
 				calls++
 				return tc.err
@@ -61,7 +61,7 @@ func TestLaunchFinalizerUnsupportedStopsWithoutReporting(t *testing.T) {
 	}
 }
 
-func TestLaunchFinalizerLeaderGate(t *testing.T) {
+func TestLaunchFinalizerQuorumGate(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	ticks := make(chan time.Time)
@@ -70,20 +70,16 @@ func TestLaunchFinalizerLeaderGate(t *testing.T) {
 	calls := 0
 	go func() {
 		defer close(done)
-		finalizeLaunches(ctx, func(context.Context) (string, error) {
+		finalizeLaunches(ctx, func(context.Context) error {
 			calls++
 			checked <- struct{}{}
-			switch calls {
-			case 1:
-				return "", errors.New("fenced")
-			case 2:
-				return "peer", nil
-			default:
-				return "", nil
+			if calls <= 2 {
+				return errors.New("no quorum")
 			}
+			return nil
 		}, func(context.Context, func(context.Context) error) error {
 			if calls < 3 {
-				t.Error("finalized without local leadership")
+				t.Error("finalized without quorum")
 			}
 			if calls == 3 {
 				return errors.New("retry on next tick")

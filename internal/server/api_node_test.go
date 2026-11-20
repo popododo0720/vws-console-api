@@ -5,10 +5,10 @@ import (
 	"testing"
 )
 
-func TestRegionLeaderGaugeTracksChanges(t *testing.T) {
+func TestRegionAPINodeGaugeTracksConnectedNode(t *testing.T) {
 	node := "pve1"
 	m := NewMetrics()
-	m.regionLeader = func() string { return node }
+	m.regionAPINode = func() string { return node }
 	for _, current := range []string{"pve1", "pve2", ""} {
 		node = current
 		var out strings.Builder
@@ -16,8 +16,11 @@ func TestRegionLeaderGaugeTracksChanges(t *testing.T) {
 			t.Fatal(err)
 		}
 		text := out.String()
+		if strings.Contains(text, "leader") {
+			t.Fatalf("metrics still name a leader: %s", text)
+		}
 		for _, candidate := range []string{"pve1", "pve2"} {
-			series := `vws_region_leader{node="` + candidate + `"} 1`
+			series := `vws_region_api_node{node="` + candidate + `"} 1`
 			if strings.Contains(text, series) != (candidate == current) {
 				t.Fatalf("current=%q metrics=%s", current, text)
 			}

@@ -3,7 +3,6 @@ package proxmox
 import (
 	"context"
 	"sync"
-	"sync/atomic"
 
 	"github.com/popododo0720/vws-console-api/internal/backend"
 	"github.com/popododo0720/vws-console-api/internal/backend/proxmox/pveclient"
@@ -17,7 +16,6 @@ type Backend struct {
 	client          *pveclient.Client
 	firewall        *pveclient.Client // only security group writes; nil without a firewall token
 	backup          *pveclient.Client // reserved for disk exports; nil without a backup token
-	leader          atomic.Pointer[Leader]
 	cfg             RegionConfig
 	zones           []backend.Zone
 	statusMu        sync.Mutex
@@ -57,10 +55,7 @@ func (b *Backend) RegionCapabilities(ctx context.Context, region string) (resour
 		return resource.RegionCapabilities{}, err
 	}
 	cluster := &resource.RegionCluster{
-		Name: b.cluster, Quorate: status.Quorate, PVERelease: status.PVERelease,
-	}
-	if status.Leader != nil {
-		cluster.Leader = *status.Leader
+		Name: b.cluster, Quorate: status.Quorate, PVERelease: status.PVERelease, APINode: status.APINode,
 	}
 	doc := resource.RegionCapabilities{
 		Region: region, Kind: resource.RegionKindProxmox,

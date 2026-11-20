@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -19,10 +18,9 @@ import (
 	"github.com/popododo0720/vws-console-api/internal/surface/regionapi"
 )
 
-func TestClusterMetadataFollowsLeaseAndQuorum(t *testing.T) {
-	leader, fake, clock := testLeader(t, scenario())
-	acquireLeader(t, leader)
-	b := leader.backend
+func TestClusterMetadataFollowsQuorum(t *testing.T) {
+	gate, fake, _ := testGate(t, scenario())
+	b := gate.backend
 	account, err := resource.Parse[resource.AccountID]("123456789012")
 	if err != nil {
 		t.Fatal(err)
@@ -31,19 +29,15 @@ func TestClusterMetadataFollowsLeaseAndQuorum(t *testing.T) {
 	svc := cloud.New(cloud.Config{
 		Capabilities: b, Regions: backend.NewStaticRegions([]backend.ProxmoxRegion{{Name: b.region}}, nil),
 	})
-	check := func(wantLeader string, quorum bool, state string) {
+	check := func(quorum bool, state string) {
 		t.Helper()
 		status, err := b.Status(t.Context())
-		if err != nil || status.Quorate != quorum || status.PVERelease != "9.2" {
+		if err != nil || status.Quorate != quorum || status.PVERelease != "9.2" || status.APINode != "pve1" {
 			t.Fatalf("status: %+v %v", status, err)
 		}
-		if wantLeader == "" && status.Leader != nil ||
-			wantLeader != "" && (status.Leader == nil || *status.Leader != wantLeader) {
-			t.Fatalf("status leader: %+v; want %q", status.Leader, wantLeader)
-		}
 		doc, err := b.RegionCapabilities(t.Context(), b.region)
-		if err != nil || doc.Cluster == nil || doc.Cluster.Name != "test" ||
-			doc.Cluster.Leader != wantLeader || doc.Cluster.Quorate != quorum || doc.Cluster.PVERelease != "9.2" {
+		if err != nil || doc.Cluster == nil || doc.Cluster.Name != "test" || doc.Cluster.APINode != "pve1" ||
+			doc.Cluster.Quorate != quorum || doc.Cluster.PVERelease != "9.2" {
 			t.Fatalf("capabilities: %+v %v", doc.Cluster, err)
 		}
 		regions, err := svc.Regions(t.Context(), caller)
@@ -51,31 +45,11 @@ func TestClusterMetadataFollowsLeaseAndQuorum(t *testing.T) {
 			t.Fatalf("regions: %+v %v", regions, err)
 		}
 	}
-	check("pve1", true, "available")
-	lease := leaderLease{Node: "pve2", Term: 2, Until: clock.now().Add(20 * time.Second)}
-	data, err := json.Marshal(lease)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := fake.PMXCFS().WriteFile(leaderPath, data); err != nil {
-		t.Fatal(err)
-	}
-	if err := leader.renew(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	check("pve2", true, "available")
+	check(true, "available")
 	fake.SetQuorate(false)
-	leader.checkQuorum(t.Context())
-	check("pve2", false, "degraded")
-	clock.advance(20 * time.Second)
-	check("", false, "degraded")
+	check(false, "degraded")
 	fake.SetQuorate(true)
-	leader.checkQuorum(t.Context())
-	leader.read = func(string) ([]byte, error) { return nil, errors.New("lease read failed") }
-	if err := leader.renew(t.Context()); err == nil {
-		t.Fatal("lease read unexpectedly succeeded")
-	}
-	check("", true, "degraded")
+	check(true, "available")
 }
 
 func TestClusterVersionFailureKeepsCapabilities(t *testing.T) {

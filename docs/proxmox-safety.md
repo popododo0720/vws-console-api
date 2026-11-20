@@ -46,8 +46,8 @@ observed in the audit log and never undone.
 - A VM with `protection=1` can't be terminated or have a volume deleted:
   `OperationNotPermitted`.
 - A volume holder VM is never started and is hidden from the instance list.
-- A node that isn't the leader, or is outside quorum, sends no mutation to
-  Proxmox.
+- A region daemon that has no quorum check from the last 5 s, or whose last
+  check found no quorum, sends no mutation to Proxmox.
 - Every Proxmox call has a timeout and bounded retries.
 - If any start-up self-check fails (token rights, cluster name, region
   configuration, storages and bridges, snippets content, a writable

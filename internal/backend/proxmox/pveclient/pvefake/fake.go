@@ -29,7 +29,6 @@ type Fake struct {
 	archive    []*task
 	failNext   map[string][]string
 	tickets    map[string]consoleTicket
-	files      map[string]pmxcfsEntry
 	nextIDs    []int
 }
 
@@ -58,7 +57,6 @@ func NewWithClock(s Scenario, clock func() time.Time) (*Fake, error) {
 	f := &Fake{s: s, roles: map[string][]string{}, quorate: true, online: map[string]bool{}, mux: http.NewServeMux()}
 	f.clock, f.failNext = clock, map[string][]string{}
 	f.tickets = map[string]consoleTicket{}
-	f.files = map[string]pmxcfsEntry{"/etc/pve": {dir: true}}
 	for _, r := range s.Roles {
 		f.roles[r.ID] = r.Privs
 	}

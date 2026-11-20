@@ -51,7 +51,7 @@ func TestRegionHealthUsesBootstrapMTLS(t *testing.T) {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
-		w.Write([]byte(`{"quorate":true,"leader":null,"nodes":[],"lastError":null}`))
+		w.Write([]byte(`{"quorate":true,"apiNode":"pve1","nodes":[],"lastError":null}`))
 	}))
 	srv.TLS = &tls.Config{MinVersion: tls.VersionTLS13, ClientAuth: tls.RequireAnyClientCert}
 	srv.StartTLS()
@@ -138,7 +138,7 @@ func TestRegionHealthUsesExplicitMTLS(t *testing.T) {
 	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/internal/v1/status":
-			w.Write([]byte(`{"quorate":true,"leader":null,"nodes":[],"lastError":null}`))
+			w.Write([]byte(`{"quorate":true,"apiNode":"pve1","nodes":[],"lastError":null}`))
 		case "/internal/v1/registration":
 			w.Write([]byte(`{}`))
 		case "/internal/v1/pools/project":

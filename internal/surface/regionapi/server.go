@@ -24,9 +24,9 @@ import (
 
 const maxRequestBytes = 1 << 20
 
-// Gate admits a local mutation or names the peer holding the lease.
+// Gate admits a mutation only while the region has quorum.
 type Gate interface {
-	Admit(context.Context) (string, error)
+	Admit(context.Context) error
 }
 
 // Version identifies the release compatibility line and registered cluster.
@@ -212,9 +212,8 @@ func register[S backend.Scope | backend.Mutation, Q, R any](mux *http.ServeMux, 
 			}
 		}
 		if mutation && cfg.Gate != nil {
-			peer, err := cfg.Gate.Admit(r.Context())
-			if err != nil || peer != "" {
-				writeJSON(w, nil, &resource.Error{Code: resource.CodeUnavailable, Message: "region leader unavailable"})
+			if err := cfg.Gate.Admit(r.Context()); err != nil {
+				writeJSON(w, nil, err)
 				return
 			}
 		}

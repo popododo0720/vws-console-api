@@ -504,7 +504,7 @@ func TestRegionsMemoryProcessMTLSAndRestart(t *testing.T) {
 			pushes.Add(1)
 			w.Write([]byte(`{}`))
 		case "/internal/v1/status":
-			w.Write([]byte(`{"quorate":true,"leader":null,"nodes":[],"lastError":null}`))
+			w.Write([]byte(`{"quorate":true,"apiNode":"pve1","nodes":[],"lastError":null}`))
 		default:
 			inventory.ServeHTTP(w, r)
 		}

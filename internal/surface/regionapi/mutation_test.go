@@ -189,9 +189,13 @@ func TestGlobalKernelMutationArrivesByteIdentical(t *testing.T) {
 }
 
 func TestMutationGate(t *testing.T) {
-	for _, peer := range []string{"", "other-node"} {
+	for _, noQuorum := range []bool{false, true} {
 		cfg := config(mutationWorld())
-		cfg.Gate = &mutationGate{peer: peer}
+		gate := &mutationGate{}
+		if noQuorum {
+			gate.err = &resource.Error{Code: resource.CodeUnavailable, Message: "region has no quorum"}
+		}
+		cfg.Gate = gate
 		c, _ := loopback(t, cfg)
 		remote, err := regionclient.New(c)
 		if err != nil {
@@ -199,8 +203,8 @@ func TestMutationGate(t *testing.T) {
 		}
 		_, err = remote.Compute.CreateVolume(t.Context(), backend.Mutation{Scope: testScope(t)},
 			resource.CreateVolumeRequest{SizeGiB: 8})
-		if (resource.CodeOf(err) == resource.CodeUnavailable) != (peer != "") {
-			t.Fatalf("peer %q mutation error = %v", peer, err)
+		if (resource.CodeOf(err) == resource.CodeUnavailable) != noQuorum {
+			t.Fatalf("no quorum %v: mutation error = %v", noQuorum, err)
 		}
 	}
 }

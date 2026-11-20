@@ -8,44 +8,40 @@ page is wrong.
 This layer runs only inside the `vws-region` daemon. console-api reaches it
 through `-backend regions`; it cannot load this code in its own process.
 
-## Leader lease and quorum
+## Quorum gate
 
-Code: `internal/backend/proxmox/leader.go`.
+Code: `internal/backend/proxmox/quorum.go`.
 
-- The lease is a JSON file at `/etc/pve/vws/leader` holding node, term and
-  expiry. It's written under the helper's `leader` mkdir lock.
-- The owner renews every 5 s and each write extends the lease to now + 20 s.
-- The term only increases when a node takes the lease after it has expired.
-  A live lease held by a peer is never taken.
-- Quorum is read every 2 s with a 2 s timeout. A check older than 5 s counts
-  as no quorum. Without fresh quorum the local node is fenced: it neither
-  renews nor acquires, and `Current` reports no leader.
-- `Admit` makes no PVE call. It returns `Unavailable` ("region leader
-  unavailable") when there is no leader, or when the local node leads with
-  5 s or less left. Otherwise it admits locally or names the peer to forward to.
-- On shutdown the node re-reads the lease under the lock and sets the expiry
-  to now, but only for its own node and term. Release and unlock share a 2 s
-  deadline that ignores cancellation. Failures are logged and the loop exits.
-  A non-owner, a repeated release or a restarted process writes nothing.
-- Leadership changes are logged, and `vws_region_leader{node}` shows the
-  current leader.
+- There is no lease and no leader. One daemon serves one cluster, and its
+  in-process locks already serialize placement and the finishing loop.
+- Quorum is read from `/cluster/status` every 2 s with a 2 s timeout. A
+  standalone node (no cluster row) counts as quorate while the local node is
+  online.
+- `Admit` makes no PVE call. It returns `Unavailable` ("region has no
+  quorum") until the first check, when the last check found no quorum or
+  failed, or when the last check is older than 5 s. Otherwise it admits.
+- Mutations pass `Admit` in the region API before dispatch. The launch
+  finishing loop calls it before each pass and before each write. Reads never
+  pass the gate.
+- Status and capabilities report `apiNode`, the node the daemon is connected
+  to (the `local` row of `/cluster/status`), and `vws_region_api_node{node}`
+  shows it. A region with quorum and a PVE version is `available`.
 
-Tests: `TestLeaderFenceHasNoPVECalls`, `TestLeaderLeaseTakeoverAndRenewal`,
-`TestLeaderLoopQuorumAndLogs`, `TestLeaderStandaloneAndLeaseErrors`,
-`TestLeaderShutdownReleaseAndTakeover`, `TestLeaderShutdownNonOwner`,
-`TestLeaderReleaseRechecksOwnershipUnderLock`,
-`TestLeaderShutdownReleaseFailureIsBoundedAndLogged`,
-`TestLeaderReleaseUnlocksAfterWriteDeadline`,
-`TestLeaderReleaseLockAndReadErrors`,
-`TestMutationRegistrationDerivesLeaderGate`,
-`TestRegionLeaderGaugeTracksChanges`.
+Tests: `TestQuorumGateStartsClosed`, `TestQuorumGateFreshness`,
+`TestQuorumGateClosesWhenQuorumIsLost`, `TestQuorumGateClosesWhenPVEFails`,
+`TestQuorumGateStandaloneUsesLocalNode`, `TestQuorumGateReportsAPINode`,
+`TestRegionAPIWithoutQuorumRefusesMutationsAndServesReads`,
+`TestMutationRegistrationDerivesQuorumGate`,
+`TestRegionAPINodeGaugeTracksConnectedNode`,
+`TestClusterMetadataFollowsQuorum`, `TestLaunchFinalizerQuorumGate`,
+`TestQuorumGateStopsFinalizeWrites`.
 
 ## Unavailable and X-Vws-Stale
 
 `Unavailable` (`resource.CodeUnavailable`) means the region couldn't safely
 answer right now and a retry may succeed. The region layer returns it when:
 
-- the leader gate refuses a mutation (see above);
+- the quorum gate refuses a mutation (see above);
 - a PVE read or write fails during a power action ("Proxmox power operation
   unavailable", `TestPowerRefusalsAndFailure`);
 - a corrupt detach replay record is found on a VM tagged for the token

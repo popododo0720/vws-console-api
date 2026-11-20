@@ -181,7 +181,7 @@ func TestLaunchSweepRetryAndFence(t *testing.T) {
 			w.b.cfg.Now = func() time.Time { return time.Unix(1700000601, 0) }
 			fence := admitFinalize
 			if cut == "fence" {
-				fence = func(context.Context) error { return errors.New("leadership lost") }
+				fence = func(context.Context) error { return errors.New("quorum lost") }
 			} else {
 				w.f.FailNext("qm"+cut, "injected task failure")
 			}

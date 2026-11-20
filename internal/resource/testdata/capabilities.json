@@ -5,7 +5,7 @@
     "name": "seoul-1",
     "pveRelease": "8.4",
     "quorate": true,
-    "leader": "pve2"
+    "apiNode": "pve2"
   },
   "zones": [
     {
