@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 )
 
 // writeFileAtomic replaces dir/name with data. The data goes to a 0600
@@ -69,12 +70,55 @@ func writeFileAtomic(dir, name string, data []byte, step func(stage string) erro
 	if err := at("syncdir"); err != nil {
 		return err
 	}
+	return syncDir(dir)
+}
+
+func syncDir(dir string) error {
 	d, err := os.Open(dir)
 	if err != nil {
-		return fmt.Errorf("open state directory: %w", err)
+		return fmt.Errorf("open directory %s: %w", dir, err)
 	}
 	if err := errors.Join(d.Sync(), d.Close()); err != nil {
-		return fmt.Errorf("sync state directory: %w", err)
+		return fmt.Errorf("sync directory %s: %w", dir, err)
+	}
+	return nil
+}
+
+// ensurePrivateDir creates dir (and missing parents) with mode 0700, fsyncing
+// the parent of every directory it creates so the entry survives power loss.
+// It refuses an existing dir that is a symlink, is not owned by this uid, or
+// has any group or other access.
+func ensurePrivateDir(dir string) error {
+	dir = filepath.Clean(dir)
+	var missing []string
+	for p := dir; ; p = filepath.Dir(p) {
+		_, err := os.Lstat(p)
+		if err == nil {
+			break
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("inspect state directory: %w", err)
+		}
+		missing = append(missing, p)
+		if filepath.Dir(p) == p {
+			break
+		}
+	}
+	for i := len(missing) - 1; i >= 0; i-- {
+		if err := os.Mkdir(missing[i], 0o700); err != nil && !errors.Is(err, os.ErrExist) {
+			return fmt.Errorf("create state directory: %w", err)
+		}
+		if err := syncDir(filepath.Dir(missing[i])); err != nil {
+			return err
+		}
+	}
+	info, err := os.Lstat(dir)
+	if err != nil {
+		return fmt.Errorf("inspect state directory: %w", err)
+	}
+	owner, ok := info.Sys().(*syscall.Stat_t)
+	if !info.IsDir() || !ok || int(owner.Uid) != os.Geteuid() || info.Mode().Perm()&0o077 != 0 {
+		return fmt.Errorf("state directory %s must be a real directory owned by this user with mode 0700", dir)
 	}
 	return nil
 }

@@ -89,3 +89,59 @@ func TestOpenRemovesTemporaryFileOfACrashedWrite(t *testing.T) {
 		t.Fatalf("old file not intact: %v", err)
 	}
 }
+
+func TestOpenRequiresAPrivateStateDirectory(t *testing.T) {
+	dir := t.TempDir()
+	config := filepath.Join(dir, "region.yaml")
+	writeFixture(t, config, []byte("read_only: true\n"))
+	for _, mode := range []os.FileMode{0o777, 0o770, 0o750, 0o707} {
+		state := filepath.Join(dir, "shared")
+		if err := os.Mkdir(state, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(state, mode); err != nil {
+			t.Fatal(err)
+		}
+		stale := filepath.Join(state, "."+registrationFile+".tmp-1")
+		writeFixture(t, stale, []byte("x"))
+		if _, err := Open(config, "pve-test-1", state, "https://unused", nil); err == nil {
+			t.Fatalf("accepted state directory with mode %o", mode)
+		}
+		if _, err := os.Stat(stale); err != nil {
+			t.Fatalf("mode %o: files were touched before the check: %v", mode, err)
+		}
+		if err := os.RemoveAll(state); err != nil {
+			t.Fatal(err)
+		}
+	}
+	target := filepath.Join(dir, "target")
+	if err := os.Mkdir(target, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "link")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Open(config, "pve-test-1", link, "https://unused", nil); err == nil {
+		t.Fatal("accepted a symlinked state directory")
+	}
+}
+
+func TestOpenCreatesNestedStateDirectoryPrivately(t *testing.T) {
+	dir := t.TempDir()
+	config := filepath.Join(dir, "region.yaml")
+	writeFixture(t, config, []byte("read_only: true\n"))
+	state := filepath.Join(dir, "a", "b", "state")
+	if _, err := Open(config, "pve-test-1", state, "https://unused", nil); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{state, filepath.Dir(state), filepath.Dir(filepath.Dir(state))} {
+		info, err := os.Stat(p)
+		if err != nil || info.Mode().Perm() != 0o700 {
+			t.Fatalf("%s: %v, %v", p, info, err)
+		}
+	}
+	if _, err := Open(config, "pve-test-1", state, "https://unused", nil); err != nil {
+		t.Fatalf("reopening an existing private directory: %v", err)
+	}
+}

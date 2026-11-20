@@ -66,14 +66,17 @@ closes for good and a handler still in flight is refused.
 
 All daemon state is one file, `registration.json`, in the state directory:
 `-state-dir`, default `/var/lib/vws-region/<region>` (systemd
-`StateDirectory`). The daemon creates the directory with mode 0700 and
-the file with mode 0600. The file holds the registration and the token
+`StateDirectory`). The daemon creates the directory with mode 0700 (fsyncing the parent of every
+directory it creates) and the file with mode 0600. It refuses to start if the
+directory exists but is a symlink, belongs to another user or has any group or
+other access. The file holds the registration and the token
 secrets in plain text, like the host's other local secrets (console token,
 AWS source keys). There is no helper binary, no sudo, no region KEK and
 no snippet file.
 
 The file changes only by a 0600 temporary file in the same directory, fsync
-of the file, rename over the target and fsync of the directory. A crash
+of the file, rename over the target and fsync of the directory; the first
+registration also relies on the directory entry synced at creation. A crash
 leaves the old file or the new one, never a partial one. A temporary file
 left by a crash is removed at startup and is never read as state. In-process
 mutex serializes registrations and reloads; there is no lock file.

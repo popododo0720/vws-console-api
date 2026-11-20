@@ -64,7 +64,7 @@ type Connection struct {
 }
 
 // Open loads node-local configuration; registration may arrive after startup.
-// The state directory is created 0700 and leftover temporary files are removed.
+// The state directory is created 0700 (or must already be private) and leftover temporary files are removed.
 func Open(configPath, region, stateDir, endpoint string, transport *http.Client) (*Connection, error) {
 	if !registrationRegion.MatchString(region) {
 		return nil, errors.New("proxmox: -region must be a lowercase DNS label")
@@ -73,7 +73,7 @@ func Open(configPath, region, stateDir, endpoint string, transport *http.Client)
 	if err != nil {
 		return nil, err
 	}
-	if err := os.MkdirAll(stateDir, 0o700); err != nil {
+	if err := ensurePrivateDir(stateDir); err != nil {
 		return nil, fmt.Errorf("proxmox: state dir: %w", err)
 	}
 	if err := removeStaleTemps(stateDir, registrationFile); err != nil {
