@@ -62,7 +62,6 @@ func TestCommandsAndConfinement(t *testing.T) {
 		{"sh", "-c"},
 		{"registration-write", outside},
 		{"token-write", outside},
-		{"lease-write", outside},
 		{"lock", "../escape"},
 		{"unlock", outside},
 		{"snippet-write", "../escape"},
@@ -72,12 +71,13 @@ func TestCommandsAndConfinement(t *testing.T) {
 			t.Fatalf("accepted %q", args)
 		}
 	}
-	for _, verb := range []string{"registration-write", "lease-write"} {
-		if err := h.run([]string{verb}, strings.NewReader("payload")); err != nil {
-			t.Fatalf("%s: %v", verb, err)
-		}
+	if err := h.run([]string{"registration-write"}, strings.NewReader("payload")); err != nil {
+		t.Fatalf("registration-write: %v", err)
 	}
-	for _, name := range []string{"registration.json", "leader"} {
+	if err := h.run([]string{"lease-write"}, strings.NewReader("payload")); err == nil {
+		t.Fatal("lease-write is no longer an operation")
+	}
+	for _, name := range []string{"registration.json"} {
 		st, err := os.Stat(filepath.Join(h.public, name))
 		if err != nil || st.Mode().Perm() != 0o640 {
 			t.Fatalf("public document is not readable: %v", err)
@@ -205,14 +205,14 @@ func TestAtomicRestartAndLocks(t *testing.T) {
 	if string(got) != "new" {
 		t.Fatal("replacement failed")
 	}
-	if err := h.run([]string{"lock", "leader"}, nil); err != nil {
+	if err := h.run([]string{"lock", "registration"}, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := h.run([]string{"lock", "leader"}, nil); err == nil {
+	if err := h.run([]string{"lock", "registration"}, nil); err == nil {
 		t.Fatal("duplicate lock acquired")
 	}
 	for range 2 {
-		if err := h.run([]string{"unlock", "leader"}, nil); err != nil {
+		if err := h.run([]string{"unlock", "registration"}, nil); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -425,8 +425,8 @@ func TestMainWithHelperRoot(t *testing.T) {
 		for _, args := range [][]string{
 			{"registration-write"},
 			{"token-write", fp},
-			{"lock", "leader"},
-			{"unlock", "leader"},
+			{"lock", "registration"},
+			{"unlock", "registration"},
 			{"snippet-write", snippet},
 			{"snippet-delete", snippet},
 		} {
@@ -463,7 +463,7 @@ func TestMainWithHelperRoot(t *testing.T) {
 	}{
 		{"etc/pve/vws", []string{"registration-write"}},
 		{"etc/pve/priv/vws", []string{"token-read", fp}},
-		{"etc/pve/priv/lock/vws-region", []string{"lock", "leader"}},
+		{"etc/pve/priv/lock/vws-region", []string{"lock", "registration"}},
 		{"etc/vws/credentials", []string{"token-write", fp}},
 		{"snippets", []string{"snippet-write", snippet}},
 		{"etc/vws", []string{"snippet-write", snippet}},
@@ -514,9 +514,8 @@ func TestClientUsesFixedArgvAndStdin(t *testing.T) {
 		{"registration-write", func() error { return c.WriteRegistration(ctx, []byte(secret)) }},
 		{"token-write|" + fp, func() error { return c.WriteToken(ctx, fp, []byte(secret)) }},
 		{"token-delete|" + fp, func() error { return c.DeleteToken(ctx, fp) }},
-		{"lease-write", func() error { return c.WriteLease(ctx, []byte(secret)) }},
-		{"lock|leader", func() error { return c.Lock(ctx, "leader") }},
-		{"unlock|leader", func() error { return c.Unlock(ctx, "leader") }},
+		{"lock|registration", func() error { return c.Lock(ctx, "registration") }},
+		{"unlock|registration", func() error { return c.Unlock(ctx, "registration") }},
 		{"snippet-write|" + snippet, func() error {
 			return c.WriteSnippet(ctx, snippet, []byte(secret))
 		}},
@@ -601,7 +600,7 @@ func TestClientRejectsInvalidNamesBeforeExec(t *testing.T) {
 			t.Fatalf("%s: helper was executed", name)
 		}
 	}
-	if err := c.Lock(ctx, "leader"); err != nil {
+	if err := c.Lock(ctx, "registration"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(path); err != nil {

@@ -77,12 +77,7 @@ func (c Client) readKey(credentials string, owner uint32) ([]byte, error) {
 	return readFile(credentialPath(credentials), owner, 0o037)
 }
 
-// WriteLease replaces the public lease document.
-func (c Client) WriteLease(ctx context.Context, data []byte) error {
-	return c.run(ctx, data, "lease-write")
-}
-
-// Lock acquires a named mkdir lock; an existing lock is an error.
+// Lock acquires the registration mkdir lock; an existing lock is an error.
 func (c Client) Lock(ctx context.Context, name string) error {
 	if !validLockName(name) {
 		return errors.New("invalid lock name")

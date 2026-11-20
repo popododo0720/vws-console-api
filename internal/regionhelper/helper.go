@@ -166,8 +166,6 @@ func (h helper) run(args []string, stdin io.Reader) (err error) {
 				}
 			}
 		}
-	case "lease-write":
-		root, name, write = h.public, "leader", true
 	case "lock", "unlock":
 		if len(args) != 2 || !validLockName(args[1]) {
 			return errors.New("invalid lock name")
@@ -189,7 +187,7 @@ func (h helper) run(args []string, stdin io.Reader) (err error) {
 	default:
 		return errors.New("unknown operation")
 	}
-	if (args[0] == "registration-write" || args[0] == "lease-write") && len(args) != 1 {
+	if args[0] == "registration-write" && len(args) != 1 {
 		return errors.New("unexpected arguments")
 	}
 	if err := confined(root, filepath.Join(root, name)); err != nil {
