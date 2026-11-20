@@ -5,11 +5,12 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 )
 
 func TestWriteFileAtomicIs0600AndDurable(t *testing.T) {
-	dir := t.TempDir()
+	dir := privateDir(t)
 	var stages []string
 	record := func(stage string) error { stages = append(stages, stage); return nil }
 	if err := writeFileAtomic(dir, "state.json", []byte("one"), record); err != nil {
@@ -31,7 +32,7 @@ func TestWriteFileAtomicIs0600AndDurable(t *testing.T) {
 func TestWriteFileAtomicCrashLeavesOldOrNew(t *testing.T) {
 	for _, crashAt := range []string{"create", "write", "sync", "close", "rename", "syncdir"} {
 		t.Run(crashAt, func(t *testing.T) {
-			dir := t.TempDir()
+			dir := privateDir(t)
 			path := filepath.Join(dir, "state.json")
 			if err := writeFileAtomic(dir, "state.json", []byte("old"), nil); err != nil {
 				t.Fatal(err)
@@ -67,7 +68,7 @@ func TestWriteFileAtomicCrashLeavesOldOrNew(t *testing.T) {
 }
 
 func TestOpenRemovesTemporaryFileOfACrashedWrite(t *testing.T) {
-	dir := t.TempDir()
+	dir := privateDir(t)
 	config := filepath.Join(dir, "region.yaml")
 	writeFixture(t, config, []byte("read_only: true\n"))
 	state := filepath.Join(dir, "state")
@@ -91,7 +92,7 @@ func TestOpenRemovesTemporaryFileOfACrashedWrite(t *testing.T) {
 }
 
 func TestOpenRequiresAPrivateStateDirectory(t *testing.T) {
-	dir := t.TempDir()
+	dir := privateDir(t)
 	config := filepath.Join(dir, "region.yaml")
 	writeFixture(t, config, []byte("read_only: true\n"))
 	for _, mode := range []os.FileMode{0o777, 0o770, 0o750, 0o707} {
@@ -128,7 +129,7 @@ func TestOpenRequiresAPrivateStateDirectory(t *testing.T) {
 }
 
 func TestOpenCreatesNestedStateDirectoryPrivately(t *testing.T) {
-	dir := t.TempDir()
+	dir := privateDir(t)
 	config := filepath.Join(dir, "region.yaml")
 	writeFixture(t, config, []byte("read_only: true\n"))
 	state := filepath.Join(dir, "a", "b", "state")
@@ -154,4 +155,66 @@ func privateDir(t *testing.T) string {
 		t.Fatal(err)
 	}
 	return dir
+}
+
+func TestOpenRejectsAnUnsafeAncestor(t *testing.T) {
+	root := privateDir(t)
+	config := filepath.Join(root, "region.yaml")
+	writeFixture(t, config, []byte("read_only: true\n"))
+	open := func(parentMode os.FileMode) error {
+		parent := filepath.Join(root, "parent")
+		if err := os.Mkdir(parent, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		defer func() {
+			if err := os.RemoveAll(parent); err != nil {
+				t.Error(err)
+			}
+		}()
+		if err := os.Chmod(parent, parentMode); err != nil {
+			t.Fatal(err)
+		}
+		_, err := Open(config, "pve-test-1", filepath.Join(parent, "state"), "https://unused", nil)
+		return err
+	}
+	for _, mode := range []os.FileMode{0o775, 0o757, 0o777} {
+		err := open(mode)
+		if err == nil || !strings.Contains(err.Error(), "parent") {
+			t.Fatalf("accepted an ancestor with mode %o: %v", mode, err)
+		}
+	}
+	if err := open(0o777 | os.ModeSticky); err != nil {
+		t.Fatalf("refused a sticky ancestor: %v", err)
+	}
+	if err := open(0o755); err != nil {
+		t.Fatalf("refused a 0755 ancestor: %v", err)
+	}
+}
+
+func TestEnsurePrivateDirRedoesAFailedSync(t *testing.T) {
+	base := privateDir(t)
+	state := filepath.Join(base, "a", "state")
+	var synced []string
+	failOnce := true
+	sync := func(p string) error {
+		if failOnce && p == filepath.Dir(state) {
+			failOnce = false
+			return errors.New("sync failed")
+		}
+		synced = append(synced, p)
+		return nil
+	}
+	if err := ensurePrivateDir(state, sync); err == nil {
+		t.Fatal("a failed sync did not fail")
+	}
+	if _, err := os.Stat(state); err != nil {
+		t.Fatalf("mkdir did not happen before the sync: %v", err)
+	}
+	synced = nil
+	if err := ensurePrivateDir(state, sync); err != nil {
+		t.Fatal(err)
+	}
+	if len(synced) < 3 || synced[0] != state || synced[1] != filepath.Dir(state) || synced[len(synced)-1] != "/" {
+		t.Fatalf("retry synced %v; want the state dir and every ancestor up to /", synced)
+	}
 }

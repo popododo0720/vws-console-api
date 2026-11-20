@@ -26,7 +26,7 @@ func TestPVEFakeCommandRegionInventoryAndRestart(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("loopback stack requires a non-root user")
 	}
-	dir := t.TempDir()
+	dir := privateDir(t)
 	for _, target := range []struct{ name, path string }{
 		{"pvefake", "./cmd/pvefake"},
 		{"vws-region", "./cmd/vws-region"},

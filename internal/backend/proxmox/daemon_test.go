@@ -141,7 +141,7 @@ func awaitClientStatus(t *testing.T, client *http.Client, url string, status int
 // TestRegionDaemonKeepsStateAcrossRestart runs the real daemon with only a
 // state directory: no sudo, no helper, no /etc/pve. Registration survives a restart.
 func TestRegionDaemonKeepsStateAcrossRestart(t *testing.T) {
-	dir := t.TempDir()
+	dir := privateDir(t)
 	binary := filepath.Join(dir, "vws-region")
 	build := exec.CommandContext(t.Context(), "go", "build", "-o", binary, "./cmd/vws-region")
 	build.Dir = "../../.."

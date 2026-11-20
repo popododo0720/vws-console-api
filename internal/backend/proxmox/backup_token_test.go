@@ -103,7 +103,7 @@ func TestBackupTokenInput(t *testing.T) {
 			fields[tc.field] = tc.value
 			data, err := json.Marshal(fields)
 			checkLaunch(t, err)
-			c := &Connection{region: "pve-test-1", dir: t.TempDir()}
+			c := &Connection{region: "pve-test-1", dir: privateDir(t)}
 			if err := c.Register(t.Context(), data); resource.AsError(err).Field != tc.want {
 				t.Fatalf("invalid input: %v, want field %s", err, tc.want)
 			}
@@ -112,7 +112,7 @@ func TestBackupTokenInput(t *testing.T) {
 }
 
 func TestBackupTokenRegistration(t *testing.T) {
-	dir := t.TempDir()
+	dir := privateDir(t)
 	s := backupScenario()
 	s.Roles = append(s.Roles, pvefake.Role{ID: "Broad", Privs: []string{"VM.Allocate"}})
 	s.Tokens = append(s.Tokens, pvefake.Token{

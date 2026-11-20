@@ -57,7 +57,7 @@ func TestFirewallTokenScope(t *testing.T) {
 }
 
 func TestFirewallTokenRegistration(t *testing.T) {
-	dir := t.TempDir()
+	dir := privateDir(t)
 	s := firewallScenario("Sys.Modify", "Sys.Audit")
 	s.Roles = append(s.Roles, pvefake.Role{ID: "Broad", Privs: []string{"Sys.Modify", "Sys.Audit", "VM.Audit"}})
 	s.Tokens = append(s.Tokens, pvefake.Token{

@@ -84,12 +84,18 @@ func syncDir(dir string) error {
 	return nil
 }
 
-// ensurePrivateDir creates dir (and missing parents) with mode 0700, fsyncing
-// the parent of every directory it creates so the entry survives power loss.
-// It refuses an existing dir that is a symlink, is not owned by this uid, or
-// has any group or other access.
-func ensurePrivateDir(dir string) error {
-	dir = filepath.Clean(dir)
+// ensurePrivateDir makes dir a private state directory: created 0700 with any
+// missing parents, owned by this uid, a real directory (not a symlink), with no
+// group or other access. Every ancestor up to / must be owned by root or this
+// uid and either not group/other writable or sticky, so no other user can
+// replace an entry on the path. Then dir and every ancestor are fsynced on every
+// call, so a sync that failed after a mkdir is redone by the next Open; any
+// failure refuses the directory.
+func ensurePrivateDir(dir string, sync func(string) error) error {
+	dir, err := filepath.Abs(dir)
+	if err != nil {
+		return fmt.Errorf("resolve state directory: %w", err)
+	}
 	var missing []string
 	for p := dir; ; p = filepath.Dir(p) {
 		_, err := os.Lstat(p)
@@ -100,27 +106,51 @@ func ensurePrivateDir(dir string) error {
 			return fmt.Errorf("inspect state directory: %w", err)
 		}
 		missing = append(missing, p)
-		if filepath.Dir(p) == p {
-			break
-		}
 	}
 	for i := len(missing) - 1; i >= 0; i-- {
 		if err := os.Mkdir(missing[i], 0o700); err != nil && !errors.Is(err, os.ErrExist) {
 			return fmt.Errorf("create state directory: %w", err)
-		}
-		if err := syncDir(filepath.Dir(missing[i])); err != nil {
-			return err
 		}
 	}
 	info, err := os.Lstat(dir)
 	if err != nil {
 		return fmt.Errorf("inspect state directory: %w", err)
 	}
-	owner, ok := info.Sys().(*syscall.Stat_t)
-	if !info.IsDir() || !ok || int(owner.Uid) != os.Geteuid() || info.Mode().Perm()&0o077 != 0 {
+	if uid, ok := owner(info); !info.IsDir() || !ok || uid != os.Geteuid() || info.Mode().Perm()&0o077 != 0 {
 		return fmt.Errorf("state directory %s must be a real directory owned by this user with mode 0700", dir)
 	}
+	for p := filepath.Dir(dir); ; p = filepath.Dir(p) {
+		info, err := os.Stat(p)
+		if err != nil {
+			return fmt.Errorf("inspect ancestor %s: %w", p, err)
+		}
+		uid, ok := owner(info)
+		if !ok || uid != 0 && uid != os.Geteuid() ||
+			info.Mode().Perm()&0o022 != 0 && info.Mode()&os.ModeSticky == 0 {
+			return fmt.Errorf("ancestor %s of the state directory must be owned by root or this user "+
+				"and not writable by group or others unless sticky", p)
+		}
+		if filepath.Dir(p) == p {
+			break
+		}
+	}
+	for p := dir; ; p = filepath.Dir(p) {
+		if err := sync(p); err != nil {
+			return err
+		}
+		if filepath.Dir(p) == p {
+			break
+		}
+	}
 	return nil
+}
+
+func owner(info os.FileInfo) (int, bool) {
+	st, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return 0, false
+	}
+	return int(st.Uid), true
 }
 
 // removeStaleTemps deletes temporary files a crashed write left behind.
