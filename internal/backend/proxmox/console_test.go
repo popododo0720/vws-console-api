@@ -122,6 +122,7 @@ func TestConnectionHonorsConsoleMode(t *testing.T) {
 			Region: "pve-test-1", ClusterName: "test", TokenID: s.Tokens[0].ID, Token: s.Tokens[0].Secret,
 			PVEAPIURLs: []string{srv.URL}, CAPEM: serverCA(srv),
 		})
+		c.Close() // idle TLS connections end here, not after the test
 		if (err != nil) != (mode == "true") {
 			t.Fatalf("read_only=%s: %v", mode, err)
 		}

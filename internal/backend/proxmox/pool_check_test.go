@@ -75,6 +75,7 @@ func TestPoolSelfCheckDoesNotExposeUpstreamBody(t *testing.T) {
 			c := &Connection{
 				config: RegionConfig{ReadOnly: true, Pools: map[string]string{"project": "managed"}},
 			}
+			defer c.Close() // idle TLS connections end here, not after the test
 			_, err := c.check(t.Context(), registrationSnapshot{
 				Region: "pve-test-1", ClusterName: "test", TokenID: "vws@pve!inventory", Token: "fake-secret",
 				PVEAPIURLs: []string{srv.URL}, CAPEM: serverCA(srv),

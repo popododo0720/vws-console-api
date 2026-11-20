@@ -145,9 +145,16 @@ func TestGateLeavesAnAddressWithoutQuorumWithinFiveSeconds(t *testing.T) {
 	members[1].fake.SetQuorate(false)
 	gate := NewQuorumGate(b)
 	ctx, stop := context.WithCancel(t.Context())
-	defer stop()
+	done := make(chan struct{})
+	defer func() {
+		stop()
+		<-done // no probe may still hold a TLS connection when the test ends
+	}()
 	started := time.Now()
-	go gate.Run(ctx)
+	go func() {
+		defer close(done)
+		gate.Run(ctx)
+	}()
 	for gate.Admit(ctx) != nil {
 		if time.Since(started) > 5*time.Second {
 			t.Fatal("the gate stayed on addresses without quorum for 5 s")
@@ -224,7 +231,11 @@ func TestFailoverKeepsTheConsoleOnTheAddressThatIssuedTheTicket(t *testing.T) {
 	deadURL := dead.URL
 	dead.Close()
 	urls = append([]string{deadURL}, urls...)
-	base := servers[0].Client().Transport.(*http.Transport)
+	base, ok := servers[0].Client().Transport.(*http.Transport)
+	if !ok {
+		t.Fatal("httptest client transport is not an *http.Transport")
+	}
+	t.Cleanup(base.CloseIdleConnections) // before the servers close, so no connection ends after the test
 	endpoints, err := pveclient.NewEndpoints(base, urls)
 	if err != nil {
 		t.Fatal(err)
