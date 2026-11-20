@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -76,10 +77,11 @@ func TestOpenRemovesTemporaryFileOfACrashedWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeFixture(t, filepath.Join(state, registrationFile), []byte(`{"region":"pve-test-1","cluster_name":"test",`+
-		`"tokenId":"vws@pve!inventory","token":"fake-secret"}`))
+		`"pveApiUrls":["https://pve1:8006"],"caPem":`+strconv.Quote(anyCA())+
+		`,"tokenId":"vws@pve!inventory","token":"fake-secret"}`))
 	torn := filepath.Join(state, "."+registrationFile+".tmp-123")
 	writeFixture(t, torn, []byte(`{"region":"pve-te`))
-	c, err := Open(config, "pve-test-1", state, "https://unused", nil)
+	c, err := Open(config, "pve-test-1", state)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,7 +107,7 @@ func TestOpenRequiresAPrivateStateDirectory(t *testing.T) {
 		}
 		stale := filepath.Join(state, "."+registrationFile+".tmp-1")
 		writeFixture(t, stale, []byte("x"))
-		if _, err := Open(config, "pve-test-1", state, "https://unused", nil); err == nil {
+		if _, err := Open(config, "pve-test-1", state); err == nil {
 			t.Fatalf("accepted state directory with mode %o", mode)
 		}
 		if _, err := os.Stat(stale); err != nil {
@@ -123,7 +125,7 @@ func TestOpenRequiresAPrivateStateDirectory(t *testing.T) {
 	if err := os.Symlink(target, link); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Open(config, "pve-test-1", link, "https://unused", nil); err == nil {
+	if _, err := Open(config, "pve-test-1", link); err == nil {
 		t.Fatal("accepted a symlinked state directory")
 	}
 }
@@ -133,7 +135,7 @@ func TestOpenCreatesNestedStateDirectoryPrivately(t *testing.T) {
 	config := filepath.Join(dir, "region.yaml")
 	writeFixture(t, config, []byte("read_only: true\n"))
 	state := filepath.Join(dir, "a", "b", "state")
-	if _, err := Open(config, "pve-test-1", state, "https://unused", nil); err != nil {
+	if _, err := Open(config, "pve-test-1", state); err != nil {
 		t.Fatal(err)
 	}
 	for _, p := range []string{state, filepath.Dir(state), filepath.Dir(filepath.Dir(state))} {
@@ -142,7 +144,7 @@ func TestOpenCreatesNestedStateDirectoryPrivately(t *testing.T) {
 			t.Fatalf("%s: %v, %v", p, info, err)
 		}
 	}
-	if _, err := Open(config, "pve-test-1", state, "https://unused", nil); err != nil {
+	if _, err := Open(config, "pve-test-1", state); err != nil {
 		t.Fatalf("reopening an existing private directory: %v", err)
 	}
 }
@@ -174,7 +176,7 @@ func TestOpenRejectsAnUnsafeAncestor(t *testing.T) {
 		if err := os.Chmod(parent, parentMode); err != nil {
 			t.Fatal(err)
 		}
-		_, err := Open(config, "pve-test-1", filepath.Join(parent, "state"), "https://unused", nil)
+		_, err := Open(config, "pve-test-1", filepath.Join(parent, "state"))
 		if err != nil && parentMode&0o022 != 0 && parentMode&os.ModeSticky == 0 {
 			if entries, readErr := os.ReadDir(parent); readErr != nil || len(entries) != 0 {
 				t.Errorf("rejection under mode %o left entries: %v %v", parentMode, entries, readErr)
@@ -244,13 +246,13 @@ func TestOpenResolvesSymlinkedAncestors(t *testing.T) {
 		}
 	}
 	nested := filepath.Join(root, "to-unsafe", "a", "state")
-	if _, err := Open(config, "pve-test-1", nested, "https://unused", nil); err == nil {
+	if _, err := Open(config, "pve-test-1", nested); err == nil {
 		t.Fatal("accepted a symlinked ancestor that resolves to a group/other writable directory")
 	}
 	if entries, err := os.ReadDir(unsafe); err != nil || len(entries) != 0 {
 		t.Fatalf("rejection left entries under the unsafe target: %v %v", entries, err)
 	}
-	c, err := Open(config, "pve-test-1", filepath.Join(root, "to-safe", "state"), "https://unused", nil)
+	c, err := Open(config, "pve-test-1", filepath.Join(root, "to-safe", "state"))
 	if err != nil {
 		t.Fatalf("refused a symlinked ancestor with a safe target: %v", err)
 	}
@@ -269,7 +271,7 @@ func TestOpenResolvesSymlinkedAncestors(t *testing.T) {
 	if err := os.Symlink(target, link); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Open(config, "pve-test-1", link, "https://unused", nil); err == nil {
+	if _, err := Open(config, "pve-test-1", link); err == nil {
 		t.Fatal("accepted a final directory that is a symlink")
 	}
 }

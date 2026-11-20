@@ -95,8 +95,9 @@ func TestBackupTokenInput(t *testing.T) {
 		{"backupToken", strings.Repeat("a", 513), "backupToken"},
 	} {
 		t.Run(tc.field+"/"+tc.value, func(t *testing.T) {
-			fields := map[string]string{
+			fields := map[string]any{
 				"region": "pve-test-1", "cluster_name": "test", "tokenId": "vws@pve!inventory",
+				"pveApiUrls": []string{"https://pve1:8006"}, "caPem": anyCA(),
 				"token": "fake-secret", "firewallTokenId": "vws@pve!firewall", "firewallToken": firewallSecret,
 				"backupTokenId": "vws@pve!backup", "backupToken": backupSecret,
 			}
@@ -120,20 +121,24 @@ func TestBackupTokenRegistration(t *testing.T) {
 	})
 	f, err := pvefake.New(s)
 	checkLaunch(t, err)
-	pve := httptest.NewServer(f)
+	pve := httptest.NewTLSServer(f)
 	defer pve.Close()
 	config := filepath.Join(dir, "region.yaml")
 	writeFixture(t, config, []byte("read_only: false\npools: {project: managed, nested: parent/child}\n"))
 	state := filepath.Join(dir, "state")
 	reg := filepath.Join(state, registrationFile)
 	open := func() *Connection {
-		conn, err := Open(config, "pve-test-1", state, pve.URL, pve.Client())
+		conn, err := Open(config, "pve-test-1", state)
 		checkLaunch(t, err)
 		return conn
 	}
 	conn := open()
 	register := func(fields map[string]string) error {
-		input := map[string]string{"region": "pve-test-1", "cluster_name": "test", "tokenId": "vws@pve!inventory"}
+		urls, ca := target(t, pve)
+		input := map[string]any{
+			"region": "pve-test-1", "cluster_name": "test", "tokenId": "vws@pve!inventory",
+			"pveApiUrls": urls, "caPem": ca,
+		}
 		for k, v := range fields {
 			input[k] = v
 		}

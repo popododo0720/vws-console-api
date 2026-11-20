@@ -23,10 +23,14 @@ PVE checks (TLS, version, cluster, privileges) from console-api itself.
 
 `-region` names the one region this instance serves; it is required and a
 registration for any other region is refused with 400. The daemon talks to
-PVE over the API only and needs no sudo and no `/etc/pve`. The default PVE
-origin is `https://127.0.0.1:8006`, verified with `/etc/pve/pve-root-ca.pem`;
-`-pve-endpoint` and `-pve-ca-file` select another verified endpoint (they
-move into the registration in a later step). Region TLS defaults are `/etc/vws/region.crt`,
+PVE over the API only and needs no sudo and no `/etc/pve`. It has no flag for
+PVE addresses or a CA: the registration carries `pveApiUrls` (1 to 16 HTTPS
+origins of the one cluster) and `caPem`, and the daemon trusts that CA for
+every address and never the system roots. It queries all addresses at
+registration and refuses the registration if one reports another cluster name
+or does not answer. For now it uses the first address; trying the others on
+failure is a later step. A state file written before this change has neither
+field and keeps `/readyz` at 503 until the region is registered again. Region TLS defaults are `/etc/vws/region.crt`,
 `/etc/vws/region.key`, and `/etc/vws/global-ca.pem`; the latter must trust
 only global client identities. The corresponding flags are
 `-tls-cert-file`, `-tls-key-file`, and `-tls-ca-file`.
@@ -147,7 +151,6 @@ Start the processes in this order:
    ```sh
    vws-region -config "$ROOT/region.yaml" \
      -region pve-test-1 -state-dir "$ROOT/state" \
-     -pve-endpoint "$PVE" -pve-ca-file "$ROOT/pve-ca.pem" \
      -tls-cert-file "$ROOT/cert.pem" -tls-key-file "$ROOT/key.pem" \
      -tls-ca-file "$ROOT/ca.pem" \
      -region-addr 127.0.0.1:18443 -ops-addr 127.0.0.1:18083
@@ -172,7 +175,7 @@ Start the processes in this order:
 
    Wait for its ops `/readyz` to return 200. Use `Authorization: Bearer
    loopback-token` for console requests. POST `/api/v1/admin/regions`
-   with `name: pve-test-1`, `clusterName: test`, `pveApiUrl: $PVE`,
+   with `name: pve-test-1`, `clusterName: test`, `pveApiUrls: ["$PVE"]`,
    `caPem` containing `pve-ca.pem`, `tokenId: vws@pve!inventory`,
    `tokenSecret: fake-secret`, `regionEndpoint: https://127.0.0.1:18443`
    and `zones: [{"letter":"a","nodes":["pve1"]}]`.

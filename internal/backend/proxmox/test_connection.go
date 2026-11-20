@@ -14,10 +14,13 @@ import (
 )
 
 // ConnectionConfig is a request-scoped PVE connection, not persisted identity.
+// URLs are the node addresses of one cluster; every one must report
+// ClusterName, and the other steps use the first.
 type ConnectionConfig struct {
-	URL, CAPEM, ClusterName, TokenID string
-	TokenSecret                      string `json:"-"`
-	Pools                            []string
+	URLs                        []string
+	CAPEM, ClusterName, TokenID string
+	TokenSecret                 string `json:"-"`
+	Pools                       []string
 }
 
 // TestConnection checks PVE without constructing a backend or persisting credentials.
@@ -30,23 +33,25 @@ func TestConnection(ctx context.Context, cfg ConnectionConfig) []resource.Connec
 		{Name: "cluster_name", Result: resource.ConnectionSkipped, Message: "previous step failed"},
 		{Name: "privileges", Result: resource.ConnectionSkipped, Message: "previous step failed"},
 	}
-	u, err := url.Parse(cfg.URL)
 	steps[0].Result, steps[0].Message = resource.ConnectionFail, "PVE TLS handshake failed"
-	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil {
+	if resource.CheckPVEAPIURLs(cfg.URLs) != nil {
 		return steps
 	}
-	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12, ServerName: u.Hostname()}
-	if cfg.CAPEM != "" {
-		tlsConfig.RootCAs = x509.NewCertPool()
-		if !tlsConfig.RootCAs.AppendCertsFromPEM([]byte(cfg.CAPEM)) {
-			return steps
-		}
+	u, err := url.Parse(cfg.URLs[0])
+	if err != nil {
+		return steps
+	}
+	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: x509.NewCertPool()}
+	if !tlsConfig.RootCAs.AppendCertsFromPEM([]byte(cfg.CAPEM)) {
+		return steps
 	}
 	port := u.Port()
 	if port == "" {
 		port = "443"
 	}
-	dialer := tls.Dialer{NetDialer: &net.Dialer{Timeout: 3 * time.Second}, Config: tlsConfig}
+	dialTLS := tlsConfig.Clone()
+	dialTLS.ServerName = u.Hostname()
+	dialer := tls.Dialer{NetDialer: &net.Dialer{Timeout: 3 * time.Second}, Config: dialTLS}
 	conn, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(u.Hostname(), port))
 	if err != nil {
 		return steps
@@ -61,13 +66,16 @@ func TestConnection(ctx context.Context, cfg ConnectionConfig) []resource.Connec
 		ResponseHeaderTimeout: 5 * time.Second, IdleConnTimeout: 30 * time.Second,
 	}
 	defer transport.CloseIdleConnections()
-	client, err := pveclient.New(pveclient.Config{
-		BaseURL: cfg.URL, TokenID: cfg.TokenID, Secret: pveclient.Secret(cfg.TokenSecret),
-		HTTPClient: &http.Client{
-			Transport: transport, Timeout: 10 * time.Second,
-			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
-		},
-	})
+	httpClient := &http.Client{
+		Transport: transport, Timeout: 10 * time.Second,
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
+	newClient := func(base string) (*pveclient.Client, error) {
+		return pveclient.New(pveclient.Config{
+			BaseURL: base, TokenID: cfg.TokenID, Secret: pveclient.Secret(cfg.TokenSecret), HTTPClient: httpClient,
+		})
+	}
+	client, err := newClient(cfg.URLs[0])
 	steps[1].Result, steps[1].Message = resource.ConnectionFail, "PVE version read failed"
 	if err != nil {
 		return steps
@@ -78,9 +86,15 @@ func TestConnection(ctx context.Context, cfg ConnectionConfig) []resource.Connec
 	}
 	steps[1].Result, steps[1].Message = resource.ConnectionPass, "PVE version read succeeded"
 	steps[2].Result, steps[2].Message = resource.ConnectionFail, "cluster_name differs or could not be verified"
-	rows, err := client.ClusterStatus(ctx)
-	if err != nil || checkClusterName(rows, cfg.ClusterName) != nil {
-		return steps
+	for _, base := range cfg.URLs {
+		other, err := newClient(base)
+		if err != nil {
+			return steps
+		}
+		rows, err := other.ClusterStatus(ctx)
+		if err != nil || checkClusterName(rows, cfg.ClusterName) != nil {
+			return steps
+		}
 	}
 	steps[2].Result, steps[2].Message = resource.ConnectionPass, "cluster_name accepted"
 	steps[3].Result, steps[3].Message = resource.ConnectionFail, "token permissions could not be verified"

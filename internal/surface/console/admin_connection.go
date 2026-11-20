@@ -129,7 +129,7 @@ func (h *handler) adminTestRegion(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if name != "" {
-		if in.Name != nil || in.ClusterName != nil || in.PVEAPIURL != nil || in.CAPEM != nil ||
+		if in.Name != nil || in.ClusterName != nil || in.PVEAPIURLs != nil || in.CAPEM != nil ||
 			in.TokenID != nil || in.RegionEndpoint != nil || in.Zones != nil {
 			writeErr(w, r, resource.Invalid("name", "saved tests accept only tokenSecret; use the unsaved test for edits"))
 			return
@@ -138,7 +138,6 @@ func (h *handler) adminTestRegion(w http.ResponseWriter, r *http.Request) {
 		for _, field := range []struct{ from, to *string }{
 			{in.Name, &v.Name},
 			{in.ClusterName, &v.ClusterName},
-			{in.PVEAPIURL, &v.PVEAPIURL},
 			{in.CAPEM, &v.CAPEM},
 			{in.TokenID, &v.TokenID},
 			{in.RegionEndpoint, &v.RegionEndpoint},
@@ -146,6 +145,9 @@ func (h *handler) adminTestRegion(w http.ResponseWriter, r *http.Request) {
 			if field.from != nil {
 				*field.to = *field.from
 			}
+		}
+		if in.PVEAPIURLs != nil {
+			v.PVEAPIURLs = *in.PVEAPIURLs
 		}
 		if in.Zones != nil {
 			v.Zones = *in.Zones

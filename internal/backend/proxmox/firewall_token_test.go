@@ -65,14 +65,18 @@ func TestFirewallTokenRegistration(t *testing.T) {
 	})
 	f, err := pvefake.New(s)
 	checkLaunch(t, err)
-	pve := httptest.NewServer(f)
+	pve := httptest.NewTLSServer(f)
 	defer pve.Close()
 	writeFixture(t, filepath.Join(dir, "region.yaml"), []byte("read_only: false\n"))
 	state := filepath.Join(dir, "state")
-	conn, err := Open(filepath.Join(dir, "region.yaml"), "pve-test-1", state, pve.URL, pve.Client())
+	conn, err := Open(filepath.Join(dir, "region.yaml"), "pve-test-1", state)
 	checkLaunch(t, err)
 	register := func(fields map[string]string) error {
-		input := map[string]any{"region": "pve-test-1", "cluster_name": "test", "tokenId": "vws@pve!inventory"}
+		urls, ca := target(t, pve)
+		input := map[string]any{
+			"region": "pve-test-1", "cluster_name": "test", "tokenId": "vws@pve!inventory",
+			"pveApiUrls": urls, "caPem": ca,
+		}
 		for k, v := range fields {
 			input[k] = v
 		}

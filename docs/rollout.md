@@ -4,9 +4,17 @@ The supported resource backends are `fake` and `regions`. The in-process
 `-backend=proxmox` mode and its node-local flags (`-region-config`,
 `-registration-file`, `-pve-endpoint`, `-pve-ca-file`, `-helper-path`) are
 removed. The `vws-region` daemon has no helper either: `-helper-path`,
-`-helper-root` and `-registration-file` are gone, and its state is one 0600
-file under `-state-dir`. Reach Proxmox through a `vws-region` daemon deployed as
-`docs/region-daemon.md` describes today, and register it with the admin API.
+`-helper-root`, `-registration-file`, `-pve-endpoint` and `-pve-ca-file` are
+gone. Its PVE addresses and CA come from the registration (`pveApiUrls`,
+`caPem`), and its state is one 0600 file under `-state-dir`.
+
+Upgrading stored data: a registry record with the old single `pveApiUrl`
+loads as a one-address list and is rewritten on its next edit; an edit also
+needs a `caPem`, which is now required. A daemon state file written before
+this change has no addresses or CA, so `/readyz` stays 503 until the region is
+saved again through the admin API, which pushes them and reuses the stored token. Reach Proxmox through a
+`vws-region` daemon deployed as `docs/region-daemon.md` describes today, and
+register it with the admin API.
 Running one daemon per Proxmox cluster on the global host is follow-up work
 (#1053 and later).
 The Kubernetes compute, storage and network backend is removed in #784.

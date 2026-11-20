@@ -92,7 +92,7 @@ func TestAdminProxmoxConnectionSteps(t *testing.T) {
 			defer upstream.Close()
 			ca := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: upstream.Certificate().Raw}))
 			if tc.untrustedCA {
-				ca = ""
+				ca = foreignCA(t)
 			}
 			var regionCalls atomic.Int32
 			region := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -117,7 +117,7 @@ func TestAdminProxmoxConnectionSteps(t *testing.T) {
 			defer rc.Close()
 			g := store.New(store.NewMemory())
 			v, err := g.Regions().Create(t.Context(), store.Region{
-				Name: "pve-test-1", ClusterName: tc.cluster, PVEAPIURL: upstream.URL, CAPEM: ca,
+				Name: "pve-test-1", ClusterName: tc.cluster, PVEAPIURLs: []string{upstream.URL}, CAPEM: ca,
 				TokenID: s.Tokens[0].ID, TokenSecret: store.DescribeSecret("fake-secret"), RegionEndpoint: region.URL,
 			})
 			if err != nil {
@@ -133,7 +133,7 @@ func TestAdminProxmoxConnectionSteps(t *testing.T) {
 				Auth: console.BearerTokens{"root": {Root: true}},
 				RegionConnection: func(ctx context.Context, v store.Region, token string) []resource.ConnectionStep {
 					return TestConnection(ctx, ConnectionConfig{
-						URL: v.PVEAPIURL, CAPEM: v.CAPEM, ClusterName: v.ClusterName,
+						URLs: v.PVEAPIURLs, CAPEM: v.CAPEM, ClusterName: v.ClusterName,
 						TokenID: v.TokenID, TokenSecret: token,
 					})
 				},
@@ -146,7 +146,7 @@ func TestAdminProxmoxConnectionSteps(t *testing.T) {
 			}
 			path := "/api/v1/admin/regions/test"
 			body := map[string]any{
-				"name": v.Name, "clusterName": v.ClusterName, "pveApiUrl": v.PVEAPIURL,
+				"name": v.Name, "clusterName": v.ClusterName, "pveApiUrls": v.PVEAPIURLs,
 				"caPem": v.CAPEM, "tokenId": v.TokenID, "regionEndpoint": v.RegionEndpoint,
 			}
 			if tc.saved {

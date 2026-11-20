@@ -31,7 +31,7 @@ func testRegionConnection(
 		}
 	}
 	return proxmox.TestConnection(ctx, proxmox.ConnectionConfig{
-		URL: region.PVEAPIURL, CAPEM: region.CAPEM, ClusterName: region.ClusterName,
+		URLs: region.PVEAPIURLs, CAPEM: region.CAPEM, ClusterName: region.ClusterName,
 		TokenID: region.TokenID, TokenSecret: token, Pools: pools,
 	})
 }

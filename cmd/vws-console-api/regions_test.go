@@ -557,8 +557,9 @@ func TestRegionsMemoryProcessMTLSAndRestart(t *testing.T) {
 			if body := call(http.MethodGet, path, ""); strings.TrimSpace(body) != `{"items":[]}` {
 				t.Fatalf("new memory registry retained registrations: %s", body)
 			}
-			body := fmt.Sprintf(`{"name":"pve-test-1","clusterName":"test","pveApiUrl":"https://pve.example:8006",
-				"tokenId":"vws@pve!inventory","tokenSecret":"memory-region-token","regionEndpoint":%q,"zones":[]}`, region.URL)
+			body := fmt.Sprintf(`{"name":"pve-test-1","clusterName":"test","pveApiUrls":["https://pve.example:8006"],
+				"caPem":%q,"tokenId":"vws@pve!inventory","tokenSecret":"memory-region-token","regionEndpoint":%q,"zones":[]}`,
+				pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: region.Certificate().Raw}), region.URL)
 			call(http.MethodPost, path, body)
 			if body := call(http.MethodGet, "/api/v1/instances", ""); !strings.Contains(body, `"i-`) {
 				t.Fatalf("registered mTLS inventory is empty: %s", body)

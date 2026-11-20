@@ -154,8 +154,7 @@ func TestPVEFakeCommandRegionInventoryAndRestart(t *testing.T) {
 		addr, ops := unusedAddress(t), unusedAddress(t)
 		region := exec.CommandContext(ctx, filepath.Join(dir, "vws-region"),
 			"-backend", "proxmox", "-config", filepath.Join(dir, "region.yaml"),
-			"-region", "pve-test-1", "-state-dir", filepath.Join(dir, "state"), "-pve-endpoint", endpoint,
-			"-pve-ca-file", filepath.Join(dir, "pve-ca.pem"),
+			"-region", "pve-test-1", "-state-dir", filepath.Join(dir, "state"),
 			"-tls-cert-file", filepath.Join(dir, "cert.pem"), "-tls-key-file", filepath.Join(dir, "key.pem"),
 			"-tls-ca-file", filepath.Join(dir, "ca.pem"), "-region-addr", addr, "-ops-addr", ops)
 		var regionLog bytes.Buffer
@@ -216,7 +215,7 @@ func TestPVEFakeCommandRegionInventoryAndRestart(t *testing.T) {
 			awaitStatus(t, "http://"+ops+"/readyz", http.StatusServiceUnavailable)
 			awaitClientStatus(t, client, "https://"+addr+"/internal/v1/status", http.StatusServiceUnavailable)
 		}
-		input := fmt.Sprintf(`{"name":"pve-test-1","clusterName":"test","pveApiUrl":%q,"caPem":%q,
+		input := fmt.Sprintf(`{"name":"pve-test-1","clusterName":"test","pveApiUrls":[%q],"caPem":%q,
 			"tokenId":"vws@pve!inventory","tokenSecret":"fake-secret","regionEndpoint":%q,
 			"zones":[{"letter":"a","nodes":["pve1"]}]}`, endpoint, pem, "https://"+addr)
 		data := admin(http.MethodPost, regionsPath, input, http.StatusCreated)

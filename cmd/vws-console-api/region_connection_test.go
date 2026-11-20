@@ -50,7 +50,7 @@ func TestRegionConnectionChecksMappedPools(t *testing.T) {
 		t.Fatal(err)
 	}
 	region := store.Region{
-		Name: "pve-test-1", PVEAPIURL: srv.URL, ClusterName: "test", TokenID: "vws@pve!inventory",
+		Name: "pve-test-1", PVEAPIURLs: []string{srv.URL}, ClusterName: "test", TokenID: "vws@pve!inventory",
 		CAPEM: string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw})),
 	}
 	for range 2 {

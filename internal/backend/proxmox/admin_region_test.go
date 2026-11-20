@@ -22,7 +22,7 @@ func TestAdminRegionDeleteNeverCallsPVE(t *testing.T) {
 	defer srv.Close()
 	g := store.New(store.NewMemory())
 	if _, err := g.Regions().Create(t.Context(), store.Region{
-		Name: "pve-test-1", ClusterName: "test", PVEAPIURL: srv.URL, RegionEndpoint: srv.URL,
+		Name: "pve-test-1", ClusterName: "test", PVEAPIURLs: []string{srv.URL}, CAPEM: serverCA(srv), RegionEndpoint: srv.URL,
 	}); err != nil {
 		t.Fatal(err)
 	}

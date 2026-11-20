@@ -19,7 +19,7 @@ import (
 type regionInput struct {
 	Name           *string       `json:"name"`
 	ClusterName    *string       `json:"clusterName"`
-	PVEAPIURL      *string       `json:"pveApiUrl"`
+	PVEAPIURLs     *[]string     `json:"pveApiUrls"`
 	CAPEM          *string       `json:"caPem"`
 	TokenID        *string       `json:"tokenId"`
 	TokenSecret    *string       `json:"tokenSecret"`
@@ -129,7 +129,6 @@ func (h *handler) adminWriteRegion(w http.ResponseWriter, r *http.Request) {
 	for _, field := range []struct{ from, to *string }{
 		{in.Name, &v.Name},
 		{in.ClusterName, &v.ClusterName},
-		{in.PVEAPIURL, &v.PVEAPIURL},
 		{in.CAPEM, &v.CAPEM},
 		{in.TokenID, &v.TokenID},
 		{in.RegionEndpoint, &v.RegionEndpoint},
@@ -139,6 +138,9 @@ func (h *handler) adminWriteRegion(w http.ResponseWriter, r *http.Request) {
 		if field.from != nil {
 			*field.to = *field.from
 		}
+	}
+	if in.PVEAPIURLs != nil {
+		v.PVEAPIURLs = *in.PVEAPIURLs
 	}
 	if in.Zones != nil {
 		v.Zones = *in.Zones
@@ -248,6 +250,8 @@ func (h *handler) pushRegion(ctx context.Context, v store.Region, in *regionInpu
 		Region string `json:"region"`
 		//nolint:tagliatelle // The daemon registration protocol names cluster_name.
 		ClusterName     string       `json:"cluster_name"`
+		PVEAPIURLs      []string     `json:"pveApiUrls"`
+		CAPEM           string       `json:"caPem"`
 		TokenID         string       `json:"tokenId"`
 		Token           *string      `json:"token,omitempty"`
 		Zones           []store.Zone `json:"zones"`
@@ -256,7 +260,8 @@ func (h *handler) pushRegion(ctx context.Context, v store.Region, in *regionInpu
 		BackupTokenID   string       `json:"backupTokenId,omitempty"`
 		BackupToken     *string      `json:"backupToken,omitempty"`
 	}{
-		Region: v.Name, ClusterName: v.ClusterName, TokenID: v.TokenID, Token: in.TokenSecret,
+		Region: v.Name, ClusterName: v.ClusterName, PVEAPIURLs: v.PVEAPIURLs, CAPEM: v.CAPEM,
+		TokenID: v.TokenID, Token: in.TokenSecret,
 		Zones: v.Zones, FirewallTokenID: v.FirewallTokenID, FirewallToken: in.FirewallTokenSecret,
 		BackupTokenID: v.BackupTokenID, BackupToken: in.BackupTokenSecret,
 	})
@@ -308,17 +313,16 @@ func validateRegion(v store.Region, token *string, create bool) error {
 	if !cluster.MatchString(v.ClusterName) {
 		return resource.Invalid("clusterName", "invalid cluster name")
 	}
-	for _, field := range []struct{ name, value string }{
-		{"pveApiUrl", v.PVEAPIURL}, {"regionEndpoint", v.RegionEndpoint},
-	} {
-		u, err := url.Parse(field.value)
-		if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil ||
-			u.RawQuery != "" || u.Fragment != "" || (u.Path != "" && u.Path != "/") {
-			return resource.Invalid(field.name, "expected an HTTPS origin")
-		}
+	if err := resource.CheckPVEAPIURLs(v.PVEAPIURLs); err != nil {
+		return err
 	}
-	if v.CAPEM != "" && !x509.NewCertPool().AppendCertsFromPEM([]byte(v.CAPEM)) {
-		return resource.Invalid("caPem", "expected PEM certificates")
+	u, err := url.Parse(v.RegionEndpoint)
+	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil ||
+		u.RawQuery != "" || u.Fragment != "" || (u.Path != "" && u.Path != "/") {
+		return resource.Invalid("regionEndpoint", "expected an HTTPS origin")
+	}
+	if !x509.NewCertPool().AppendCertsFromPEM([]byte(v.CAPEM)) {
+		return resource.Invalid("caPem", "expected the PEM certificates that sign the PVE nodes")
 	}
 	tokenID := regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}@[A-Za-z0-9._-]{1,32}![A-Za-z][A-Za-z0-9._-]{0,63}$`)
 	if !tokenID.MatchString(v.TokenID) {

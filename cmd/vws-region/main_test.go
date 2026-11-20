@@ -85,6 +85,8 @@ func TestRegionNameIsRequiredAndRemovedFlagsAreRefused(t *testing.T) {
 	for _, args := range [][]string{
 		nil,
 		{"-region", "Not_A_Label"},
+		{"-region", "pve-test-1", "-pve-endpoint", "https://127.0.0.1:8006"},
+		{"-region", "pve-test-1", "-pve-ca-file", "/etc/pve/pve-root-ca.pem"},
 		{"-region", "pve-test-1", "-helper-path", "/helper"},
 		{"-region", "pve-test-1", "-helper-root", "/fixture"},
 		{"-region", "pve-test-1", "-registration-file", "/etc/pve/vws/registration.json"},

@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -56,7 +57,7 @@ func TestRegistrationSelfCheckDiagnostics(t *testing.T) {
 		{"unknown storage", "storages", RegionConfig{Storages: map[string]string{"gp3": token}}, "", 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			pve := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			pve := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if tc.path != "" && strings.HasSuffix(r.URL.Path, tc.path) {
 					http.Error(w, "https://"+tokenID+":"+token+"@private.example", tc.status)
 					return
@@ -81,7 +82,7 @@ func TestRegistrationSelfCheckDiagnostics(t *testing.T) {
 			}))
 			defer pve.Close()
 			c := &Connection{
-				region: "pve-test-1", dir: t.TempDir(), config: tc.config, endpoint: pve.URL, transport: pve.Client(),
+				region: "pve-test-1", dir: t.TempDir(), config: tc.config,
 			}
 			daemon := httptest.NewTLSServer(regionapi.WithRegistration(c.Register, http.NotFoundHandler()))
 			defer daemon.Close()
@@ -92,7 +93,8 @@ func TestRegistrationSelfCheckDiagnostics(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer client.Close()
-			data := json.RawMessage(`{"region":"pve-test-1","cluster_name":"test","tokenId":"` +
+			data := json.RawMessage(`{"region":"pve-test-1","cluster_name":"test","pveApiUrls":["` +
+				pve.URL + `"],"caPem":` + strconv.Quote(serverCA(pve)) + `,"tokenId":"` +
 				tokenID + `","token":"` + token + `"}`)
 			want := "registration self-check failed: " + tc.check
 			code := resource.CodeUnavailable

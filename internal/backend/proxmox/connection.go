@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,6 +22,10 @@ import (
 	"github.com/popododo0720/vws-console-api/internal/backend/proxmox/pveclient"
 	"github.com/popododo0720/vws-console-api/internal/resource"
 )
+
+// errNoEndpoints is the state of a registration file written before it carried
+// pveApiUrls and caPem.
+var errNoEndpoints = errors.New("registration has no valid pveApiUrls and caPem; register the region again")
 
 // maxRegistrationBytes bounds the registration request and the state file.
 const (
@@ -39,10 +45,14 @@ var (
 type registrationSnapshot struct {
 	Region string `json:"region"`
 	//nolint:tagliatelle // The registration protocol names cluster_name.
-	ClusterName string         `json:"cluster_name"`
-	Zones       []backend.Zone `json:"zones"`
-	TokenID     string         `json:"tokenId"`
-	Token       string         `json:"token,omitempty"`
+	ClusterName string `json:"cluster_name"`
+	// PVEAPIURLs are the node addresses of the one cluster, in order; CAPEM
+	// is the only trust root for all of them.
+	PVEAPIURLs []string       `json:"pveApiUrls"`
+	CAPEM      string         `json:"caPem"`
+	Zones      []backend.Zone `json:"zones"`
+	TokenID    string         `json:"tokenId"`
+	Token      string         `json:"token,omitempty"`
 
 	FirewallTokenID string `json:"firewallTokenId,omitempty"`
 	FirewallToken   string `json:"firewallToken,omitempty"`
@@ -57,15 +67,16 @@ type Connection struct {
 	mu          sync.Mutex
 	config      RegionConfig
 	region, dir string
-	endpoint    string
-	transport   *http.Client
+	client      *http.Client // pinned to clientCA
+	clientCA    string
 	current     *Backend
 	digest      [32]byte
 }
 
 // Open loads node-local configuration; registration may arrive after startup.
 // The state directory is created 0700 (or must already be private) and leftover temporary files are removed.
-func Open(configPath, region, stateDir, endpoint string, transport *http.Client) (*Connection, error) {
+// PVE addresses and the CA come from the registration only.
+func Open(configPath, region, stateDir string) (*Connection, error) {
 	if !registrationRegion.MatchString(region) {
 		return nil, errors.New("proxmox: -region must be a lowercase DNS label")
 	}
@@ -80,7 +91,36 @@ func Open(configPath, region, stateDir, endpoint string, transport *http.Client)
 	if err := removeStaleTemps(stateDir, registrationFile); err != nil {
 		return nil, err
 	}
-	return &Connection{config: cfg, region: region, dir: stateDir, endpoint: endpoint, transport: transport}, nil
+	return &Connection{config: cfg, region: region, dir: stateDir}, nil
+}
+
+// Close drops idle PVE connections.
+func (c *Connection) Close() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.client != nil {
+		c.client.CloseIdleConnections()
+	}
+}
+
+// httpClient trusts the registered CA and nothing else, never the system roots.
+func (c *Connection) httpClient(caPEM string) (*http.Client, error) {
+	if c.client != nil && c.clientCA == caPEM {
+		return c.client, nil
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM([]byte(caPEM)) {
+		return nil, resource.Invalid("caPem", "expected PEM certificates")
+	}
+	if c.client != nil {
+		c.client.CloseIdleConnections()
+	}
+	c.client, c.clientCA = &http.Client{
+		Transport:     &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: pool}},
+		Timeout:       10 * time.Second,
+		CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse },
+	}, caPEM
+	return c.client, nil
 }
 
 func decodeRegistration(data []byte) (registrationSnapshot, error) {
@@ -97,6 +137,12 @@ func decodeRegistration(data []byte) (registrationSnapshot, error) {
 	if !registrationRegion.MatchString(s.Region) || !registrationCluster.MatchString(s.ClusterName) ||
 		!registrationTokenID.MatchString(s.TokenID) || len(s.Zones) > 26 {
 		return s, resource.Invalid("registration", "invalid region, cluster_name, tokenId or zones")
+	}
+	if err := resource.CheckPVEAPIURLs(s.PVEAPIURLs); err != nil {
+		return s, err
+	}
+	if !x509.NewCertPool().AppendCertsFromPEM([]byte(s.CAPEM)) {
+		return s, resource.Invalid("caPem", "expected the PEM certificates that sign the PVE nodes")
 	}
 	if s.FirewallTokenID == "" && s.FirewallToken != "" ||
 		s.FirewallTokenID != "" && (!registrationTokenID.MatchString(s.FirewallTokenID) || s.FirewallTokenID == s.TokenID) {
@@ -133,8 +179,14 @@ func (c *Connection) check(ctx context.Context, s registrationSnapshot) (*Backen
 	if s.BackupTokenID != "" && !registrationSecret.MatchString(string(s.BackupToken)) {
 		return nil, resource.Invalid("backupToken", "expected 1-512 token characters")
 	}
+	transport, err := c.httpClient(s.CAPEM)
+	if err != nil {
+		return nil, err
+	}
+	// The first address serves for now; failing over between them is a later step.
+	endpoint := s.PVEAPIURLs[0]
 	client, err := pveclient.New(pveclient.Config{
-		BaseURL: c.endpoint, TokenID: s.TokenID, Secret: pveclient.Secret(s.Token), HTTPClient: c.transport,
+		BaseURL: endpoint, TokenID: s.TokenID, Secret: pveclient.Secret(s.Token), HTTPClient: transport,
 	})
 	if err != nil {
 		return nil, errors.New("invalid PVE connection")
@@ -142,7 +194,7 @@ func (c *Connection) check(ctx context.Context, s registrationSnapshot) (*Backen
 	var firewall *pveclient.Client
 	if s.FirewallTokenID != "" {
 		firewall, err = pveclient.New(pveclient.Config{
-			BaseURL: c.endpoint, TokenID: s.FirewallTokenID, Secret: pveclient.Secret(s.FirewallToken), HTTPClient: c.transport,
+			BaseURL: endpoint, TokenID: s.FirewallTokenID, Secret: pveclient.Secret(s.FirewallToken), HTTPClient: transport,
 		})
 		if err != nil {
 			return nil, errors.New("invalid PVE connection")
@@ -161,7 +213,7 @@ func (c *Connection) check(ctx context.Context, s registrationSnapshot) (*Backen
 	if err == nil && s.BackupTokenID != "" {
 		var backup *pveclient.Client
 		backup, err = pveclient.New(pveclient.Config{
-			BaseURL: c.endpoint, TokenID: s.BackupTokenID, Secret: pveclient.Secret(s.BackupToken), HTTPClient: c.transport,
+			BaseURL: endpoint, TokenID: s.BackupTokenID, Secret: pveclient.Secret(s.BackupToken), HTTPClient: transport,
 		})
 		if err == nil {
 			if err = checkBackup(ctx, backup, c.config); err == nil {
@@ -198,7 +250,7 @@ func (c *Connection) Register(ctx context.Context, data json.RawMessage) error {
 	if s.Token == "" || s.FirewallTokenID != "" && s.FirewallToken == "" ||
 		s.BackupTokenID != "" && s.BackupToken == "" {
 		stored, _, err := c.registration()
-		if err != nil && err.Error() != "unregistered" {
+		if err != nil && err.Error() != "unregistered" && !errors.Is(err, errNoEndpoints) {
 			return err
 		}
 		if s.Token == "" {
@@ -223,6 +275,9 @@ func (c *Connection) Register(ctx context.Context, data json.RawMessage) error {
 	if _, err := c.check(ctx, s); err != nil {
 		return err
 	}
+	if err := c.verifyOtherEndpoints(ctx, s); err != nil {
+		return err
+	}
 	state, err := json.Marshal(s)
 	if err != nil {
 		return fmt.Errorf("encode registration: %w", err)
@@ -232,6 +287,35 @@ func (c *Connection) Register(ctx context.Context, data json.RawMessage) error {
 	}
 	if err := writeFileAtomic(c.dir, registrationFile, state, nil); err != nil {
 		return fmt.Errorf("persist registration: %w", err)
+	}
+	return nil
+}
+
+// verifyOtherEndpoints asks the addresses after the first, which check
+// already queried, for the cluster name before the registration is stored: a
+// mixed set must not be accepted, and an address that cannot answer is a typo
+// to fix now.
+func (c *Connection) verifyOtherEndpoints(ctx context.Context, s registrationSnapshot) error {
+	transport, err := c.httpClient(s.CAPEM)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	for _, endpoint := range s.PVEAPIURLs[1:] {
+		client, err := pveclient.New(pveclient.Config{
+			BaseURL: endpoint, TokenID: s.TokenID, Secret: pveclient.Secret(s.Token), HTTPClient: transport,
+		})
+		var rows []pveclient.ClusterStatus
+		if err == nil {
+			rows, err = client.ClusterStatus(ctx)
+		}
+		if err != nil {
+			return &resource.Error{Code: resource.CodeUnavailable, Message: "registration self-check failed: pveApiUrls"}
+		}
+		if err := checkClusterName(rows, s.ClusterName); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -272,6 +356,10 @@ func (c *Connection) registration() (registrationSnapshot, []byte, error) {
 	}
 	s, err = decodeRegistration(data)
 	if err != nil {
+		if field := resource.AsError(err).Field; (field == "pveApiUrls" || field == "caPem") && s.Region == c.region {
+			// s still holds the decoded tokens, so a re-registration may omit them.
+			return s, nil, errNoEndpoints
+		}
 		return s, nil, errors.New("invalid registration")
 	}
 	if s.Region != c.region {

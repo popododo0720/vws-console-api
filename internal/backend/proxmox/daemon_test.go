@@ -20,6 +20,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -198,7 +199,6 @@ func TestRegionDaemonKeepsStateAcrossRestart(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.WithoutCancel(t.Context()), time.Minute)
 		cmd := exec.CommandContext(ctx, binary,
 			"-config", filepath.Join(dir, "region.yaml"), "-region", region, "-state-dir", stateDir,
-			"-pve-endpoint", pve.URL, "-pve-ca-file", filepath.Join(dir, "ca.pem"),
 			"-tls-cert-file", filepath.Join(dir, "cert.pem"), "-tls-key-file", filepath.Join(dir, "key.pem"),
 			"-tls-ca-file", filepath.Join(dir, "ca.pem"), "-region-addr", addr, "-ops-addr", ops)
 		var output bytes.Buffer
@@ -233,10 +233,15 @@ func TestRegionDaemonKeepsStateAcrossRestart(t *testing.T) {
 	if string(body) != "unregistered\n" {
 		t.Fatalf("unregistered readiness = %q", body)
 	}
+	caPEM, err := os.ReadFile(filepath.Join(dir, "ca.pem"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	put := func(origin, region string, want int) {
 		t.Helper()
 		request(t, http.MethodPut, origin+"/internal/v1/registration", `{"region":"`+region+
-			`","cluster_name":"test","tokenId":"vws@pve!inventory","token":"`+canary+
+			`","cluster_name":"test","pveApiUrls":["`+pve.URL+`"],"caPem":`+strconv.Quote(string(caPEM))+
+			`,"tokenId":"vws@pve!inventory","token":"`+canary+
 			`","zones":[{"letter":"a","nodes":["pve1"]}]}`, want)
 	}
 	put(first, "other-region", http.StatusBadRequest)

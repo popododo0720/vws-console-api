@@ -55,8 +55,8 @@ type Backend interface {
 type Region struct {
 	Name           string         `json:"name"`
 	ClusterName    string         `json:"clusterName"`
-	PVEAPIURL      string         `json:"pveApiUrl"`
-	CAPEM          string         `json:"caPem,omitempty"`
+	PVEAPIURLs     []string       `json:"pveApiUrls"`
+	CAPEM          string         `json:"caPem"`
 	TokenID        string         `json:"tokenId"`
 	TokenSecret    SecretMetadata `json:"tokenSecret"`
 	RegionEndpoint string         `json:"regionEndpoint"`
@@ -72,6 +72,23 @@ type Region struct {
 	BackupTokenSecret SecretMetadata `json:"backupTokenSecret"`
 
 	LastError *resource.RegionStatusError `json:"lastError,omitempty"`
+}
+
+// UnmarshalJSON reads a record stored before pveApiUrls as a one-address list;
+// the next write stores the new shape.
+func (r *Region) UnmarshalJSON(data []byte) error {
+	type plain Region
+	aux := struct {
+		*plain
+		LegacyURL string `json:"pveApiUrl"`
+	}{plain: (*plain)(r)}
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return fmt.Errorf("decode region: %w", err)
+	}
+	if len(r.PVEAPIURLs) == 0 && aux.LegacyURL != "" {
+		r.PVEAPIURLs = []string{aux.LegacyURL}
+	}
+	return nil
 }
 
 // Zone is a node group of a region.
