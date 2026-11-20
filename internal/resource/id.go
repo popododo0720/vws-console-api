@@ -22,7 +22,6 @@ type (
 	imageKind         struct{}
 	reservationKind   struct{}
 	subnetKind        struct{}
-	bucketKind        struct{}
 	vpcKind           struct{}
 	volumeKind        struct{}
 	securityGroupKind struct{}
@@ -35,7 +34,6 @@ func (instanceKind) kind() Kind      { return KindInstance }
 func (imageKind) kind() Kind         { return KindImage }
 func (reservationKind) kind() Kind   { return KindReservation }
 func (subnetKind) kind() Kind        { return KindSubnet }
-func (bucketKind) kind() Kind        { return KindBucket }
 func (vpcKind) kind() Kind           { return KindVpc }
 func (volumeKind) kind() Kind        { return KindVolume }
 func (securityGroupKind) kind() Kind { return KindSecurityGroup }
@@ -47,7 +45,6 @@ func (instanceKind) valid(s string) bool      { return validMinted(KindInstance,
 func (imageKind) valid(s string) bool         { return validMinted(KindImage, s) }
 func (reservationKind) valid(s string) bool   { return validMinted(KindReservation, s) }
 func (subnetKind) valid(s string) bool        { return validMinted(KindSubnet, s) || validDirectSubnet(s) }
-func (bucketKind) valid(s string) bool        { return validBucketName(s) }
 func (vpcKind) valid(s string) bool           { return validMinted(KindVpc, s) || s == directVpc }
 func (volumeKind) valid(s string) bool        { return validMinted(KindVolume, s) }
 func (securityGroupKind) valid(s string) bool { return validMinted(KindSecurityGroup, s) }
@@ -84,8 +81,6 @@ type (
 	// SubnetID identifies a subnet ("subnet-" and 8 to 17 hex digits), or a
 	// direct subnet ("subnet-direct-" and a name).
 	SubnetID = ID[subnetKind]
-	// BucketName is chosen by the caller. It is not minted.
-	BucketName = ID[bucketKind]
 )
 
 // String returns the identifier as it appears on the wire.
@@ -118,21 +113,10 @@ func (id *ID[K]) UnmarshalText(b []byte) error {
 }
 
 // UnmarshalJSON decodes identifiers in resource records and backend requests.
-// Bucket creation validates its chosen name with Parse; a stored name must
-// remain readable after the create policy gains a reserved prefix or suffix.
 func (id *ID[K]) UnmarshalJSON(data []byte) error {
 	var s string
 	if err := json.Unmarshal(data, &s); err != nil {
 		return fmt.Errorf("decode resource ID: %w", err)
-	}
-	var k K
-	if k.kind() == KindBucket {
-		name, err := ParseStoredBucketName(s)
-		if err != nil {
-			return err
-		}
-		id.v = name.v
-		return nil
 	}
 	return id.UnmarshalText([]byte(s))
 }
@@ -169,75 +153,6 @@ func isHex(r rune) bool {
 	return (r >= '0' && r <= '9') || (r >= 'a' && r <= 'f')
 }
 
-func validBucketName(s string) bool {
-	return len(s) >= 3 && bucketNameShape(s) && !reservedBucketName(s)
-}
-
-// bucketNameShape reports whether s has the name shape this API or the
-// backend stores: 1 to 63 lowercase letters, numbers, periods and hyphens,
-// starting and ending with a letter or number, without two adjacent periods,
-// and not an IP address. The create-time minimum length and the reserved
-// prefix and suffix policy stay with the caller.
-func bucketNameShape(s string) bool {
-	if len(s) < 1 || len(s) > 63 || strings.Contains(s, "..") || ipv4Shaped(s) {
-		return false
-	}
-	for i, r := range s {
-		switch {
-		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
-		case r == '-' || r == '.':
-			if i == 0 || i == len(s)-1 {
-				return false
-			}
-		default:
-			return false
-		}
-	}
-	return true
-}
-
-// reservedBucketName reports whether s starts with a prefix or ends with a
-// suffix reserved by the AWS general purpose bucket naming rules. AWS reserves
-// the prefixes xn--, sthree- and amzn-s3-demo- and the suffixes -s3alias,
-// --ol-s3, .mrap, --x-s3, --table-s3 and -an. A name ends in -an only for a
-// bucket in an account-regional namespace, which this API does not create, so
-// the suffix is refused here (#500).
-// https://docs.aws.amazon.com/AmazonS3/latest/userguide/bucketnamingrules.html
-func reservedBucketName(s string) bool {
-	for _, prefix := range [...]string{"xn--", "sthree-", "amzn-s3-demo-"} {
-		if strings.HasPrefix(s, prefix) {
-			return true
-		}
-	}
-	for _, suffix := range [...]string{"-s3alias", "--ol-s3", ".mrap", "--x-s3", "--table-s3", "-an"} {
-		if strings.HasSuffix(s, suffix) {
-			return true
-		}
-	}
-	return false
-}
-
-// ipv4Shaped reports whether s is four dot-separated runs of one to three
-// digits. S3 refuses that shape so a bucket name never matches an IP address.
-// https://docs.aws.amazon.com/AmazonS3/latest/userguide/bucketnamingrules.html
-func ipv4Shaped(s string) bool {
-	labels := strings.Split(s, ".")
-	if len(labels) != 4 {
-		return false
-	}
-	for _, label := range labels {
-		if len(label) < 1 || len(label) > 3 {
-			return false
-		}
-		for _, r := range label {
-			if r < '0' || r > '9' {
-				return false
-			}
-		}
-	}
-	return true
-}
-
 type textValue[T any] interface {
 	*T
 	encoding.TextUnmarshaler
@@ -252,18 +167,6 @@ func Parse[T any, PT textValue[T]](s string) (T, error) {
 		return zero, err //nolint:wrapcheck // UnmarshalText already returns the caller-facing *Error.
 	}
 	return v, nil
-}
-
-// ParseStoredBucketName turns a bucket name read from the backend into a
-// BucketName. It enforces the shape this API or the backend stores but not
-// the create-time reserved prefix and suffix policy, so a bucket made before
-// #498 or #510 can still be listed and read. Create paths keep Parse, which
-// refuses those names.
-func ParseStoredBucketName(s string) (BucketName, error) {
-	if !bucketNameShape(s) {
-		return BucketName{}, Malformed(KindBucket, s)
-	}
-	return BucketName{v: s}, nil
 }
 
 type mintable[T any] interface {
@@ -351,10 +254,9 @@ func validateRefID(k Kind, id string) error {
 		_, err = Parse[ReservationID](id)
 	case KindSubnet:
 		_, err = Parse[SubnetID](id)
-	case KindBucket:
-		_, err = Parse[BucketName](id)
-	case KindObject:
-		_, err = Parse[ObjectKey](id)
+	case KindBucket, KindObject:
+		// VWS hosts no buckets or objects, so no reference names one.
+		err = Malformed(k, id)
 	case KindOperation:
 		_, err = Parse[OperationID](id)
 	case KindVpc:

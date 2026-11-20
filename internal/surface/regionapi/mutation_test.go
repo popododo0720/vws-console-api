@@ -46,7 +46,6 @@ func TestEveryMutationRoundTrips(t *testing.T) {
 	}{
 		{"Compute", reflect.TypeFor[backend.Compute]()},
 		{"Network", reflect.TypeFor[backend.Network]()},
-		{"Storage", reflect.TypeFor[backend.Storage]()},
 	} {
 		for i := 0; i < service.typ.NumMethod(); i++ {
 			method := service.typ.Method(i)
@@ -121,7 +120,6 @@ func fillMutationRequest(t *testing.T, value reflect.Value) {
 		reflect.TypeFor[resource.SubnetID]():        "subnet-0123456789abcdef0",
 		reflect.TypeFor[resource.SecurityGroupID](): "sg-0123456789abcdef0",
 		reflect.TypeFor[resource.AddressID]():       "eipalloc-0123456789abcdef0",
-		reflect.TypeFor[resource.BucketName]():      "test-bucket", reflect.TypeFor[resource.ObjectKey](): "test-key",
 	}
 	if text, ok := names[value.Type()]; ok {
 		if err := json.Unmarshal([]byte(`"`+text+`"`), value.Addr().Interface()); err != nil {
@@ -190,7 +188,7 @@ func TestGlobalKernelMutationArrivesByteIdentical(t *testing.T) {
 	}
 }
 
-func TestMutationGateAndObjectBound(t *testing.T) {
+func TestMutationGate(t *testing.T) {
 	for _, peer := range []string{"", "other-node"} {
 		cfg := config(mutationWorld())
 		cfg.Gate = &mutationGate{peer: peer}
@@ -203,16 +201,6 @@ func TestMutationGateAndObjectBound(t *testing.T) {
 			resource.CreateVolumeRequest{SizeGiB: 8})
 		if (resource.CodeOf(err) == resource.CodeUnavailable) != (peer != "") {
 			t.Fatalf("peer %q mutation error = %v", peer, err)
-		}
-		bucket, _ := resource.Parse[resource.BucketName]("test-bucket")
-		if _, err := remote.Storage.CreateBucket(t.Context(), testScope(t), bucket); peer != "" &&
-			resource.CodeOf(err) != resource.CodeUnavailable {
-			t.Fatalf("storage bypassed follower gate: %v", err)
-		}
-		_, err = remote.Storage.PutObject(t.Context(), testScope(t), resource.PutObjectRequest{},
-			strings.NewReader(strings.Repeat("x", resource.MaxObjectBytes+1)))
-		if resource.CodeOf(err) != resource.CodePayloadTooLarge {
-			t.Fatalf("oversized object error = %v", err)
 		}
 	}
 }

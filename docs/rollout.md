@@ -3,8 +3,8 @@
 The supported resource backends are `fake`, `regions` and `proxmox`.
 The Kubernetes compute, storage and network backend is removed in #784.
 Its ConfigMap launch records and detach-label reservation rollout rules
-do not apply to current builds. The historical detach model remains in
-`docs/formal/README.md` with its original code mapping pinned in Git history.
+do not apply to current builds. The historical detach model is
+removed; Git history keeps it.
 
 Before upgrading an installation, remove the retired backend selection,
 compute/storage/network address flags and Kubernetes launch-store flags

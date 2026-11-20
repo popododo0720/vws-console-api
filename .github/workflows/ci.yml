@@ -1,4 +1,4 @@
-# Lint and test only. The image is published by publish.yml; no deployment manifests live here.
+# Lint and test only. No image is built and no deployment manifests live here; vws-deploy packages the binary.
 name: ci
 
 on:

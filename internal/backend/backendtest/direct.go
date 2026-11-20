@@ -255,8 +255,8 @@ func directLaunch(ctx context.Context, t *testing.T, newSet Harness, overlay, di
 	}
 }
 
-// checkDirectVisible checks that account reads the direct subnet as vws-network
-// serves it, in a listing and by id.
+// checkDirectVisible checks that account reads the direct subnet in a listing
+// and by id.
 func checkDirectVisible(
 	ctx context.Context, t *testing.T, set backend.Set, account resource.AccountID, direct resource.SubnetID,
 ) {

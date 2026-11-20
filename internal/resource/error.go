@@ -78,9 +78,6 @@ type Error struct {
 	Field   string
 	Message string
 	cause   error
-	// owned marks a bucket create refused because the caller already owns
-	// the name, as opposed to a name another account holds (#315).
-	owned bool
 	// duplicate marks a security group rule that already exists, which EC2
 	// answers as InvalidPermission.Duplicate (#272).
 	duplicate bool
@@ -93,10 +90,7 @@ type Error struct {
 	// rulesLimit marks a security group that would hold more than
 	// MaxIngressRules inbound rules, which EC2 answers as
 	// RulesPerSecurityGroupLimitExceeded.
-	rulesLimit bool
-	// deleting marks a bucket create refused because the caller's own bucket
-	// of that name is still being deleted (#321).
-	deleting       bool
+	rulesLimit     bool
 	capacity       bool
 	subnetCapacity bool
 }
@@ -201,16 +195,12 @@ func (e *Error) UnmarshalJSON(data []byte) error {
 		decoded.invalid = invalidTaggedID
 	case "attachmentLimit":
 		decoded.invalid = invalidAttachmentLimit
-	case "owned":
-		decoded.owned = true
 	case "duplicate":
 		decoded.duplicate = true
 	case "permissionMissing":
 		decoded.permissionMissing = true
 	case "rulesLimit":
 		decoded.rulesLimit = true
-	case "deleting":
-		decoded.deleting = true
 	case "capacity":
 		decoded.capacity = true
 	case "subnetCapacity":
@@ -239,16 +229,12 @@ func (e *Error) refinement() string {
 	case invalidValue:
 	}
 	switch {
-	case e.owned:
-		return "owned"
 	case e.duplicate:
 		return "duplicate"
 	case e.permissionMissing:
 		return "permissionMissing"
 	case e.rulesLimit:
 		return "rulesLimit"
-	case e.deleting:
-		return "deleting"
 	case e.capacity:
 		return "capacity"
 	case e.subnetCapacity:
@@ -387,15 +373,12 @@ func NotFound(kind Kind, id string) *Error {
 // notFoundMessage is the text AWS sends for a missing resource. The ids are
 // part of the text.
 // https://docs.aws.amazon.com/AWSEC2/latest/APIReference/errors-overview.html
-// https://docs.aws.amazon.com/AmazonS3/latest/API/ErrorResponses.html
 func notFoundMessage(kind Kind, id string) string {
 	switch kind {
 	case KindInstance:
 		return "The instance ID '" + id + "' does not exist"
 	case KindImage:
 		return imageNotFoundMessage(id)
-	case KindBucket:
-		return "The specified bucket does not exist"
 	case KindVpc:
 		return "The vpc ID '" + id + "' does not exist"
 	case KindSubnet:
@@ -410,7 +393,7 @@ func notFoundMessage(kind Kind, id string) string {
 		return "The allocation ID '" + id + "' does not exist"
 	case KindSnapshot:
 		return "The snapshot '" + id + "' does not exist."
-	case KindReservation, KindObject, KindOperation, KindUnspecified:
+	case KindReservation, KindBucket, KindObject, KindOperation, KindUnspecified:
 		return "not found"
 	}
 	// Exhaustive requires every kind as a case; Go requires this return.
@@ -479,45 +462,6 @@ func PermissionNotFound(id string) *Error {
 func IsPermissionNotFound(err error) bool {
 	var e *Error
 	return errors.As(err, &e) && e.permissionMissing
-}
-
-// BucketOwnedMessage is the text S3 sends with BucketAlreadyOwnedByYou, from
-// the List of Error Codes in the S3 API Reference PDF (API Version
-// 2006-03-01). The current ErrorResponses page describes the code in other
-// words.
-const BucketOwnedMessage = "Your previous request to create the named bucket succeeded and you already own it."
-
-// BucketAlreadyOwned reports a bucket create for a name the caller already
-// owns. It is CodeAlreadyExists, and OwnedByCaller tells it apart from a
-// name another account holds (#315).
-func BucketAlreadyOwned(name string) *Error {
-	return &Error{Code: CodeAlreadyExists, Kind: KindBucket, ID: name, Message: BucketOwnedMessage, owned: true}
-}
-
-// OwnedByCaller reports whether err is a BucketAlreadyOwned error.
-func OwnedByCaller(err error) bool {
-	var e *Error
-	return errors.As(err, &e) && e.owned
-}
-
-// BucketDeletingMessage is the text S3 sends with OperationAborted, from the
-// List of Error Codes in the S3 API Reference PDF (API Version 2006-03-01).
-const BucketDeletingMessage = "A conflicting conditional action is currently in progress " +
-	"against this resource. Try again."
-
-// BucketDeleting reports a bucket create for a name the caller's own bucket
-// still holds while vws-storage deletes it. S3 answers 409 OperationAborted:
-// the name is neither another account's (BucketAlreadyExists) nor a bucket
-// the caller can use (BucketAlreadyOwnedByYou), and a retry after the delete
-// finishes can succeed (#321).
-func BucketDeleting(name string) *Error {
-	return &Error{Code: CodeConflict, Kind: KindBucket, ID: name, Message: BucketDeletingMessage, deleting: true}
-}
-
-// IsBucketDeleting reports whether err is a BucketDeleting error.
-func IsBucketDeleting(err error) bool {
-	var e *Error
-	return errors.As(err, &e) && e.deleting
 }
 
 // Conflict reports a lifecycle or occupancy conflict.

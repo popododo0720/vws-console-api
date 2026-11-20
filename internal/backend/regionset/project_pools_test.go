@@ -88,16 +88,6 @@ func TestProjectPoolsBindReadsMutationsAndConsoles(t *testing.T) {
 	if got := (<-calls).(backend.Scope); got != want.Scope {
 		t.Fatalf("console binding: %+v", got)
 	}
-	bucket, err := resource.Parse[resource.BucketName]("test-bucket")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := set.Storage.CreateBucket(t.Context(), scope, bucket); err != nil {
-		t.Fatal(err)
-	}
-	if got := (<-calls).(backend.Scope); got != want.Scope {
-		t.Fatalf("synchronous storage binding: %+v", got)
-	}
 	fail = true
 	_, err = set.Compute.DescribeInstances(t.Context(), scope, resource.InstanceQuery{})
 	if resource.CodeOf(err) != resource.CodeUnavailable {

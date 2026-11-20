@@ -21,7 +21,7 @@ func TestEmptyListsAreArrays(t *testing.T) {
 	h := New(rootConfig(svc, account))
 	for _, path := range []string{
 		"/api/v1/instances", "/api/v1/vpcs", "/api/v1/subnets", "/api/v1/volumes",
-		"/api/v1/key-pairs", "/api/v1/addresses", "/api/v1/snapshots", "/api/v1/buckets",
+		"/api/v1/key-pairs", "/api/v1/addresses", "/api/v1/snapshots",
 		"/api/v1/instances?state=stopped", "/api/v1/security-groups?groupId=sg-00000000000000000",
 	} {
 		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, path, nil)

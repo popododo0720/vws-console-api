@@ -2,15 +2,15 @@ package resource
 
 import "strings"
 
-// A direct network is a provider network vws-network shares with every
-// project (vws-deploy#125). Each is a subnet "subnet-direct-<name>" in the
+// A direct network is a provider network shared with every project: a
+// bridge or VNet the operator owns, outside any project's SDN. Each is a subnet "subnet-direct-<name>" in the
 // VPC "vpc-direct". Every account sees it, and no account can create, change
 // or delete it.
 const (
 	directVpc          = "vpc-direct"
 	directSubnetPrefix = "subnet-direct-"
 	// DirectNetworkTagKey and DirectNetworkTagValue are the tag a direct
-	// subnet carries, the label vws-network sets on it.
+	// subnet carries.
 	DirectNetworkTagKey   = "vws:network-type"
 	DirectNetworkTagValue = "direct"
 )
@@ -25,19 +25,20 @@ func IsDirectVpc(id VpcID) bool { return id.v == directVpc }
 func IsDirectSubnet(id SubnetID) bool { return strings.HasPrefix(id.v, directSubnetPrefix) }
 
 // DirectReadOnly refuses a write to a direct network. EC2 answers
-// UnauthorizedOperation, as vws-network does.
+// UnauthorizedOperation. The Proxmox backend answers it for a shared VNet
+// no project pool owns.
 func DirectReadOnly() *Error { return Denied("direct networks are read-only") }
 
 // DirectElasticIP refuses an elastic IP for an instance whose primary
 // interface is on a direct network. That interface is already on the
 // physical network, with no NAT to attach the address to. EC2 answers
-// InvalidParameterCombination, as vws-network does.
+// InvalidParameterCombination.
 func DirectElasticIP() *Error {
 	return InvalidCombination("instanceId", "an elastic ip cannot attach to a direct network interface")
 }
 
-// validDirectSubnet is the vws-network direct name rule,
-// ^[a-z][a-z0-9-]{0,14}$, after the prefix.
+// validDirectSubnet is the direct name rule, ^[a-z][a-z0-9-]{0,14}$, after
+// the prefix.
 func validDirectSubnet(s string) bool {
 	name, ok := strings.CutPrefix(s, directSubnetPrefix)
 	if !ok || len(name) < 1 || len(name) > 15 {

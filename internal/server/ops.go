@@ -125,8 +125,8 @@ func (c *codeRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 }
 
 // opsHandler serves the liveness, readiness, and metrics endpoints. It runs
-// on its own listener so no path collides with a bucket name on the object
-// surface or with console routes.
+// on its own listener so no path collides with an S3 path or with console
+// routes.
 func opsHandler(m *Metrics, ready *atomic.Bool, check func(context.Context) error) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {

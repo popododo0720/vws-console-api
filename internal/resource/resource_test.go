@@ -28,12 +28,6 @@ func TestParseRejectsRawShapes(t *testing.T) {
 	if _, err := Parse[InstanceID]("i-0123456789ABCDEF0"); err == nil {
 		t.Fatal("uppercase hex must fail")
 	}
-	if _, err := Parse[BucketName]("OK"); err == nil {
-		t.Fatal("uppercase bucket must fail")
-	}
-	if _, err := Parse[BucketName]("logs"); err != nil {
-		t.Fatal(err)
-	}
 	if _, err := Parse[AccountID]("123456789012"); err != nil {
 		t.Fatal(err)
 	}
@@ -45,110 +39,6 @@ func TestParseRejectsRawShapes(t *testing.T) {
 	}
 	if _, err := Parse[Region]("us-east-1"); err == nil {
 		t.Fatal("only vws-1 is a region")
-	}
-}
-
-// TestBucketNameFollowsAWSNamingRules pins the general purpose bucket rules:
-// dotted names and reserved words in the middle are valid, but a name may not
-// start or end with a period, contain two adjacent periods, match an IP
-// address, start with a reserved prefix or end with a reserved suffix,
-// including -an, which AWS allows only in an account-regional namespace.
-// https://docs.aws.amazon.com/AmazonS3/latest/userguide/bucketnamingrules.html
-func TestBucketNameFollowsAWSNamingRules(t *testing.T) {
-	valid := []string{
-		"logs",
-		"build-logs",
-		"a.b",
-		"example.com",
-		"www.example.com",
-		"my.example.s3.bucket",
-		"a-b.c-d",
-		"my-xn--bucket",
-		"my-s3alias-bucket",
-		"my-an-bucket",
-		"192.168.0.1.example",
-		strings.Repeat("a", 61) + ".b",
-	}
-	for _, name := range valid {
-		if _, err := Parse[BucketName](name); err != nil {
-			t.Errorf("%q must be valid: %v", name, err)
-		}
-	}
-	invalid := []string{
-		"ab",
-		strings.Repeat("a", 64),
-		"Edge-Bucket",
-		".example.com",
-		"example.com.",
-		"example..com",
-		"192.168.5.4",
-		"999.999.999.999",
-		"example_com",
-		"-example.com",
-		"example.com-",
-		"xn--bucket",
-		"sthree-bucket",
-		"amzn-s3-demo-bucket",
-		"bucket-s3alias",
-		"bucket--ol-s3",
-		"bucket.mrap",
-		"bucket--x-s3",
-		"bucket--table-s3",
-		"edge-bucket-an",
-	}
-	for _, name := range invalid {
-		if _, err := Parse[BucketName](name); err == nil {
-			t.Errorf("%q must be invalid", name)
-		}
-	}
-}
-
-// TestParseStoredBucketNameAcceptsBackendNames pins the read side: a bucket
-// the backend already holds is read even when its name matches a create-time
-// reserved prefix or suffix, or is shorter than the create minimum (#511).
-func TestParseStoredBucketNameAcceptsBackendNames(t *testing.T) {
-	for _, name := range []string{
-		"a",
-		"ab",
-		"edge-bucket-an",
-		"xn--bucket",
-		"sthree-bucket",
-		"amzn-s3-demo-bucket",
-		"bucket-s3alias",
-		"bucket--ol-s3",
-		"bucket.mrap",
-		"bucket--x-s3",
-		"bucket--table-s3",
-	} {
-		stored, err := ParseStoredBucketName(name)
-		if err != nil {
-			t.Errorf("%q must be readable: %v", name, err)
-			continue
-		}
-		if stored.String() != name {
-			t.Errorf("stored %q, want %q", stored.String(), name)
-		}
-	}
-	for _, name := range []string{
-		"",
-		strings.Repeat("a", 64),
-		"Edge-Bucket",
-		".example.com",
-		"example.com.",
-		"example..com",
-		"192.168.5.4",
-		"example_com",
-		"-example.com",
-		"example.com-",
-	} {
-		if _, err := ParseStoredBucketName(name); err == nil {
-			t.Errorf("%q must be malformed", name)
-		}
-	}
-	for _, name := range []string{"edge-bucket-an", "xn--bucket", "ab"} {
-		if _, err := Parse[BucketName](name); err == nil {
-			t.Errorf("create must still refuse %q", name)
-		}
 	}
 }
 
@@ -175,9 +65,6 @@ func TestMintUsesEntropy(t *testing.T) {
 	}
 	if !strings.HasPrefix(id.String(), "i-") || len(id.String()) != 2+17 {
 		t.Fatalf("minted %s", id)
-	}
-	if _, err := Mint[BucketName](entropy); err == nil {
-		t.Fatal("bucket names are not minted")
 	}
 }
 
@@ -448,25 +335,12 @@ func TestZeroVpcIDOmitsFromSubnetJSON(t *testing.T) {
 	}
 }
 
-func TestObjectCapMatchesStorageProto(t *testing.T) {
-	if MaxObjectBytes != 4194304 {
-		t.Fatalf("MaxObjectBytes = %d, storage proto caps payloads at 4194304", MaxObjectBytes)
-	}
-	bucket, err := Parse[BucketName]("bkt")
-	if err != nil {
-		t.Fatal(err)
-	}
-	key, err := Parse[ObjectKey]("k")
-	if err != nil {
-		t.Fatal(err)
-	}
-	req := PutObjectRequest{Bucket: bucket, Key: key, Size: MaxObjectBytes}
-	if _, err := req.Normalize(); err != nil {
-		t.Fatalf("at cap: %v", err)
-	}
-	req.Size = MaxObjectBytes + 1
-	if _, err := req.Normalize(); CodeOf(err) != CodePayloadTooLarge {
-		t.Fatalf("over cap: %v", err)
+// No reference names a bucket or an object: VWS hosts neither.
+func TestBucketAndObjectRefsAreRefused(t *testing.T) {
+	for _, kind := range []Kind{KindBucket, KindObject} {
+		if _, err := ParseRef(kind.String(), "logs"); CodeOf(err) != CodeInvalidArgument {
+			t.Errorf("%v reference: %v", kind, err)
+		}
 	}
 }
 

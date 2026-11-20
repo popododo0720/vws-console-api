@@ -11,8 +11,8 @@ import (
 )
 
 // A credential is read from, in order: the deprecated command-line flag, the
-// file named by <ENV>_FILE (mount it from a Secret), then the <ENV> variable
-// (secretKeyRef). A flag puts the value in the process arguments, where ps and
+// file named by <ENV>_FILE (a root-owned file or systemd credential), then
+// the <ENV> variable. A flag puts the value in the process arguments, where ps and
 // /proc/<pid>/cmdline show it, so it is kept only for compatibility and logs a
 // deprecation warning that names the flag, never the value. Setting both
 // <ENV>_FILE and <ENV> is an error, as is an empty or unreadable file. With

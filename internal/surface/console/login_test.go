@@ -183,8 +183,8 @@ func TestSessionIsAuthorizedPerRequest(t *testing.T) {
 		!strings.Contains(rec.Body.String(), `"principal":"arn:aws:iam::123456789012:user/bob"`) {
 		t.Errorf("session: %d %s", rec.Code, rec.Body)
 	}
-	if rec := e.do(t, http.MethodGet, "/api/v1/buckets/b1", "", nil, session); rec.Code != http.StatusForbidden {
-		t.Errorf("s3:ListBucket is not granted: %d %s", rec.Code, rec.Body)
+	if rec := e.do(t, http.MethodGet, "/api/v1/projects", "", nil, session); rec.Code != http.StatusForbidden {
+		t.Errorf("vws:ListProjects is not granted: %d %s", rec.Code, rec.Body)
 	}
 	mutate := map[string]string{"Idempotency-Key": "vpc-login-1", CSRFHeader: csrf.Value}
 	if rec := e.do(t, http.MethodPost, "/api/v1/vpcs", `{"cidrBlock":"10.4.0.0/16"}`, mutate, session); rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "PermissionDenied") {

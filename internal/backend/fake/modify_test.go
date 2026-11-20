@@ -9,8 +9,8 @@ import (
 )
 
 // #324 review: two ModifyVolume operations pending at once each land only
-// what their request changed, and the size never shrinks, as vws-storage
-// stores max(stored, target). Pending operations settle in map order, so the
+// what their request changed, and the size never shrinks: the stored size is
+// max(stored, target). Pending operations settle in map order, so the
 // test repeats to cover both orders.
 func TestOverlappingModifiesKeepBothChanges(t *testing.T) {
 	account, err := resource.Parse[resource.AccountID]("123456789012")

@@ -36,7 +36,9 @@ func (s *scopeTransport) Call(_ context.Context, _, _ string, input, _, _ any) e
 	return nil
 }
 
-func TestVerifiedRegionReachesRegionsetOnEC2AndS3(t *testing.T) {
+// The verified EC2 region reaches regionset unchanged. S3 for a Proxmox region
+// is NotImplemented and makes no regional call.
+func TestVerifiedRegionReachesRegionsetOnEC2(t *testing.T) {
 	now := time.Date(2026, 11, 10, 10, 0, 0, 0, time.UTC)
 	account := mustParse[resource.AccountID](t, "123456789012")
 	auth := iam.NewStatic("AKIDEXAMPLE", "secret", account)
@@ -55,10 +57,10 @@ func TestVerifiedRegionReachesRegionsetOnEC2AndS3(t *testing.T) {
 			v := sigv4.NewVerifier(sigv4.Verifier{
 				Service: service, Regions: regions, Auth: iam.Authenticator(auth), Now: func() time.Time { return now },
 			})
-			handler := s3rest.New(s3rest.Config{Service: svc, Verifier: v, Authorizer: auth})
+			handler, want := s3rest.New(s3rest.Config{Verifier: v}), http.StatusNotImplemented
 			path := "/"
 			if service == sigv4.ServiceEC2 {
-				handler = ec2query.New(ec2query.Config{Service: svc, Verifier: v, Authorizer: auth})
+				handler, want = ec2query.New(ec2query.Config{Service: svc, Verifier: v, Authorizer: auth}), http.StatusOK
 				path = "/?Action=DescribeVolumes&Version=" + ec2query.Version
 			}
 			req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, path, nil)
@@ -67,12 +69,12 @@ func TestVerifiedRegionReachesRegionsetOnEC2AndS3(t *testing.T) {
 			}
 			res := httptest.NewRecorder()
 			handler.ServeHTTP(res, req)
-			if res.Code != http.StatusOK {
+			if res.Code != want {
 				t.Fatalf("%s: %d %s", service, res.Code, res.Body)
 			}
 		}
-		if transport.calls != 2 {
-			t.Fatalf("regional calls = %d, want 2", transport.calls)
+		if transport.calls != 1 {
+			t.Fatalf("regional calls = %d, want 1", transport.calls)
 		}
 	}
 }

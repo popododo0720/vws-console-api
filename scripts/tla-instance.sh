@@ -1,11 +1,17 @@
 #!/usr/bin/env bash
 # Checks the proposed lifecycle design and one counterexample per guard.
-# Needs Java 11+; uses the same verified jar as the detach and IAM models.
+# Needs Java 11+ and curl. scripts/tla-iam.sh reads the jar pin from this file.
 # TLA_OUT keeps logs/configs; "model" runs only the real design.
 set -euo pipefail
 
 die() { echo "tla-instance: $*" >&2; exit 1; }
 root=$(cd "$(dirname "$0")/.." && pwd)
+# Our own copy of the upstream tlaplus v1.8.0 prerelease jar (#563): the
+# release tla2tools-v1.8.0-20261103 of this repo, whose notes give the upstream
+# URL, the date fetched and the sha256. Upstream republishes prerelease assets
+# (v1.8.0 was rebuilt on 2026-11-03), so an upstream URL is never pinned. This
+# copy is never replaced; a new version gets a new tag. The tla and tla-iam
+# workflows read TLA_SHA256 from this line as their cache key.
 TLA_VERSION=1.8.0
 TLA_URL=https://github.com/popododo0720/vws-console-api/releases/download/tla2tools-v1.8.0-20261103/tla2tools.jar
 TLA_SHA256=e20447644bfabd29d6bd0fc2c0eb1473fb301c1a0e4dfe1961938ce5a191edbf

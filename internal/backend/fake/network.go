@@ -117,8 +117,8 @@ func (n network) GetOperation(ctx context.Context, s backend.Scope, id resource.
 	return n.w.getOp(s, id, resource.ServiceNetwork)
 }
 
-// directFor is a direct subnet as account reads it: owned by the caller, as
-// vws-network names it in the caller's project, and tagged direct.
+// directFor is a direct subnet as account reads it: owned by the caller and
+// tagged direct.
 func directFor(sub resource.Subnet, account resource.AccountID) resource.Subnet {
 	sub.OwnerID = account
 	sub.Tags = map[string]string{resource.DirectNetworkTagKey: resource.DirectNetworkTagValue}

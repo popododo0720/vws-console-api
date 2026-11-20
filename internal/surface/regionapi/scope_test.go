@@ -25,20 +25,15 @@ func TestScopeCheckPrecedesReadsMutationsAndConsole(t *testing.T) {
 	}{
 		{"Compute", "DescribeInstances", scope},
 		{"Compute", "CreateVolume", backend.Mutation{Scope: scope}},
-		{"Storage", "CreateBucket", scope},
 		{"Console", "OpenConsole", scope},
 	} {
 		var output any
-		req := any(struct{}{})
-		if call.service == "Storage" {
-			req = "test-bucket"
-		}
-		err := client.Call(context.Background(), call.service, call.method, call.input, req, &output)
+		err := client.Call(context.Background(), call.service, call.method, call.input, struct{}{}, &output)
 		if resource.CodeOf(err) != resource.CodePermissionDenied {
 			t.Fatalf("%s.%s bypassed scope check: %v", call.service, call.method, err)
 		}
 	}
-	if checks != 4 {
+	if checks != 3 {
 		t.Fatalf("scope checks: %d", checks)
 	}
 }

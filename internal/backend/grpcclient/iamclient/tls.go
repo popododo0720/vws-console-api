@@ -9,7 +9,7 @@ import (
 )
 
 // TLSFiles names the PEM files that secure the connection to vws-iam. They
-// are usually mounted from a Kubernetes Secret. The zero value means
+// are usually root-owned files or systemd credentials. The zero value means
 // plaintext.
 type TLSFiles struct {
 	// CAFile is the bundle that verifies the vws-iam server certificate.

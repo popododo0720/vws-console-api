@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"io"
 	"reflect"
 	"strings"
 	"testing"
@@ -55,7 +54,7 @@ func TestAuthorizationAuditBoundaries(t *testing.T) {
 func TestEveryKernelMutationAudited(t *testing.T) {
 	seen := map[string]bool{}
 	for _, typ := range []reflect.Type{
-		reflect.TypeFor[backend.Compute](), reflect.TypeFor[backend.Network](), reflect.TypeFor[backend.Storage](),
+		reflect.TypeFor[backend.Compute](), reflect.TypeFor[backend.Network](),
 	} {
 		for i := 0; i < typ.NumMethod(); i++ {
 			name := typ.Method(i).Name
@@ -105,9 +104,6 @@ func TestEveryKernelMutationAudited(t *testing.T) {
 						if kind == resource.RegionKindAWS {
 							destination = "aws"
 						}
-						if typ == reflect.TypeFor[backend.Storage]() {
-							service = "s3"
-						}
 						if fault != nil {
 							result = "error:" + resource.CodeOf(fault).String()
 							if resource.CodeOf(fault) == resource.CodePermissionDenied {
@@ -155,23 +151,12 @@ func TestEveryKernelMutationAudited(t *testing.T) {
 
 func auditArgument(t *testing.T, typ reflect.Type) reflect.Value {
 	t.Helper()
-	switch typ {
-	case reflect.TypeFor[resource.ClientToken]():
+	if typ == reflect.TypeFor[resource.ClientToken]() {
 		return reflect.ValueOf(token(t, auditCanary))
-	case reflect.TypeFor[io.Reader]():
-		return reflect.ValueOf(strings.NewReader(auditCanary))
 	}
 	value := reflect.New(typ)
-	if typ.Kind() != reflect.Struct || typ == reflect.TypeFor[resource.BucketName]() ||
-		typ == reflect.TypeFor[resource.ObjectKey]() {
-		text := `"audit-bucket"`
-		if typ == reflect.TypeFor[resource.ObjectKey]() {
-			text = `"audit-key"`
-		}
-		if err := json.Unmarshal([]byte(text), value.Interface()); err != nil {
-			t.Fatal(err)
-		}
-		return value.Elem()
+	if typ.Kind() != reflect.Struct {
+		t.Fatalf("no audit argument for %s", typ)
 	}
 	data := `{
 		"imageId":"ami-0123456789abcdef0","instanceIds":["i-0123456789abcdef0"],
@@ -183,7 +168,6 @@ func auditArgument(t *testing.T, typ reflect.Type) reflect.Value {
 		"allocationId":"eipalloc-0123456789abcdef0","keyPairId":"key-0123456789abcdef0",
 		"cidrBlock":"10.1.0.0/24","availabilityZone":"vws-1a","size":8,"device":"/dev/sdf",
 		"groupName":"audit-group","keyName":"audit-key","keyType":"ed25519","name":"audit-image",
-		"bucket":"audit-bucket","key":"audit-key",
 		"rules":[{"ipProtocol":"tcp","fromPort":22,"toPort":22,"cidrIp":"10.1.0.0/24"}],
 		"tags":{"canary":"` + auditCanary + `"},"userData":"` + auditCanary + `",
 		"description":"` + auditCanary + `"
@@ -224,8 +208,6 @@ func (a auditTransport) Call(_ context.Context, _, _ string, input, req, dst any
 		reflect.TypeFor[resource.AddressID]():       "eipalloc-0123456789abcdef0",
 		reflect.TypeFor[resource.KeyPairID]():       "key-0123456789abcdef0",
 		reflect.TypeFor[resource.AccountID]():       "123456789012",
-		reflect.TypeFor[resource.BucketName]():      "audit-bucket",
-		reflect.TypeFor[resource.ObjectKey]():       "audit-key",
 	} {
 		for i := 0; i < item.NumField(); i++ {
 			if field := item.Field(i); field.Type() == typ {
@@ -438,30 +420,15 @@ func (auditPanicNetwork) CreateVpc(context.Context, backend.Mutation, resource.C
 	panic(auditCanary)
 }
 
-type auditPanicStorage struct{ backend.Storage }
-
-func (auditPanicStorage) CreateBucket(context.Context, backend.Scope, resource.BucketName) (resource.Bucket, error) {
-	panic(auditCanary)
-}
-
 func TestAuditPanicIsAnErrorAndPropagates(t *testing.T) {
 	var buf bytes.Buffer
 	set := world(t).Set()
-	set.Network, set.Storage = auditPanicNetwork{set.Network}, auditPanicStorage{set.Storage}
+	set.Network = auditPanicNetwork{set.Network}
 	svc := New(Config{Backends: set, Audit: audit.New(&buf)})
-	bucket, err := resource.Parse[resource.BucketName]("audit-bucket")
-	if err != nil {
-		t.Fatal(err)
-	}
 	for _, call := range []func(){
 		func() {
 			if _, err := svc.CreateVpc(t.Context(), caller(t), token(t, "panic"),
 				resource.CreateVpcRequest{Cidr: "10.0.0.0/16"}); err != nil {
-				t.Fatal(err)
-			}
-		},
-		func() {
-			if _, err := svc.CreateBucket(t.Context(), caller(t), bucket); err != nil {
 				t.Fatal(err)
 			}
 		},

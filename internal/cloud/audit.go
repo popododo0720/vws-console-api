@@ -220,13 +220,6 @@ func auditKeyName(name string) string {
 	return r.Name
 }
 
-func auditObjectID(bucket resource.BucketName, key resource.ObjectKey) []string {
-	if bucket.IsZero() || key.IsZero() {
-		return nil
-	}
-	return []string{bucket.String() + "/" + key.String()}
-}
-
 func auditIDs[T fmt.Stringer](ids ...T) []string {
 	out := make([]string, 0, len(ids))
 	for _, id := range ids {

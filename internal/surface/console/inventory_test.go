@@ -29,7 +29,7 @@ func (f inventoryTransport) Call(ctx context.Context, service, method string, s,
 func inventoryRoutes() []string {
 	return []string{
 		"instances", "volumes", "snapshots", "vpcs", "subnets",
-		"security-groups", "addresses", "key-pairs", "images", "buckets",
+		"security-groups", "addresses", "key-pairs", "images",
 	}
 }
 

@@ -7,7 +7,7 @@
 #   tla-iam.sh model     only the real design (docs/formal/iamauth.cfg)
 #
 # Needs java (11 or later) and curl. The tla2tools.jar pin is the one in
-# scripts/tla-detach.sh, read from there so the two never drift. The jar is
+# scripts/tla-instance.sh, read from there so the two never drift. The jar is
 # TLA_TOOLS_JAR, or is downloaded once to TLA_CACHE (default ~/.cache/vws)
 # and checked by sha256. Logs go to TLA_OUT (default a new temporary
 # directory).
@@ -16,11 +16,11 @@ set -euo pipefail
 die() { echo "tla-iam: $*" >&2; exit 1; }
 
 root=$(cd "$(dirname "$0")/.." && pwd)
-pin() { sed -n "s/^$1=//p" "${root}/scripts/tla-detach.sh"; }
+pin() { sed -n "s/^$1=//p" "${root}/scripts/tla-instance.sh"; }
 TLA_VERSION=$(pin TLA_VERSION)
 TLA_URL=$(pin TLA_URL)
 TLA_SHA256=$(pin TLA_SHA256)
-[[ $TLA_SHA256 =~ ^[0-9a-f]{64}$ && -n $TLA_URL ]] || die "no tla2tools pin in scripts/tla-detach.sh"
+[[ $TLA_SHA256 =~ ^[0-9a-f]{64}$ && -n $TLA_URL ]] || die "no tla2tools pin in scripts/tla-instance.sh"
 
 spec_dir=${root}/docs/formal
 cfg=${spec_dir}/iamauth.cfg

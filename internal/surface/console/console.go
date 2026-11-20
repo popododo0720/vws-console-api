@@ -5,7 +5,6 @@ package console
 import (
 	"context"
 	"encoding/json"
-	"io"
 	"log/slog"
 	"net/http"
 	"net/netip"
@@ -196,13 +195,6 @@ func (h *handler) routes(mux *http.ServeMux) {
 	handle("GET /api/v1/security-groups", h.listSecurityGroups)
 	handle("GET /api/v1/addresses", h.listAddresses)
 	handle("GET /api/v1/snapshots", h.listSnapshots)
-	handle("GET /api/v1/buckets", h.listBuckets)
-	handle("PUT /api/v1/buckets/{name}", h.createBucket)
-	handle("GET /api/v1/buckets/{name}", h.getBucket)
-	handle("DELETE /api/v1/buckets/{name}", h.deleteBucket)
-	handle(routePutObject, h.putObject)
-	handle("GET /api/v1/buckets/{name}/objects/{key...}", h.getObject)
-	handle("DELETE /api/v1/buckets/{name}/objects/{key...}", h.deleteObject)
 }
 
 type handler struct {
@@ -453,145 +445,6 @@ func (h *handler) getSubnet(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, page.Items[0])
 }
 
-func (h *handler) listBuckets(w http.ResponseWriter, r *http.Request) {
-	c, ok := h.caller(w, r)
-	if !ok {
-		return
-	}
-	page, err := pageRequest(r)
-	if err != nil {
-		writeErr(w, r, err)
-		return
-	}
-	out, err := h.svc.ListBuckets(r.Context(), c, resource.BucketQuery{Page: page})
-	if err != nil {
-		writeErr(w, r, err)
-		return
-	}
-	writeInventory(w, out)
-}
-
-func (h *handler) createBucket(w http.ResponseWriter, r *http.Request) {
-	c, ok := h.caller(w, r)
-	if !ok {
-		return
-	}
-	name, err := resource.Parse[resource.BucketName](r.PathValue("name"))
-	if err != nil {
-		writeErr(w, r, err)
-		return
-	}
-	b, err := h.svc.CreateBucket(r.Context(), c, name)
-	if err != nil {
-		writeErr(w, r, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, b)
-}
-
-func (h *handler) getBucket(w http.ResponseWriter, r *http.Request) {
-	c, ok := h.caller(w, r)
-	if !ok {
-		return
-	}
-	name, err := resource.ParseStoredBucketName(r.PathValue("name"))
-	if err != nil {
-		writeErr(w, r, err)
-		return
-	}
-	b, err := h.svc.GetBucket(r.Context(), c, name)
-	if err != nil {
-		writeErr(w, r, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, b)
-}
-
-func (h *handler) deleteBucket(w http.ResponseWriter, r *http.Request) {
-	c, ok := h.caller(w, r)
-	if !ok {
-		return
-	}
-	name, err := resource.Parse[resource.BucketName](r.PathValue("name"))
-	if err != nil {
-		writeErr(w, r, err)
-		return
-	}
-	if err := h.svc.DeleteBucket(r.Context(), c, name); err != nil {
-		writeErr(w, r, err)
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
-}
-
-func (h *handler) putObject(w http.ResponseWriter, r *http.Request) {
-	c, ok := h.caller(w, r)
-	if !ok {
-		return
-	}
-	req, err := objectRef(r)
-	if err != nil {
-		writeErr(w, r, err)
-		return
-	}
-	req.ContentType = r.Header.Get("Content-Type")
-	req.Size = r.ContentLength
-	obj, err := h.svc.PutObject(r.Context(), c, req, r.Body)
-	if err != nil {
-		writeErr(w, r, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, obj)
-}
-
-func (h *handler) getObject(w http.ResponseWriter, r *http.Request) {
-	c, ok := h.caller(w, r)
-	if !ok {
-		return
-	}
-	ref, err := objectRef(r)
-	if err != nil {
-		writeErr(w, r, err)
-		return
-	}
-	meta, rc, err := h.svc.GetObject(r.Context(), c, resource.GetObjectRequest{Bucket: ref.Bucket, Key: ref.Key})
-	if err != nil {
-		writeErr(w, r, err)
-		return
-	}
-	defer server.Close(w, rc)
-	buf, err := io.ReadAll(io.LimitReader(rc, resource.MaxObjectBytes+1))
-	if err != nil {
-		writeErr(w, r, resource.Internal(err))
-		return
-	}
-	if len(buf) > resource.MaxObjectBytes {
-		writeErr(w, r, resource.TooLarge("object exceeds 4 MiB"))
-		return
-	}
-	writeJSON(w, http.StatusOK, struct {
-		resource.Object
-		Body []byte `json:"body"`
-	}{Object: meta, Body: buf})
-}
-
-func (h *handler) deleteObject(w http.ResponseWriter, r *http.Request) {
-	c, ok := h.caller(w, r)
-	if !ok {
-		return
-	}
-	ref, err := objectRef(r)
-	if err != nil {
-		writeErr(w, r, err)
-		return
-	}
-	if err := h.svc.DeleteObject(r.Context(), c, ref.Bucket, ref.Key); err != nil {
-		writeErr(w, r, err)
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
-}
-
 func (h *handler) begin(w http.ResponseWriter, r *http.Request) (resource.Caller, resource.ClientToken, bool) {
 	c, ok := h.caller(w, r)
 	if !ok {
@@ -650,18 +503,6 @@ func pageRequest(r *http.Request) (resource.PageRequest, error) {
 	}
 	p.Token = r.URL.Query().Get("pageToken")
 	return p, nil
-}
-
-func objectRef(r *http.Request) (resource.PutObjectRequest, error) {
-	bucket, err := resource.Parse[resource.BucketName](r.PathValue("name"))
-	if err != nil {
-		return resource.PutObjectRequest{}, err
-	}
-	key, err := resource.Parse[resource.ObjectKey](r.PathValue("key"))
-	if err != nil {
-		return resource.PutObjectRequest{}, err
-	}
-	return resource.PutObjectRequest{Bucket: bucket, Key: key, Size: -1}, nil
 }
 
 func writeAccepted[T any](w http.ResponseWriter, acc resource.Accepted[T]) {

@@ -58,14 +58,6 @@ func TestDetachReplayContract(t *testing.T) {
 	})
 }
 
-// TestBucketCreateContract runs the #315 CreateBucket table on the fake.
-func TestBucketCreateContract(t *testing.T) {
-	now := time.Unix(1_700_000_000, 0).UTC()
-	backendtest.BucketCreate(t, func() backend.Set {
-		return New(Options{Now: func() time.Time { return now }, Entropy: &Sequence{}}).Set()
-	})
-}
-
 // TestDetachWindowContract runs the #303 DetachVolume record window table on
 // the fake.
 func TestDetachWindowContract(t *testing.T) {

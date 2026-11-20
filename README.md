@@ -1,14 +1,14 @@
 # vws-console-api
 
 Web backend for VWS. One process serves the Next.js console, an EC2 Query
-entry point, and a path-style object entry point. It does not store resources:
+entry point, and an S3 entry point that forwards AWS-region requests to AWS.
+It does not store resources or objects:
 Proxmox VE and AWS are the source of truth (`docs/hybrid.md`). A restart of
 this process drops nothing, because the idempotency record and the operation
 live with the resource.
 
 Long-running work returns an operation. The console polls it. Query clients
-poll the resource state, which is the same lifecycle. Bucket and object calls
-finish before the response.
+poll the resource state, which is the same lifecycle.
 
 The console JSON is the resource model. `instanceId`, `pending`, and `running`
 are the same strings on the query surface.
@@ -52,13 +52,13 @@ go run ./cmd/vws-console-api -backend=fake \
 `docs/proxmox-safety.md` the token and test safety rules.
 `docs/region-layer.md` describes region layer operations.
 `docs/terraform.md` has the Terraform provider blocks, aws-cli examples and
-the pve action table for using pve and AWS regions through one endpoint. The retired
-Kubernetes backend and its service-address and launch-store flags are removed.
+the pve action table for using pve and AWS regions through one endpoint.
+The retired hosted backend and its service-address and launch-store flags are removed.
 `-iam=grpc` continues to connect to vws-iam independently of the backend.
 
 ### Credentials
 
-| Credential | Environment | File (Secret mount) | Deprecated flag |
+| Credential | Environment | File | Deprecated flag |
 | --- | --- | --- | --- |
 | console bearer token | `VWS_CONSOLE_TOKEN` | `VWS_CONSOLE_TOKEN_FILE` | `-console-token` |
 | root access key id | `VWS_ACCESS_KEY` | `VWS_ACCESS_KEY_FILE` | `-access-key` |
@@ -79,7 +79,7 @@ The fake backend is in-memory and is gone when the process exits.
 shutdown starts), and `GET /metrics` in the Prometheus text format. Every
 series is prefixed `vws_console_api_`: `http_requests_total{surface,code}` and
 `http_request_duration_seconds_sum`/`_count{surface}`. These live on their own
-listener so no path collides with a bucket name or a console route.
+listener so no path collides with an S3 path or a console route.
 
 ### Observability
 
@@ -112,7 +112,7 @@ covers them still verifies.
 | `VWS_LOG_FORMAT` | `json` or `text` | `json` |
 | `VWS_HEALTH_ADDR` | Serves `GET /healthz` and `GET /readyz` | empty, off |
 
-`VWS_HEALTH_ADDR` is separate from `-ops-addr`; the chart sets it. Its
+`VWS_HEALTH_ADDR` is separate from `-ops-addr`; the vws-deploy packaging sets it. Its
 `/healthz` checks no dependency, and `/readyz` fails after SIGTERM. Neither
 probe checks the telemetry backend. The metrics `vws.http.server.*`,
 `vws.aws.errors{action,aws_code}`, and `vws.rpc.client.duration` go to the
@@ -236,12 +236,12 @@ names nobody and there is nothing to sign in to; a bad bearer token is still
 With sign-in on: `POST /api/v1/auth/login` with
 `{"account","userName","password"}` (an IAM user's `CreateLoginProfile`
 password, or `root` with its vws-iam password in grpc mode; fake mode uses
-`-root-password-file`, mounted from a Secret). Fake sessions remain in memory
+`-root-password-file`). Fake sessions remain in memory
 and are lost on restart. It sets an HttpOnly, Secure, SameSite=Strict `__Host-vws_session` cookie
 (12 hours) and a `vws_csrf` cookie; every request other than GET/HEAD on a
 session must echo `vws_csrf` in `X-CSRF-Token`. Each console route is
 authorized as the matching IAM action (`ec2:DescribeVpcs`, `ec2:CreateVpc`,
-`s3:GetObject`, `vws:GetOperation`, ...), so a session only does what the
+`vws:GetOperation`, ...), so a session only does what the
 user's policies allow. Every failure is the same `401`. Abuse limits: five
 wrong passwords in a row from one address lock that user from that address
 only (1 minute, doubling per further failure up to 1 hour, logged as
@@ -260,11 +260,7 @@ replica, and front the vws-iam lockout without copying it; argon2id hashing runs
 slots and a sign-in that cannot get one within 200 ms is `503` with
 `Retry-After`. Sign-in and every state-changing cookie request must be
 `Content-Type: application/json` (else `415`) and carry an `Origin` that is
-the console's own host or one listed in `-console-origins` (else `403`). The
-one exception to the JSON rule is an object upload
-(`PUT /api/v1/buckets/{name}/objects/{key}`), whose `Content-Type` is the
-object's and is stored and returned as S3 does; it still needs the `Origin`
-and `X-CSRF-Token` (else `403`). `GET /api/v1/auth/session` names
+the console's own host or one listed in `-console-origins` (else `403`). `GET /api/v1/auth/session` names
 the caller; `POST /api/v1/auth/logout` ends the session. The bearer
 `-console-token` still acts as the account root until it is retired.
 
@@ -285,8 +281,8 @@ the client and never used, so a forged leftmost entry changes nothing, and a
 request that reaches the console directly from an untrusted address cannot
 set its own client address at all. If every entry is trusted, the leftmost
 is used (an internal client); if the header is missing or an entry walked is
-not an IP, the TCP peer is used. List only your proxy hops (e.g. the ingress
-controller pods' range), make the proxy append to `X-Forwarded-For`, and do
+not an IP, the TCP peer is used. List only your proxy hops (e.g. the
+reverse proxy's address), make the proxy append to `X-Forwarded-For`, and do
 not expose the console port past the proxy. A bad CIDR (or one with host
 bits set) stops startup. `Origin` checks compare against the `Host` header
 and `-console-origins`, not the client address, so they are unaffected.
@@ -308,8 +304,7 @@ Console sign-in limits for now:
 
 The subnet must already exist and belong to the caller. The response is `202`
 with an `operation` and the instances. Poll `GET /api/v1/operations/{id}`.
-`GET /api/v1/buckets/{name}/objects/{key}` returns the object metadata and the
-body. Repeating the same idempotency key and the same body returns the same
+Repeating the same idempotency key and the same body returns the same
 operation and the same ids. A different body with the same key is rejected.
 
 Query, signed with service `ec2`, region `vws-1`, version `2016-11-15`:
@@ -320,14 +315,14 @@ Action=RunInstances&Version=2016-11-15&ImageId=ami-0123456789abcdef0&InstanceTyp
 
 `ClientToken` is required. `MinCount` and `MaxCount` must be equal. A parameter
 this entry point does not apply is rejected. The same client token returns the
-same instances. Object calls use path-style URLs on the object listener:
-`PUT /build-logs`, `PUT /build-logs/a.txt`, `GET /build-logs/a.txt`.
-Subresources such as `?tagging` and `X-Amz-Copy-Source` are refused, so they
-cannot replace an object.
+same instances.
+
+The S3 listener stores nothing. In regions mode a request signed for a
+registered AWS region is verified, authorized and forwarded to AWS
+(`docs/aws-proxy.md`). A request signed for any other region is verified and
+then answered `NotImplemented` (501) in the S3 error shape.
 
 Header signatures are checked. Presigned query strings are refused.
-This skeleton accepts object bodies up to 4 MiB. A larger body is not a quota
-error.
 
 ## Error status by listener
 
@@ -340,13 +335,12 @@ The AWS protocol listeners use the status on the AWS page for that API.
 | Listener | Missing resource | Status | AWS page |
 | --- | --- | --- | --- |
 | EC2 Query | `InvalidAMIID.NotFound` and the other `*.NotFound` codes | 400 | [EC2 error codes](https://docs.aws.amazon.com/AWSEC2/latest/APIReference/errors-overview.html) |
-| S3 | `NoSuchBucket`, `NoSuchKey` | 404 | [S3 error responses](https://docs.aws.amazon.com/AmazonS3/latest/developerguide/ErrorResponses.html) |
 | IAM | `NoSuchEntity` | 404 | [DeleteUser errors](https://docs.aws.amazon.com/IAM/latest/APIReference/API_DeleteUser.html) |
 
 EC2 client errors, including `InvalidAction`, are a 400-series response.
 EC2 server errors, including `RequestLimitExceeded`, are a 500-series
-response, and this listener answers `RequestLimitExceeded` as 503. S3
-`EntityTooLarge` is 400. Each listener's error test pins the full table.
+response, and this listener answers `RequestLimitExceeded` as 503. Each
+listener's error test pins the full table.
 
 ## Resource API module
 

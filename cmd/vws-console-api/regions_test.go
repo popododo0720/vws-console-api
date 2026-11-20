@@ -220,11 +220,14 @@ func TestRegionsProcessInventoryAndRestart(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		for _, service := range []sigv4.Service{sigv4.ServiceEC2, sigv4.ServiceS3} {
-			signed(service, "pve-test-1", http.StatusOK)
-		}
+		signed(sigv4.ServiceEC2, "pve-test-1", http.StatusOK)
 		if pveCalls.Load() <= before {
 			t.Fatal("verified scope did not reach registered region")
+		}
+		before = pveCalls.Load()
+		signed(sigv4.ServiceS3, "pve-test-1", http.StatusNotImplemented)
+		if pveCalls.Load() != before {
+			t.Fatal("S3 for a Proxmox region reached the backend")
 		}
 		signed(sigv4.ServiceEC2, "us-east-1", http.StatusOK)
 		call := func(path, name string, want int) string {
@@ -319,7 +322,7 @@ func TestRegionsProcessInventoryAndRestart(t *testing.T) {
 			if body := call("/api/v1/regions", "", 200); !strings.Contains(body, `"state":"unavailable"`) {
 				t.Fatalf("offline region disappeared: %s", body)
 			}
-			call("/api/v1/buckets/probe-bucket", "pve-test-1", 503)
+			call("/api/v1/volumes/vol-0123456789abcdef0", "pve-test-1", 503)
 			call("/api/v1/instances", "us-east-1", 503)
 		}
 		http.DefaultClient.CloseIdleConnections()

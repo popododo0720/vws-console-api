@@ -43,9 +43,6 @@ const (
 	routeLogin   = "POST /api/v1/auth/login"
 	routeLogout  = "POST /api/v1/auth/logout"
 	routeSession = "GET /api/v1/auth/session"
-	// routePutObject is the one cookie write whose body is not JSON: the
-	// request Content-Type is the object's, as in S3 PutObject (#224).
-	routePutObject = "PUT /api/v1/buckets/{name}/objects/{key...}"
 )
 
 // csrfToken derives the CSRF token from the session token. It needs no

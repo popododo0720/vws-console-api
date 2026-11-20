@@ -853,7 +853,7 @@ func (h *handler) describeVolumesModifications(w http.ResponseWriter, r *http.Re
 			return
 		}
 	}
-	// VWS has no modification history to return; vws-storage#157 tracks it.
+	// VWS keeps no modification history to return.
 	writeXML(w, describeVolumesModificationsXML{
 		VolumesModifications: volumeModificationSetXML{Items: []volumeModificationItem{}},
 		RequestID:            requestID(r),

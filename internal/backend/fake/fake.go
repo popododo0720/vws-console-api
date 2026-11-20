@@ -19,26 +19,23 @@ import (
 
 // Options configures a world. Zero values use the wall clock, no settle
 // delay, and crypto/rand. Images seeds the compute image store; the catalog
-// image is always present. Buckets seeds storage with records another path
-// wrote, including names the current create rule refuses (#511). Direct are
-// the direct networks every account sees.
+// image is always present. Direct are the direct networks every account sees.
 type Options struct {
 	Now     func() time.Time
 	Latency time.Duration
 	Entropy io.Reader
 	Images  []resource.Image
-	Buckets []resource.Bucket
 	Direct  []DirectNetwork
 }
 
-// DirectNetwork is a provider network shared with every account, as
-// vws-network serves it: a direct subnet id and its CIDR.
+// DirectNetwork is a provider network shared with every account: a direct
+// subnet id and its CIDR.
 type DirectNetwork struct {
 	ID   resource.SubnetID
 	Cidr string
 }
 
-// World is one account-aware simulation of compute, storage, and network.
+// World is one account-aware simulation of compute and network.
 type World struct {
 	now     func() time.Time
 	latency time.Duration
@@ -59,8 +56,6 @@ type World struct {
 	addr   map[resource.AddressID]*resource.Address
 	snap   map[resource.SnapshotID]*resource.Snapshot
 	img    map[resource.ImageID]*resource.Image
-	buck   map[resource.BucketName]*resource.Bucket
-	obj    map[string]*storedObject
 	seqIP  uint32
 	// detached is when each volume was last detached from each instance
 	// with a client token, for the DetachVolume record budget (#303).
@@ -79,12 +74,7 @@ type opRecord struct {
 	apply   func(now time.Time)
 }
 
-type storedObject struct {
-	meta resource.Object
-	body []byte
-}
-
-// New builds a world and the three service views over it.
+// New builds a world and the service views over it.
 func New(opt Options) *World {
 	if opt.Now == nil {
 		opt.Now = time.Now
@@ -108,14 +98,9 @@ func New(opt Options) *World {
 		addr:     map[resource.AddressID]*resource.Address{},
 		snap:     map[resource.SnapshotID]*resource.Snapshot{},
 		img:      map[resource.ImageID]*resource.Image{},
-		buck:     map[resource.BucketName]*resource.Bucket{},
-		obj:      map[string]*storedObject{},
 	}
 	for _, img := range opt.Images {
 		world.img[img.ID] = &img
-	}
-	for _, bucket := range opt.Buckets {
-		world.buck[bucket.Name] = &bucket
 	}
 	for _, d := range opt.Direct {
 		world.direct = append(world.direct, resource.Subnet{
@@ -126,9 +111,9 @@ func New(opt Options) *World {
 	return world
 }
 
-// Set returns the three clients.
+// Set returns the clients.
 func (w *World) Set() backend.Set {
-	return backend.Set{Compute: compute{w}, Storage: storage{w}, Network: network{w}, Console: console{w}}
+	return backend.Set{Compute: compute{w}, Network: network{w}, Console: console{w}}
 }
 
 func (w *World) settle(now time.Time) {

@@ -1,4 +1,4 @@
-# Checks the Proxmox lifecycle and archived gRPC detach design.
+# Checks the Proxmox lifecycle design.
 # See docs/formal/README.md for the model boundaries.
 name: tla
 
@@ -6,22 +6,18 @@ on:
   pull_request:
     paths:
       - docs/formal/**
-      - scripts/tla-detach.sh
       - scripts/tla-instance.sh
       - scripts/tla-instance_test.sh
       - internal/backend/proxmox/lifecycle*.go
       - .github/workflows/tla.yml
-      - internal/backend/backend.go
   push:
     branches: [main]
     paths:
       - docs/formal/**
-      - scripts/tla-detach.sh
       - scripts/tla-instance.sh
       - scripts/tla-instance_test.sh
       - internal/backend/proxmox/lifecycle*.go
       - .github/workflows/tla.yml
-      - internal/backend/backend.go
 
 permissions:
   contents: read
@@ -44,7 +40,7 @@ jobs:
         with:
           go-version-file: go.mod
       - id: pin
-        run: grep -E '^TLA_SHA256=[0-9a-f]{64}$' scripts/tla-detach.sh >>"$GITHUB_OUTPUT"
+        run: grep -E '^TLA_SHA256=[0-9a-f]{64}$' scripts/tla-instance.sh >>"$GITHUB_OUTPUT"
       - uses: actions/cache@v4
         with:
           path: ~/.cache/vws
@@ -55,22 +51,3 @@ jobs:
         run: scripts/tla-instance.sh
       - name: Go lifecycle table agrees with the model
         run: go test ./internal/backend/proxmox -run TestInstanceTransition -count=1
-  detach:
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: "21"
-      # The cache key is the pinned hash read from the script, so a jar cached
-      # under another pin is never restored (#563).
-      - id: pin
-        run: grep -E '^TLA_SHA256=[0-9a-f]{64}$' scripts/tla-detach.sh >>"$GITHUB_OUTPUT"
-      - uses: actions/cache@v4
-        with:
-          path: ~/.cache/vws
-          key: tla2tools-${{ steps.pin.outputs.TLA_SHA256 }}
-      - name: TLC passes the archived design and rejects its seeded bugs
-        run: scripts/tla-detach.sh

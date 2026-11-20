@@ -6,11 +6,15 @@ tmp=$(mktemp -d "${TMPDIR:-$root}/tla-instance-test.XXXXXX")
 trap 'rm -rf "$tmp"' EXIT
 fails=0
 
+# tla-instance.sh holds the one jar pin; tla-iam.sh reads it from there.
 for key in TLA_VERSION TLA_URL TLA_SHA256; do
-  pin=$(sed -n "s/^${key}=//p" "$root/scripts/tla-detach.sh")
-  [[ -n $pin && $(sed -n "s/^${key}=//p" "$root/scripts/tla-instance.sh") == "$pin" ]] ||
-    { echo "FAIL: ${key} differs from the detach runner"; exit 1; }
+  [[ $(grep -c "^${key}=..*" "$root/scripts/tla-instance.sh") -eq 1 ]] ||
+    { echo "FAIL: tla-instance.sh must define ${key} exactly once"; exit 1; }
+  grep -Fxq "${key}=\$(pin ${key})" "$root/scripts/tla-iam.sh" ||
+    { echo "FAIL: tla-iam.sh does not read ${key} from the pin"; exit 1; }
 done
+grep -Fxq 'pin() { sed -n "s/^$1=//p" "${root}/scripts/tla-instance.sh"; }' "$root/scripts/tla-iam.sh" ||
+  { echo "FAIL: tla-iam.sh does not read the pin from tla-instance.sh"; exit 1; }
 mkdir -p "$tmp/scripts" "$tmp/docs/formal"
 cp "$root/scripts/tla-instance.sh" "$tmp/scripts/"
 cp "$root/docs/formal/instance."{tla,cfg} "$tmp/docs/formal/"
