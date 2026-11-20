@@ -24,8 +24,13 @@ func (c *Client) Console(
 	if vm.VMID < 100 || vm.VMID > 999999999 {
 		return nil, errors.New("pve console: invalid VM ID")
 	}
-	transport, ok := c.http.Transport.(*http.Transport)
-	if c.http.Transport == nil {
+	roundTripper := c.http.Transport
+	endpoints, failover := roundTripper.(*Endpoints)
+	if failover {
+		roundTripper = endpoints.Transport()
+	}
+	transport, ok := roundTripper.(*http.Transport)
+	if roundTripper == nil {
 		transport, ok = http.DefaultTransport.(*http.Transport)
 	}
 	if !ok {
@@ -51,6 +56,11 @@ func (c *Client) Console(
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, errors.New("pve console: proxy unavailable")
+	}
+	if failover && resp.Request != nil {
+		// The ticket is valid on the node that issued it; the websocket must
+		// reach the same address, not the current one.
+		u.Host = resp.Request.URL.Host
 	}
 	var answer struct {
 		Data struct {

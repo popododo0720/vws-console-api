@@ -8,6 +8,38 @@ page is wrong.
 This layer runs only inside the `vws-region` daemon. console-api reaches it
 through `-backend regions`; it cannot load this code in its own process.
 
+## Endpoint failover
+
+Code: `internal/backend/proxmox/pveclient/endpoints.go`.
+
+- The registration lists 1 to 16 addresses of one cluster. The daemon keeps
+  that list in order with one current index and sends each request to the
+  current address. A failure rotates the index to the next address, wrapping
+  around. There are no health checks beyond the quorum gate.
+- A GET moves to the next address after any transport error. Any other method
+  moves only when no connection was obtained, that is a dial or TLS handshake
+  failure before the first byte of the request. A write that was sent and then
+  cut off returns an error and is not sent to another address; the task
+  (UPID) and launch-marker reconciliation read PVE to learn the outcome.
+- Every address is checked against the registered `caPem` only, under its own
+  host name. Redirects are not followed, and a token goes only to an address
+  of the registered list.
+- Concurrent failures rotate the index once: only a caller that still sees
+  the failed address as current moves it.
+- A console websocket goes to the address that issued its ticket.
+- Each connect and TLS handshake is capped at 3 s so a dead address does not
+  use the call's 10 s budget.
+
+Tests: `TestEndpointsRetryOnlyWhatNeverReachedTheServer`,
+`TestEndpointsNeverResendASentWrite`,
+`TestEndpointsReadAfterCutGoesToTheNextAddress`,
+`TestEndpointsUseTheRegisteredAddressesOnly`,
+`TestEndpointsDeadAddressWithConcurrentCalls`,
+`TestEndpointsAllAddressesDownIsAnError`, `TestNewEndpointsRefusesNonOrigins`,
+`TestFailoverSkipsAFirstAddressThatIsDown`,
+`TestFailoverNeverResendsAWriteThatWasSent`,
+`TestFailoverKeepsTheConsoleOnTheAddressThatIssuedTheTicket`.
+
 ## Quorum gate
 
 Code: `internal/backend/proxmox/quorum.go`.
@@ -17,6 +49,11 @@ Code: `internal/backend/proxmox/quorum.go`.
 - Quorum is read from `/cluster/status` every 2 s with a 2 s timeout. A
   standalone node (no cluster row) counts as quorate while the local node is
   online.
+- When the current address fails or reports no quorum, the check moves to the
+  next address and probes again, at most once per address, and stops at the
+  first that reports quorum. An address without quorum is therefore left
+  within one check. The gate stays closed when no address has quorum. The
+  freshness time is the start of the last probe.
 - `Admit` makes no PVE call. It returns `Unavailable` ("region has no
   quorum") until the first check, when the last check found no quorum or
   failed, or when the last check is older than 5 s. Otherwise it admits.
@@ -34,7 +71,10 @@ Tests: `TestQuorumGateStartsClosed`, `TestQuorumGateFreshness`,
 `TestMutationRegistrationDerivesQuorumGate`,
 `TestRegionAPINodeGaugeTracksConnectedNode`,
 `TestClusterMetadataFollowsQuorum`, `TestLaunchFinalizerQuorumGate`,
-`TestQuorumGateStopsFinalizeWrites`.
+`TestQuorumGateStopsFinalizeWrites`,
+`TestGateLeavesAnAddressWithoutQuorumWithinFiveSeconds`,
+`TestGateLeavesAnAddressThatIsDown`,
+`TestGateWithNoQuorumAnywhereStaysClosedAndTriesEachAddressOnce`.
 
 ## Unavailable and X-Vws-Stale
 

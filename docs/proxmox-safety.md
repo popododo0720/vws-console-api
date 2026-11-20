@@ -49,6 +49,9 @@ observed in the audit log and never undone.
 - A volume holder VM is never started and is hidden from the instance list.
 - A region daemon that has no quorum check from the last 5 s, or whose last
   check found no quorum, sends no mutation to Proxmox.
+- A write that was sent to a PVE node and then cut off is never sent to
+  another node; only a dial or TLS handshake failure, before any request byte,
+  moves a write to the next address.
 - Every Proxmox call has a timeout and bounded retries.
 - If any start-up self-check fails (token rights, cluster name, region
   configuration, storages and bridges, the state file), `/readyz` fails and the daemon stays not ready.

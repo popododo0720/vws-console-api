@@ -54,11 +54,39 @@ func (g *QuorumGate) stop() {
 	g.stopped, g.quorate = true, false
 }
 
+// check probes /cluster/status. When the current address fails or reports no
+// quorum, it moves to the next address and probes again, at most once per
+// address, and stops at the first one that reports quorum. A minority node
+// is thus left within one check, not parked on. The recorded time is the
+// start of the last probe, so a long walk never extends the freshness of a
+// reading.
 func (g *QuorumGate) check(ctx context.Context) {
-	at := g.now()
-	status, err := g.backend.clusterStatus(ctx)
-	if ctx.Err() != nil {
-		return
+	endpoints := g.backend.endpoints
+	probes := 1
+	if endpoints != nil {
+		probes = endpoints.Len()
+	}
+	var (
+		at     time.Time
+		status resource.RegionStatus
+		err    error
+	)
+	for i := range probes {
+		from := 0
+		if endpoints != nil {
+			from = endpoints.Index()
+		}
+		at = g.now()
+		status, err = g.backend.clusterStatus(ctx)
+		if ctx.Err() != nil {
+			return
+		}
+		if err == nil && status.Quorate || i == probes-1 {
+			break
+		}
+		// Another request may have moved the index already; Advance then does
+		// nothing and the next probe goes where that request went.
+		endpoints.Advance(from)
 	}
 	g.mu.Lock()
 	defer g.mu.Unlock()

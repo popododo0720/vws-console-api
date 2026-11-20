@@ -340,7 +340,7 @@ func TestStandaloneNodeCannotJoinAnAddressList(t *testing.T) {
 	}
 }
 
-func TestOmittedWriteTokensStayWithTheFirstAddress(t *testing.T) {
+func TestOmittedWriteTokensGoOnlyToStoredAddresses(t *testing.T) {
 	var servers []*httptest.Server
 	var fakes []*pvefake.Fake
 	for range 2 {
@@ -387,19 +387,22 @@ func TestOmittedWriteTokensStayWithTheFirstAddress(t *testing.T) {
 	if err := c.Register(t.Context(), body([]string{a.URL, b.URL}, true, true)); err != nil {
 		t.Fatal(err)
 	}
+	// Failover sends every token to every address of the list, so an omitted
+	// write secret is reused for any subset of the stored addresses.
 	for name, urls := range map[string][]string{"reordered": {b.URL, a.URL}, "first dropped": {b.URL}} {
-		before := requests()
-		err := c.Register(t.Context(), body(urls, false, true))
-		e := resource.AsError(err)
-		if err == nil || e.Code != resource.CodeInvalidArgument || e.Field != "firewallToken" {
-			t.Errorf("%s: %v, want 400 on firewallToken", name, err)
-		}
-		if n := requests() - before; n != 0 {
-			t.Errorf("%s: %d requests reached PVE", name, n)
+		if err := c.Register(t.Context(), body(urls, false, true)); err != nil {
+			t.Errorf("%s: %v", name, err)
 		}
 	}
-	// The inventory token alone keeps the subset rule.
-	if err := c.Register(t.Context(), body([]string{b.URL, a.URL}, false, false)); err != nil {
-		t.Fatalf("reordered addresses without write tokens: %v", err)
+	// A new address would receive a secret it never held.
+	c3 := httptest.NewTLSServer(fakes[0])
+	t.Cleanup(c3.Close)
+	before := requests()
+	err = c.Register(t.Context(), body([]string{a.URL, b.URL, c3.URL}, false, true))
+	if e := resource.AsError(err); err == nil || e.Code != resource.CodeInvalidArgument || e.Field != "token" {
+		t.Errorf("new address: %v, want 400 on token", err)
+	}
+	if n := requests() - before; n != 0 {
+		t.Errorf("%d requests reached PVE", n)
 	}
 }
