@@ -16,7 +16,8 @@ until the region is registered again with an explicit `tokenSecret`. The
 daemon reuses a stored secret only when the registration keeps the same
 `caPem` and only addresses it already holds, so a legacy file, a changed CA
 or a new address needs the secret in the request and otherwise gets 400
-before any PVE request.
+before any PVE request. A firewall or backup secret additionally needs the
+same first address, because those tokens were only used there.
 
 Rollout prerequisite, separate from the read migration above: the clients
 that write regions must send `pveApiUrls` before anyone re-saves a region.

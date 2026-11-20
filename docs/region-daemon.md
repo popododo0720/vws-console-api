@@ -32,7 +32,8 @@ or does not answer. For now it uses the first address; trying the others on
 failure is a later step. A state file written before this change has neither
 field and keeps `/readyz` at 503 until the region is registered again with
 its token secret. An omitted secret is reused only for the same CA and
-addresses the file already holds. With two or more addresses every one must
+addresses the file already holds; a firewall or backup secret also needs
+the same first address. With two or more addresses every one must
 report a cluster row with the registered name; a standalone node is accepted
 only as the single address. Region TLS defaults are `/etc/vws/region.crt`,
 `/etc/vws/region.key`, and `/etc/vws/global-ca.pem`; the latter must trust

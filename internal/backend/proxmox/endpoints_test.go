@@ -339,3 +339,67 @@ func TestStandaloneNodeCannotJoinAnAddressList(t *testing.T) {
 		}
 	}
 }
+
+func TestOmittedWriteTokensStayWithTheFirstAddress(t *testing.T) {
+	var servers []*httptest.Server
+	var fakes []*pvefake.Fake
+	for range 2 {
+		f, err := pvefake.New(backupScenario())
+		if err != nil {
+			t.Fatal(err)
+		}
+		srv := httptest.NewTLSServer(f)
+		t.Cleanup(srv.Close)
+		servers, fakes = append(servers, srv), append(fakes, f)
+	}
+	a, b := servers[0], servers[1]
+	requests := func() int { return len(fakes[0].Requests()) + len(fakes[1].Requests()) }
+	dir := privateDir(t)
+	writeFixture(t, filepath.Join(dir, "region.yaml"),
+		[]byte("read_only: false\npools: {project: managed, nested: parent/child}\n"))
+	c, err := Open(filepath.Join(dir, "region.yaml"), "pve-test-1", filepath.Join(dir, "state"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(c.Close)
+	ca := serverCA(a)
+	body := func(urls []string, withSecrets, writeTokens bool) []byte {
+		fields := map[string]any{
+			"region": "pve-test-1", "cluster_name": "test", "pveApiUrls": urls, "caPem": ca,
+			"tokenId": "vws@pve!inventory",
+		}
+		if writeTokens {
+			fields["firewallTokenId"], fields["backupTokenId"] = "vws@pve!firewall", "vws@pve!backup"
+		}
+		if withSecrets {
+			fields["token"], fields["firewallToken"], fields["backupToken"] = "fake-secret", firewallSecret, backupSecret
+			if !writeTokens {
+				delete(fields, "firewallToken")
+				delete(fields, "backupToken")
+			}
+		}
+		data, err := json.Marshal(fields)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return data
+	}
+	if err := c.Register(t.Context(), body([]string{a.URL, b.URL}, true, true)); err != nil {
+		t.Fatal(err)
+	}
+	for name, urls := range map[string][]string{"reordered": {b.URL, a.URL}, "first dropped": {b.URL}} {
+		before := requests()
+		err := c.Register(t.Context(), body(urls, false, true))
+		e := resource.AsError(err)
+		if err == nil || e.Code != resource.CodeInvalidArgument || e.Field != "firewallToken" {
+			t.Errorf("%s: %v, want 400 on firewallToken", name, err)
+		}
+		if n := requests() - before; n != 0 {
+			t.Errorf("%s: %d requests reached PVE", name, n)
+		}
+	}
+	// The inventory token alone keeps the subset rule.
+	if err := c.Register(t.Context(), body([]string{b.URL, a.URL}, false, false)); err != nil {
+		t.Fatalf("reordered addresses without write tokens: %v", err)
+	}
+}

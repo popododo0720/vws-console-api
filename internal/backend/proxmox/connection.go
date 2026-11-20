@@ -256,6 +256,8 @@ func (c *Connection) Register(ctx context.Context, data json.RawMessage) error {
 		}
 		// A stored secret goes only to the destination that already held it.
 		unchanged := sameTrust(stored, s)
+		// Firewall and backup tokens only ever went to the first address.
+		sameFirst := unchanged && endpointKey(stored.PVEAPIURLs[0]) == endpointKey(s.PVEAPIURLs[0])
 		if s.Token == "" {
 			if stored.TokenID != s.TokenID || stored.Token == "" {
 				return resource.Invalid("token", "required for first registration")
@@ -266,8 +268,8 @@ func (c *Connection) Register(ctx context.Context, data json.RawMessage) error {
 			s.Token = stored.Token
 		}
 		if s.FirewallTokenID != "" && s.FirewallToken == "" {
-			if !unchanged {
-				return resource.Invalid("firewallToken", "required when caPem or pveApiUrls change")
+			if !sameFirst {
+				return resource.Invalid("firewallToken", "required when caPem or the first pveApiUrl change")
 			}
 			if stored.FirewallTokenID != s.FirewallTokenID || stored.FirewallToken == "" {
 				return resource.Invalid("firewallToken", "required for a new firewall token")
@@ -275,8 +277,8 @@ func (c *Connection) Register(ctx context.Context, data json.RawMessage) error {
 			s.FirewallToken = stored.FirewallToken
 		}
 		if s.BackupTokenID != "" && s.BackupToken == "" {
-			if !unchanged {
-				return resource.Invalid("backupToken", "required when caPem or pveApiUrls change")
+			if !sameFirst {
+				return resource.Invalid("backupToken", "required when caPem or the first pveApiUrl change")
 			}
 			if stored.BackupTokenID != s.BackupTokenID || stored.BackupToken == "" {
 				return resource.Invalid("backupToken", "required for a new backup token")
