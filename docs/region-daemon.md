@@ -15,6 +15,10 @@ disk configuration supplies it.
 vws-region -config /etc/vws/region.yaml
 ```
 
+The daemon is the only process that talks to PVE. console-api has no
+in-process Proxmox backend (`-backend` is `fake` or `regions`); it reaches the
+daemon over regionapi through `-backend regions`.
+
 The default PVE origin is `https://127.0.0.1:8006`, verified with
 `/etc/pve/pve-root-ca.pem`. `-pve-endpoint` and `-pve-ca-file` select another
 verified endpoint. Region TLS defaults are `/etc/vws/region.crt`,

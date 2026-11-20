@@ -5,6 +5,9 @@ names the Go tests that pin it. The full rule text and the checks behind it
 live in `docs/rules.md`; when the two disagree, `docs/rules.md` wins and this
 page is wrong.
 
+This layer runs only inside the `vws-region` daemon. console-api reaches it
+through `-backend regions`; it cannot load this code in its own process.
+
 ## Leader lease and quorum
 
 Code: `internal/backend/proxmox/leader.go`.

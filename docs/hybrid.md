@@ -66,8 +66,9 @@ the AWS API as the common language.
   replaced by another.
 - Proxmox has no placement scheduler, so the region layer picks a node for
   `RunInstances` from each node's free CPU, memory and storage.
-- The `proxmox` backend runs here, so PVE tokens never leave the cluster. The
-  global layer reaches it through the `regions` backend.
+- The `vws-region` daemon runs here, so PVE tokens never leave the cluster.
+  console-api reaches it only through the `regions` backend; it has no
+  in-process Proxmox backend.
 
 ## AWS forwarding proxy
 
@@ -82,7 +83,6 @@ its own process and the only one that reads the source AWS credentials.
 | --- | --- |
 | `fake` | In-memory, for tests and local runs. |
 | `regions` | The global layer: picks a region per request and sends it to that region layer or to AWS. |
-| `proxmox` | The region layer: one Proxmox cluster through its API. |
 
 With `-backend=regions -iam=grpc`, key pair create, import, delete and
 describe actions use vws-iam in the caller's region, with no regionapi call.
