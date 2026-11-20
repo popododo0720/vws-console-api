@@ -204,17 +204,63 @@ func TestEnsurePrivateDirRedoesAFailedSync(t *testing.T) {
 		synced = append(synced, p)
 		return nil
 	}
-	if err := ensurePrivateDir(state, sync); err == nil {
+	if _, err := ensurePrivateDir(state, sync); err == nil {
 		t.Fatal("a failed sync did not fail")
 	}
 	if _, err := os.Stat(state); err != nil {
 		t.Fatalf("mkdir did not happen before the sync: %v", err)
 	}
 	synced = nil
-	if err := ensurePrivateDir(state, sync); err != nil {
+	if _, err := ensurePrivateDir(state, sync); err != nil {
 		t.Fatal(err)
 	}
 	if len(synced) < 3 || synced[0] != state || synced[1] != filepath.Dir(state) || synced[len(synced)-1] != "/" {
 		t.Fatalf("retry synced %v; want the state dir and every ancestor up to /", synced)
+	}
+}
+
+func TestOpenResolvesSymlinkedAncestors(t *testing.T) {
+	root := privateDir(t)
+	config := filepath.Join(root, "region.yaml")
+	writeFixture(t, config, []byte("read_only: true\n"))
+	safe := filepath.Join(root, "safe")
+	unsafe := filepath.Join(root, "unsafe")
+	for dir, mode := range map[string]os.FileMode{safe: 0o700, unsafe: 0o700} {
+		if err := os.Mkdir(dir, mode); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Chmod(unsafe, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	for name, target := range map[string]string{"to-safe": safe, "to-unsafe": unsafe} {
+		if err := os.Symlink(target, filepath.Join(root, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := Open(config, "pve-test-1", filepath.Join(root, "to-unsafe", "state"), "https://unused", nil); err == nil {
+		t.Fatal("accepted a symlinked ancestor that resolves to a group/other writable directory")
+	}
+	c, err := Open(config, "pve-test-1", filepath.Join(root, "to-safe", "state"), "https://unused", nil)
+	if err != nil {
+		t.Fatalf("refused a symlinked ancestor with a safe target: %v", err)
+	}
+	want, err := filepath.EvalSymlinks(filepath.Join(safe, "state"))
+	if err != nil || c.dir != want {
+		t.Fatalf("state I/O dir = %q, want the resolved %q (%v)", c.dir, want, err)
+	}
+	if err := writeFileAtomic(c.dir, registrationFile, []byte("{}"), nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(safe, "state", registrationFile)); err != nil {
+		t.Fatalf("state was not written under the resolved path: %v", err)
+	}
+	target := filepath.Join(safe, "state")
+	link := filepath.Join(root, "final-link")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Open(config, "pve-test-1", link, "https://unused", nil); err == nil {
+		t.Fatal("accepted a final directory that is a symlink")
 	}
 }

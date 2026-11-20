@@ -70,7 +70,9 @@ All daemon state is one file, `registration.json`, in the state directory:
 refuses to start if the directory exists but is a symlink, belongs to another
 user or has any group or other access, or if any ancestor up to `/` is not
 owned by root or the daemon's user or is writable by group or others without
-the sticky bit. On every start it fsyncs the state directory and each ancestor,
+the sticky bit. The path is resolved once (symlinked ancestors are followed),
+every component of the resolved path is checked without following symlinks,
+and all state I/O uses only the resolved path. On every start it fsyncs the state directory and each ancestor,
 and a failed sync fails startup. The file holds the registration and the token
 secrets in plain text, like the host's other local secrets (console token,
 AWS source keys). There is no helper binary, no sudo, no region KEK and

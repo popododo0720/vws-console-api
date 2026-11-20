@@ -73,7 +73,8 @@ func Open(configPath, region, stateDir, endpoint string, transport *http.Client)
 	if err != nil {
 		return nil, err
 	}
-	if err := ensurePrivateDir(stateDir, syncDir); err != nil {
+	stateDir, err = ensurePrivateDir(stateDir, syncDir)
+	if err != nil {
 		return nil, fmt.Errorf("proxmox: state dir: %w", err)
 	}
 	if err := removeStaleTemps(stateDir, registrationFile); err != nil {

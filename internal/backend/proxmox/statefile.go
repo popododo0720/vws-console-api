@@ -84,65 +84,75 @@ func syncDir(dir string) error {
 	return nil
 }
 
-// ensurePrivateDir makes dir a private state directory: created 0700 with any
-// missing parents, owned by this uid, a real directory (not a symlink), with no
-// group or other access. Every ancestor up to / must be owned by root or this
-// uid and either not group/other writable or sticky, so no other user can
-// replace an entry on the path. Then dir and every ancestor are fsynced on every
-// call, so a sync that failed after a mkdir is redone by the next Open; any
-// failure refuses the directory.
-func ensurePrivateDir(dir string, sync func(string) error) error {
+// ensurePrivateDir makes dir a private state directory and returns its
+// resolved absolute path; callers use only that path. The existing prefix of
+// dir is resolved once with EvalSymlinks and the missing components are created
+// 0700. Then every component from / down is checked with Lstat: each must be a
+// real directory, not a symlink, owned by root or this uid. Ancestors must not
+// be group or other writable unless sticky, so no other user can replace an
+// entry on the path. The final directory must be owned by this uid with no
+// group or other access, and dir itself may not be a symlink. Last, the final
+// directory and every ancestor are fsynced on every call, so a sync that failed
+// after a mkdir is redone by the next Open; any failure refuses the directory.
+func ensurePrivateDir(dir string, sync func(string) error) (string, error) {
 	dir, err := filepath.Abs(dir)
 	if err != nil {
-		return fmt.Errorf("resolve state directory: %w", err)
+		return "", fmt.Errorf("resolve state directory: %w", err)
 	}
-	var missing []string
-	for p := dir; ; p = filepath.Dir(p) {
-		_, err := os.Lstat(p)
-		if err == nil {
+	if info, err := os.Lstat(dir); err == nil && info.Mode()&os.ModeSymlink != 0 {
+		return "", fmt.Errorf("state directory %s must not be a symlink", dir)
+	}
+	existing, rest := dir, []string{}
+	for {
+		if _, err := os.Lstat(existing); err == nil {
 			break
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return "", fmt.Errorf("inspect state directory: %w", err)
 		}
-		if !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("inspect state directory: %w", err)
-		}
-		missing = append(missing, p)
+		rest = append([]string{filepath.Base(existing)}, rest...)
+		existing = filepath.Dir(existing)
 	}
-	for i := len(missing) - 1; i >= 0; i-- {
-		if err := os.Mkdir(missing[i], 0o700); err != nil && !errors.Is(err, os.ErrExist) {
-			return fmt.Errorf("create state directory: %w", err)
-		}
-	}
-	info, err := os.Lstat(dir)
+	resolved, err := filepath.EvalSymlinks(existing)
 	if err != nil {
-		return fmt.Errorf("inspect state directory: %w", err)
+		return "", fmt.Errorf("resolve state directory: %w", err)
 	}
-	if uid, ok := owner(info); !info.IsDir() || !ok || uid != os.Geteuid() || info.Mode().Perm()&0o077 != 0 {
-		return fmt.Errorf("state directory %s must be a real directory owned by this user with mode 0700", dir)
+	for _, name := range rest {
+		resolved = filepath.Join(resolved, name)
+		if err := os.Mkdir(resolved, 0o700); err != nil && !errors.Is(err, os.ErrExist) {
+			return "", fmt.Errorf("create state directory: %w", err)
+		}
 	}
-	for p := filepath.Dir(dir); ; p = filepath.Dir(p) {
-		info, err := os.Stat(p)
+	parts := strings.Split(strings.TrimPrefix(resolved, "/"), "/")
+	paths := []string{"/"}
+	for i := range parts {
+		if parts[i] != "" {
+			paths = append(paths, filepath.Join("/", filepath.Join(parts[:i+1]...)))
+		}
+	}
+	for i, p := range paths {
+		info, err := os.Lstat(p)
 		if err != nil {
-			return fmt.Errorf("inspect ancestor %s: %w", p, err)
+			return "", fmt.Errorf("inspect %s: %w", p, err)
 		}
 		uid, ok := owner(info)
-		if !ok || uid != 0 && uid != os.Geteuid() ||
-			info.Mode().Perm()&0o022 != 0 && info.Mode()&os.ModeSticky == 0 {
-			return fmt.Errorf("ancestor %s of the state directory must be owned by root or this user "+
+		final := i == len(paths)-1
+		switch {
+		case !info.IsDir() || !ok:
+			return "", fmt.Errorf("%s on the state directory path must be a real directory, not a symlink", p)
+		case final && (uid != os.Geteuid() || info.Mode().Perm()&0o077 != 0):
+			return "", fmt.Errorf("state directory %s must be owned by this user with mode 0700", p)
+		case !final && (uid != 0 && uid != os.Geteuid() ||
+			info.Mode().Perm()&0o022 != 0 && info.Mode()&os.ModeSticky == 0):
+			return "", fmt.Errorf("ancestor %s of the state directory must be owned by root or this user "+
 				"and not writable by group or others unless sticky", p)
 		}
-		if filepath.Dir(p) == p {
-			break
+	}
+	for i := len(paths) - 1; i >= 0; i-- {
+		if err := sync(paths[i]); err != nil {
+			return "", err
 		}
 	}
-	for p := dir; ; p = filepath.Dir(p) {
-		if err := sync(p); err != nil {
-			return err
-		}
-		if filepath.Dir(p) == p {
-			break
-		}
-	}
-	return nil
+	return resolved, nil
 }
 
 func owner(info os.FileInfo) (int, bool) {
