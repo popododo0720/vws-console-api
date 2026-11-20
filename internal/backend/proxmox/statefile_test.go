@@ -175,6 +175,11 @@ func TestOpenRejectsAnUnsafeAncestor(t *testing.T) {
 			t.Fatal(err)
 		}
 		_, err := Open(config, "pve-test-1", filepath.Join(parent, "state"), "https://unused", nil)
+		if err != nil && parentMode&0o022 != 0 && parentMode&os.ModeSticky == 0 {
+			if entries, readErr := os.ReadDir(parent); readErr != nil || len(entries) != 0 {
+				t.Errorf("rejection under mode %o left entries: %v %v", parentMode, entries, readErr)
+			}
+		}
 		return err
 	}
 	for _, mode := range []os.FileMode{0o775, 0o757, 0o777} {
@@ -238,8 +243,12 @@ func TestOpenResolvesSymlinkedAncestors(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := Open(config, "pve-test-1", filepath.Join(root, "to-unsafe", "state"), "https://unused", nil); err == nil {
+	nested := filepath.Join(root, "to-unsafe", "a", "state")
+	if _, err := Open(config, "pve-test-1", nested, "https://unused", nil); err == nil {
 		t.Fatal("accepted a symlinked ancestor that resolves to a group/other writable directory")
+	}
+	if entries, err := os.ReadDir(unsafe); err != nil || len(entries) != 0 {
+		t.Fatalf("rejection left entries under the unsafe target: %v %v", entries, err)
 	}
 	c, err := Open(config, "pve-test-1", filepath.Join(root, "to-safe", "state"), "https://unused", nil)
 	if err != nil {
