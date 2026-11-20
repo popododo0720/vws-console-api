@@ -51,7 +51,7 @@ observed in the audit log and never undone.
 - Every Proxmox call has a timeout and bounded retries.
 - If any start-up self-check fails (token rights, cluster name, region
   configuration, storages and bridges, snippets content, a writable
-  `/etc/pve/vws/`), `/readyz` fails and the node stays out of the VIP.
+  `/etc/pve/vws/`), `/readyz` fails and the daemon stays not ready.
 
 ## Test safety
 

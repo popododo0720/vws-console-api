@@ -58,8 +58,9 @@ the AWS API as the common language.
 
 ## Proxmox region layer
 
-- A `.deb` on every PVE node behind one VIP. Any node answers a read the same
-  way.
+- One `vws-region` daemon per cluster, started on a single host (the per-node
+  `.deb` behind a VIP is being replaced, vws-deploy #849). Never run two
+  daemons for one cluster.
 - One `vws-region` daemon per cluster makes every mutation (placement
   included), serialized by its in-process locks. A daemon without a quorum
   check from the last 5 s refuses mutations.

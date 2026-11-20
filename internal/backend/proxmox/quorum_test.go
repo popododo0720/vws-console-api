@@ -1,6 +1,7 @@
 package proxmox
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -208,4 +209,27 @@ func TestQuorumGateStopsFinalizeWrites(t *testing.T) {
 	assertSweepReadOnly(t, w, before)
 	gate.check(t.Context())
 	checkLaunch(t, w.b.FinalizeLaunches(t.Context(), gate.Admit))
+}
+
+func TestQuorumGateRefusesAfterRunStops(t *testing.T) {
+	gate, _, _ := testGate(t, scenario())
+	gate.now = time.Now
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		gate.Run(ctx)
+	}()
+	deadline := time.Now().Add(5 * time.Second)
+	for gate.Admit(t.Context()) != nil {
+		if time.Now().After(deadline) {
+			t.Fatal("gate never opened")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	cancel()
+	<-done
+	wantUnavailable(t, gate.Admit(t.Context()), "after the poller stopped")
+	gate.check(t.Context())
+	wantUnavailable(t, gate.Admit(t.Context()), "after a late check")
 }

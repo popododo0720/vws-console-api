@@ -21,6 +21,7 @@ type QuorumGate struct {
 	now     func() time.Time
 
 	mu      sync.RWMutex
+	stopped bool
 	quorate bool
 	checked time.Time
 	apiNode string
@@ -31,8 +32,10 @@ func NewQuorumGate(b *Backend) *QuorumGate {
 	return &QuorumGate{backend: b, now: time.Now}
 }
 
-// Run refreshes the quorum check until ctx ends.
+// Run refreshes the quorum check until ctx ends. When it returns the gate is
+// closed for good, so a handler that outlives the poller is refused.
 func (g *QuorumGate) Run(ctx context.Context) {
+	defer g.stop()
 	ticker := time.NewTicker(quorumInterval)
 	defer ticker.Stop()
 	for {
@@ -45,6 +48,12 @@ func (g *QuorumGate) Run(ctx context.Context) {
 	}
 }
 
+func (g *QuorumGate) stop() {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.stopped, g.quorate = true, false
+}
+
 func (g *QuorumGate) check(ctx context.Context) {
 	at := g.now()
 	status, err := g.backend.clusterStatus(ctx)
@@ -53,6 +62,9 @@ func (g *QuorumGate) check(ctx context.Context) {
 	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	if g.stopped {
+		return
+	}
 	g.quorate, g.checked = err == nil && status.Quorate, at
 	if err == nil {
 		g.apiNode = status.APINode

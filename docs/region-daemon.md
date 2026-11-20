@@ -44,6 +44,20 @@ found quorum and is at most 5 s old; otherwise they return 503, before any PVE
 call. Reads stay available. Status, capabilities and `/metrics`
 (`vws_region_api_node{node}`) name `apiNode`, the PVE node the daemon is
 connected to, and no leader. A region with quorum reports `available`.
+Once the daemon's poller stops (shutdown or a registration reload), the gate
+closes for good and a handler still in flight is refused.
+
+### Rollout prerequisites
+
+- Exactly one active `vws-region` per cluster. The gate is not a lock: the
+  in-process locks and the TLA model assume a single writer. This release must
+  not run with the old per-node layout (a daemon on every PVE node behind a
+  VIP). Stop and disable every old per-node daemon, then start the single new
+  one. The per-cluster placement belongs to vws-deploy #849; until it ships,
+  do not roll this release out through the current per-node packaging.
+- Status now carries `apiNode` and no `leader`. The deploy CLI
+  (`vws region health`) and the console admin regions view must accept
+  `apiNode` before this ships (deploy #849, console #216).
 
 ## Registration
 
