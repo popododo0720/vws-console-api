@@ -94,7 +94,7 @@ func New(ctx context.Context, client *pveclient.Client, reg Registration, cfg Re
 	if err := checkPools(ctx, client, pools); err != nil {
 		return nil, &selfCheckError{check: "pools", cause: err}
 	}
-	if len(cfg.Storages) != 0 || cfg.SnippetsStorage != "" {
+	if len(cfg.Storages) != 0 {
 		rows, err := client.ClusterResources(ctx, pveclient.ResourceStorage)
 		if err != nil {
 			return nil, &selfCheckError{check: "storages", cause: fmt.Errorf("proxmox: check storages: %w", err)}
@@ -110,11 +110,6 @@ func New(ctx context.Context, client *pveclient.Client, reg Registration, cfg Re
 				return nil, &selfCheckError{
 					check: "storages", cause: fmt.Errorf("proxmox: storages.%s: unknown storage %q", volumeType, storage),
 				}
-			}
-		}
-		if cfg.SnippetsStorage != "" && !known[cfg.SnippetsStorage] {
-			return nil, &selfCheckError{
-				check: "storages", cause: fmt.Errorf("proxmox: snippets_storage: unknown storage %q", cfg.SnippetsStorage),
 			}
 		}
 	}

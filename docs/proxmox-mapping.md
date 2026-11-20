@@ -195,7 +195,7 @@ filter, including privileges inherited from pools.
 | Region | Cluster |
 | Instance state | `running` and `stopped` from `status`; `pending` while `lock=clone` or `create` or while `qmpstatus` is `paused` or `prelaunch`; `stopping` and `shutting-down` while our task runs. A deleted VM is `InvalidInstanceID.NotFound`. |
 | AMI | VM template |
-| User data, key pair | cloud-init (`sshkeys` and a snippet file) |
+| User data, key pair | cloud-init (`sshkeys`; user data is unsupported until a NoCloud seed ISO replaces snippets) |
 | EBS volume, snapshot | VM disk, VM snapshot without RAM state |
 | VPC, subnet | SDN VNet and subnet, or one default VPC per bridge or VLAN |
 | Security group | Proxmox firewall security group; a VM with its firewall off has none |

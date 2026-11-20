@@ -62,7 +62,7 @@ per-VM serialization across restarts, and serialized marker lookup plus clone
 submission, with the marker visible before a restarted daemon may allocate.
 The model abstracts the five-second freshness window into current quorum;
 it does not prove network-delayed POST fencing.
-It does not cover pools, fingerprint mismatch, disk preservation, snippets,
+It does not cover pools, fingerprint mismatch, disk preservation,
 or guest-initiated changes. Go boundary tests cover invalid table input;
 there is no new API input parser here.
 

@@ -12,7 +12,7 @@ images use the template name and description, with root size when the boot
 disk configuration supplies it.
 
 ```sh
-vws-region -config /etc/vws/region.yaml
+vws-region -config /etc/vws/region.yaml -region <name>
 ```
 
 The daemon is the only process that sends Proxmox resource requests to PVE.
@@ -21,9 +21,12 @@ console-api has no in-process Proxmox backend (`-backend` is `fake` or
 The one exception is the admin Proxmox connection test, which makes read-only
 PVE checks (TLS, version, cluster, privileges) from console-api itself.
 
-The default PVE origin is `https://127.0.0.1:8006`, verified with
-`/etc/pve/pve-root-ca.pem`. `-pve-endpoint` and `-pve-ca-file` select another
-verified endpoint. Region TLS defaults are `/etc/vws/region.crt`,
+`-region` names the one region this instance serves; it is required and a
+registration for any other region is refused with 400. The daemon talks to
+PVE over the API only and needs no sudo and no `/etc/pve`. The default PVE
+origin is `https://127.0.0.1:8006`, verified with `/etc/pve/pve-root-ca.pem`;
+`-pve-endpoint` and `-pve-ca-file` select another verified endpoint (they
+move into the registration in a later step). Region TLS defaults are `/etc/vws/region.crt`,
 `/etc/vws/region.key`, and `/etc/vws/global-ca.pem`; the latter must trust
 only global client identities. The corresponding flags are
 `-tls-cert-file`, `-tls-key-file`, and `-tls-ca-file`.
@@ -32,7 +35,7 @@ only global client identities. The corresponding flags are
 self-check, then repeats the Proxmox permission, cluster and storage checks
 at most once per 2 s; concurrent probes share the check in flight. An
 unreachable PVE API or failed self-check returns 503.
-Invalid YAML or certificates fail startup; failed self-checks or shared files fail readiness.
+Invalid YAML or certificates fail startup; failed self-checks or an unreadable state file fail readiness.
 Interrupt and SIGTERM drain both listeners. `/metrics` uses the shared
 server exporter; regionapi uses the existing HTTP telemetry middleware.
 
@@ -59,24 +62,38 @@ closes for good and a handler still in flight is refused.
   (`vws region health`) and the console admin regions view must accept
   `apiNode` before this ships (deploy #849, console #216).
 
-## Registration
+## Registration and state
 
-Before registration, `/readyz` returns 503 with `unregistered`.
-When registration.json names a token file that is absent or unreadable, for
-example on a node that still has the unsuffixed `pve-token` layout, `/readyz`
-returns 503 and the daemon logs `region not ready` with reason
-`registration token unreadable`. There is no automatic
-migration: re-register the region with its token (a PUT that includes
-`token`), which writes `pve-token.<fp>` and the matching identity without a
-restart.
+All daemon state is one file, `registration.json`, in the state directory:
+`-state-dir`, default `/var/lib/vws-region/<region>` (systemd
+`StateDirectory`). The daemon creates the directory with mode 0700 and
+the file with mode 0600. The file holds the registration and the token
+secrets in plain text, like the host's other local secrets (console token,
+AWS source keys). There is no helper binary, no sudo, no region KEK and
+no snippet file.
+
+The file changes only by a 0600 temporary file in the same directory, fsync
+of the file, rename over the target and fsync of the directory. A crash
+leaves the old file or the new one, never a partial one. A temporary file
+left by a crash is removed at startup and is never read as state. In-process
+mutex serializes registrations and reloads; there is no lock file.
+
+After a restart the daemon reads the file and is ready without a new
+registration. Before registration, `/readyz` returns 503 with `unregistered`.
+A file readable by group or others, or naming another region than `-region`,
+fails readiness.
+
 `PUT /internal/v1/registration` requires the global client's mTLS certificate.
-Its JSON fields are `region`, `cluster_name`, `zones` (letter and node groups),
-`tokenId` (`user@realm!name`) and `token` (write-only), plus the optional
+Its JSON fields are `region` (must equal `-region`, otherwise 400),
+`cluster_name`, `zones` (letter and node groups), `tokenId`
+(`user@realm!name`) and `token` (write-only), plus the optional
 `firewallTokenId` and write-only `firewallToken` of the security group token,
 and `backupTokenId` and write-only `backupToken` reserved for disk exports.
-See [registration rules](rules.md) for size limits, reloads and recovery.
+An omitted secret reuses the stored one only for the same token id. The PVE
+self-check runs before anything is written; a failed check leaves the old file.
+See [registration rules](rules.md) for size limits and reloads.
 No credential value belongs in region.yaml, command arguments or the
-environment. Snapshot decoder errors never echo submitted values.
+environment. Registration decoder errors never echo submitted values.
 
 Optional `sdn_zone` in region.yaml selects an existing PVE SDN zone for
 VPC writes when `read_only` is false. Grant SDN.Allocate on that zone and
@@ -94,71 +111,7 @@ VM.Backup on each configured `/pool/<id>` and Datastore.AllocateSpace on a
 `/storage/<id>` path, refuses any other privilege (including VM.Allocate), and
 refuses backup tokens on read_only regions because a stop-mode export writes
 PVE state. The admin API calls its write-only secret `backupTokenSecret`.
-An omitted secret reuses only the same stored id. Its sealed fingerprint
-survives restart; removing the id cleans the file. The helper protects all
-three live fingerprints. Disk export itself is not enabled by registration.
-
-## Privileged helper
-
-`cmd/vws-region-helper` provides `registration-write`,
-taking contents on stdin (at most 1 MiB) and no arguments.
-`token-write <fp>`, `token-read <fp>` and `token-delete <fp>` require a full
-lowercase SHA-256 fingerprint matching `^[0-9a-f]{64}$`, checked by both
-helper and client before exec. Token files are
-`/etc/pve/priv/vws/pve-token.<fp>`. token-write refuses stdin whose hash
-differs and seals only that file; token-read returns only its encrypted
-envelope. token-delete acquires the registration lock across the identity check
-and removal, refuses the current fingerprint, and releases its lock on success
-or error. A busy lock refuses deletion without removing any file or that lock;
-an absent inactive file is already deleted.
-Identity writes atomically replace `/etc/pve/vws/registration.json`.
-The public identity file uses mode 0640 (pmxcfs owns it as root:www-data);
-token and snippet files use 0600. Token files contain a versioned AES-256-GCM envelope
-authenticated with the raw 32-byte `$CREDENTIALS_DIRECTORY/region-kek`.
-The credential must be a root-owned regular file with no group/other access.
-With no credential directory, the helper uses `/etc/vws/credentials/region-kek`.
-`regionhelper.Open` authenticates and decrypts this format.
-
-Registration runs the PVE self-check, acquires the registration lock, writes
-the candidate token, then commits by renaming registration.json. That rename
-is the only commit point. There are no compensation writes: a helper failure,
-including a nonzero exit after rename, leaves a matching old or new pair.
-A retry converges. After a confirmed commit and registration unlock, deletion of a different
-previous token is best effort. A busy lock or other cleanup failure produces a
-secret-free warning without changing the successful result.
-After a registration-write error, the writer re-reads identity under the lock;
-if the candidate fingerprint committed, it attempts cleanup and returns the error.
-An omitted token is read by the stored fingerprint, verified and self-checked;
-only the identity is written. Readers select the named file and verify its
-content hash. If an old token was deleted during rotation, the reader re-reads
-identity once and retries only when the fingerprint changed. Missing or
-mismatched pairs fail readiness and serving until repaired.
-`TestRegionDaemonReadsRestartAndReadiness` enforces pre-commit and after-rename
-failures, retry, rotation, failed candidates, reader races, torn pairs and
-recovery. `TestTokenFingerprintGrammar`, `TestTokenWriteEncrypted` and
-`TestTokenReadAndCredentialFallback` enforce the helper contract.
-`TestTokenDeleteSerializesRegistration` enforces deletion/publication
-serialization, busy-lock refusal and lock release after success or refusal.
-
-`lock NAME` (used only for the registration lock) uses mkdir under `/etc/pve/priv/lock/vws-region/`; a duplicate
-lock fails. `unlock NAME` removes an empty directory; an absent lock succeeds.
-Names are 1-64 letters, digits, `_` or `-`, starting with a letter or digit.
-`snippet-write NAME` and `snippet-delete NAME` operate only on
-`vws-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx-user.yaml` with lowercase hex digits.
-The snippet directory is one absolute, clean path in the fixed text file
-`/etc/vws/region-helper-snippets`, root-owned and not group/other writable.
-This small config avoids granting the caller a directory-selection flag.
-The configured directories must already exist and be administered by root.
-Final symlinks are refused; operations use an open directory root.
-
-`regionhelper.Client` invokes `sudo -n /usr/lib/vws/vws-region-helper`, with fixed
-verbs, stdin contents and a 10 s deadline. The helper reports a generic
-failure on stderr and a nonzero exit code; no submitted contents are echoed.
-File replacement and deletion can be retried; lock acquisition deliberately
-fails on an existing directory. A killed write leaves the old target or the
-complete replacement; an orphan temporary file is never read as a target.
-Daemon integration is #757, and sudo/systemd
-credential delivery and installation are vws-deploy#764.
+Disk export itself is not enabled by registration.
 
 ## Non-root loopback stack
 
@@ -169,24 +122,10 @@ registers through the console API, verifies all connection diagnostics,
 reads health, edits zones twice and deletes the region. It restarts the stack
 and repeats with a fresh memory registry and the persisted daemon identity.
 
-For a console e2e job, build `./cmd/pvefake`, `./cmd/vws-region`,
-`./cmd/vws-region-helper` and `./cmd/vws-console-api`. Keep the following
-files and directories in an absolute, clean `$ROOT`, owned by the CI user:
-
-```text
-etc/pve/vws/
-etc/pve/priv/vws/
-etc/pve/priv/lock/vws-region/
-etc/vws/credentials/region-kek
-etc/vws/region-helper-snippets
-snippets/
-```
-
-The helper KEK contains 32 raw bytes with mode 0600.
-`etc/vws/region-helper-snippets` is a non-writable-by-others text file
-containing the absolute path `$ROOT/snippets`. `CREDENTIALS_DIRECTORY`,
-when set, overrides the rooted KEK path for both daemon and helper.
-The global `-admin-kek-file` is a separate base64-encoded 32-byte key.
+For a console e2e job, build `./cmd/pvefake`, `./cmd/vws-region` and
+`./cmd/vws-console-api`. Keep the files in an absolute, clean `$ROOT`, owned
+by the CI user; the daemon state goes to `$ROOT/state`.
+The global `-admin-kek-file` is a base64-encoded 32-byte key.
 Use test certificates with the loopback IP in their subject alternative
 names, a CA trusted by both peers, and server/client authentication usages.
 Keep their private keys at mode 0600.
@@ -200,8 +139,7 @@ Start the processes in this order:
 
    ```sh
    vws-region -config "$ROOT/region.yaml" \
-     -registration-file "$ROOT/etc/pve/vws/registration.json" \
-     -helper-path "$BIN/vws-region-helper" -helper-root "$ROOT" \
+     -region pve-test-1 -state-dir "$ROOT/state" \
      -pve-endpoint "$PVE" -pve-ca-file "$ROOT/pve-ca.pem" \
      -tls-cert-file "$ROOT/cert.pem" -tls-key-file "$ROOT/key.pem" \
      -tls-ca-file "$ROOT/ca.pem" \
@@ -236,11 +174,4 @@ Start the processes in this order:
    all five steps return `PASS`. GET the same region's `/health`, PATCH
    its `zones` using the latest `ETag` as `If-Match`, then DELETE it.
    Stop the processes with SIGTERM. The global registrations disappear
-   on restart; the daemon's encrypted token and identity remain under `$ROOT`.
-
-`-helper-root` requires `-helper-path`; both daemon and helper refuse the
-override when running as root, and reject empty, relative or unclean roots.
-The daemon sets `VWS_REGION_HELPER_ROOT` only on its direct helper child.
-The installed sudo invocation receives no root override. For a standalone
-helper smoke test, set `VWS_REGION_HELPER_ROOT="$ROOT"` explicitly.
-Without it the production paths and uid 0 credential ownership stay unchanged.
+   on restart; the daemon's registration file remains under `$ROOT/state`.

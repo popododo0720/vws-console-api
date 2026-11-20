@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/popododo0720/vws-console-api/internal/backend"
+	"github.com/popododo0720/vws-console-api/internal/resource"
 )
 
 func registrationZones(count int) []backend.Zone {
@@ -24,7 +25,7 @@ func TestUnregisteredConnection(t *testing.T) {
 	dir := t.TempDir()
 	config := filepath.Join(dir, "region.yaml")
 	writeFixture(t, config, []byte("read_only: true\n"))
-	conn, err := Open(config, filepath.Join(dir, "registration.json"), "https://unused", nil)
+	conn, err := Open(config, "pve-test-1", dir, "https://unused", nil)
 	if err != nil {
 		t.Fatalf("unregistered daemon cannot start: %v", err)
 	}
@@ -45,5 +46,23 @@ func TestRegistrationRejectsInvalidInput(t *testing.T) {
 		if _, err := decodeRegistration([]byte(bad)); err == nil {
 			t.Fatal("accepted invalid registration")
 		}
+	}
+}
+
+func TestRegistrationForAnotherRegionIsInvalid(t *testing.T) {
+	dir := t.TempDir()
+	config := filepath.Join(dir, "region.yaml")
+	writeFixture(t, config, []byte("read_only: true\n"))
+	conn, err := Open(config, "pve-test-1", filepath.Join(dir, "state"), "https://unused", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = conn.Register(t.Context(), []byte(`{"region":"pve-test-2","cluster_name":"test",`+
+		`"tokenId":"vws@pve!inventory","token":"fake-secret"}`))
+	if e := resource.AsError(err); e.Code != resource.CodeInvalidArgument || e.Field != "region" {
+		t.Fatalf("other region: %v", err)
+	}
+	if _, err := Open(config, "", dir, "https://unused", nil); err == nil {
+		t.Fatal("accepted an empty region name")
 	}
 }
