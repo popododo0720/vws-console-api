@@ -2,6 +2,7 @@ package proxmox
 
 import (
 	"bytes"
+	"context"
 	"net/http/httptest"
 	"testing"
 
@@ -34,7 +35,13 @@ func TestAdminRegionDeleteNeverCallsPVE(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	var told []string
 	h := console.New(console.Config{
+		// The delete reaches the region daemon, never PVE.
+		RegionDeregistration: func(_ context.Context, endpoint, region string) error {
+			told = append(told, endpoint+" "+region)
+			return nil
+		},
 		Registry: g,
 		AdminKey: key,
 		IAM:      iam.NewFake(),
@@ -44,7 +51,7 @@ func TestAdminRegionDeleteNeverCallsPVE(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer tok")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
-	if rec.Code != 204 || len(pve.Requests()) != 0 {
-		t.Fatalf("delete status=%d PVE calls=%v", rec.Code, pve.Requests())
+	if rec.Code != 204 || len(pve.Requests()) != 0 || len(told) != 1 || told[0] != srv.URL+" pve-test-1" {
+		t.Fatalf("delete status=%d PVE calls=%v daemon calls=%v", rec.Code, pve.Requests(), told)
 	}
 }
