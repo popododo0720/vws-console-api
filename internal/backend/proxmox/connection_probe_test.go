@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
@@ -354,13 +355,6 @@ func TestConnectionTestValidatesLikeRegistration(t *testing.T) {
 		"token with a space":  func(m map[string]any) { m["token"] = "a b" },
 		"unknown field":       func(m map[string]any) { m["extra"] = 1 },
 		"path-like pool":      func(m map[string]any) { m["pools"] = []string{"../access"} },
-		"too many pools": func(m map[string]any) {
-			pools := make([]string, 257)
-			for i := range pools {
-				pools[i] = "p"
-			}
-			m["pools"] = pools
-		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			m := base()
@@ -393,5 +387,27 @@ func TestConnectionTestValidatesLikeRegistration(t *testing.T) {
 	steps, err := c.TestConnection(t.Context(), data)
 	if err != nil || steps[0].Result != resource.ConnectionFail || dialed.Load() != 1 {
 		t.Fatalf("a valid request: %+v %v dials=%d", steps, err, dialed.Load())
+	}
+}
+
+// A region may map more pools than any fixed count; the body and time limits
+// bound the test, so every mapped pool reaches the checks.
+func TestConnectionTestAcceptsManyMappedPools(t *testing.T) {
+	srv := clusterServer(t, "test")
+	c, _ := openFixture(t)
+	pools := make([]string, 257)
+	for i := range pools {
+		pools[i] = fmt.Sprintf("vws-p%03d", i)
+	}
+	data, err := json.Marshal(map[string]any{
+		"region": "pve-test-1", "cluster_name": "test", "pveApiUrls": []string{srv.URL},
+		"caPem": serverCA(srv), "tokenId": "vws@pve!inventory", "token": "fake-secret", "pools": pools,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	steps, err := c.TestConnection(t.Context(), data)
+	if err != nil || len(steps) != 4 || steps[0].Result != resource.ConnectionPass {
+		t.Fatalf("257 mapped pools: %+v %v", steps, err)
 	}
 }

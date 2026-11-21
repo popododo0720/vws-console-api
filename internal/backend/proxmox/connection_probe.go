@@ -12,9 +12,6 @@ import (
 	"github.com/popododo0720/vws-console-api/internal/resource"
 )
 
-// maxProbePools bounds the managed pools one connection test reads.
-const maxProbePools = 256
-
 var probePool = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 
 // probeRequest is the candidate registration an operator wants checked. It
@@ -56,9 +53,6 @@ func decodeProbe(data []byte, region string) (probeRequest, error) {
 	}
 	if !x509.NewCertPool().AppendCertsFromPEM([]byte(r.CAPEM)) {
 		return r, resource.Invalid("caPem", "expected the PEM certificates that sign the PVE nodes")
-	}
-	if len(r.Pools) > maxProbePools {
-		return r, resource.Invalid("pools", "too many pools")
 	}
 	for _, pool := range r.Pools {
 		if !probePool.MatchString(pool) {
