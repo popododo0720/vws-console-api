@@ -168,14 +168,16 @@ func run(ctx context.Context, args []string) (err error) {
 		cancel()
 		err = errors.Join(err, <-opsDone)
 	}()
-	h := regionapi.WithRegistration(conn.Register, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		current := state.Load()
-		if current == nil {
-			regionapi.WriteNotReady(w, probe.Ready(r.Context()))
-			return
-		}
-		(*current).ServeHTTP(w, r)
-	}))
+	// Registration and the connection test work before the region is ready.
+	h := regionapi.WithRegistration(conn.Register, regionapi.WithConnectionTest(conn.TestConnection,
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			current := state.Load()
+			if current == nil {
+				regionapi.WriteNotReady(w, probe.Ready(r.Context()))
+				return
+			}
+			(*current).ServeHTTP(w, r)
+		})))
 	srv := regionapi.NewServer(*addr, h, cert, ca)
 	lc := net.ListenConfig{}
 	ln, err := lc.Listen(ctx, "tcp", *addr)

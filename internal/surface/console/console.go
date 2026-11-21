@@ -61,7 +61,7 @@ type Config struct {
 	RegionPool   func(context.Context, string, string) (bool, error)
 
 	RegionRegistration func(context.Context, string, json.RawMessage) error
-	RegionConnection   func(context.Context, store.Region, string) []resource.ConnectionStep
+	RegionConnection   func(ctx context.Context, endpoint string, data json.RawMessage) ([]resource.ConnectionStep, error)
 	AccountConnection  func(context.Context, resource.AWSConnectionRequest, string) []resource.ConnectionStep
 	AWSCost            func(context.Context, resource.Caller, string, string, string) (string, string, error)
 	// Origins are browser origins allowed besides the console's own host,
@@ -221,7 +221,7 @@ type handler struct {
 	regionPool   func(context.Context, string, string) (bool, error)
 
 	regionRegistration func(context.Context, string, json.RawMessage) error
-	regionConnection   func(context.Context, store.Region, string) []resource.ConnectionStep
+	regionConnection   func(ctx context.Context, endpoint string, data json.RawMessage) ([]resource.ConnectionStep, error)
 	accountConnection  func(context.Context, resource.AWSConnectionRequest, string) []resource.ConnectionStep
 	awsCost            func(context.Context, resource.Caller, string, string, string) (string, string, error)
 }

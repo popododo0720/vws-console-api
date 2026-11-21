@@ -43,7 +43,8 @@ func RegionFailureMessage(err error) string {
 	e := AsError(err)
 	if e.Code == CodeUnavailable {
 		switch e.Message {
-		case "not ready", "region pool check failed", "region status unavailable":
+		case "not ready", "region pool check failed", "region status unavailable",
+			"connection test busy", "connection test failed", "region daemon returned an invalid connection test":
 			return e.Message
 		}
 	}

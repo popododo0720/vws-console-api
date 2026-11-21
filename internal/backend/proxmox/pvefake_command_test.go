@@ -218,7 +218,27 @@ func TestPVEFakeCommandRegionInventoryAndRestart(t *testing.T) {
 		input := fmt.Sprintf(`{"name":"pve-test-1","clusterName":"test","pveApiUrls":[%q],"caPem":%q,
 			"tokenId":"vws@pve!inventory","tokenSecret":"fake-secret","regionEndpoint":%q,
 			"zones":[{"letter":"a","nodes":["pve1"]}]}`, endpoint, pem, "https://"+addr)
-		data := admin(http.MethodPost, regionsPath, input, http.StatusCreated)
+		// The daemon runs the PVE checks for a candidate before any registration reached it.
+		data := admin(http.MethodPost, regionsPath+"/test", input, http.StatusOK)
+		var candidate struct {
+			Steps []struct {
+				Result  string `json:"result"`
+				Message string `json:"message"`
+			} `json:"steps"`
+		}
+		if err := json.Unmarshal(data, &candidate); err != nil || len(candidate.Steps) != 5 {
+			t.Fatalf("candidate diagnostic: %s %v", data, err)
+		}
+		for _, step := range candidate.Steps[:4] {
+			if step.Result != "PASS" {
+				t.Fatalf("candidate test failed: %s", data)
+			}
+		}
+		// The fifth step reads the daemon status, which is not ready until this registration.
+		if _, err := os.Stat(filepath.Join(dir, "state", registrationFile)); attempt == 0 && !os.IsNotExist(err) {
+			t.Fatalf("the connection test wrote a registration: %v", err)
+		}
+		data = admin(http.MethodPost, regionsPath, input, http.StatusCreated)
 		if bytes.Contains(data, []byte(`"lastError":{`)) {
 			t.Fatalf("registration push failed: %s", data)
 		}

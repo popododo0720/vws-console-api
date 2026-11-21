@@ -113,6 +113,11 @@ var ownerRules = []struct {
 		"PVE API types stay inside internal/backend/proxmox",
 	},
 	{
+		func(imp string) bool { return imp == module+"/internal/backend/proxmox" },
+		[]string{"internal/backend/proxmox", "cmd/vws-region"},
+		"only the region daemon connects to PVE; console-api reaches it through regionapi",
+	},
+	{
 		hasPrefix(module + "/internal/backend/proxmox/pveclient/pvefake"),
 		[]string{"internal/backend/proxmox", "cmd/pvefake"},
 		"the fake PVE handler belongs to Proxmox tests and its standalone command",
@@ -219,6 +224,9 @@ func TestArchitectureRules(t *testing.T) {
 			module + `/internal/backend/proxmox/pveclient"`,
 		"internal/widget/fake.go": `package widget; import _ "` +
 			module + `/internal/backend/proxmox/pveclient/pvefake"`,
+		"cmd/vws-region/ok.go": `package main; import _ "` + module + `/internal/backend/proxmox"`,
+		"cmd/vws-console-api/pve.go": `package main; import _ "` +
+			module + `/internal/backend/proxmox"`,
 		"internal/surface/ec2query/ok.go":      `package ec2query; import _ "` + module + `/internal/cloud"`,
 		"internal/resource/std.go":             `package resource; import _ "fmt"`,
 		"internal/cloud/backend.go":            `package cloud; import _ "` + module + `/internal/backend"`,
@@ -238,6 +246,8 @@ func TestArchitectureRules(t *testing.T) {
 		"internal/backend/grpcclient/iamclient imports " + vwsProto + "/gen/go/vws/network/v1: " +
 			"compute, storage and network gRPC services are retired",
 		"internal/backend/launch/kubestore imports k8s.io/api/core/v1: Kubernetes imports are forbidden",
+		"cmd/vws-console-api imports " + module + "/internal/backend/proxmox: " +
+			"only the region daemon connects to PVE; console-api reaches it through regionapi",
 		"cmd/pvefake imports " + module + "/internal/backend/proxmox/pveclient: " +
 			"PVE API types stay inside internal/backend/proxmox",
 		"internal/widget imports " + module + "/internal/backend/proxmox/pveclient/pvefake: " +
