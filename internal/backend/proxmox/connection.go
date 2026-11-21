@@ -342,6 +342,47 @@ func (c *Connection) Register(ctx context.Context, data json.RawMessage) error {
 	return nil
 }
 
+// Deregister forgets the registration, and with it every token secret: it
+// removes the state file and any temporary file of a crashed write, then
+// fsyncs the directory, under the same mutex as Register and Check. It is
+// idempotent: with no file it still syncs the directory, so a retry finishes a
+// removal whose sync failed. The request names the region and must match
+// -region, so a call meant for another daemon changes nothing. On success
+// nothing here can serve the old registration: the cached backend is dropped
+// and Check reports unregistered. Stopping what already runs on that backend
+// is the caller's job.
+func (c *Connection) Deregister(data json.RawMessage) error {
+	var req struct {
+		Region string `json:"region"`
+	}
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+	var extra any
+	if err := dec.Decode(&req); err != nil || !errors.Is(dec.Decode(&extra), io.EOF) {
+		return resource.Invalid("deregistration", "expected one JSON object with region")
+	}
+	if req.Region != c.region {
+		return resource.Invalid("region", "deregistration is for another region than this instance")
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if err := os.Remove(filepath.Join(c.dir, registrationFile)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("remove registration: %w", err)
+	}
+	if err := removeStaleTemps(c.dir, registrationFile); err != nil {
+		return err
+	}
+	if err := syncDir(c.dir); err != nil {
+		return err
+	}
+	c.current, c.digest = nil, [32]byte{}
+	c.endpoints, c.endpointsID = nil, ""
+	if c.client != nil {
+		c.client.CloseIdleConnections()
+	}
+	return nil
+}
+
 // sameTrust reports whether s sends a stored secret nowhere new: the stored
 // registration has the same CA and every address of s. A registration with no
 // recorded addresses or CA is changed.

@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -168,16 +169,41 @@ func run(ctx context.Context, args []string) (err error) {
 		cancel()
 		err = errors.Join(err, <-opsDone)
 	}()
-	// Registration and the connection test work before the region is ready.
-	h := regionapi.WithRegistration(conn.Register, regionapi.WithConnectionTest(conn.TestConnection,
-		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			current := state.Load()
-			if current == nil {
-				regionapi.WriteNotReady(w, probe.Ready(r.Context()))
-				return
-			}
-			(*current).ServeHTTP(w, r)
-		})))
+	// deregister removes the registration first. If that fails nothing else
+	// changes, so the region keeps working and the call can be retried. After
+	// it, the quorum gate and launch finalizer are stopped and waited for (the
+	// finalizer ends on the cancelled context and the wait covers its last PVE
+	// write), the region API is withdrawn and the readiness cache is dropped, so
+	// /readyz says unregistered at once. A request already past the gate may
+	// finish; none starts. probe.mu orders this against Ready; Register may run
+	// meanwhile, and its result is picked up by the next Ready.
+	deregister := func(_ context.Context, data json.RawMessage) error {
+		probe.mu.Lock()
+		defer probe.mu.Unlock()
+		if err := conn.Deregister(data); err != nil {
+			return err
+		}
+		if gateCancel != nil {
+			gateCancel()
+			<-gateDone
+		}
+		gateCancel, gateDone, gateBackend = nil, nil, nil
+		gated.Store(nil)
+		state.Store(nil)
+		probe.at = time.Time{}
+		return nil
+	}
+	// Registration, deregistration and the connection test work before the region is ready.
+	h := regionapi.WithRegistration(conn.Register, regionapi.WithDeregistration(deregister,
+		regionapi.WithConnectionTest(conn.TestConnection,
+			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				current := state.Load()
+				if current == nil {
+					regionapi.WriteNotReady(w, probe.Ready(r.Context()))
+					return
+				}
+				(*current).ServeHTTP(w, r)
+			}))))
 	srv := regionapi.NewServer(*addr, h, cert, ca)
 	lc := net.ListenConfig{}
 	ln, err := lc.Listen(ctx, "tcp", *addr)

@@ -39,6 +39,18 @@ func regionRegistration(files iamclient.TLSFiles) func(context.Context, string, 
 	}
 }
 
+func regionDeregistration(files iamclient.TLSFiles) func(context.Context, string, string) error {
+	connect := regionConnection(files)
+	return func(ctx context.Context, endpoint, region string) error {
+		client, err := connect(endpoint)
+		if err != nil {
+			return err
+		}
+		defer client.Close()
+		return client.Deregister(ctx, region)
+	}
+}
+
 // regionConnectionTest sends the PVE connection test to the region daemon,
 // the only process that connects to PVE.
 func regionConnectionTest(

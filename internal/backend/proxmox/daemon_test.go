@@ -295,4 +295,37 @@ func TestRegionDaemonKeepsStateAcrossRestart(t *testing.T) {
 	if err != nil || len(files) != 1 {
 		t.Fatalf("state directory holds more than the state file: %v %v", files, err)
 	}
+	// Deregistration for another region changes nothing.
+	request(t, http.MethodPost, restarted+"/internal/v1/deregister", `{"region":"other-region"}`, http.StatusBadRequest)
+	if _, err := os.Stat(filepath.Join(stateDir, registrationFile)); err != nil {
+		t.Fatalf("a deregistration for another region removed the state file: %v", err)
+	}
+	request(t, http.MethodGet, restartOps+"/readyz", "", http.StatusOK)
+	// Deregistration deletes the state file and the region is not ready at once;
+	// it is idempotent, and the quorum poller and launch finalizer stop: PVE
+	// sees no further request.
+	for range 2 {
+		request(t, http.MethodPost, restarted+"/internal/v1/deregister", `{"region":"pve-test-1"}`, http.StatusOK)
+		files, err = os.ReadDir(stateDir)
+		if err != nil || len(files) != 0 {
+			t.Fatalf("state directory after deregistration: %v %v", files, err)
+		}
+		body := request(t, http.MethodGet, restartOps+"/readyz", "", http.StatusServiceUnavailable)
+		if string(body) != "unregistered\n" {
+			t.Fatalf("readiness after deregistration = %q", body)
+		}
+	}
+	request(t, http.MethodPost, restarted+"/internal/v1/Compute/DescribeInstances",
+		`{"scope":{"account":"`+account.String()+`","pool":"123456789012"},"req":{}}`, http.StatusServiceUnavailable)
+	requests := len(fake.RequestMethods())
+	time.Sleep(2500 * time.Millisecond) // longer than the quorum poll interval
+	if got := len(fake.RequestMethods()); got != requests {
+		t.Fatalf("PVE saw %d requests after deregistration", got-requests)
+	}
+	// A new registration brings the region back.
+	put(restarted, "pve-test-1", http.StatusOK)
+	awaitStatus(t, restartOps+"/readyz", http.StatusOK)
+	if got := read(restarted); !reflect.DeepEqual(got, want) {
+		t.Fatalf("re-registration changed inventory: got=%+v want=%+v", got, want)
+	}
 }

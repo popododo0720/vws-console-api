@@ -127,6 +127,24 @@ and `backupTokenId` and write-only `backupToken` reserved for disk exports.
 An omitted secret reuses the stored one only for the same token id. The PVE
 self-check runs before anything is written; a failed check leaves the old file.
 See [registration rules](rules.md) for size limits and reloads.
+
+`POST /internal/v1/deregister` (same mTLS requirement, body `{"region": "<name>"}`,
+400 for another region) makes the daemon forget the registration. It deletes
+`registration.json` and syncs the directory, stops the quorum gate and the
+launch finalizer and waits for them, withdraws the region API and reports
+`unregistered` on `/readyz`. When it returns, no finalizer write is running or
+can start; a request that was already past the gate may still finish. It is
+idempotent: a daemon with nothing registered answers 200. A failed removal
+changes nothing else and returns 503, so the call can be repeated.
+
+The global API sends it before it removes a region (`DELETE
+/api/v1/admin/regions/<name>`). If the daemon cannot be reached the delete
+fails with 503 and the region stays registered. To remove a region whose
+daemon is gone for good, add `?force=true`. The entry is then removed but the
+daemon, if it ever comes back, still holds the PVE token: delete the token in
+PVE (`pveum user token remove <user> <token>`). The same applies to the
+firewall and backup tokens. Changing `regionEndpoint` does not deregister the
+old daemon yet.
 No credential value belongs in region.yaml, command arguments or the
 environment. Registration decoder errors never echo submitted values.
 
@@ -154,8 +172,10 @@ Run `go test -race ./internal/backend/proxmox -run TestPVEFakeCommandRegionInven
 as a non-root user for the complete pvefake, region daemon and console API
 admin lifecycle. It builds the shipped commands, uses loopback listeners,
 registers through the console API, verifies all connection diagnostics,
-reads health, edits zones twice and deletes the region. It restarts the stack
-and repeats with a fresh memory registry and the persisted daemon identity.
+reads health, edits zones twice and deletes the region; the delete
+deregisters the daemon, which removes its state file and reports not ready. It
+restarts the stack and repeats from a fresh memory registry and an unregistered
+daemon.
 
 For a console e2e job, build `./cmd/pvefake`, `./cmd/vws-region` and
 `./cmd/vws-console-api`. Keep the files in an absolute, clean `$ROOT`, owned
@@ -206,6 +226,8 @@ Start the processes in this order:
 4. Wait for the region ops `/readyz` to return 200. POST
    `/api/v1/admin/regions/pve-test-1/test` with `{"tokenSecret":"fake-secret"}`;
    all five steps return `PASS`. GET the same region's `/health`, PATCH
-   its `zones` using the latest `ETag` as `If-Match`, then DELETE it.
+   its `zones` using the latest `ETag` as `If-Match`, then DELETE it. The
+   daemon deletes `$ROOT/state/registration.json` and its `/readyz` returns 503
+   `unregistered`.
    Stop the processes with SIGTERM. The global registrations disappear
-   on restart; the daemon's registration file remains under `$ROOT/state`.
+   on restart.

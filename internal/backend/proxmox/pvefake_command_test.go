@@ -288,6 +288,11 @@ func TestPVEFakeCommandRegionInventoryAndRestart(t *testing.T) {
 			previous = page
 		}
 		admin(http.MethodDelete, regionPath, "", http.StatusNoContent)
+		// The delete told the daemon first: its state file and token are gone.
+		if _, err := os.Stat(filepath.Join(dir, "state", registrationFile)); !os.IsNotExist(err) {
+			t.Fatalf("deleting the region left the daemon registered: %v", err)
+		}
+		awaitStatus(t, "http://"+ops+"/readyz", http.StatusServiceUnavailable)
 		if data := admin(http.MethodGet, regionsPath, "", http.StatusOK); strings.TrimSpace(string(data)) != `{"items":[]}` {
 			t.Fatalf("deleted region retained: %s", data)
 		}

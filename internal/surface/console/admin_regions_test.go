@@ -62,6 +62,7 @@ func regionCall(t *testing.T, e loginEnv, method string, body any, match string,
 func TestAdminRegionLifecycleAndCanary(t *testing.T) {
 	e, g, app, auditLog := accountFixture(t)
 	var pushed []map[string]any
+	var deregistered []string
 	var mu sync.Mutex
 	stub := httptest.NewTLSServer(regionapi.WithRegistration(func(_ context.Context, data json.RawMessage) error {
 		var body map[string]any
@@ -72,7 +73,16 @@ func TestAdminRegionLifecycleAndCanary(t *testing.T) {
 		pushed = append(pushed, body)
 		mu.Unlock()
 		return nil
-	}, http.NotFoundHandler()))
+	}, regionapi.WithDeregistration(func(ctx context.Context, data json.RawMessage) error {
+		// The registry entry must still exist while the daemon is told.
+		if _, err := g.Regions().Get(ctx, "pve-test-1"); err != nil {
+			return err
+		}
+		mu.Lock()
+		deregistered = append(deregistered, string(data))
+		mu.Unlock()
+		return nil
+	}, http.NotFoundHandler())))
 	defer stub.Close()
 	config := stub.Client().Transport.(*http.Transport).TLSClientConfig.Clone()
 	config.Certificates = stub.TLS.Certificates
@@ -84,6 +94,9 @@ func TestAdminRegionLifecycleAndCanary(t *testing.T) {
 	h := e.h.(*handler)
 	h.regionRegistration = func(ctx context.Context, _ string, data json.RawMessage) error {
 		return client.Register(ctx, data)
+	}
+	h.regionDeregistration = func(ctx context.Context, _, region string) error {
+		return client.Deregister(ctx, region)
 	}
 	h.svc = cloud.New(cloud.Config{Backends: fake.New(fake.Options{}).Set(), Regions: g.Catalog()})
 	post := regionCall(t, e, "POST", validRegion(), "", 201)
@@ -127,6 +140,11 @@ func TestAdminRegionLifecycleAndCanary(t *testing.T) {
 	if _, err := g.Regions().Get(t.Context(), original.Name); !errors.Is(err, store.ErrNotFound) {
 		t.Fatal("delete kept region")
 	}
+	mu.Lock()
+	if !reflect.DeepEqual(deregistered, []string{`{"region":"pve-test-1"}`}) {
+		t.Fatalf("deregistrations: %v", deregistered)
+	}
+	mu.Unlock()
 	rec := e.do(t, "GET", "/api/v1/regions", "", map[string]string{"Authorization": "Bearer tok"})
 	if rec.Code != 200 || strings.Contains(rec.Body.String(), original.Name) {
 		t.Fatal("delete kept catalog entry")
@@ -152,6 +170,11 @@ func TestAdminRegionLifecycleAndCanary(t *testing.T) {
 
 func TestAdminRegionDeleteRefusesProjectMappings(t *testing.T) {
 	e, g, app, auditLog := accountFixture(t)
+	var deregistrations int
+	e.h.(*handler).regionDeregistration = func(context.Context, string, string) error {
+		deregistrations++
+		return nil
+	}
 	post := regionCall(t, e, "POST", validRegion(), "", 201)
 	mapping, err := g.Projects().Put(t.Context(), store.Project{
 		Project: "123456789012", Pools: []store.ProjectPool{{Region: "pve-test-1", Pool: "mapped"}},
@@ -168,11 +191,17 @@ func TestAdminRegionDeleteRefusesProjectMappings(t *testing.T) {
 	if err := g.ClaimCluster(t.Context(), "test", "pve-other-1", time.Now()); !errors.Is(err, store.ErrExists) {
 		t.Fatalf("refusal released cluster claim: %v", err)
 	}
+	if deregistrations != 0 {
+		t.Fatal("a region with project mappings was deregistered")
+	}
 	mapping.Pools = nil
 	if _, err := g.Projects().Put(t.Context(), mapping); err != nil {
 		t.Fatal(err)
 	}
 	regionCall(t, e, "DELETE", nil, post.Header().Get("ETag"), 204)
+	if deregistrations != 1 {
+		t.Fatalf("deregistrations = %d", deregistrations)
+	}
 	if strings.Count(auditLog.String(), "\n") != 4 {
 		t.Fatalf("expected one audit per region write: %s", auditLog)
 	}
@@ -455,5 +484,89 @@ func TestAdminRegionBackupToken(t *testing.T) {
 		v.BackupTokenSecret != (store.SecretMetadata{}) ||
 		strings.Contains(responses+app.String()+auditLog.String()+string(record), secret) {
 		t.Fatal("backup removal retained metadata or the secret escaped")
+	}
+}
+
+func TestAdminRegionDeleteNeedsTheDaemonUnlessForced(t *testing.T) {
+	e, g, app, auditLog := accountFixture(t)
+	h := e.h.(*handler)
+	const endpoint = "https://region.example"
+	var calls []string
+	h.regionDeregistration = func(_ context.Context, to, region string) error {
+		calls = append(calls, to+" "+region)
+		return fmt.Errorf("dial %s: token %s", to, validRegion()["tokenSecret"])
+	}
+	regionCall(t, e, "POST", validRegion(), "", 201)
+	del := func(query string, want int) *httptest.ResponseRecorder {
+		t.Helper()
+		rec := e.do(t, "DELETE", regionPath+"/pve-test-1"+query, "",
+			map[string]string{"Authorization": "Bearer tok"})
+		if rec.Code != want {
+			t.Fatalf("DELETE%s: %d %s", query, rec.Code, rec.Body)
+		}
+		return rec
+	}
+	rec := del("", 503)
+	if !strings.Contains(rec.Body.String(), "force=true") || strings.Contains(rec.Body.String(), "canary") ||
+		strings.Contains(rec.Body.String(), endpoint) {
+		t.Fatalf("refusal: %s", rec.Body)
+	}
+	if _, err := g.Regions().Get(t.Context(), "pve-test-1"); err != nil {
+		t.Fatalf("an unreachable daemon let the entry go: %v", err)
+	}
+	if err := g.ClaimCluster(t.Context(), "test", "pve-other-1", time.Now()); !errors.Is(err, store.ErrExists) {
+		t.Fatalf("the cluster claim was released: %v", err)
+	}
+	for _, query := range []string{"?force=false", "?force=true&x=1", "?x=1", "?force=true&force=true"} {
+		del(query, 400)
+	}
+	if len(calls) != 1 {
+		t.Fatalf("a rejected query reached the daemon: %v", calls)
+	}
+	del("?force=true", 204)
+	if want := []string{endpoint + " pve-test-1", endpoint + " pve-test-1"}; !reflect.DeepEqual(calls, want) {
+		t.Fatalf("calls = %v", calls)
+	}
+	if _, err := g.Regions().Get(t.Context(), "pve-test-1"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("force kept the entry: %v", err)
+	}
+	if err := g.ClaimCluster(t.Context(), "test", "pve-other-1", time.Now()); err != nil {
+		t.Fatalf("force kept the cluster claim: %v", err)
+	}
+	if !strings.Contains(app.String(), "delete its PVE token by hand") {
+		t.Fatalf("forced removal was not logged: %s", app)
+	}
+	if all := app.String() + auditLog.String(); strings.Contains(all, "canary") || strings.Contains(all, endpoint) {
+		t.Fatal("secret or endpoint detail escaped into logs")
+	}
+}
+
+func TestAdminRegionDeleteRepeatsAfterAFailedRegistryDelete(t *testing.T) {
+	e, g, _, _ := accountFixture(t)
+	calls := 0
+	e.h.(*handler).regionDeregistration = func(ctx context.Context, _, _ string) error {
+		calls++
+		if calls == 1 {
+			// A concurrent edit makes the registry delete lose after the daemon was told.
+			v, err := g.Regions().Get(ctx, "pve-test-1")
+			if err == nil {
+				_, err = g.Regions().Update(ctx, v)
+			}
+			return err
+		}
+		return nil
+	}
+	post := regionCall(t, e, "POST", validRegion(), "", 201)
+	regionCall(t, e, "DELETE", nil, post.Header().Get("ETag"), 409)
+	if _, err := g.Regions().Get(t.Context(), "pve-test-1"); err != nil || calls != 1 {
+		t.Fatalf("entry %v, calls %d", err, calls)
+	}
+	regionCall(t, e, "DELETE", nil, "", 204)
+	if _, err := g.Regions().Get(t.Context(), "pve-test-1"); !errors.Is(err, store.ErrNotFound) || calls != 2 {
+		t.Fatalf("entry %v, calls %d", err, calls)
+	}
+	stale := e.do(t, "DELETE", regionPath+"/pve-test-1", "", map[string]string{"Authorization": "Bearer tok"})
+	if stale.Code != 404 || calls != 2 {
+		t.Fatalf("delete of a removed region: %d, calls %d", stale.Code, calls)
 	}
 }
