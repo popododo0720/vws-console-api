@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/popododo0720/vws-console-api/internal/resource"
@@ -56,23 +57,28 @@ func TestDeregistrationRoute(t *testing.T) {
 	}
 }
 
-func TestClientDeregister(t *testing.T) {
-	var got string
+func TestDeregistrationRequiresTheGlobalClientCertificate(t *testing.T) {
+	var calls atomic.Int32
 	var failure error
-	srv := httptest.NewTLSServer(WithDeregistration(func(_ context.Context, data json.RawMessage) error {
-		got = string(data)
+	h := WithDeregistration(func(context.Context, json.RawMessage) error {
+		calls.Add(1)
 		return failure
-	}, http.NotFoundHandler()))
-	defer srv.Close()
-	config := srv.Client().Transport.(*http.Transport).TLSClientConfig.Clone()
-	config.Certificates = srv.TLS.Certificates
-	client, err := NewClient(srv.URL, config)
+	}, http.NotFoundHandler())
+	client, anonymous, base := serveConnectionTest(t, h)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, base+deregisterPath,
+		strings.NewReader(`{"region":"pve-test-1"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close()
-	if err := client.Deregister(t.Context(), "pve-test-1"); err != nil || got != `{"region":"pve-test-1"}` {
-		t.Fatalf("deregister: %v, body %q", err, got)
+	if resp, err := anonymous.Do(req); err == nil {
+		_ = resp.Body.Close()
+		t.Fatalf("a client without a certificate got status %d", resp.StatusCode)
+	}
+	if calls.Load() != 0 {
+		t.Fatal("an unauthenticated request reached the daemon")
+	}
+	if err := client.Deregister(t.Context(), "pve-test-1"); err != nil || calls.Load() != 1 {
+		t.Fatalf("deregister: %v, calls %d", err, calls.Load())
 	}
 	failure = errors.New("boom")
 	if err := client.Deregister(t.Context(), "pve-test-1"); err == nil ||
