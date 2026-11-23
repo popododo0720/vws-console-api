@@ -237,10 +237,13 @@ func TestRegionDaemonKeepsStateAcrossRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	generation := 10
 	put := func(origin, region string, want int) {
 		t.Helper()
+		generation += 10
 		request(t, http.MethodPut, origin+"/internal/v1/registration", `{"region":"`+region+
-			`","cluster_name":"test","pveApiUrls":["`+pve.URL+`"],"caPem":`+strconv.Quote(string(caPEM))+
+			`","generation":`+strconv.Itoa(generation)+`,"cluster_name":"test",`+
+			`"pveApiUrls":["`+pve.URL+`"],"caPem":`+strconv.Quote(string(caPEM))+
 			`,"tokenId":"vws@pve!inventory","token":"`+canary+
 			`","zones":[{"letter":"a","nodes":["pve1"]}]}`, want)
 	}
@@ -249,6 +252,10 @@ func TestRegionDaemonKeepsStateAcrossRestart(t *testing.T) {
 		t.Fatalf("a registration for another region reached the state file: %v", err)
 	}
 	put(first, "pve-test-1", http.StatusOK)
+	if saved, err := os.ReadFile(filepath.Join(stateDir, registrationFile)); err != nil ||
+		bytes.Contains(saved, []byte("generation")) {
+		t.Fatalf("the state file changed schema: %s %v", saved, err)
+	}
 	awaitStatus(t, ops+"/readyz", http.StatusOK)
 	info, err := os.Stat(filepath.Join(stateDir, registrationFile))
 	if err != nil || info.Mode().Perm() != 0o600 {
@@ -292,7 +299,57 @@ func TestRegionDaemonKeepsStateAcrossRestart(t *testing.T) {
 		}
 	}
 	files, err := os.ReadDir(stateDir)
-	if err != nil || len(files) != 1 {
-		t.Fatalf("state directory holds more than the state file: %v %v", files, err)
+	if err != nil || len(files) != 2 {
+		t.Fatalf("state directory holds more than the state and generation files: %v %v", files, err)
+	}
+	// Deregistration for another region changes nothing.
+	deregister := func(region string, generation int, want int) {
+		t.Helper()
+		request(t, http.MethodPost, restarted+"/internal/v1/deregister",
+			`{"region":"`+region+`","generation":`+strconv.Itoa(generation)+`}`, want)
+	}
+	deregister("other-region", generation+5, http.StatusBadRequest)
+	// A removal older than the registration it would remove is stale.
+	deregister("pve-test-1", generation-1, http.StatusConflict)
+	if _, err := os.Stat(filepath.Join(stateDir, registrationFile)); err != nil {
+		t.Fatalf("a refused deregistration removed the state file: %v", err)
+	}
+	request(t, http.MethodGet, restartOps+"/readyz", "", http.StatusOK)
+	// Deregistration deletes the state file and the region is not ready at once;
+	// it is idempotent, and the quorum poller and launch finalizer stop: PVE
+	// sees no further request.
+	removal := generation + 5
+	for range 2 {
+		deregister("pve-test-1", removal, http.StatusOK)
+		files, err = os.ReadDir(stateDir)
+		if err != nil || len(files) != 1 || files[0].Name() != fenceFile {
+			t.Fatalf("state directory after deregistration: %v %v", files, err)
+		}
+		body := request(t, http.MethodGet, restartOps+"/readyz", "", http.StatusServiceUnavailable)
+		if string(body) != "unregistered\n" {
+			t.Fatalf("readiness after deregistration = %q", body)
+		}
+	}
+	// A delayed registration from before the removal is refused.
+	generation = removal - 20 // put adds 10
+	put(restarted, "pve-test-1", http.StatusConflict)
+	generation = removal - 10
+	put(restarted, "pve-test-1", http.StatusConflict)
+	if _, err := os.Stat(filepath.Join(stateDir, registrationFile)); !os.IsNotExist(err) {
+		t.Fatalf("a stale registration reached the state file: %v", err)
+	}
+	generation = removal // the next registration is newer than the removal
+	request(t, http.MethodPost, restarted+"/internal/v1/Compute/DescribeInstances",
+		`{"scope":{"account":"`+account.String()+`","pool":"123456789012"},"req":{}}`, http.StatusServiceUnavailable)
+	requests := len(fake.RequestMethods())
+	time.Sleep(2500 * time.Millisecond) // longer than the quorum poll interval
+	if got := len(fake.RequestMethods()); got != requests {
+		t.Fatalf("PVE saw %d requests after deregistration", got-requests)
+	}
+	// A new registration brings the region back.
+	put(restarted, "pve-test-1", http.StatusOK)
+	awaitStatus(t, restartOps+"/readyz", http.StatusOK)
+	if got := read(restarted); !reflect.DeepEqual(got, want) {
+		t.Fatalf("re-registration changed inventory: got=%+v want=%+v", got, want)
 	}
 }

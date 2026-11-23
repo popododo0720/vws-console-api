@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -25,6 +26,9 @@ import (
 	"github.com/popododo0720/vws-console-api/internal/resource"
 )
 
+// ErrUnregistered is the readiness state of a daemon with no registration.
+var ErrUnregistered = errors.New("unregistered")
+
 // errNoEndpoints is the state of a registration file written before it carried
 // pveApiUrls and caPem.
 var errNoEndpoints = errors.New("registration has no valid pveApiUrls and caPem; register the region again")
@@ -33,6 +37,7 @@ var errNoEndpoints = errors.New("registration has no valid pveApiUrls and caPem;
 const (
 	maxRegistrationBytes = 65 << 10
 	registrationFile     = "registration.json"
+	fenceFile            = "generation.json"
 	// dialTimeout bounds the connect and the TLS handshake to one address.
 	dialTimeout = time.Second
 )
@@ -57,6 +62,9 @@ type registrationSnapshot struct {
 	Zones      []backend.Zone `json:"zones"`
 	TokenID    string         `json:"tokenId"`
 	Token      string         `json:"token,omitempty"`
+	// Generation is the registry version of this registration. A daemon
+	// refuses one older than the highest it has accepted; 0 means unfenced.
+	Generation int64 `json:"generation,omitempty"`
 
 	FirewallTokenID string `json:"firewallTokenId,omitempty"`
 	FirewallToken   string `json:"firewallToken,omitempty"`
@@ -81,6 +89,10 @@ type Connection struct {
 	// dialPVE replaces the network dialer of connection tests; tests use it
 	// to make PVE reachable from this process alone.
 	dialPVE func(ctx context.Context, network, addr string) (net.Conn, error)
+	// step, when set, is called before each stage of a removal and before
+	// Register persists the state file, and fails it by returning an error;
+	// tests use it.
+	step func(stage string) error
 }
 
 // Open loads node-local configuration; registration may arrive after startup.
@@ -98,8 +110,10 @@ func Open(configPath, region, stateDir string) (*Connection, error) {
 	if err != nil {
 		return nil, fmt.Errorf("proxmox: state dir: %w", err)
 	}
-	if err := removeStaleTemps(stateDir, registrationFile); err != nil {
-		return nil, err
+	for _, name := range []string{registrationFile, fenceFile} {
+		if err := removeStaleTemps(stateDir, name); err != nil {
+			return nil, err
+		}
 	}
 	return &Connection{config: cfg, region: region, dir: stateDir}, nil
 }
@@ -155,6 +169,18 @@ func (c *Connection) endpointsFor(s registrationSnapshot) (*pveclient.Endpoints,
 	return endpoints, nil
 }
 
+// encodeState is the content of registration.json. The generation lives only
+// in generation.json, so the file keeps the schema of earlier releases and a
+// daemon rolled back to one still reads it.
+func encodeState(s registrationSnapshot) ([]byte, error) {
+	s.Generation = 0
+	state, err := json.Marshal(s)
+	if err != nil {
+		return nil, fmt.Errorf("encode registration: %w", err)
+	}
+	return state, nil
+}
+
 func decodeRegistration(data []byte) (registrationSnapshot, error) {
 	var s registrationSnapshot
 	dec := json.NewDecoder(bytes.NewReader(data))
@@ -167,7 +193,7 @@ func decodeRegistration(data []byte) (registrationSnapshot, error) {
 		return s, resource.Invalid("registration", "expected one JSON document")
 	}
 	if !registrationRegion.MatchString(s.Region) || !registrationCluster.MatchString(s.ClusterName) ||
-		!registrationTokenID.MatchString(s.TokenID) || len(s.Zones) > 26 {
+		!registrationTokenID.MatchString(s.TokenID) || len(s.Zones) > 26 || s.Generation < 0 {
 		return s, resource.Invalid("registration", "invalid region, cluster_name, tokenId or zones")
 	}
 	if err := resource.CheckPVEAPIURLs(s.PVEAPIURLs); err != nil {
@@ -287,10 +313,19 @@ func (c *Connection) Register(ctx context.Context, data json.RawMessage) error {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	// A pending removal is finished first, whichever path follows: replacing
+	// its tombstone with this generation must not leave the removed file.
+	f, err := c.finishPendingRemoval()
+	if err != nil {
+		return err
+	}
+	if s.Generation < f.Generation || s.Generation == f.Generation && f.Deregistered {
+		return errStaleGeneration()
+	}
 	if s.Token == "" || s.FirewallTokenID != "" && s.FirewallToken == "" ||
 		s.BackupTokenID != "" && s.BackupToken == "" {
 		stored, _, err := c.registration()
-		if err != nil && err.Error() != "unregistered" && !errors.Is(err, errNoEndpoints) {
+		if err != nil && !errors.Is(err, ErrUnregistered) && !errors.Is(err, errNoEndpoints) {
 			return err
 		}
 		// A stored secret goes only to the destination that already held it.
@@ -329,17 +364,259 @@ func (c *Connection) Register(ctx context.Context, data json.RawMessage) error {
 	if err := c.verifyOtherEndpoints(ctx, s); err != nil {
 		return err
 	}
-	state, err := json.Marshal(s)
+	state, err := encodeState(s)
 	if err != nil {
-		return fmt.Errorf("encode registration: %w", err)
+		return err
 	}
 	if len(state) > maxRegistrationBytes {
 		return resource.Invalid("registration", "serialized registration exceeds 65 KiB")
+	}
+	// The generation is persisted first: a crash between the two files only
+	// makes older pushes stale, and the console repeats the registration.
+	if want := (fence{Generation: s.Generation}); f != want {
+		if err := c.writeFence(want); err != nil {
+			return err
+		}
+	}
+	if err := c.at("persist"); err != nil {
+		return err
 	}
 	if err := writeFileAtomic(c.dir, registrationFile, state, nil); err != nil {
 		return fmt.Errorf("persist registration: %w", err)
 	}
 	return nil
+}
+
+// fence is the highest registry generation this daemon has accepted, kept in
+// its own file so that it outlives the registration. After a removal it is the
+// tombstone: Deregistered is true and every registration at or below
+// Generation is refused, so a push delayed in the network or sent by another
+// console replica cannot bring the region back. A tombstone is Pending from
+// its write until the unlink of registration.json is synced. RemovedDigest
+// (hex SHA-256 of the bytes) and RemovedFile (device, inode and birth time) name the
+// file that removal unlinks, so a file beside a tombstone can be told apart
+// from one a rolled-back daemon wrote since, even with the same bytes.
+type fence struct {
+	Generation    int64  `json:"generation"`
+	Deregistered  bool   `json:"deregistered"`
+	Pending       bool   `json:"pending,omitempty"`
+	RemovedDigest string `json:"removedDigest,omitempty"`
+	RemovedFile   fileID `json:"removedFile,omitzero"`
+}
+
+// fileID identifies one file. A write by temporary file and rename always
+// makes a new inode with a new birth time, so equal bytes written again do not
+// have the same fileID, while chmod and chown keep it. Btime is 0 where the
+// platform reports no birth time. The zero value means the identity is
+// unknown.
+type fileID struct {
+	Dev   uint64 `json:"dev"`
+	Ino   uint64 `json:"ino"`
+	Btime int64  `json:"btimeNs,omitempty"`
+}
+
+// sameFile reports whether a and b name the same known file. Birth times are
+// compared only when both lookups report one, since statx may report it on one
+// lookup and not the next.
+func (a fileID) sameFile(b fileID) bool {
+	if a.Ino == 0 || a.Dev != b.Dev || a.Ino != b.Ino {
+		return false
+	}
+	return a.Btime == 0 || b.Btime == 0 || a.Btime == b.Btime
+}
+
+func errStaleGeneration() error {
+	return &resource.Error{Code: resource.CodeConflict, Message: "generation is older than the daemon's current one"}
+}
+
+func (c *Connection) readFence() (fence, error) {
+	var f fence
+	data, err := os.ReadFile(filepath.Join(c.dir, fenceFile))
+	if errors.Is(err, os.ErrNotExist) {
+		return f, nil
+	}
+	if err != nil || json.Unmarshal(data, &f) != nil || f.Generation < 0 {
+		return f, errors.New("generation file unreadable")
+	}
+	return f, nil
+}
+
+func (c *Connection) writeFence(f fence) error {
+	data, err := json.Marshal(f)
+	if err != nil {
+		return fmt.Errorf("encode generation: %w", err)
+	}
+	if err := writeFileAtomic(c.dir, fenceFile, data, nil); err != nil {
+		return fmt.Errorf("persist generation: %w", err)
+	}
+	return nil
+}
+
+// stateFile returns the hex SHA-256 and the identity of registration.json, or
+// "" when there is none. The identity is zero when the platform has none.
+func (c *Connection) stateFile() (string, fileID, error) {
+	file := filepath.Join(c.dir, registrationFile)
+	info, err := os.Lstat(file)
+	if errors.Is(err, os.ErrNotExist) {
+		return "", fileID{}, nil
+	}
+	var data []byte
+	if err == nil {
+		data, err = os.ReadFile(file)
+	}
+	if err != nil {
+		return "", fileID{}, errors.New("registration unreadable")
+	}
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:]), fileIdentity(file, info), nil
+}
+
+// finishPendingRemoval settles a tombstone beside registration.json and
+// returns the fence that holds afterwards. It runs under the mutex on startup,
+// on every reload and before every Register and Deregister, before the stored
+// credentials can be read or the tombstone replaced.
+//
+// A pending tombstone owns the file only when both its RemovedDigest and its
+// known RemovedFile match: the unlink is still owed (a crash or a failed
+// unlink), and it is finished, synced and the tombstone marked done. From the
+// moment a pending tombstone owns the registration it is gone: the error
+// always matches ErrUnregistered, joined with the storage error when the
+// cleanup failed, and the next call retries the cleanup. Any other file beside
+// a tombstone (the tombstone is done, or the bytes, the inode or the birth
+// time differ, or the identity is unknown) was written since by a rolled-back daemon, which does
+// not know the fence: it is kept and served, and the tombstone becomes a plain
+// fence at the same generation, so older generations stay refused.
+func (c *Connection) finishPendingRemoval() (fence, error) {
+	f, err := c.readFence()
+	if err != nil || !f.Deregistered {
+		return f, err
+	}
+	digest, id, err := c.stateFile()
+	if err != nil {
+		return f, err
+	}
+	owned := f.Pending && digest == f.RemovedDigest && id.sameFile(f.RemovedFile)
+	if digest != "" && !owned {
+		f = fence{Generation: f.Generation}
+		return f, c.writeFence(f)
+	}
+	if !f.Pending {
+		return f, nil
+	}
+	if err := c.completeRemoval(f.Generation, digest != ""); err != nil {
+		return f, errors.Join(ErrUnregistered, err)
+	}
+	return fence{Generation: f.Generation, Deregistered: true}, nil
+}
+
+// completeRemoval finishes the removal a pending tombstone at generation owns:
+// it drops the cached backend, unlinks registration.json when unlink is set,
+// syncs the directory and marks the tombstone done. A failure leaves the
+// pending tombstone, so a later call repeats it.
+func (c *Connection) completeRemoval(generation int64, unlink bool) error {
+	c.dropBackend()
+	if unlink {
+		if err := c.at("unlink"); err != nil {
+			return err
+		}
+		if err := os.Remove(filepath.Join(c.dir, registrationFile)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("remove registration: %w", err)
+		}
+	}
+	if err := c.at("sync"); err != nil {
+		return err
+	}
+	if err := syncDir(c.dir); err != nil {
+		return err
+	}
+	return c.writeFence(fence{Generation: generation, Deregistered: true})
+}
+
+func (c *Connection) dropBackend() {
+	c.current, c.digest = nil, [32]byte{}
+	c.endpoints, c.endpointsID = nil, ""
+	if c.client != nil {
+		c.client.CloseIdleConnections()
+	}
+}
+
+// at calls the test hook before stage; an error from it fails the caller there.
+func (c *Connection) at(stage string) error {
+	if c.step == nil {
+		return nil
+	}
+	return c.step(stage)
+}
+
+// Deregister forgets the registration, and with it every token secret, in
+// this order under the mutex of Register and Check: stale temporary files go,
+// a pending tombstone with the generation and the digest and identity of
+// registration.json is persisted, the file is unlinked, the directory is
+// fsynced and the tombstone is marked done. The request names the region,
+// which must match -region, and a generation, which must be at least the
+// highest accepted (equal only to repeat a removal); anything older is refused
+// with 409 and changes nothing.
+//
+// removed reports whether the registration is gone. A failure before the
+// pending tombstone is persisted changes no registration and the caller keeps
+// serving. Once it is persisted the removal is committed: removed is true even
+// when err is non-nil (the unlink, the directory sync or the done marker
+// failed), the caller must stop everything that runs on the old registration,
+// and a repeat or the next reload finishes the cleanup. It is idempotent: with
+// no file it still syncs.
+func (c *Connection) Deregister(data json.RawMessage) (removed bool, err error) {
+	var req struct {
+		Region     string `json:"region"`
+		Generation int64  `json:"generation"`
+	}
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+	var extra any
+	if err := dec.Decode(&req); err != nil || !errors.Is(dec.Decode(&extra), io.EOF) || req.Generation < 1 {
+		return false, resource.Invalid("deregistration", "expected one JSON object with region and generation")
+	}
+	if req.Region != c.region {
+		return false, resource.Invalid("region", "deregistration is for another region than this instance")
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if err := c.at("cleanup"); err != nil {
+		return false, err
+	}
+	for _, name := range []string{registrationFile, fenceFile} {
+		if err := removeStaleTemps(c.dir, name); err != nil {
+			return false, err
+		}
+	}
+	f, err := c.finishPendingRemoval()
+	if errors.Is(err, ErrUnregistered) {
+		return true, err
+	}
+	if err != nil {
+		return false, err
+	}
+	if req.Generation < f.Generation || req.Generation == f.Generation && !f.Deregistered {
+		return false, errStaleGeneration()
+	}
+	if f.Generation == req.Generation {
+		c.dropBackend()
+		if err := c.at("sync"); err != nil {
+			return true, err
+		}
+		return true, syncDir(c.dir)
+	}
+	digest, id, err := c.stateFile()
+	if err != nil {
+		return false, err
+	}
+	if err := c.at("fence"); err != nil {
+		return false, err
+	}
+	pending := fence{Generation: req.Generation, Deregistered: true, Pending: true, RemovedDigest: digest, RemovedFile: id}
+	if err := c.writeFence(pending); err != nil {
+		return false, err
+	}
+	return true, c.completeRemoval(req.Generation, digest != "")
 }
 
 // sameTrust reports whether s sends a stored secret nowhere new: the stored
@@ -416,9 +693,16 @@ func (c *Connection) Check(ctx context.Context) (*Backend, error) {
 
 func (c *Connection) registration() (registrationSnapshot, []byte, error) {
 	var s registrationSnapshot
+	settled, err := c.finishPendingRemoval()
+	if err != nil {
+		return s, nil, err
+	}
+	if settled.Deregistered {
+		return s, nil, ErrUnregistered
+	}
 	f, err := os.OpenFile(filepath.Join(c.dir, registrationFile), os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 	if errors.Is(err, os.ErrNotExist) {
-		return s, nil, errors.New("unregistered")
+		return s, nil, ErrUnregistered
 	}
 	if err != nil {
 		return s, nil, errors.New("registration unreadable")

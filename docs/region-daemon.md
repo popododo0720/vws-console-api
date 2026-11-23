@@ -92,7 +92,8 @@ closes for good and a handler still in flight is refused.
 
 ## Registration and state
 
-All daemon state is one file, `registration.json`, in the state directory:
+All daemon state is `registration.json` and the small `generation.json` fence (see
+deregistration below) in the state directory:
 `-state-dir`, default `/var/lib/vws-region/<region>` (systemd
 `StateDirectory`). The daemon creates the directory with mode 0700 and the file with mode 0600. It
 refuses to start if the directory exists but is a symlink, belongs to another
@@ -127,6 +128,58 @@ and `backupTokenId` and write-only `backupToken` reserved for disk exports.
 An omitted secret reuses the stored one only for the same token id. The PVE
 self-check runs before anything is written; a failed check leaves the old file.
 See [registration rules](rules.md) for size limits and reloads.
+
+`POST /internal/v1/deregister` (same mTLS requirement, body
+`{"region": "<name>", "generation": <n>}`, 400 for another region) makes the
+daemon forget the registration. A registration push may carry the registry
+version as `generation`; one without it is generation 0 and is accepted as
+before while no removal happened. The daemon keeps the highest generation it
+accepted in `generation.json` next to `registration.json`, and refuses (409) a
+registration older than it or at the level of a removal, and a removal older
+than it or at the level of a registration. This fences a push that is delayed
+or comes from another console replica. `GET /internal/v1/fence` answers
+`{"generation": true}` before the region is ready; a daemon that does not
+serve it predates the fence.
+
+On a removal the daemon deletes stale temporary files, persists a pending
+tombstone (the generation, plus the SHA-256 and the device, inode and birth time of
+the `registration.json` it removes), unlinks `registration.json`, syncs the
+directory and marks the tombstone done. A failure before the tombstone is
+persisted changes no registration and the region keeps serving. Once it is
+persisted the removal is committed: the daemon stops the quorum gate and the
+launch finalizer and waits for them, withdraws the region API and reports
+`unregistered` on `/readyz`, even if the unlink, the directory sync or the
+done marker failed; that case returns 503, and a repeat or the next reload
+finishes the cleanup. When it returns, no finalizer write is running or can
+start. A request that was already past the gate may still finish, and a PVE
+task already submitted, such as a VM start, may complete. It is idempotent: a
+daemon with nothing registered answers 200.
+
+A `registration.json` found beside a tombstone at startup, on a reload or
+before a registration or removal is settled first. The file is the one the
+removal left behind (a crash, or a failed unlink) only if the tombstone is
+pending and both the digest and the device, inode and birth time match: the daemon
+reports `unregistered` and stops its workers at once, then finishes the unlink
+and the sync, retrying on later passes if they fail. Any other file is a
+registration written since by a daemon rolled back to an earlier release,
+which knows no fence: the daemon keeps and serves it and replaces the tombstone
+with a plain fence at the same generation, so older generations stay refused.
+The older binary writes by temporary file and rename, so its registration is
+always a new inode with a new birth time, even with byte-identical
+credentials, while chmod or chown of the old file (repairing its permissions
+after a failed unlink) changes neither: the pending removal stays
+authoritative until the old file is gone. Where statx reports no birth time
+the identity is the device and inode alone; then one case remains: once the
+old file was unlinked, a later file that reuses its inode with the same bytes
+would be taken for it. Where the platform
+reports no file identity, a file beside a tombstone is always kept: the daemon
+never deletes a file it cannot prove is the removed one. A registration that
+supplies every secret settles the tombstone the same way before it replaces
+it.
+
+Rollback: `registration.json` keeps the schema of earlier releases (no
+`generation`), so a daemon can be rolled back and still reads it; the older
+binary ignores `generation.json`.
 No credential value belongs in region.yaml, command arguments or the
 environment. Registration decoder errors never echo submitted values.
 

@@ -389,9 +389,13 @@ func TestOmittedWriteTokensGoOnlyToStoredAddresses(t *testing.T) {
 	}
 	// Failover sends every token to every address of the list, so an omitted
 	// write secret is reused for any subset of the stored addresses.
-	for name, urls := range map[string][]string{"reordered": {b.URL, a.URL}, "first dropped": {b.URL}} {
-		if err := c.Register(t.Context(), body(urls, false, true)); err != nil {
-			t.Errorf("%s: %v", name, err)
+	// In order: dropping an address narrows the stored set, so it goes last.
+	for _, tc := range []struct {
+		name string
+		urls []string
+	}{{"reordered", []string{b.URL, a.URL}}, {"first dropped", []string{b.URL}}} {
+		if err := c.Register(t.Context(), body(tc.urls, false, true)); err != nil {
+			t.Errorf("%s: %v", tc.name, err)
 		}
 	}
 	// A new address would receive a secret it never held.
