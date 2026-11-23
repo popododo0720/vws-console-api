@@ -112,13 +112,8 @@ func run(ctx context.Context, args []string) (err error) {
 		gated.Store(nil)
 	}
 	probe := &readiness{check: func(ctx context.Context) error {
-		b, err := conn.Check(ctx)
+		b, err := checkThen(ctx, conn.Check, stopGate)
 		if err != nil {
-			if errors.Is(err, proxmox.ErrUnregistered) {
-				// The registration is gone (removed, or a tombstone finished by the
-				// reload): nothing may keep running on the old one.
-				stopGate()
-			}
 			if ctx.Err() == nil {
 				state.Store(nil)
 			}
@@ -262,8 +257,9 @@ func run(ctx context.Context, args []string) (err error) {
 // /readyz says unregistered at once. A request already past the gate may
 // finish; none starts. If remove fails before the registration is gone,
 // nothing is stopped and the region keeps working. If it fails after (the
-// directory sync), the removal is committed: stop still runs and the error is
-// returned so that the caller repeats the call, which redoes the sync.
+// unlink, the directory sync or the done marker), the removal is committed:
+// stop still runs and the error is returned so that the caller repeats the
+// call, which finishes the cleanup.
 func deregisterThen(
 	data json.RawMessage, remove func(json.RawMessage) (bool, error), stop func(),
 ) error {
@@ -272,6 +268,20 @@ func deregisterThen(
 		stop()
 	}
 	return err
+}
+
+// checkThen runs check and, when it reports the registration gone (removed,
+// or owned by a pending tombstone, even when a storage error is joined to that
+// report because the cleanup failed), calls stop first: nothing may keep
+// running on the old registration.
+func checkThen(
+	ctx context.Context, check func(context.Context) (*proxmox.Backend, error), stop func(),
+) (*proxmox.Backend, error) {
+	b, err := check(ctx)
+	if errors.Is(err, proxmox.ErrUnregistered) {
+		stop()
+	}
+	return b, err
 }
 
 func finalizeLaunches(

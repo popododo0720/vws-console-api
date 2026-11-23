@@ -2,8 +2,6 @@ package proxmox
 
 import (
 	"bytes"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"net/http/httptest"
@@ -130,31 +128,36 @@ func TestStaleGenerationsAreRefusedAfterARemoval(t *testing.T) {
 	}
 }
 
-// Cleanup of stale files comes first: if it fails nothing has changed and
-// the caller must keep serving. After the unlink a failed sync is a committed
-// teardown that a repeat completes.
+// Cleanup of stale files comes first: if it or the tombstone write fails
+// nothing has changed and the caller must keep serving. Once the pending
+// tombstone is persisted the removal is committed: a failed unlink or sync
+// still reports the registration removed and gone from readiness, and a later
+// reload or repeat finishes the cleanup.
 func TestDeregisterFailurePoints(t *testing.T) {
 	boom := errors.New("injected")
-	for _, stage := range []string{"cleanup", "fence", "unlink"} {
+	failAt := func(conn *Connection, stage string) {
+		conn.step = func(s string) error {
+			if s == stage {
+				return boom
+			}
+			return nil
+		}
+	}
+	for _, stage := range []string{"cleanup", "fence"} {
 		t.Run(stage, func(t *testing.T) {
 			conn, state := openForDeregistration(t)
 			file := filepath.Join(state, registrationFile)
 			writeFixture(t, file, []byte("kept"))
 			conn.current = &Backend{}
-			conn.step = func(s string) error {
-				if s == stage {
-					return boom
-				}
-				return nil
-			}
+			failAt(conn, stage)
 			if removed, err := conn.Deregister(deregisterBody(4)); !errors.Is(err, boom) || removed {
 				t.Fatalf("%v %v", removed, err)
 			}
 			if data, err := os.ReadFile(file); err != nil || string(data) != "kept" || conn.current == nil {
-				t.Fatalf("a failure before the unlink changed state: %q %v", data, err)
+				t.Fatalf("a failure before the tombstone changed state: %q %v", data, err)
 			}
-			if _, err := os.Stat(filepath.Join(state, fenceFile)); stage != "unlink" && err == nil {
-				t.Fatal("the generation was persisted before cleanup finished")
+			if _, err := os.Stat(filepath.Join(state, fenceFile)); err == nil {
+				t.Fatal("the generation was persisted")
 			}
 			conn.step = nil
 			if removed, err := conn.Deregister(deregisterBody(4)); err != nil || !removed {
@@ -162,22 +165,55 @@ func TestDeregisterFailurePoints(t *testing.T) {
 			}
 		})
 	}
+	t.Run("unlink", func(t *testing.T) {
+		conn, state := openForDeregistration(t)
+		file := filepath.Join(state, registrationFile)
+		writeFixture(t, file, []byte("kept"))
+		conn.current = &Backend{}
+		failAt(conn, "unlink")
+		if removed, err := conn.Deregister(deregisterBody(4)); !errors.Is(err, boom) || !removed {
+			t.Fatalf("a failed unlink after the tombstone must report the removal: %v %v", removed, err)
+		}
+		if conn.current != nil {
+			t.Fatal("the cached backend outlived the removal")
+		}
+		// Readiness reports the registration gone while the unlink keeps failing,
+		// so the daemon stops the old quorum gate and finalizer.
+		if _, err := conn.Check(t.Context()); !errors.Is(err, ErrUnregistered) || !errors.Is(err, boom) {
+			t.Fatalf("readiness while the cleanup fails: %v", err)
+		}
+		if _, err := os.Stat(file); err != nil {
+			t.Fatalf("the injected failure did not keep the file: %v", err)
+		}
+		conn.step = nil
+		if _, err := conn.Check(t.Context()); !errors.Is(err, ErrUnregistered) || errors.Is(err, boom) {
+			t.Fatalf("a later pass did not finish the cleanup: %v", err)
+		}
+		if _, err := os.Stat(file); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("the file survived the later pass: %v", err)
+		}
+		if f, err := conn.readFence(); err != nil || f != (fence{Generation: 4, Deregistered: true}) {
+			t.Fatalf("tombstone after the later pass: %+v %v", f, err)
+		}
+		if removed, err := conn.Deregister(deregisterBody(4)); err != nil || !removed {
+			t.Fatalf("retry: %v %v", removed, err)
+		}
+	})
 	t.Run("sync", func(t *testing.T) {
 		conn, state := openForDeregistration(t)
 		writeFixture(t, filepath.Join(state, registrationFile), []byte("kept"))
 		conn.current = &Backend{}
-		conn.step = func(s string) error {
-			if s == "sync" {
-				return boom
-			}
-			return nil
-		}
+		failAt(conn, "sync")
 		removed, err := conn.Deregister(deregisterBody(4))
 		if !errors.Is(err, boom) || !removed {
 			t.Fatalf("a failed sync must report the committed removal: %v %v", removed, err)
 		}
 		if _, err := os.Stat(filepath.Join(state, registrationFile)); !errors.Is(err, os.ErrNotExist) || conn.current != nil {
 			t.Fatalf("file or cached backend survived: %v", err)
+		}
+		// A retry whose recovery fails after the unlink still reports the removal.
+		if removed, err := conn.Deregister(deregisterBody(4)); !errors.Is(err, boom) || !removed {
+			t.Fatalf("retry with the sync still failing: %v %v", removed, err)
 		}
 		syncs := 0
 		conn.step = func(s string) error {
@@ -186,14 +222,15 @@ func TestDeregisterFailurePoints(t *testing.T) {
 			}
 			return nil
 		}
-		if removed, err := conn.Deregister(deregisterBody(4)); err != nil || !removed || syncs != 1 {
+		if removed, err := conn.Deregister(deregisterBody(4)); err != nil || !removed || syncs == 0 {
 			t.Fatalf("retry: %v %v syncs=%d", removed, err, syncs)
 		}
 	})
 }
 
 // A crash after the tombstone commits and before the unlink leaves the old
-// credentials on disk beside a pending tombstone that names their digest.
+// credentials on disk beside a pending tombstone that names their digest and
+// inode.
 // They must not come back, on startup or on a reload, and the pending unlink
 // is finished. Other bytes beside it were written since and are kept.
 func TestTombstoneBesideARegistrationFileIsAuthoritative(t *testing.T) {
@@ -207,19 +244,23 @@ func TestTombstoneBesideARegistrationFileIsAuthoritative(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sum := sha256.Sum256(old)
-	pending := fence{Generation: 9, Deregistered: true, Pending: true, RemovedDigest: hex.EncodeToString(sum[:])}
 	conn, err := Open(config, "pve-test-1", state)
 	if err != nil {
 		t.Fatal(err)
 	}
 	file := filepath.Join(state, registrationFile)
+	var pending fence
 	leave := func() {
 		t.Helper()
+		writeFixture(t, file, old)
+		digest, id, err := conn.stateFile()
+		if err != nil || id == (fileID{}) {
+			t.Fatalf("identity: %+v %v", id, err)
+		}
+		pending = fence{Generation: 9, Deregistered: true, Pending: true, RemovedDigest: digest, RemovedFile: id}
 		if err := conn.writeFence(pending); err != nil {
 			t.Fatal(err)
 		}
-		writeFixture(t, file, old)
 	}
 	leave()
 	conn.Close()
@@ -291,7 +332,7 @@ func TestRegistrationWithEverySecretFinishesAPendingRemoval(t *testing.T) {
 		}
 	}
 	fail("unlink")
-	if removed, err := conn.Deregister(deregisterBody(5)); removed || !errors.Is(err, boom) {
+	if removed, err := conn.Deregister(deregisterBody(5)); !removed || !errors.Is(err, boom) {
 		t.Fatalf("deregistration: %v %v", removed, err)
 	}
 	fail("persist")
@@ -408,5 +449,58 @@ func TestStateFileKeepsTheLegacySchema(t *testing.T) {
 	var old legacy
 	if err := dec.Decode(&old); err != nil {
 		t.Fatalf("the previous schema refuses the state file: %v\n%s", err, state)
+	}
+}
+
+// A crash in the middle of a removal leaves the old file beside a pending
+// tombstone. A daemon rolled back to the older binary serves it, and a
+// re-registration with the same credentials writes the same bytes by
+// temporary file and rename. That is a new inode: the upgraded daemon keeps
+// it and is ready, while the untouched leftover is still removed.
+func TestByteIdenticalRegistrationAfterARollbackIsKept(t *testing.T) {
+	pve, _ := clusterFake(t, "test")
+	dir := privateDir(t)
+	config := filepath.Join(dir, "region.yaml")
+	writeFixture(t, config, []byte("read_only: true\n"))
+	state := filepath.Join(dir, "state")
+	file := filepath.Join(state, registrationFile)
+	conn, err := Open(config, "pve-test-1", state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.Register(t.Context(), fencedRegistration(t, pve, 3)); err != nil {
+		t.Fatal(err)
+	}
+	crash := errors.New("crash")
+	conn.step = func(s string) error {
+		if s == "unlink" {
+			return crash
+		}
+		return nil
+	}
+	if removed, err := conn.Deregister(deregisterBody(5)); !removed || !errors.Is(err, crash) {
+		t.Fatalf("deregistration: %v %v", removed, err)
+	}
+	conn.Close()
+	old, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeFileAtomic(state, registrationFile, old, nil); err != nil {
+		t.Fatal(err)
+	}
+	conn, err = Open(config, "pve-test-1", state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(conn.Close)
+	if _, err := conn.Check(t.Context()); err != nil {
+		t.Fatalf("the upgraded daemon dropped the re-registration: %v", err)
+	}
+	if data, err := os.ReadFile(file); err != nil || !bytes.Equal(data, old) {
+		t.Fatalf("the re-registration changed on disk: %v", err)
+	}
+	if f, err := conn.readFence(); err != nil || f != (fence{Generation: 5}) {
+		t.Fatalf("the fence after the re-registration: %+v %v", f, err)
 	}
 }

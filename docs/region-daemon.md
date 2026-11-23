@@ -142,34 +142,38 @@ or comes from another console replica. `GET /internal/v1/fence` answers
 serve it predates the fence.
 
 On a removal the daemon deletes stale temporary files, persists a pending
-tombstone (the generation and the SHA-256 of the `registration.json` bytes it
-removes), unlinks `registration.json`, syncs the directory and marks the
-tombstone done. A failure before the unlink changes no registration and the
-region keeps serving. Once the file is gone the daemon stops the quorum gate
-and the launch finalizer and waits for them, withdraws the region API and
-reports `unregistered` on `/readyz`, even if the directory sync failed; that
-case returns 503 and a repeat redoes the sync. When it returns, no finalizer
-write is running or can start. A request that was already past the gate may
-still finish, and a PVE task already submitted, such as a VM start, may
-complete. It is idempotent: a daemon with nothing registered answers 200.
+tombstone (the generation, plus the SHA-256 and the device, inode and ctime of
+the `registration.json` it removes), unlinks `registration.json`, syncs the
+directory and marks the tombstone done. A failure before the tombstone is
+persisted changes no registration and the region keeps serving. Once it is
+persisted the removal is committed: the daemon stops the quorum gate and the
+launch finalizer and waits for them, withdraws the region API and reports
+`unregistered` on `/readyz`, even if the unlink, the directory sync or the
+done marker failed; that case returns 503, and a repeat or the next reload
+finishes the cleanup. When it returns, no finalizer write is running or can
+start. A request that was already past the gate may still finish, and a PVE
+task already submitted, such as a VM start, may complete. It is idempotent: a
+daemon with nothing registered answers 200.
 
 A `registration.json` found beside a tombstone at startup, on a reload or
-before a registration or removal is settled first. If the tombstone is pending
-and the file has the recorded digest, it is the file the removal left behind
-(a crash, or a failed unlink): the daemon finishes the unlink and the sync and
-stays unregistered. Any other file (the tombstone is done, or the bytes differ)
-is a registration written since by a daemon rolled back to an earlier release,
+before a registration or removal is settled first. The file is the one the
+removal left behind (a crash, or a failed unlink) only if the tombstone is
+pending and both the digest and the device, inode and ctime match: the daemon
+reports `unregistered` and stops its workers at once, then finishes the unlink
+and the sync, retrying on later passes if they fail. Any other file is a
+registration written since by a daemon rolled back to an earlier release,
 which knows no fence: the daemon keeps and serves it and replaces the tombstone
 with a plain fence at the same generation, so older generations stay refused.
-A registration that supplies every secret settles the tombstone the same way
-before it replaces it.
+The older binary writes by temporary file and rename, so its registration is
+always a new inode, even with byte-identical credentials. Where the platform
+reports no file identity, a file beside a tombstone is always kept: the daemon
+never deletes a file it cannot prove is the removed one. A registration that
+supplies every secret settles the tombstone the same way before it replaces
+it.
 
 Rollback: `registration.json` keeps the schema of earlier releases (no
 `generation`), so a daemon can be rolled back and still reads it; the older
-binary ignores `generation.json`. One case is still taken as the leftover: a
-crash in the middle of a removal, then a rollback, then a re-registration with
-byte-identical credentials. The upgraded daemon removes that file and reports
-`unregistered`; register the region again.
+binary ignores `generation.json`.
 No credential value belongs in region.yaml, command arguments or the
 environment. Registration decoder errors never echo submitted values.
 
