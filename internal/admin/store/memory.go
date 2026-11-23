@@ -69,6 +69,28 @@ func (m *Memory) Delete(_ context.Context, key string, expected Version) error {
 	if err := m.check(key, expected); err != nil {
 		return err
 	}
+	if err := m.unclaimed(key); err != nil {
+		return err
+	}
+	delete(m.entries, key)
+	return nil
+}
+
+// UpdateUnclaimed replaces a region key at expected while it has no pool claims.
+func (m *Memory) UpdateUnclaimed(_ context.Context, key string, value []byte, expected Version) (Version, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err := m.check(key, expected); err != nil {
+		return 0, err
+	}
+	if err := m.unclaimed(key); err != nil {
+		return 0, err
+	}
+	return m.put(key, value), nil
+}
+
+// unclaimed refuses a region key that project pool claims still reference.
+func (m *Memory) unclaimed(key string) error {
 	if name, ok := strings.CutPrefix(key, "regions/"); ok {
 		for claim := range m.entries {
 			if strings.HasPrefix(claim, "project-pools/"+name+"/") {
@@ -76,7 +98,6 @@ func (m *Memory) Delete(_ context.Context, key string, expected Version) error {
 			}
 		}
 	}
-	delete(m.entries, key)
 	return nil
 }
 

@@ -40,12 +40,66 @@ func Run(t *testing.T, newBackend func(t *testing.T) store.Backend) {
 	t.Run("lifecycle", func(t *testing.T) { lifecycle(t, newBackend(t)) })
 	t.Run("region deletion dependencies", func(t *testing.T) { regionDeletionDependencies(t, newBackend(t)) })
 	t.Run("region deletion mapping race", func(t *testing.T) { regionDeletionMappingRace(t, newBackend(t)) })
+	t.Run("region deletion mark", func(t *testing.T) { regionDeletionMark(t, newBackend(t)) })
 	t.Run("one writer wins", func(t *testing.T) { oneWriterWins(t, newBackend(t)) })
 	t.Run("project pool claims", func(t *testing.T) { projectClaims(t, newBackend(t)) })
 	t.Run("project list", func(t *testing.T) { projectList(t, newBackend(t)) })
 	t.Run("project concurrency", func(t *testing.T) { projectConcurrency(t, newBackend(t)) })
 	t.Run("project interrupted write", func(t *testing.T) { projectInterruptedWrite(t, newBackend(t)) })
 	t.Run("project transaction limit", func(t *testing.T) { projectTransactionLimit(t, newBackend(t)) })
+}
+
+// A region is marked deleting only at its version and only while no project
+// pool maps it, in one transaction; once marked, no mapping can commit.
+func regionDeletionMark(t *testing.T, b store.Backend) {
+	ctx := t.Context()
+	g := store.New(b)
+	region, err := g.Regions().Create(ctx, Region("pve-test-1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	projectRegions(t, b, "pve-test-10")
+	if _, err := g.Projects().Put(ctx, store.Project{
+		Project: "333333333333", Pools: []store.ProjectPool{{Region: "pve-test-10", Pool: "mapped"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	mapping, err := g.Projects().Put(ctx, store.Project{
+		Project: "111111111111", Pools: []store.ProjectPool{{Region: region.Name, Pool: "mapped"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := g.MarkRegionDeleting(ctx, region); !errors.Is(err, store.ErrRegionInUse) {
+		t.Fatalf("mark of a mapped region: %v", err)
+	}
+	if got, err := g.Regions().Get(ctx, region.Name); err != nil || got.Deleting || got.Version != region.Version {
+		t.Fatalf("a refused mark changed the region: %+v %v", got, err)
+	}
+	mapping.Pools = nil
+	if _, err := g.Projects().Put(ctx, mapping); err != nil {
+		t.Fatal(err)
+	}
+	stale := region
+	stale.Version++
+	if _, err := g.MarkRegionDeleting(ctx, stale); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("mark at another version: %v", err)
+	}
+	marked, err := g.MarkRegionDeleting(ctx, region)
+	if err != nil || !marked.Deleting || marked.Version <= region.Version {
+		t.Fatalf("mark: %+v %v", marked, err)
+	}
+	if got, err := g.Regions().Get(ctx, region.Name); err != nil || !got.Deleting || got.Version != marked.Version {
+		t.Fatalf("stored mark: %+v %v", got, err)
+	}
+	if _, err := g.Projects().Put(ctx, store.Project{
+		Project: "222222222222", Pools: []store.ProjectPool{{Region: region.Name, Pool: "mapped"}},
+	}); !errors.Is(err, store.ErrRegionDeleting) {
+		t.Fatalf("mapping of a marked region: %v", err)
+	}
+	if err := g.Regions().Delete(ctx, region.Name, marked.Version); err != nil {
+		t.Fatalf("delete of the marked region: %v", err)
+	}
 }
 
 func regionDeletionDependencies(t *testing.T, b store.Backend) {

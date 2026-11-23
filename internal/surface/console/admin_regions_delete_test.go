@@ -253,10 +253,16 @@ func TestRegionDeleteOverlappingCallsKeepTheMark(t *testing.T) {
 	}
 }
 
-func TestRegionDeleteOfAMappedRegionReleasesTheMark(t *testing.T) {
+// A mapped region is refused in the same registry transaction that would mark
+// it, so it is never marked and stays editable.
+func TestRegionDeleteOfAMappedRegionIsNotMarked(t *testing.T) {
 	e, g, d, h := deleteFixture(t)
 	regionCall(t, e, "POST", validRegion(), "", 201)
 	if err := mapRegion(t, g); err != nil {
+		t.Fatal(err)
+	}
+	before, err := g.Regions().Get(t.Context(), "pve-test-1")
+	if err != nil {
 		t.Fatal(err)
 	}
 	calls := 0
@@ -269,13 +275,71 @@ func TestRegionDeleteOfAMappedRegionReleasesTheMark(t *testing.T) {
 		t.Fatalf("message: %s", rec.Body)
 	}
 	stored, err := g.Regions().Get(t.Context(), "pve-test-1")
-	if err != nil || stored.Deleting || calls != 0 {
+	if err != nil || stored.Deleting || stored.Version != before.Version || calls != 0 {
 		t.Fatalf("after a refusal: %+v %v, daemon calls %d", stored, err, calls)
 	}
 	if _, registered, _ := d.state(); !registered {
 		t.Fatal("a mapped region was deregistered")
 	}
 	regionCall(t, e, "PATCH", map[string]any{}, strconv.Quote(strconv.FormatInt(int64(stored.Version), 10)), 200)
+}
+
+// The last mapping is removed between attempts. The next DELETE marks the
+// region and waits in its daemon call while a joined DELETE commits the removal
+// and loses its reply; the first then fails to dial. Nothing clears the mark,
+// a new mapping is refused, and a repeat completes.
+func TestRegionDeleteAfterTheLastMappingIsRemoved(t *testing.T) {
+	e, g, d, h := deleteFixture(t)
+	regionCall(t, e, "POST", validRegion(), "", 201)
+	mapping, err := g.Projects().Put(t.Context(), store.Project{ // another project than mapRegion's
+		Project: "210987654321", Pools: []store.ProjectPool{{Region: "pve-test-1", Pool: "p"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	regionCall(t, e, "DELETE", nil, "", 409)
+	mapping.Pools = nil
+	if _, err := g.Projects().Put(t.Context(), mapping); err != nil {
+		t.Fatal(err)
+	}
+	inFirst, resume := make(chan struct{}), make(chan struct{})
+	var mu sync.Mutex
+	calls := 0
+	h.regionDeregistration = func(ctx context.Context, _, region string, generation int64) error {
+		mu.Lock()
+		calls++
+		n := calls
+		mu.Unlock()
+		switch n {
+		case 1:
+			close(inFirst)
+			<-resume
+			return d.down.Deregister(ctx, region, generation)
+		case 2:
+			if err := d.up.Deregister(ctx, region, generation); err != nil {
+				return err
+			}
+			return context.DeadlineExceeded // committed, reply lost
+		}
+		return d.up.Deregister(ctx, region, generation)
+	}
+	first := make(chan int, 1)
+	go func() {
+		first <- e.do(t, "DELETE", regionPath+"/pve-test-1", "",
+			map[string]string{"Authorization": "Bearer tok"}).Code
+	}()
+	awaitSignal(t, inFirst)
+	regionCall(t, e, "DELETE", nil, "", 503)
+	close(resume)
+	if code := <-first; code != http.StatusServiceUnavailable {
+		t.Fatalf("first DELETE = %d", code)
+	}
+	if _, registered, _ := d.state(); registered {
+		t.Fatal("the committed removal was undone")
+	}
+	assertMarked(t, e, g, d)
+	regionCall(t, e, "DELETE", nil, "", 204)
+	assertDeleted(t, g, d)
 }
 
 // A region registered again under the same name gets a new record, whose

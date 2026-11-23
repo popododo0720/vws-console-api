@@ -185,13 +185,15 @@ The console pushes every registration with the registry version as
 `generation` and sends the removal before it deletes a region (`DELETE
 /api/v1/admin/regions/<name>`):
 
-1. The delete marks the region record deleting by CAS. The version of the mark
-   is the removal generation, higher than any pushed registration. A delete
-   that finds the region already deleting joins it and reuses that generation.
+1. The delete marks the region record deleting in one registry transaction
+   that checks the record version and that no project pool maps the region,
+   the same guard as the registry delete. A mapped region is refused with 409
+   and is not marked. The version of the mark is the removal generation,
+   higher than any pushed registration. A delete that finds the region already
+   deleting joins it and reuses that generation.
 2. While the region is deleting, PATCH is 409 and the registry refuses a
-   project mapping of it, so the mappings cannot change. A region that is
-   mapped is refused with 409 before the daemon is told; only the call that set
-   the mark releases it.
+   project mapping of it, so it stays unmapped and no call ever clears the
+   mark.
 3. The console then sends the removal. From this point no call releases the
    mark: after a dial failure, a timeout, a lost reply, a 5xx or a 409 the
    delete returns 503 and the region stays deleting until the delete is

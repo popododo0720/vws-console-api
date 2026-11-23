@@ -270,48 +270,28 @@ func deleteForce(r *http.Request) (bool, error) {
 
 // deleteRegion removes a region.
 //
-//  1. Mark: a CAS sets Deleting. The version it writes is the removal
-//     generation, higher than any pushed registration. A call that finds the
-//     record already Deleting joins and reuses that generation.
-//  2. Check: the registry refuses a project mapping of a Deleting region, so
-//     the mappings are frozen. A mapped region is refused (409), and only the
-//     call that set the mark releases it, by CAS on its version. No attempt
-//     can have reached the daemon, because each one sees the same mappings.
+//  1. Mark: one registry transaction sets Deleting only while the record is at
+//     the version read and the region has no project pool mappings, the guard
+//     the registry delete uses. A mapped region is refused (409) and never
+//     marked. The version the mark writes is the removal generation, higher
+//     than any pushed registration. A call that finds the record already
+//     Deleting joins and reuses that generation.
+//  2. A marked region refuses PATCH and new project mappings, so it stays
+//     unmapped, and no attempt ever clears the mark.
 //  3. Deregister: the daemon removes the registration and refuses older
-//     generations; repeating the same generation succeeds. After this point
-//     no attempt releases the mark, whatever the failure: the delete is
-//     repeated until the daemon confirms.
+//     generations; repeating the same generation succeeds. Any failure leaves
+//     the mark, and the delete is repeated until the daemon confirms.
 //  4. Delete the entry at the marked version, then release the cluster claim.
 //
 // force deletes the entry even when the daemon cannot be told; its PVE token
 // is then deleted by hand.
 func (h *handler) deleteRegion(ctx context.Context, v store.Region, force bool) error {
-	owner := false
 	if !v.Deleting {
-		v.Deleting = true
-		marked, err := h.registry.Regions().Update(ctx, v)
+		marked, err := h.registry.MarkRegionDeleting(ctx, v)
 		if err != nil {
 			return err
 		}
-		v, owner = marked, true
-	}
-	projects, _, err := h.registry.Projects().List(ctx)
-	if err != nil {
-		return err
-	}
-	for _, p := range projects {
-		for _, pool := range p.Pools {
-			if pool.Region != v.Name {
-				continue
-			}
-			if owner {
-				v.Deleting = false
-				if _, err := h.registry.Regions().Update(context.WithoutCancel(ctx), v); err != nil {
-					return errors.Join(store.ErrRegionInUse, err)
-				}
-			}
-			return store.ErrRegionInUse
-		}
+		v = marked
 	}
 	if err := h.deregisterRegion(ctx, v); err != nil {
 		reason := h.regionFailure(ctx, err)
