@@ -60,8 +60,10 @@ func TestDeregistrationRoute(t *testing.T) {
 func TestDeregistrationRequiresTheGlobalClientCertificate(t *testing.T) {
 	var calls atomic.Int32
 	var failure error
-	h := WithDeregistration(func(context.Context, json.RawMessage) error {
+	var body string
+	h := WithDeregistration(func(_ context.Context, data json.RawMessage) error {
 		calls.Add(1)
+		body = string(data)
 		return failure
 	}, http.NotFoundHandler())
 	client, anonymous, base := serveConnectionTest(t, h)
@@ -77,16 +79,13 @@ func TestDeregistrationRequiresTheGlobalClientCertificate(t *testing.T) {
 	if calls.Load() != 0 {
 		t.Fatal("an unauthenticated request reached the daemon")
 	}
-	deregister := func() error {
-		var result struct{}
-		return client.do(t.Context(), http.MethodPost, deregisterPath,
-			[]byte(`{"region":"pve-test-1","generation":7}`), &result)
-	}
-	if err := deregister(); err != nil || calls.Load() != 1 {
-		t.Fatalf("deregister: %v, calls %d", err, calls.Load())
+	if err := client.Deregister(t.Context(), "pve-test-1", 7); err != nil || calls.Load() != 1 ||
+		body != `{"region":"pve-test-1","generation":7}` {
+		t.Fatalf("deregister: %v, calls %d, body %s", err, calls.Load(), body)
 	}
 	failure = errors.New("boom")
-	if err := deregister(); err == nil || resource.AsError(err).Message != "deregistration failed" {
+	if err := client.Deregister(t.Context(), "pve-test-1", 7); err == nil ||
+		resource.RegionFailureMessage(err) != "deregistration failed" {
 		t.Fatalf("failure: %v", err)
 	}
 }

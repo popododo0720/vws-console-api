@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -67,6 +68,21 @@ func WithDeregistration(deregister func(context.Context, json.RawMessage) error,
 		writeJSON(w, struct{}{}, err)
 	})))
 	return mux
+}
+
+// Deregister asks the region daemon to delete its registration, become not
+// ready and refuse any registration at or below generation. Repeating the same
+// generation succeeds.
+func (c *Client) Deregister(ctx context.Context, region string, generation int64) error {
+	data, err := json.Marshal(struct {
+		Region     string `json:"region"`
+		Generation int64  `json:"generation"`
+	}{region, generation})
+	if err != nil {
+		return fmt.Errorf("encode deregistration: %w", err)
+	}
+	var result struct{}
+	return c.do(ctx, http.MethodPost, deregisterPath, data, &result)
 }
 
 // passesThrough reports whether err is a refusal of the request itself, which
