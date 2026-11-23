@@ -142,7 +142,7 @@ or comes from another console replica. `GET /internal/v1/fence` answers
 serve it predates the fence.
 
 On a removal the daemon deletes stale temporary files, persists a pending
-tombstone (the generation, plus the SHA-256 and the device, inode and ctime of
+tombstone (the generation, plus the SHA-256 and the device, inode and birth time of
 the `registration.json` it removes), unlinks `registration.json`, syncs the
 directory and marks the tombstone done. A failure before the tombstone is
 persisted changes no registration and the region keeps serving. Once it is
@@ -158,14 +158,20 @@ daemon with nothing registered answers 200.
 A `registration.json` found beside a tombstone at startup, on a reload or
 before a registration or removal is settled first. The file is the one the
 removal left behind (a crash, or a failed unlink) only if the tombstone is
-pending and both the digest and the device, inode and ctime match: the daemon
+pending and both the digest and the device, inode and birth time match: the daemon
 reports `unregistered` and stops its workers at once, then finishes the unlink
 and the sync, retrying on later passes if they fail. Any other file is a
 registration written since by a daemon rolled back to an earlier release,
 which knows no fence: the daemon keeps and serves it and replaces the tombstone
 with a plain fence at the same generation, so older generations stay refused.
 The older binary writes by temporary file and rename, so its registration is
-always a new inode, even with byte-identical credentials. Where the platform
+always a new inode with a new birth time, even with byte-identical
+credentials, while chmod or chown of the old file (repairing its permissions
+after a failed unlink) changes neither: the pending removal stays
+authoritative until the old file is gone. Where statx reports no birth time
+the identity is the device and inode alone; then one case remains: once the
+old file was unlinked, a later file that reuses its inode with the same bytes
+would be taken for it. Where the platform
 reports no file identity, a file beside a tombstone is always kept: the daemon
 never deletes a file it cannot prove is the removed one. A registration that
 supplies every secret settles the tombstone the same way before it replaces

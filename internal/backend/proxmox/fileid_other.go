@@ -6,4 +6,4 @@ import "os"
 
 // fileIdentity is unknown here, so no file beside a tombstone is taken for
 // the one it removed.
-func fileIdentity(os.FileInfo) fileID { return fileID{} }
+func fileIdentity(string, os.FileInfo) fileID { return fileID{} }

@@ -393,7 +393,7 @@ func (c *Connection) Register(ctx context.Context, data json.RawMessage) error {
 // Generation is refused, so a push delayed in the network or sent by another
 // console replica cannot bring the region back. A tombstone is Pending from
 // its write until the unlink of registration.json is synced. RemovedDigest
-// (hex SHA-256 of the bytes) and RemovedFile (device, inode and ctime) name the
+// (hex SHA-256 of the bytes) and RemovedFile (device, inode and birth time) name the
 // file that removal unlinks, so a file beside a tombstone can be told apart
 // from one a rolled-back daemon wrote since, even with the same bytes.
 type fence struct {
@@ -404,13 +404,15 @@ type fence struct {
 	RemovedFile   fileID `json:"removedFile,omitzero"`
 }
 
-// fileID identifies one inode. A write by temporary file and rename always
-// makes a new one, so equal bytes written again do not have the same fileID.
-// The zero value means the identity is unknown.
+// fileID identifies one file. A write by temporary file and rename always
+// makes a new inode with a new birth time, so equal bytes written again do not
+// have the same fileID, while chmod and chown keep it. Btime is 0 where the
+// platform reports no birth time. The zero value means the identity is
+// unknown.
 type fileID struct {
 	Dev   uint64 `json:"dev"`
 	Ino   uint64 `json:"ino"`
-	Ctime int64  `json:"ctimeNs"`
+	Btime int64  `json:"btimeNs,omitempty"`
 }
 
 func errStaleGeneration() error {
@@ -456,7 +458,7 @@ func (c *Connection) stateFile() (string, fileID, error) {
 		return "", fileID{}, errors.New("registration unreadable")
 	}
 	sum := sha256.Sum256(data)
-	return hex.EncodeToString(sum[:]), fileIdentity(info), nil
+	return hex.EncodeToString(sum[:]), fileIdentity(file, info), nil
 }
 
 // finishPendingRemoval settles a tombstone beside registration.json and
@@ -470,8 +472,8 @@ func (c *Connection) stateFile() (string, fileID, error) {
 // moment a pending tombstone owns the registration it is gone: the error
 // always matches ErrUnregistered, joined with the storage error when the
 // cleanup failed, and the next call retries the cleanup. Any other file beside
-// a tombstone (the tombstone is done, or the bytes or the inode differ, or the
-// identity is unknown) was written since by a rolled-back daemon, which does
+// a tombstone (the tombstone is done, or the bytes, the inode or the birth
+// time differ, or the identity is unknown) was written since by a rolled-back daemon, which does
 // not know the fence: it is kept and served, and the tombstone becomes a plain
 // fence at the same generation, so older generations stay refused.
 func (c *Connection) finishPendingRemoval() (fence, error) {

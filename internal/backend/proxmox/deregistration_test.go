@@ -9,6 +9,9 @@ import (
 	"path/filepath"
 	"strconv"
 	"testing"
+	"time"
+
+	"golang.org/x/sys/unix"
 
 	"github.com/popododo0720/vws-console-api/internal/resource"
 )
@@ -177,6 +180,9 @@ func TestDeregisterFailurePoints(t *testing.T) {
 		if conn.current != nil {
 			t.Fatal("the cached backend outlived the removal")
 		}
+		// An operator repairs the permissions of the old file: chmod and chown
+		// change its ctime, not its identity, so it is still the removed file.
+		changeMetadata(t, file)
 		// Readiness reports the registration gone while the unlink keeps failing,
 		// so the daemon stops the old quorum gate and finalizer.
 		if _, err := conn.Check(t.Context()); !errors.Is(err, ErrUnregistered) || !errors.Is(err, boom) {
@@ -502,5 +508,34 @@ func TestByteIdenticalRegistrationAfterARollbackIsKept(t *testing.T) {
 	}
 	if f, err := conn.readFence(); err != nil || f != (fence{Generation: 5}) {
 		t.Fatalf("the fence after the re-registration: %+v %v", f, err)
+	}
+}
+
+// changeMetadata runs chmod and chown on file without touching its bytes, and
+// waits until its ctime has moved, so the change is visible at the kernel's
+// timestamp granularity.
+func changeMetadata(t *testing.T, file string) {
+	t.Helper()
+	ctime := func() int64 {
+		var st unix.Stat_t
+		if err := unix.Lstat(file, &st); err != nil {
+			t.Fatal(err)
+		}
+		return st.Ctim.Nano()
+	}
+	before := ctime()
+	for deadline := time.Now().Add(time.Second); ctime() == before; time.Sleep(5 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("ctime did not change")
+		}
+		if err := os.Chmod(file, 0o640); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(file, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chown(file, os.Getuid(), os.Getgid()); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
