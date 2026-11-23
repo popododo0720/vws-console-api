@@ -4,9 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/popododo0720/vws-console-api/internal/admin/store"
 	"github.com/popododo0720/vws-console-api/internal/surface/regionapi"
@@ -25,6 +28,7 @@ func endpointFixture(t *testing.T) (e loginEnv, g *store.Registry, app *bytes.Bu
 	oldDaemon, newDaemon, oldDown = newFakeDaemon(t), newFakeDaemon(t), new(bool)
 	oldEndpoint := validRegion()["regionEndpoint"].(string)
 	client := func(endpoint string) *regionapi.Client {
+		endpoint = strings.TrimSuffix(endpoint, "/") // the client dials the origin
 		switch {
 		case endpoint == oldEndpoint && *oldDown:
 			return oldDaemon.down
@@ -56,79 +60,191 @@ func etag(t *testing.T, g *store.Registry) (store.Region, string) {
 	return v, strconv.Quote(strconv.FormatInt(int64(v.Version), 10))
 }
 
-func TestRegionEndpointChangeDeregistersTheOldDaemon(t *testing.T) {
+func moveBody() map[string]any {
+	return map[string]any{"regionEndpoint": newEndpoint, "tokenSecret": validRegion()["tokenSecret"]}
+}
+
+func patchRegion(t *testing.T, e loginEnv, query string, body map[string]any, match string, want int) string {
+	t.Helper()
+	data, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := e.do(t, "PATCH", regionPath+"/pve-test-1"+query, string(data),
+		map[string]string{"Authorization": "Bearer tok", "If-Match": match})
+	if rec.Code != want {
+		t.Fatalf("PATCH%s: %d %s", query, rec.Code, rec.Body)
+	}
+	return rec.Body.String()
+}
+
+func TestRegionMoveDeregistersTheOldDaemon(t *testing.T) {
 	e, g, _, oldDaemon, newDaemon, _ := endpointFixture(t)
 	_, match := etag(t, g)
-	regionCall(t, e, "PATCH", map[string]any{
-		"regionEndpoint": newEndpoint, "tokenSecret": validRegion()["tokenSecret"],
-	}, match, 200)
-	if _, registered, pushes := oldDaemon.state(); registered || pushes != 1 {
+	patchRegion(t, e, "", moveBody(), match, 200)
+	removed, registered, pushes := oldDaemon.state()
+	if registered || pushes != 1 {
 		t.Fatalf("old daemon: registered %v, pushes %d", registered, pushes)
 	}
-	removed, _, _ := oldDaemon.state()
 	generation, registered, pushes := newDaemon.state()
 	if !registered || pushes != 1 || generation <= removed {
 		t.Fatalf("new daemon: registered %v, pushes %d, generation %d after removal %d",
 			registered, pushes, generation, removed)
 	}
 	stored, _ := etag(t, g)
-	if stored.RegionEndpoint != newEndpoint || stored.LastError != nil {
+	if stored.RegionEndpoint != newEndpoint || stored.PendingDeregister != nil || stored.LastError != nil {
 		t.Fatalf("stored: %+v", stored)
 	}
 }
 
-func TestRegionEndpointChangeWithTheSameTokenNeedsTheOldDaemon(t *testing.T) {
+// With the old daemon unreachable the move stays pending: the new endpoint
+// gets nothing, and a repeat once the old daemon is back completes it.
+func TestRegionMoveWaitsForTheOldDaemon(t *testing.T) {
 	e, g, _, oldDaemon, newDaemon, oldDown := endpointFixture(t)
 	*oldDown = true
-	before, match := etag(t, g)
-	for _, body := range []map[string]any{
-		{"regionEndpoint": newEndpoint},
-		{"regionEndpoint": newEndpoint, "tokenSecret": validRegion()["tokenSecret"]},
-	} {
-		rec := regionCall(t, e, "PATCH", body, match, 400)
-		if !strings.Contains(rec.Body.String(), "regionEndpoint") || !strings.Contains(rec.Body.String(), "new tokenSecret") {
-			t.Fatalf("refusal: %s", rec.Body)
-		}
+	_, match := etag(t, g)
+	rec := e.do(t, "PATCH", regionPath+"/pve-test-1", `{"regionEndpoint":"`+newEndpoint+`","tokenSecret":"`+
+		validRegion()["tokenSecret"].(string)+`"}`, map[string]string{"Authorization": "Bearer tok", "If-Match": match})
+	if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), "repeat the edit") {
+		t.Fatalf("PATCH: %d %s", rec.Code, rec.Body)
 	}
-	if after, _ := etag(t, g); after.Version != before.Version || after.RegionEndpoint != before.RegionEndpoint {
-		t.Fatalf("registry changed: %+v", after)
+	stored, retry := etag(t, g)
+	if stored.PendingDeregister == nil || stored.PendingDeregister.Endpoint != validRegion()["regionEndpoint"] ||
+		rec.Header().Get("ETag") != retry {
+		t.Fatalf("pending move: %+v, ETag %q", stored, rec.Header().Get("ETag"))
 	}
 	if _, registered, _ := oldDaemon.state(); !registered {
 		t.Fatal("old daemon lost its registration")
 	}
 	if _, _, pushes := newDaemon.state(); pushes != 0 {
-		t.Fatalf("the new daemon got %d pushes", pushes)
+		t.Fatalf("the new daemon got %d pushes before the old one was told", pushes)
+	}
+	patchRegion(t, e, "", map[string]any{"zones": []store.Zone{{Letter: "b"}}}, retry, 400) // needs the secrets again
+	*oldDown = false
+	patchRegion(t, e, "", moveBody(), retry, 200)
+	if _, registered, _ := oldDaemon.state(); registered {
+		t.Fatal("old daemon still registered")
+	}
+	if _, registered, pushes := newDaemon.state(); !registered || pushes != 1 {
+		t.Fatalf("new daemon: registered %v, pushes %d", registered, pushes)
+	}
+	if stored, _ := etag(t, g); stored.PendingDeregister != nil {
+		t.Fatalf("pending kept: %+v", stored)
 	}
 }
 
-func TestRegionEndpointChangeWithANewTokenSkipsAnUnreachableOldDaemon(t *testing.T) {
+func TestRegionMoveForcedPastAnUnreachableOldDaemon(t *testing.T) {
 	e, g, app, oldDaemon, newDaemon, oldDown := endpointFixture(t)
 	*oldDown = true
 	generationBefore, _, _ := oldDaemon.state()
 	_, match := etag(t, g)
-	const token = "distinctive-new-token-1069"
-	regionCall(t, e, "PATCH", map[string]any{"regionEndpoint": newEndpoint, "tokenSecret": token}, match, 200)
+	patchRegion(t, e, "?force=true", moveBody(), match, 200)
 	if generation, registered, pushes := oldDaemon.state(); !registered || pushes != 1 || generation != generationBefore {
-		t.Fatalf("old daemon was reached: generation %d, registered %v, pushes %d", generation, registered, pushes)
+		t.Fatalf("old daemon changed: generation %d, registered %v, pushes %d", generation, registered, pushes)
 	}
-	newDaemon.mu.Lock()
-	pushed := newDaemon.registered && len(newDaemon.pushes) == 1 && bytes.Contains(newDaemon.pushes[0], []byte(token))
-	newDaemon.mu.Unlock()
-	if !pushed {
-		t.Fatal("the new daemon did not get the new token")
+	if _, registered, pushes := newDaemon.state(); !registered || pushes != 1 {
+		t.Fatalf("new daemon: registered %v, pushes %d", registered, pushes)
 	}
-	if stored, _ := etag(t, g); stored.RegionEndpoint != newEndpoint || stored.TokenSecret != store.DescribeSecret(token) {
+	if stored, _ := etag(t, g); stored.RegionEndpoint != newEndpoint || stored.PendingDeregister != nil {
 		t.Fatalf("stored: %+v", stored)
 	}
-	if !strings.Contains(app.String(), "revoke them in PVE") || strings.Contains(app.String(), token) {
+	if !strings.Contains(app.String(), "revoke its old token in PVE") {
 		t.Fatalf("warning: %s", app)
+	}
+}
+
+// Every refusal comes before any daemon is touched.
+func TestRegionMoveRefusalsTouchNoDaemon(t *testing.T) {
+	e, g, _, oldDaemon, newDaemon, _ := endpointFixture(t)
+	calls := 0
+	h := e.h.(*handler)
+	deregister := h.regionDeregistration
+	h.regionDeregistration = func(ctx context.Context, endpoint, region string, generation int64) error {
+		calls++
+		return deregister(ctx, endpoint, region, generation)
+	}
+	before, match := etag(t, g)
+	noToken := map[string]any{"regionEndpoint": newEndpoint}
+	if body := patchRegion(t, e, "", noToken, match, 400); !strings.Contains(body, "tokenSecret") {
+		t.Fatalf("move without a token: %s", body)
+	}
+	if err := g.ClaimCluster(t.Context(), "other", "pve-other-1", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	claimed := moveBody()
+	claimed["clusterName"] = "other"
+	if body := patchRegion(t, e, "", claimed, match, 400); !strings.Contains(body, "clusterName") {
+		t.Fatalf("move to a claimed cluster: %s", body)
+	}
+	patchRegion(t, e, "", moveBody(), `"1"`, 409)
+	patchRegion(t, e, "?force=1", moveBody(), match, 400)
+	if after, _ := etag(t, g); after.Version != before.Version || calls != 0 {
+		t.Fatalf("a refusal changed the registry (%+v) or reached a daemon (%d)", after, calls)
+	}
+	if _, registered, pushes := oldDaemon.state(); !registered || pushes != 1 {
+		t.Fatalf("old daemon: registered %v, pushes %d", registered, pushes)
+	}
+	if _, _, pushes := newDaemon.state(); pushes != 0 {
+		t.Fatalf("new daemon got %d pushes", pushes)
+	}
+}
+
+// Two moves at the same version: the one that loses the registry CAS has
+// touched no daemon.
+func TestRegionMoveOverlapLosesTheCASBeforeAnyDaemon(t *testing.T) {
+	e, g, _, oldDaemon, _, _ := endpointFixture(t)
+	h := e.h.(*handler)
+	_, match := etag(t, g)
+	inFirst, resume := make(chan struct{}), make(chan struct{})
+	var mu sync.Mutex
+	calls := 0
+	deregister := h.regionDeregistration
+	h.regionDeregistration = func(ctx context.Context, endpoint, region string, generation int64) error {
+		mu.Lock()
+		calls++
+		n := calls
+		mu.Unlock()
+		if n == 1 {
+			close(inFirst)
+			<-resume
+		}
+		return deregister(ctx, endpoint, region, generation)
+	}
+	first := make(chan string, 1)
+	go func() { first <- patchRegion(t, e, "", moveBody(), match, 200) }()
+	awaitSignal(t, inFirst)
+	patchRegion(t, e, "", moveBody(), match, 409)
+	mu.Lock()
+	n := calls
+	mu.Unlock()
+	if n != 1 {
+		t.Fatalf("the losing PATCH reached a daemon: %d calls", n)
+	}
+	close(resume)
+	<-first
+	if _, registered, _ := oldDaemon.state(); registered {
+		t.Fatal("old daemon still registered")
+	}
+}
+
+// A trailing slash names the same daemon: it is not a move, and the stored
+// token is reused there.
+func TestRegionSlashOnlyEditIsNotAMove(t *testing.T) {
+	e, g, _, oldDaemon, newDaemon, _ := endpointFixture(t)
+	_, match := etag(t, g)
+	patchRegion(t, e, "", map[string]any{"regionEndpoint": validRegion()["regionEndpoint"].(string) + "/"}, match, 200)
+	if generation, registered, pushes := oldDaemon.state(); !registered || pushes != 2 || generation == 0 {
+		t.Fatalf("daemon: registered %v, pushes %d", registered, pushes)
+	}
+	if _, _, pushes := newDaemon.state(); pushes != 0 {
+		t.Fatalf("another daemon got %d pushes", pushes)
 	}
 }
 
 func TestRegionPatchWithoutAnEndpointChangeTouchesOnlyItsDaemon(t *testing.T) {
 	e, g, _, oldDaemon, newDaemon, _ := endpointFixture(t)
 	before, match := etag(t, g)
-	regionCall(t, e, "PATCH", map[string]any{
+	patchRegion(t, e, "", map[string]any{
 		"regionEndpoint": before.RegionEndpoint, "zones": []store.Zone{{Letter: "b"}},
 	}, match, 200)
 	if _, registered, pushes := oldDaemon.state(); !registered || pushes != 2 {
@@ -136,5 +252,19 @@ func TestRegionPatchWithoutAnEndpointChangeTouchesOnlyItsDaemon(t *testing.T) {
 	}
 	if _, _, pushes := newDaemon.state(); pushes != 0 {
 		t.Fatalf("another daemon got %d pushes", pushes)
+	}
+}
+
+// A region deleted while a move is pending deregisters the old daemon too,
+// which still holds the tokens.
+func TestRegionDeleteDuringAPendingMoveTellsTheOldDaemon(t *testing.T) {
+	e, g, _, oldDaemon, _, oldDown := endpointFixture(t)
+	*oldDown = true
+	_, match := etag(t, g)
+	patchRegion(t, e, "", moveBody(), match, 503)
+	*oldDown = false
+	regionCall(t, e, "DELETE", nil, "", 204)
+	if _, registered, _ := oldDaemon.state(); registered {
+		t.Fatal("old daemon still registered")
 	}
 }

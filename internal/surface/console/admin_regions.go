@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/popododo0720/vws-console-api/internal/admin/store"
@@ -70,9 +71,18 @@ func (h *handler) regionCapabilities(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *handler) adminWriteRegion(w http.ResponseWriter, r *http.Request) {
-	// Only DELETE takes a query, force=true, and checks it itself.
-	if r.Method != http.MethodDelete && !h.adminReady(w, r) || r.Method == http.MethodDelete && !h.adminRegistry(w, r) {
+	// Only DELETE and PATCH take a query, force=true, and check it themselves.
+	forceable := r.Method == http.MethodDelete || r.Method == http.MethodPatch
+	if !forceable && !h.adminReady(w, r) || forceable && !h.adminRegistry(w, r) {
 		return
+	}
+	force := false
+	if forceable {
+		var err error
+		if force, err = forceQuery(r); err != nil {
+			writeErr(w, r, err)
+			return
+		}
 	}
 	if h.adminKey == nil {
 		writeErr(w, r, &resource.Error{Code: resource.CodeUnavailable, Message: "admin writes require credentials.kek_file"})
@@ -107,10 +117,7 @@ func (h *handler) adminWriteRegion(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if r.Method == http.MethodDelete {
-		force, err := deleteForce(r)
-		if err == nil {
-			err = h.deleteRegion(r.Context(), v, force)
-		}
+		err := h.deleteRegion(r.Context(), v, force)
 		var refusal *resource.Error
 		switch {
 		case errors.As(err, &refusal):
@@ -131,7 +138,12 @@ func (h *handler) adminWriteRegion(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, r, resource.Invalid("body", "expected one JSON object"))
 		return
 	}
-	old := v
+	// live is the endpoint of the daemon that holds the tokens: the old one
+	// while a move is pending.
+	live := v.RegionEndpoint
+	if v.PendingDeregister != nil {
+		live = v.PendingDeregister.Endpoint
+	}
 	oldCluster := v.ClusterName
 	if in.Name != nil && r.Method == http.MethodPatch && *in.Name != v.Name {
 		writeErr(w, r, resource.Invalid("name", "must match path"))
@@ -164,6 +176,17 @@ func (h *handler) adminWriteRegion(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, r, err)
 		return
 	}
+	moving := r.Method == http.MethodPatch && regionOrigin(v.RegionEndpoint) != regionOrigin(live)
+	if moving {
+		if err := moveSecrets(v, in); err != nil {
+			writeErr(w, r, err)
+			return
+		}
+	}
+	v.PendingDeregister = nil
+	if moving && !force {
+		v.PendingDeregister = &store.PendingDeregister{Endpoint: live}
+	}
 	setAuditAccount(w, v.Name)
 	if r.Method == http.MethodPost {
 		if _, err := h.registry.Regions().Get(r.Context(), v.Name); err == nil {
@@ -188,12 +211,6 @@ func (h *handler) adminWriteRegion(w http.ResponseWriter, r *http.Request) {
 	}
 	if v.BackupTokenID == "" {
 		v.BackupTokenSecret = store.SecretMetadata{}
-	}
-	if r.Method == http.MethodPatch && v.RegionEndpoint != old.RegionEndpoint {
-		if err := h.leaveOldEndpoint(r.Context(), old, v); err != nil {
-			writeErr(w, r, err)
-			return
-		}
 	}
 	claimed := oldCluster != v.ClusterName
 	if claimed {
@@ -231,6 +248,27 @@ func (h *handler) adminWriteRegion(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if v.PendingDeregister != nil {
+		// The move is reserved by the CAS above: tell the old daemon at this
+		// version, which is above anything it accepted, before the new
+		// endpoint gets the registration.
+		if err := h.deregisterRegion(r.Context(), v.PendingDeregister.Endpoint, v); err != nil {
+			w.Header().Set("ETag", strconv.Quote(strconv.FormatInt(int64(v.Version), 10)))
+			writeErr(w, r, &resource.Error{Code: resource.CodeUnavailable, Message: "the daemon at the old endpoint " +
+				"could not be deregistered: " + h.regionFailure(r.Context(), err) + "; repeat the edit, or pass " +
+				"force=true once the old daemon is stopped or its token revoked"})
+			return
+		}
+		v.PendingDeregister = nil
+		if v, err = h.registry.Regions().Update(r.Context(), v); err != nil {
+			adminError(w, r, err)
+			return
+		}
+	}
+	if moving && force {
+		h.log.WarnContext(r.Context(), "region moved without deregistering the old daemon; "+
+			"revoke its old token in PVE", slog.String("region", v.Name))
+	}
 	pushErr := h.pushRegion(r.Context(), v, in)
 	v.LastError = nil
 	if pushErr != nil {
@@ -262,33 +300,33 @@ func (h *handler) adminWriteRegion(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, status, v)
 }
 
-// leaveOldEndpoint deregisters the daemon at the old endpoint before a PATCH
-// that moves the region writes the registry or pushes to the new endpoint, so
-// the registration and its token are never sent where the old daemon would
-// keep serving them. The generation is the version of the record the PATCH
-// read: every push is followed by a registry write, so it is above every
-// generation the old daemon accepted. If the old daemon cannot be told, the
-// PATCH is refused (400) unless it brings a new token: the old daemon then
-// keeps only the old token, which the operator revokes in PVE.
-func (h *handler) leaveOldEndpoint(ctx context.Context, old, v store.Region) error {
-	err := h.deregisterRegion(ctx, old)
-	if err == nil {
-		return nil
+// regionOrigin is the origin the region client dials: an endpoint with or
+// without a trailing slash is the same daemon.
+func regionOrigin(endpoint string) string {
+	u, err := url.Parse(endpoint)
+	if err != nil {
+		return endpoint
 	}
-	reason := h.regionFailure(ctx, err)
-	if v.TokenSecret.Fingerprint == old.TokenSecret.Fingerprint {
-		return resource.Invalid("regionEndpoint", "the daemon at the old endpoint could not be deregistered ("+reason+
-			"); make it reachable, or submit a new tokenSecret and revoke the old token in PVE")
+	return strings.ToLower(u.Scheme + "://" + u.Host)
+}
+
+// moveSecrets refuses a move that the new daemon's first registration would
+// refuse: it needs the token and every configured optional token.
+func moveSecrets(v store.Region, in *regionInput) error {
+	switch {
+	case in.TokenSecret == nil:
+		return resource.Invalid("tokenSecret", "required when regionEndpoint changes")
+	case v.FirewallTokenID != "" && in.FirewallTokenSecret == nil:
+		return resource.Invalid("firewallTokenSecret", "required when regionEndpoint changes")
+	case v.BackupTokenID != "" && in.BackupTokenSecret == nil:
+		return resource.Invalid("backupTokenSecret", "required when regionEndpoint changes")
 	}
-	h.log.WarnContext(ctx, "region endpoint changed without deregistering the old daemon; "+
-		"it still holds the old tokens: revoke them in PVE",
-		slog.String("region", old.Name), slog.String("reason", reason))
 	return nil
 }
 
-// deleteForce reads the only query parameter of DELETE. force=true removes the
-// registry entry even when the daemon cannot be told.
-func deleteForce(r *http.Request) (bool, error) {
+// forceQuery reads the only query parameter of DELETE and PATCH. force=true
+// goes on when the old daemon cannot be told.
+func forceQuery(r *http.Request) (bool, error) {
 	q := r.URL.Query()
 	if len(q) == 0 {
 		return false, nil
@@ -324,7 +362,7 @@ func (h *handler) deleteRegion(ctx context.Context, v store.Region, force bool) 
 		}
 		v = marked
 	}
-	if err := h.deregisterRegion(ctx, v); err != nil {
+	if err := h.deregisterEndpoints(ctx, v); err != nil {
 		reason := h.regionFailure(ctx, err)
 		if !force {
 			return &resource.Error{Code: resource.CodeUnavailable, Message: "region deregistration failed: " + reason +
@@ -340,13 +378,24 @@ func (h *handler) deleteRegion(ctx context.Context, v store.Region, force bool) 
 	return h.registry.ReleaseCluster(ctx, v.ClusterName, v.Name)
 }
 
-func (h *handler) deregisterRegion(ctx context.Context, v store.Region) error {
+// deregisterEndpoints tells the daemon of a deleted region, and the old one
+// too while a move is pending, since that one still holds the tokens.
+func (h *handler) deregisterEndpoints(ctx context.Context, v store.Region) error {
+	if v.PendingDeregister != nil {
+		if err := h.deregisterRegion(ctx, v.PendingDeregister.Endpoint, v); err != nil {
+			return err
+		}
+	}
+	return h.deregisterRegion(ctx, v.RegionEndpoint, v)
+}
+
+func (h *handler) deregisterRegion(ctx context.Context, endpoint string, v store.Region) error {
 	if h.regionDeregistration == nil {
 		return errors.New("region deregistration transport unavailable")
 	}
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	return h.regionDeregistration(ctx, v.RegionEndpoint, v.Name, int64(v.Version))
+	return h.regionDeregistration(ctx, endpoint, v.Name, int64(v.Version))
 }
 
 func (h *handler) pushRegion(ctx context.Context, v store.Region, in *regionInput) error {

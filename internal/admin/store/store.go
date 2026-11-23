@@ -82,6 +82,17 @@ type Region struct {
 	// are refused, and the version of this record is the generation that
 	// fences the region daemon against older pushes.
 	Deleting bool `json:"deleting,omitempty"`
+
+	// PendingDeregister is an endpoint move whose old daemon has not
+	// confirmed its removal: the record already holds the new endpoint, which
+	// is not pushed until the old one is told. The removal generation is the
+	// version of this record.
+	PendingDeregister *PendingDeregister `json:"pendingDeregister,omitempty"`
+}
+
+// PendingDeregister names the daemon that still holds the region's tokens.
+type PendingDeregister struct {
+	Endpoint string `json:"endpoint"`
 }
 
 // UnmarshalJSON reads a record stored before pveApiUrls as a one-address list;
