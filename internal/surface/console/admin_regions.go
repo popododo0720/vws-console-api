@@ -97,6 +97,10 @@ func (h *handler) adminWriteRegion(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		setAuditAccount(w, name)
+		if v.Deleting && r.Method != http.MethodDelete {
+			adminError(w, r, store.ErrRegionDeleting)
+			return
+		}
 		if match != "" && match != strconv.Quote(strconv.FormatInt(int64(v.Version), 10)) {
 			adminError(w, r, store.ErrConflict)
 			return
@@ -264,36 +268,67 @@ func deleteForce(r *http.Request) (bool, error) {
 	return true, nil
 }
 
-// deleteRegion removes a region. The daemon is told first, so its state file
-// and token secret are gone before the only record of its endpoint is. If
-// the daemon cannot be reached the entry stays and the call fails; force
-// removes the entry anyway and the operator must delete the PVE token by
-// hand, because the daemon still holds it. A failed registry delete after a
-// successful deregister leaves a registered region with an unregistered
-// daemon; repeating the call succeeds because deregistration is idempotent.
-// A region with project mappings is refused before the daemon is touched.
+// deleteRegion removes a region in four steps.
+//
+//  1. Reserve: a CAS marks the record Deleting. From then on a PATCH is
+//     refused, a project mapping of the region is refused, and any registration
+//     push made from an older version is stale. The new version of the record
+//     is the generation of the removal.
+//  2. Check: a region with project mappings is released again and refused (409),
+//     before the daemon is touched. A mapping cannot commit after step 1.
+//  3. Deregister the stored endpoint with that generation. The daemon
+//     persists it and refuses every older registration, so a delayed push cannot
+//     bring the daemon back. If the daemon cannot be told, the region is
+//     released (not deleting) and the call fails; force skips this and removes
+//     the entry anyway, and the operator must delete the PVE tokens by hand
+//     because the daemon still holds them.
+//  4. Delete the entry at the reserved version, then release the cluster claim.
+//
+// A failure after step 3 leaves a Deleting region with an unregistered daemon;
+// repeating the call finishes, because deregistration is idempotent.
 func (h *handler) deleteRegion(ctx context.Context, v store.Region, force bool) error {
+	if !v.Deleting {
+		v.Deleting = true
+		marked, err := h.registry.Regions().Update(ctx, v)
+		if err != nil {
+			return err
+		}
+		v = marked
+	}
+	release := func(err error) error {
+		v.Deleting = false
+		if _, uerr := h.registry.Regions().Update(context.WithoutCancel(ctx), v); uerr != nil {
+			h.log.WarnContext(ctx, "region left reserved for deletion; repeat the delete or edit after it",
+				slog.String("region", v.Name))
+			return errors.Join(err, uerr)
+		}
+		return err
+	}
 	projects, _, err := h.registry.Projects().List(ctx)
 	if err != nil {
-		return err
+		return release(err)
 	}
 	for _, p := range projects {
 		for _, pool := range p.Pools {
 			if pool.Region == v.Name {
-				return store.ErrRegionInUse
+				return release(store.ErrRegionInUse)
 			}
 		}
 	}
+	var daemonErr error
 	if err := h.deregisterRegion(ctx, v); err != nil {
 		if !force {
-			return &resource.Error{Code: resource.CodeUnavailable, Message: "region deregistration failed: " +
-				h.regionFailure(ctx, err) + "; fix the connection or delete with force=true and delete the PVE token by hand"}
+			return release(&resource.Error{Code: resource.CodeUnavailable, Message: "region deregistration failed: " +
+				h.regionFailure(ctx, err) + "; fix the connection or delete with force=true and delete the PVE token by hand"})
 		}
-		h.log.WarnContext(ctx, "region deleted without deregistering its daemon; delete its PVE token by hand",
-			slog.String("region", v.Name), slog.String("reason", h.regionFailure(ctx, err)))
+		daemonErr = err
 	}
 	if err := h.registry.Regions().Delete(ctx, v.Name, v.Version); err != nil {
 		return err
+	}
+	if daemonErr != nil {
+		h.log.WarnContext(ctx, "region deleted without deregistering its daemon; delete its PVE token by hand",
+			slog.String("region", v.Name), slog.String("reason", h.regionFailure(ctx, daemonErr)))
 	}
 	return h.registry.ReleaseCluster(ctx, v.ClusterName, v.Name)
 }
@@ -304,12 +339,15 @@ func (h *handler) deregisterRegion(ctx context.Context, v store.Region) error {
 	}
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	return h.regionDeregistration(ctx, v.RegionEndpoint, v.Name)
+	return h.regionDeregistration(ctx, v.RegionEndpoint, v.Name, int64(v.Version))
 }
 
 func (h *handler) pushRegion(ctx context.Context, v store.Region, in *regionInput) error {
 	data, err := json.Marshal(struct {
 		Region string `json:"region"`
+		// Generation is the registry version of this registration; the daemon
+		// refuses it once it has accepted a newer one or a removal.
+		Generation int64 `json:"generation"`
 		//nolint:tagliatelle // The daemon registration protocol names cluster_name.
 		ClusterName     string       `json:"cluster_name"`
 		PVEAPIURLs      []string     `json:"pveApiUrls"`
@@ -322,7 +360,7 @@ func (h *handler) pushRegion(ctx context.Context, v store.Region, in *regionInpu
 		BackupTokenID   string       `json:"backupTokenId,omitempty"`
 		BackupToken     *string      `json:"backupToken,omitempty"`
 	}{
-		Region: v.Name, ClusterName: v.ClusterName, PVEAPIURLs: v.PVEAPIURLs, CAPEM: v.CAPEM,
+		Region: v.Name, Generation: int64(v.Version), ClusterName: v.ClusterName, PVEAPIURLs: v.PVEAPIURLs, CAPEM: v.CAPEM,
 		TokenID: v.TokenID, Token: in.TokenSecret,
 		Zones: v.Zones, FirewallTokenID: v.FirewallTokenID, FirewallToken: in.FirewallTokenSecret,
 		BackupTokenID: v.BackupTokenID, BackupToken: in.BackupTokenSecret,

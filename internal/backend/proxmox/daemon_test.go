@@ -237,10 +237,13 @@ func TestRegionDaemonKeepsStateAcrossRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	generation := 10
 	put := func(origin, region string, want int) {
 		t.Helper()
+		generation += 10
 		request(t, http.MethodPut, origin+"/internal/v1/registration", `{"region":"`+region+
-			`","cluster_name":"test","pveApiUrls":["`+pve.URL+`"],"caPem":`+strconv.Quote(string(caPEM))+
+			`","generation":`+strconv.Itoa(generation)+`,"cluster_name":"test",`+
+			`"pveApiUrls":["`+pve.URL+`"],"caPem":`+strconv.Quote(string(caPEM))+
 			`,"tokenId":"vws@pve!inventory","token":"`+canary+
 			`","zones":[{"letter":"a","nodes":["pve1"]}]}`, want)
 	}
@@ -292,22 +295,30 @@ func TestRegionDaemonKeepsStateAcrossRestart(t *testing.T) {
 		}
 	}
 	files, err := os.ReadDir(stateDir)
-	if err != nil || len(files) != 1 {
-		t.Fatalf("state directory holds more than the state file: %v %v", files, err)
+	if err != nil || len(files) != 2 {
+		t.Fatalf("state directory holds more than the state and generation files: %v %v", files, err)
 	}
 	// Deregistration for another region changes nothing.
-	request(t, http.MethodPost, restarted+"/internal/v1/deregister", `{"region":"other-region"}`, http.StatusBadRequest)
+	deregister := func(region string, generation int, want int) {
+		t.Helper()
+		request(t, http.MethodPost, restarted+"/internal/v1/deregister",
+			`{"region":"`+region+`","generation":`+strconv.Itoa(generation)+`}`, want)
+	}
+	deregister("other-region", generation+5, http.StatusBadRequest)
+	// A removal older than the registration it would remove is stale.
+	deregister("pve-test-1", generation-1, http.StatusConflict)
 	if _, err := os.Stat(filepath.Join(stateDir, registrationFile)); err != nil {
-		t.Fatalf("a deregistration for another region removed the state file: %v", err)
+		t.Fatalf("a refused deregistration removed the state file: %v", err)
 	}
 	request(t, http.MethodGet, restartOps+"/readyz", "", http.StatusOK)
 	// Deregistration deletes the state file and the region is not ready at once;
 	// it is idempotent, and the quorum poller and launch finalizer stop: PVE
 	// sees no further request.
+	removal := generation + 5
 	for range 2 {
-		request(t, http.MethodPost, restarted+"/internal/v1/deregister", `{"region":"pve-test-1"}`, http.StatusOK)
+		deregister("pve-test-1", removal, http.StatusOK)
 		files, err = os.ReadDir(stateDir)
-		if err != nil || len(files) != 0 {
+		if err != nil || len(files) != 1 || files[0].Name() != fenceFile {
 			t.Fatalf("state directory after deregistration: %v %v", files, err)
 		}
 		body := request(t, http.MethodGet, restartOps+"/readyz", "", http.StatusServiceUnavailable)
@@ -315,6 +326,15 @@ func TestRegionDaemonKeepsStateAcrossRestart(t *testing.T) {
 			t.Fatalf("readiness after deregistration = %q", body)
 		}
 	}
+	// A delayed registration from before the removal is refused.
+	generation = removal - 20 // put adds 10
+	put(restarted, "pve-test-1", http.StatusConflict)
+	generation = removal - 10
+	put(restarted, "pve-test-1", http.StatusConflict)
+	if _, err := os.Stat(filepath.Join(stateDir, registrationFile)); !os.IsNotExist(err) {
+		t.Fatalf("a stale registration reached the state file: %v", err)
+	}
+	generation = removal // the next registration is newer than the removal
 	request(t, http.MethodPost, restarted+"/internal/v1/Compute/DescribeInstances",
 		`{"scope":{"account":"`+account.String()+`","pool":"123456789012"},"req":{}}`, http.StatusServiceUnavailable)
 	requests := len(fake.RequestMethods())

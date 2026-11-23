@@ -61,7 +61,7 @@ type Config struct {
 	RegionPool   func(context.Context, string, string) (bool, error)
 
 	// RegionDeregistration tells the daemon at an endpoint to forget a region.
-	RegionDeregistration func(ctx context.Context, endpoint, region string) error
+	RegionDeregistration func(ctx context.Context, endpoint, region string, generation int64) error
 
 	RegionRegistration func(context.Context, string, json.RawMessage) error
 	RegionConnection   func(ctx context.Context, endpoint string, data json.RawMessage) ([]resource.ConnectionStep, error)
@@ -224,7 +224,7 @@ type handler struct {
 	regionStatus func(context.Context, string) (resource.RegionStatus, error)
 	regionPool   func(context.Context, string, string) (bool, error)
 
-	regionDeregistration func(ctx context.Context, endpoint, region string) error
+	regionDeregistration func(ctx context.Context, endpoint, region string, generation int64) error
 
 	regionRegistration func(context.Context, string, json.RawMessage) error
 	regionConnection   func(ctx context.Context, endpoint string, data json.RawMessage) ([]resource.ConnectionStep, error)

@@ -33,6 +33,7 @@ var errNoEndpoints = errors.New("registration has no valid pveApiUrls and caPem;
 const (
 	maxRegistrationBytes = 65 << 10
 	registrationFile     = "registration.json"
+	fenceFile            = "generation.json"
 	// dialTimeout bounds the connect and the TLS handshake to one address.
 	dialTimeout = time.Second
 )
@@ -57,6 +58,9 @@ type registrationSnapshot struct {
 	Zones      []backend.Zone `json:"zones"`
 	TokenID    string         `json:"tokenId"`
 	Token      string         `json:"token,omitempty"`
+	// Generation is the registry version of this registration. A daemon
+	// refuses one older than the highest it has accepted; 0 means unfenced.
+	Generation int64 `json:"generation,omitempty"`
 
 	FirewallTokenID string `json:"firewallTokenId,omitempty"`
 	FirewallToken   string `json:"firewallToken,omitempty"`
@@ -81,6 +85,9 @@ type Connection struct {
 	// dialPVE replaces the network dialer of connection tests; tests use it
 	// to make PVE reachable from this process alone.
 	dialPVE func(ctx context.Context, network, addr string) (net.Conn, error)
+	// step, when set, is called before each stage of Deregister and fails it
+	// by returning an error; tests use it.
+	step func(stage string) error
 }
 
 // Open loads node-local configuration; registration may arrive after startup.
@@ -98,8 +105,10 @@ func Open(configPath, region, stateDir string) (*Connection, error) {
 	if err != nil {
 		return nil, fmt.Errorf("proxmox: state dir: %w", err)
 	}
-	if err := removeStaleTemps(stateDir, registrationFile); err != nil {
-		return nil, err
+	for _, name := range []string{registrationFile, fenceFile} {
+		if err := removeStaleTemps(stateDir, name); err != nil {
+			return nil, err
+		}
 	}
 	return &Connection{config: cfg, region: region, dir: stateDir}, nil
 }
@@ -167,7 +176,7 @@ func decodeRegistration(data []byte) (registrationSnapshot, error) {
 		return s, resource.Invalid("registration", "expected one JSON document")
 	}
 	if !registrationRegion.MatchString(s.Region) || !registrationCluster.MatchString(s.ClusterName) ||
-		!registrationTokenID.MatchString(s.TokenID) || len(s.Zones) > 26 {
+		!registrationTokenID.MatchString(s.TokenID) || len(s.Zones) > 26 || s.Generation < 0 {
 		return s, resource.Invalid("registration", "invalid region, cluster_name, tokenId or zones")
 	}
 	if err := resource.CheckPVEAPIURLs(s.PVEAPIURLs); err != nil {
@@ -287,6 +296,13 @@ func (c *Connection) Register(ctx context.Context, data json.RawMessage) error {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	f, err := c.readFence()
+	if err != nil {
+		return err
+	}
+	if s.Generation < f.Generation || s.Generation == f.Generation && f.Deregistered {
+		return errStaleGeneration()
+	}
 	if s.Token == "" || s.FirewallTokenID != "" && s.FirewallToken == "" ||
 		s.BackupTokenID != "" && s.BackupToken == "" {
 		stored, _, err := c.registration()
@@ -336,51 +352,129 @@ func (c *Connection) Register(ctx context.Context, data json.RawMessage) error {
 	if len(state) > maxRegistrationBytes {
 		return resource.Invalid("registration", "serialized registration exceeds 65 KiB")
 	}
+	// The generation is persisted first: a crash between the two files only
+	// makes older pushes stale, and the console repeats the registration.
+	if want := (fence{s.Generation, false}); f != want {
+		if err := c.writeFence(want); err != nil {
+			return err
+		}
+	}
 	if err := writeFileAtomic(c.dir, registrationFile, state, nil); err != nil {
 		return fmt.Errorf("persist registration: %w", err)
 	}
 	return nil
 }
 
-// Deregister forgets the registration, and with it every token secret: it
-// removes the state file and any temporary file of a crashed write, then
-// fsyncs the directory, under the same mutex as Register and Check. It is
-// idempotent: with no file it still syncs the directory, so a retry finishes a
-// removal whose sync failed. The request names the region and must match
-// -region, so a call meant for another daemon changes nothing. On success
-// nothing here can serve the old registration: the cached backend is dropped
-// and Check reports unregistered. Stopping what already runs on that backend
-// is the caller's job.
-func (c *Connection) Deregister(data json.RawMessage) error {
+// fence is the highest registry generation this daemon has accepted, kept in
+// its own file so that it outlives the registration. After a removal it is the
+// tombstone: Deregistered is true and every registration at or below
+// Generation is refused, so a push delayed in the network or sent by another
+// console replica cannot bring the region back.
+type fence struct {
+	Generation   int64 `json:"generation"`
+	Deregistered bool  `json:"deregistered"`
+}
+
+func errStaleGeneration() error {
+	return &resource.Error{Code: resource.CodeConflict, Message: "generation is older than the daemon's current one"}
+}
+
+func (c *Connection) readFence() (fence, error) {
+	var f fence
+	data, err := os.ReadFile(filepath.Join(c.dir, fenceFile))
+	if errors.Is(err, os.ErrNotExist) {
+		return f, nil
+	}
+	if err != nil || json.Unmarshal(data, &f) != nil || f.Generation < 0 {
+		return f, errors.New("generation file unreadable")
+	}
+	return f, nil
+}
+
+func (c *Connection) writeFence(f fence) error {
+	data, err := json.Marshal(f)
+	if err != nil {
+		return fmt.Errorf("encode generation: %w", err)
+	}
+	if err := writeFileAtomic(c.dir, fenceFile, data, nil); err != nil {
+		return fmt.Errorf("persist generation: %w", err)
+	}
+	return nil
+}
+
+// Deregister forgets the registration, and with it every token secret, in
+// this order under the mutex of Register and Check: stale temporary files go,
+// the tombstone generation is persisted, registration.json is unlinked and the
+// directory is fsynced. The request names the region, which must match
+// -region, and a generation, which must be at least the highest accepted
+// (equal only to repeat a removal); anything older is refused with 409 and
+// changes nothing.
+//
+// removed reports whether the registration is gone. A failure before that
+// changes no registration and the caller keeps serving. After it, the removal
+// is committed: the caller must stop everything that runs on the old
+// registration even when err is non-nil (the directory sync failed), and a
+// repeat redoes the sync. It is idempotent: with no file it still syncs.
+func (c *Connection) Deregister(data json.RawMessage) (removed bool, err error) {
 	var req struct {
-		Region string `json:"region"`
+		Region     string `json:"region"`
+		Generation int64  `json:"generation"`
 	}
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()
 	var extra any
-	if err := dec.Decode(&req); err != nil || !errors.Is(dec.Decode(&extra), io.EOF) {
-		return resource.Invalid("deregistration", "expected one JSON object with region")
+	if err := dec.Decode(&req); err != nil || !errors.Is(dec.Decode(&extra), io.EOF) || req.Generation < 1 {
+		return false, resource.Invalid("deregistration", "expected one JSON object with region and generation")
 	}
 	if req.Region != c.region {
-		return resource.Invalid("region", "deregistration is for another region than this instance")
+		return false, resource.Invalid("region", "deregistration is for another region than this instance")
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	at := func(stage string) error {
+		if c.step == nil {
+			return nil
+		}
+		return c.step(stage)
+	}
+	if err := at("cleanup"); err != nil {
+		return false, err
+	}
+	for _, name := range []string{registrationFile, fenceFile} {
+		if err := removeStaleTemps(c.dir, name); err != nil {
+			return false, err
+		}
+	}
+	f, err := c.readFence()
+	if err != nil {
+		return false, err
+	}
+	if req.Generation < f.Generation || req.Generation == f.Generation && !f.Deregistered {
+		return false, errStaleGeneration()
+	}
+	if want := (fence{req.Generation, true}); f != want {
+		if err := at("fence"); err != nil {
+			return false, err
+		}
+		if err := c.writeFence(want); err != nil {
+			return false, err
+		}
+	}
+	if err := at("unlink"); err != nil {
+		return false, err
+	}
 	if err := os.Remove(filepath.Join(c.dir, registrationFile)); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("remove registration: %w", err)
-	}
-	if err := removeStaleTemps(c.dir, registrationFile); err != nil {
-		return err
-	}
-	if err := syncDir(c.dir); err != nil {
-		return err
+		return false, fmt.Errorf("remove registration: %w", err)
 	}
 	c.current, c.digest = nil, [32]byte{}
 	c.endpoints, c.endpointsID = nil, ""
 	if c.client != nil {
 		c.client.CloseIdleConnections()
 	}
-	return nil
+	if err := at("sync"); err != nil {
+		return true, err
+	}
+	return true, syncDir(c.dir)
 }
 
 // sameTrust reports whether s sends a stored secret nowhere new: the stored

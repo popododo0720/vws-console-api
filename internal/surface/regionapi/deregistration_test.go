@@ -77,11 +77,11 @@ func TestDeregistrationRequiresTheGlobalClientCertificate(t *testing.T) {
 	if calls.Load() != 0 {
 		t.Fatal("an unauthenticated request reached the daemon")
 	}
-	if err := client.Deregister(t.Context(), "pve-test-1"); err != nil || calls.Load() != 1 {
+	if err := client.Deregister(t.Context(), "pve-test-1", 7); err != nil || calls.Load() != 1 {
 		t.Fatalf("deregister: %v, calls %d", err, calls.Load())
 	}
 	failure = errors.New("boom")
-	if err := client.Deregister(t.Context(), "pve-test-1"); err == nil ||
+	if err := client.Deregister(t.Context(), "pve-test-1", 7); err == nil ||
 		resource.RegionFailureMessage(err) != "deregistration failed" {
 		t.Fatalf("failure: %v", err)
 	}

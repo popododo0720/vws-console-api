@@ -140,6 +140,10 @@ func adminError(w http.ResponseWriter, r *http.Request, err error) {
 		writeErr(w, r, &resource.Error{Code: resource.CodeConflict, Message: store.ErrRegionInUse.Error()})
 		return
 	}
+	if errors.Is(err, store.ErrRegionDeleting) {
+		writeErr(w, r, &resource.Error{Code: resource.CodeConflict, Message: store.ErrRegionDeleting.Error()})
+		return
+	}
 	if errors.Is(err, store.ErrExists) || errors.Is(err, store.ErrConflict) {
 		writeErr(w, r, &resource.Error{Code: resource.CodeConflict, Message: "registration already exists or changed"})
 		return

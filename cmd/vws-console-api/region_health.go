@@ -39,15 +39,15 @@ func regionRegistration(files iamclient.TLSFiles) func(context.Context, string, 
 	}
 }
 
-func regionDeregistration(files iamclient.TLSFiles) func(context.Context, string, string) error {
+func regionDeregistration(files iamclient.TLSFiles) func(context.Context, string, string, int64) error {
 	connect := regionConnection(files)
-	return func(ctx context.Context, endpoint, region string) error {
+	return func(ctx context.Context, endpoint, region string, generation int64) error {
 		client, err := connect(endpoint)
 		if err != nil {
 			return err
 		}
 		defer client.Close()
-		return client.Deregister(ctx, region)
+		return client.Deregister(ctx, region, generation)
 	}
 }
 

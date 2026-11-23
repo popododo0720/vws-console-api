@@ -46,9 +46,15 @@ func WithDeregistration(deregister func(context.Context, json.RawMessage) error,
 		if err == nil {
 			err = deregister(r.Context(), data)
 		}
-		if err != nil && resource.AsError(err).Code != resource.CodeInvalidArgument {
+		if err != nil && !passesThrough(err) {
 			err = report.Error(r.Context(), &resource.Error{Code: resource.CodeUnavailable, Message: "deregistration failed"},
 				slog.String("op", "POST "+deregisterPath))
+		}
+		if err != nil && resource.AsError(err).Code == resource.CodeConflict {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusConflict)
+			server.RecordFailure(w, json.NewEncoder(w).Encode(errorBody{Error: resource.AsError(err)}))
+			return
 		}
 		writeJSON(w, struct{}{}, err)
 	})))
@@ -56,14 +62,23 @@ func WithDeregistration(deregister func(context.Context, json.RawMessage) error,
 }
 
 // Deregister asks the region daemon to delete its registration and become
-// not ready. It is safe to repeat: a daemon with nothing registered succeeds.
-func (c *Client) Deregister(ctx context.Context, region string) error {
+// not ready and to refuse any registration older than generation. It is safe
+// to repeat: a daemon with nothing registered succeeds.
+func (c *Client) Deregister(ctx context.Context, region string, generation int64) error {
 	data, err := json.Marshal(struct {
-		Region string `json:"region"`
-	}{region})
+		Region     string `json:"region"`
+		Generation int64  `json:"generation"`
+	}{region, generation})
 	if err != nil {
 		return fmt.Errorf("encode deregistration: %w", err)
 	}
 	var result struct{}
 	return c.do(ctx, http.MethodPost, deregisterPath, data, &result)
+}
+
+// passesThrough reports whether err is a refusal of the request itself, which
+// is safe to return as is.
+func passesThrough(err error) bool {
+	code := resource.AsError(err).Code
+	return code == resource.CodeInvalidArgument || code == resource.CodeConflict
 }

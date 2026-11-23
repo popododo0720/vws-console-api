@@ -95,8 +95,8 @@ func TestAdminRegionLifecycleAndCanary(t *testing.T) {
 	h.regionRegistration = func(ctx context.Context, _ string, data json.RawMessage) error {
 		return client.Register(ctx, data)
 	}
-	h.regionDeregistration = func(ctx context.Context, _, region string) error {
-		return client.Deregister(ctx, region)
+	h.regionDeregistration = func(ctx context.Context, _, region string, generation int64) error {
+		return client.Deregister(ctx, region, generation)
 	}
 	h.svc = cloud.New(cloud.Config{Backends: fake.New(fake.Options{}).Set(), Regions: g.Catalog()})
 	post := regionCall(t, e, "POST", validRegion(), "", 201)
@@ -141,8 +141,14 @@ func TestAdminRegionLifecycleAndCanary(t *testing.T) {
 		t.Fatal("delete kept region")
 	}
 	mu.Lock()
-	if !reflect.DeepEqual(deregistered, []string{`{"region":"pve-test-1"}`}) {
-		t.Fatalf("deregistrations: %v", deregistered)
+	var gone struct {
+		Region     string  `json:"region"`
+		Generation float64 `json:"generation"`
+	}
+	last, _ := pushes[1]["generation"].(float64)
+	if len(deregistered) != 1 || json.Unmarshal([]byte(deregistered[0]), &gone) != nil ||
+		gone.Region != "pve-test-1" || gone.Generation <= last || last <= 0 {
+		t.Fatalf("deregistrations %v after pushes at generation %v", deregistered, last)
 	}
 	mu.Unlock()
 	rec := e.do(t, "GET", "/api/v1/regions", "", map[string]string{"Authorization": "Bearer tok"})
@@ -171,11 +177,11 @@ func TestAdminRegionLifecycleAndCanary(t *testing.T) {
 func TestAdminRegionDeleteRefusesProjectMappings(t *testing.T) {
 	e, g, app, auditLog := accountFixture(t)
 	var deregistrations int
-	e.h.(*handler).regionDeregistration = func(context.Context, string, string) error {
+	e.h.(*handler).regionDeregistration = func(context.Context, string, string, int64) error {
 		deregistrations++
 		return nil
 	}
-	post := regionCall(t, e, "POST", validRegion(), "", 201)
+	regionCall(t, e, "POST", validRegion(), "", 201)
 	mapping, err := g.Projects().Put(t.Context(), store.Project{
 		Project: "123456789012", Pools: []store.ProjectPool{{Region: "pve-test-1", Pool: "mapped"}},
 	})
@@ -183,7 +189,7 @@ func TestAdminRegionDeleteRefusesProjectMappings(t *testing.T) {
 		t.Fatal(err)
 	}
 	for range 2 {
-		rec := regionCall(t, e, "DELETE", nil, post.Header().Get("ETag"), 409)
+		rec := regionCall(t, e, "DELETE", nil, "", 409)
 		if !strings.Contains(rec.Body.String(), "project pool mappings") {
 			t.Fatalf("missing dependency explanation: %s", rec.Body)
 		}
@@ -198,7 +204,7 @@ func TestAdminRegionDeleteRefusesProjectMappings(t *testing.T) {
 	if _, err := g.Projects().Put(t.Context(), mapping); err != nil {
 		t.Fatal(err)
 	}
-	regionCall(t, e, "DELETE", nil, post.Header().Get("ETag"), 204)
+	regionCall(t, e, "DELETE", nil, "", 204)
 	if deregistrations != 1 {
 		t.Fatalf("deregistrations = %d", deregistrations)
 	}
@@ -492,7 +498,7 @@ func TestAdminRegionDeleteNeedsTheDaemonUnlessForced(t *testing.T) {
 	h := e.h.(*handler)
 	const endpoint = "https://region.example"
 	var calls []string
-	h.regionDeregistration = func(_ context.Context, to, region string) error {
+	h.regionDeregistration = func(_ context.Context, to, region string, _ int64) error {
 		calls = append(calls, to+" "+region)
 		return fmt.Errorf("dial %s: token %s", to, validRegion()["tokenSecret"])
 	}
@@ -544,7 +550,7 @@ func TestAdminRegionDeleteNeedsTheDaemonUnlessForced(t *testing.T) {
 func TestAdminRegionDeleteRepeatsAfterAFailedRegistryDelete(t *testing.T) {
 	e, g, _, _ := accountFixture(t)
 	calls := 0
-	e.h.(*handler).regionDeregistration = func(ctx context.Context, _, _ string) error {
+	e.h.(*handler).regionDeregistration = func(ctx context.Context, _, _ string, _ int64) error {
 		calls++
 		if calls == 1 {
 			// A concurrent edit makes the registry delete lose after the daemon was told.

@@ -92,7 +92,8 @@ closes for good and a handler still in flight is refused.
 
 ## Registration and state
 
-All daemon state is one file, `registration.json`, in the state directory:
+All daemon state is `registration.json` and the small `generation.json` fence (see
+deregistration below) in the state directory:
 `-state-dir`, default `/var/lib/vws-region/<region>` (systemd
 `StateDirectory`). The daemon creates the directory with mode 0700 and the file with mode 0600. It
 refuses to start if the directory exists but is a symlink, belongs to another
@@ -128,18 +129,30 @@ An omitted secret reuses the stored one only for the same token id. The PVE
 self-check runs before anything is written; a failed check leaves the old file.
 See [registration rules](rules.md) for size limits and reloads.
 
-`POST /internal/v1/deregister` (same mTLS requirement, body `{"region": "<name>"}`,
-400 for another region) makes the daemon forget the registration. It deletes
-`registration.json` and syncs the directory, stops the quorum gate and the
-launch finalizer and waits for them, withdraws the region API and reports
-`unregistered` on `/readyz`. When it returns, no finalizer write is running or
-can start; a request that was already past the gate may still finish. It is
-idempotent: a daemon with nothing registered answers 200. A failed removal
-changes nothing else and returns 503, so the call can be repeated.
+`POST /internal/v1/deregister` (same mTLS requirement, body
+`{"region": "<name>", "generation": <n>}`, 400 for another region) makes the
+daemon forget the registration. Registration pushes carry the registry version
+as `generation`. The daemon keeps the highest generation it accepted in
+`generation.json` next to `registration.json`, and refuses (409) a registration
+older than it or at the level of a removal, and a removal older than it. This
+fences a PATCH push that is delayed or comes from another console replica.
+
+On a removal the daemon deletes stale temporary files, persists the generation,
+unlinks `registration.json` and syncs the directory. A failure before the
+unlink changes nothing and the region keeps serving. Once the file is gone the
+daemon stops the quorum gate and the launch finalizer and waits for them,
+withdraws the region API and reports `unregistered` on `/readyz`, even if the
+directory sync failed; that case returns 503 and a repeat redoes the sync.
+When it returns, no finalizer write is running or can start. A request that was
+already past the gate may still finish, and a PVE task already submitted, such
+as a VM start, may complete. It is idempotent: a daemon with nothing registered
+answers 200.
 
 The global API sends it before it removes a region (`DELETE
-/api/v1/admin/regions/<name>`). If the daemon cannot be reached the delete
-fails with 503 and the region stays registered. To remove a region whose
+/api/v1/admin/regions/<name>`). The delete first marks the region deleting,
+which refuses PATCH and project mappings of it; a mapping that already exists
+makes it 409 before the daemon is touched. If the daemon cannot be reached the
+delete fails with 503, the mark is released and the region stays registered. To remove a region whose
 daemon is gone for good, add `?force=true`. The entry is then removed but the
 daemon, if it ever comes back, still holds the PVE token: delete the token in
 PVE (`pveum user token remove <user> <token>`). The same applies to the
@@ -230,4 +243,6 @@ Start the processes in this order:
    daemon deletes `$ROOT/state/registration.json` and its `/readyz` returns 503
    `unregistered`.
    Stop the processes with SIGTERM. The global registrations disappear
-   on restart.
+   on restart; because the memory registry restarts its versions below the
+   daemon's fence, delete `$ROOT/state/generation.json` before registering
+   again. The same applies after any rebuild of the registry (a new etcd).

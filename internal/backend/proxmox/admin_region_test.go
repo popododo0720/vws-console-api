@@ -38,7 +38,7 @@ func TestAdminRegionDeleteNeverCallsPVE(t *testing.T) {
 	var told []string
 	h := console.New(console.Config{
 		// The delete reaches the region daemon, never PVE.
-		RegionDeregistration: func(_ context.Context, endpoint, region string) error {
+		RegionDeregistration: func(_ context.Context, endpoint, region string, _ int64) error {
 			told = append(told, endpoint+" "+region)
 			return nil
 		},
