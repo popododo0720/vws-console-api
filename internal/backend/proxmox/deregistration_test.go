@@ -288,6 +288,19 @@ func TestTombstoneBesideARegistrationFileIsAuthoritative(t *testing.T) {
 			t.Fatalf("%s: tombstone not marked done: %+v %v", phase, f, err)
 		}
 	}
+	// A tombstone written where statx reported no birth time still owns the
+	// unchanged file once a later lookup reports one.
+	leave()
+	pending.RemovedFile.Btime = 0
+	if err := conn.writeFence(pending); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Check(t.Context()); !errors.Is(err, ErrUnregistered) {
+		t.Fatalf("without a recorded birth time the removed registration is ready: %v", err)
+	}
+	if _, err := os.Stat(file); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("without a recorded birth time the pending unlink was not finished: %v", err)
+	}
 	// A rolled-back daemon re-registered other credentials after the crash.
 	if err := conn.writeFence(pending); err != nil {
 		t.Fatal(err)
@@ -536,6 +549,26 @@ func changeMetadata(t *testing.T, file string) {
 		}
 		if err := os.Chown(file, os.Getuid(), os.Getgid()); err != nil {
 			t.Fatal(err)
+		}
+	}
+}
+
+func TestFileIdentityComparesBirthTimesOnlyWhenBothHaveOne(t *testing.T) {
+	removed := fileID{Dev: 1, Ino: 7, Btime: 100}
+	for name, tc := range map[string]struct {
+		a, b fileID
+		same bool
+	}{
+		"equal":                   {removed, removed, true},
+		"recorded, then not seen": {removed, fileID{Dev: 1, Ino: 7}, true},
+		"not recorded, then seen": {fileID{Dev: 1, Ino: 7}, removed, true},
+		"different birth time":    {removed, fileID{Dev: 1, Ino: 7, Btime: 200}, false},
+		"different inode":         {removed, fileID{Dev: 1, Ino: 8, Btime: 100}, false},
+		"different device":        {removed, fileID{Dev: 2, Ino: 7, Btime: 100}, false},
+		"unknown identity":        {fileID{}, fileID{}, false},
+	} {
+		if got := tc.b.sameFile(tc.a); got != tc.same {
+			t.Errorf("%s: sameFile = %v, want %v", name, got, tc.same)
 		}
 	}
 }

@@ -415,6 +415,16 @@ type fileID struct {
 	Btime int64  `json:"btimeNs,omitempty"`
 }
 
+// sameFile reports whether a and b name the same known file. Birth times are
+// compared only when both lookups report one, since statx may report it on one
+// lookup and not the next.
+func (a fileID) sameFile(b fileID) bool {
+	if a.Ino == 0 || a.Dev != b.Dev || a.Ino != b.Ino {
+		return false
+	}
+	return a.Btime == 0 || b.Btime == 0 || a.Btime == b.Btime
+}
+
 func errStaleGeneration() error {
 	return &resource.Error{Code: resource.CodeConflict, Message: "generation is older than the daemon's current one"}
 }
@@ -485,7 +495,7 @@ func (c *Connection) finishPendingRemoval() (fence, error) {
 	if err != nil {
 		return f, err
 	}
-	owned := f.Pending && digest == f.RemovedDigest && id != (fileID{}) && id == f.RemovedFile
+	owned := f.Pending && digest == f.RemovedDigest && id.sameFile(f.RemovedFile)
 	if digest != "" && !owned {
 		f = fence{Generation: f.Generation}
 		return f, c.writeFence(f)
