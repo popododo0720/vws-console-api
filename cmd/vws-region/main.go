@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -99,9 +100,25 @@ func run(ctx context.Context, args []string) (err error) {
 	var gateBackend *proxmox.Backend
 	var gateCancel context.CancelFunc
 	var gateDone chan struct{}
+	// stopGate ends the quorum gate and the launch finalizer and waits for
+	// both; the finalizer ends on the cancelled context and the wait covers its
+	// last PVE write. Callers hold probe.mu.
+	stopGate := func() {
+		if gateCancel != nil {
+			gateCancel()
+			<-gateDone
+		}
+		gateCancel, gateDone, gateBackend = nil, nil, nil
+		gated.Store(nil)
+	}
 	probe := &readiness{check: func(ctx context.Context) error {
 		b, err := conn.Check(ctx)
 		if err != nil {
+			if errors.Is(err, proxmox.ErrUnregistered) {
+				// The registration is gone (removed, or a tombstone finished by the
+				// reload): nothing may keep running on the old one.
+				stopGate()
+			}
 			if ctx.Err() == nil {
 				state.Store(nil)
 			}
@@ -168,16 +185,29 @@ func run(ctx context.Context, args []string) (err error) {
 		cancel()
 		err = errors.Join(err, <-opsDone)
 	}()
-	// Registration and the connection test work before the region is ready.
-	h := regionapi.WithRegistration(conn.Register, regionapi.WithConnectionTest(conn.TestConnection,
-		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			current := state.Load()
-			if current == nil {
-				regionapi.WriteNotReady(w, probe.Ready(r.Context()))
-				return
-			}
-			(*current).ServeHTTP(w, r)
-		})))
+	// deregister runs under probe.mu, which orders it against Ready; Register
+	// may run meanwhile and its result is picked up by the next Ready. See
+	// deregisterThen for what a failure leaves behind.
+	deregister := func(_ context.Context, data json.RawMessage) error {
+		probe.mu.Lock()
+		defer probe.mu.Unlock()
+		return deregisterThen(data, conn.Deregister, func() {
+			stopGate()
+			state.Store(nil)
+			probe.at = time.Time{}
+		})
+	}
+	// Registration, deregistration and the connection test work before the region is ready.
+	h := regionapi.WithRegistration(conn.Register, regionapi.WithDeregistration(deregister,
+		regionapi.WithConnectionTest(conn.TestConnection,
+			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				current := state.Load()
+				if current == nil {
+					regionapi.WriteNotReady(w, probe.Ready(r.Context()))
+					return
+				}
+				(*current).ServeHTTP(w, r)
+			}))))
 	srv := regionapi.NewServer(*addr, h, cert, ca)
 	lc := net.ListenConfig{}
 	ln, err := lc.Listen(ctx, "tcp", *addr)
@@ -220,6 +250,26 @@ func run(ctx context.Context, args []string) (err error) {
 	err = errors.Join(err, srv.Shutdown(shutCtx))
 	if serveErr := <-done; !errors.Is(serveErr, http.ErrServerClosed) {
 		err = errors.Join(err, serveErr)
+	}
+	return err
+}
+
+// deregisterThen removes the registration with remove and, once it reports
+// the registration gone, calls stop to end everything that runs on it: the
+// quorum gate and the launch finalizer are stopped and waited for (the
+// finalizer ends on the cancelled context, and the wait covers its last PVE
+// write), the region API is withdrawn and the readiness cache is dropped, so
+// /readyz says unregistered at once. A request already past the gate may
+// finish; none starts. If remove fails before the registration is gone,
+// nothing is stopped and the region keeps working. If it fails after (the
+// directory sync), the removal is committed: stop still runs and the error is
+// returned so that the caller repeats the call, which redoes the sync.
+func deregisterThen(
+	data json.RawMessage, remove func(json.RawMessage) (bool, error), stop func(),
+) error {
+	removed, err := remove(data)
+	if removed {
+		stop()
 	}
 	return err
 }

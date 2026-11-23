@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"sync"
@@ -94,5 +95,28 @@ func TestRegionNameIsRequiredAndRemovedFlagsAreRefused(t *testing.T) {
 		if err := run(t.Context(), args); err == nil {
 			t.Fatalf("accepted %q", args)
 		}
+	}
+}
+
+func TestDeregisterThenStopsWhenTheRegistrationIsGone(t *testing.T) {
+	boom := errors.New("sync failed")
+	for _, tc := range []struct {
+		name     string
+		removed  bool
+		err      error
+		wantStop bool
+	}{
+		{"removed", true, nil, true},
+		{"unchanged after a failure", false, boom, false},
+		{"removed but not durable", true, boom, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stops := 0
+			err := deregisterThen(nil, func(json.RawMessage) (bool, error) { return tc.removed, tc.err },
+				func() { stops++ })
+			if !errors.Is(err, tc.err) || (stops == 1) != tc.wantStop || stops > 1 {
+				t.Fatalf("err %v, stops %d", err, stops)
+			}
+		})
 	}
 }

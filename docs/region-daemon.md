@@ -92,7 +92,8 @@ closes for good and a handler still in flight is refused.
 
 ## Registration and state
 
-All daemon state is one file, `registration.json`, in the state directory:
+All daemon state is `registration.json` and the small `generation.json` fence (see
+deregistration below) in the state directory:
 `-state-dir`, default `/var/lib/vws-region/<region>` (systemd
 `StateDirectory`). The daemon creates the directory with mode 0700 and the file with mode 0600. It
 refuses to start if the directory exists but is a symlink, belongs to another
@@ -127,6 +128,48 @@ and `backupTokenId` and write-only `backupToken` reserved for disk exports.
 An omitted secret reuses the stored one only for the same token id. The PVE
 self-check runs before anything is written; a failed check leaves the old file.
 See [registration rules](rules.md) for size limits and reloads.
+
+`POST /internal/v1/deregister` (same mTLS requirement, body
+`{"region": "<name>", "generation": <n>}`, 400 for another region) makes the
+daemon forget the registration. A registration push may carry the registry
+version as `generation`; one without it is generation 0 and is accepted as
+before while no removal happened. The daemon keeps the highest generation it
+accepted in `generation.json` next to `registration.json`, and refuses (409) a
+registration older than it or at the level of a removal, and a removal older
+than it or at the level of a registration. This fences a push that is delayed
+or comes from another console replica. `GET /internal/v1/fence` answers
+`{"generation": true}` before the region is ready; a daemon that does not
+serve it predates the fence.
+
+On a removal the daemon deletes stale temporary files, persists a pending
+tombstone (the generation and the SHA-256 of the `registration.json` bytes it
+removes), unlinks `registration.json`, syncs the directory and marks the
+tombstone done. A failure before the unlink changes no registration and the
+region keeps serving. Once the file is gone the daemon stops the quorum gate
+and the launch finalizer and waits for them, withdraws the region API and
+reports `unregistered` on `/readyz`, even if the directory sync failed; that
+case returns 503 and a repeat redoes the sync. When it returns, no finalizer
+write is running or can start. A request that was already past the gate may
+still finish, and a PVE task already submitted, such as a VM start, may
+complete. It is idempotent: a daemon with nothing registered answers 200.
+
+A `registration.json` found beside a tombstone at startup, on a reload or
+before a registration or removal is settled first. If the tombstone is pending
+and the file has the recorded digest, it is the file the removal left behind
+(a crash, or a failed unlink): the daemon finishes the unlink and the sync and
+stays unregistered. Any other file (the tombstone is done, or the bytes differ)
+is a registration written since by a daemon rolled back to an earlier release,
+which knows no fence: the daemon keeps and serves it and replaces the tombstone
+with a plain fence at the same generation, so older generations stay refused.
+A registration that supplies every secret settles the tombstone the same way
+before it replaces it.
+
+Rollback: `registration.json` keeps the schema of earlier releases (no
+`generation`), so a daemon can be rolled back and still reads it; the older
+binary ignores `generation.json`. One case is still taken as the leftover: a
+crash in the middle of a removal, then a rollback, then a re-registration with
+byte-identical credentials. The upgraded daemon removes that file and reports
+`unregistered`; register the region again.
 No credential value belongs in region.yaml, command arguments or the
 environment. Registration decoder errors never echo submitted values.
 
