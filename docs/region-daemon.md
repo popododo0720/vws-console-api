@@ -208,34 +208,21 @@ PVE (`pveum user token remove <user> <token>`), and the firewall and backup
 tokens the same way. A region registered again gets a new record whose version
 is above the removal generation, so the daemon accepts it.
 
-A PATCH that moves the region to another daemon (`regionEndpoint` names
-another HTTPS origin; a trailing slash is not a move) works in this order:
+A PATCH that moves a region to another daemon changes the origin of
+`regionEndpoint`: the scheme or the host, compared in lower case, or the port,
+with 443 the same as none. A path or a trailing slash is not a move. A move is
+refused with 400, before any daemon is called, unless it meets all of these:
 
-1. Every check that can refuse the edit runs first, before any daemon is
-   touched: the body, the If-Match version, the cluster claim, and the secrets
-   the new daemon's first registration needs. A move must carry `tokenSecret`,
-   plus `firewallTokenSecret` and `backupTokenSecret` when those token ids are
-   set; otherwise it is 400.
-2. One CAS on the If-Match version commits the new endpoint together with
-   `pendingDeregister: {"endpoint": <old>}`. Of two overlapping edits, the
-   loser fails here (409) before any daemon call. The version this write
-   creates is the removal generation, above anything the old daemon accepted.
-3. The console deregisters the old daemon at that generation. If that fails,
-   the PATCH is 503 and returns the new ETag. The record keeps
-   `pendingDeregister`, and the new endpoint gets nothing, so the tokens are
-   never on two daemons. Repeat the edit with the same secrets (the registry
-   keeps only fingerprints), or pass `?force=true` once the old daemon is
-   stopped or its token is revoked.
-4. On success the console clears `pendingDeregister` by CAS and pushes to the
-   new endpoint as for any edit. A failed push is kept in `lastError` and can
-   be retried.
+- It carries a `tokenSecret` whose fingerprint differs from the stored one.
+- It carries `firewallTokenSecret` and `backupTokenSecret` when those token
+  ids are set, as the new daemon's first registration needs.
+- The last registration push succeeded (no `lastError`), so the stored
+  fingerprint is the token the old daemon holds.
 
-While a move is pending, any PATCH that keeps the new endpoint repeats the
-move. A PATCH back to the old endpoint drops the pending move without
-deregistering anything. A DELETE deregisters both daemons. `?force=true`
-skips the old daemon, commits the move and pushes to the new endpoint, and
-logs a warning to revoke the old token in PVE. A PATCH that keeps the
-endpoint is unchanged.
+The move then takes the normal PATCH path and pushes only to the new endpoint.
+The console never contacts the old daemon: stop it and revoke its old token
+in PVE, as the move runbook says. It keeps the old token and never sees the
+new one.
 No credential value belongs in region.yaml, command arguments or the
 environment. Registration decoder errors never echo submitted values.
 
