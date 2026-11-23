@@ -36,6 +36,11 @@ func (h *handler) adminReady(w http.ResponseWriter, r *http.Request) bool {
 		writeErr(w, r, resource.Invalid("query", "query parameters are not supported"))
 		return false
 	}
+	return h.adminRegistry(w, r)
+}
+
+// adminRegistry refuses a request while the admin registry is not configured.
+func (h *handler) adminRegistry(w http.ResponseWriter, r *http.Request) bool {
 	if h.registry == nil {
 		writeErr(w, r, &resource.Error{Code: resource.CodeUnavailable, Message: "admin registry unavailable"})
 		return false
@@ -133,6 +138,10 @@ func (h *handler) adminAccount(w http.ResponseWriter, r *http.Request) {
 func adminError(w http.ResponseWriter, r *http.Request, err error) {
 	if errors.Is(err, store.ErrRegionInUse) {
 		writeErr(w, r, &resource.Error{Code: resource.CodeConflict, Message: store.ErrRegionInUse.Error()})
+		return
+	}
+	if errors.Is(err, store.ErrRegionDeleting) {
+		writeErr(w, r, &resource.Error{Code: resource.CodeConflict, Message: store.ErrRegionDeleting.Error()})
 		return
 	}
 	if errors.Is(err, store.ErrExists) || errors.Is(err, store.ErrConflict) {

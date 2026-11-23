@@ -87,37 +87,56 @@ func (s *Store) Update(ctx context.Context, key string, value []byte, expected s
 
 // Delete removes key if its mod revision is expected.
 func (s *Store) Delete(ctx context.Context, key string, expected store.Version) error {
-	if name, ok := strings.CutPrefix(key, "regions/"); ok {
-		ctx, cancel := context.WithTimeout(ctx, CallTimeout)
-		defer cancel()
-		k := store.Prefix + key
-		claims := store.Prefix + "project-pools/" + name + "/"
-		resp, err := s.kv.Txn(ctx).
-			If(
-				clientv3.Compare(clientv3.CreateRevision(k), ">", 0),
-				clientv3.Compare(clientv3.ModRevision(k), "=", int64(expected)),
-				clientv3.Compare(clientv3.CreateRevision(claims), "=", 0).WithPrefix(),
-			).
-			Then(clientv3.OpDelete(k)).
-			Else(clientv3.OpGet(k)).
-			Commit()
-		if err != nil {
-			return fmt.Errorf("etcd delete region %s: %w", k, err)
-		}
-		if resp.Succeeded {
-			return nil
-		}
-		current := resp.Responses[0].GetResponseRange().Kvs
-		if len(current) == 0 {
-			return store.ErrNotFound
-		}
-		if current[0].ModRevision != int64(expected) {
-			return store.ErrConflict
-		}
-		return store.ErrRegionInUse
+	if _, ok := strings.CutPrefix(key, "regions/"); ok {
+		_, err := s.ifUnclaimed(ctx, key, expected, clientv3.OpDelete(store.Prefix+key))
+		return err
 	}
 	_, err := s.ifAt(ctx, key, expected, clientv3.OpDelete(store.Prefix+key))
 	return err
+}
+
+// UpdateUnclaimed puts a region key at expected while it has no pool claims.
+func (s *Store) UpdateUnclaimed(
+	ctx context.Context, key string, value []byte, expected store.Version,
+) (store.Version, error) {
+	if _, ok := strings.CutPrefix(key, "regions/"); !ok {
+		return 0, fmt.Errorf("etcd update unclaimed %s: not a region", key)
+	}
+	return s.ifUnclaimed(ctx, key, expected, clientv3.OpPut(store.Prefix+key, string(value)))
+}
+
+// ifUnclaimed runs op on a region key at expected only while no
+// project-pools/<name>/ claim exists, in one transaction.
+func (s *Store) ifUnclaimed(
+	ctx context.Context, key string, expected store.Version, op clientv3.Op,
+) (store.Version, error) {
+	ctx, cancel := context.WithTimeout(ctx, CallTimeout)
+	defer cancel()
+	k := store.Prefix + key
+	claims := store.Prefix + "project-pools/" + strings.TrimPrefix(key, "regions/") + "/"
+	resp, err := s.kv.Txn(ctx).
+		If(
+			clientv3.Compare(clientv3.CreateRevision(k), ">", 0),
+			clientv3.Compare(clientv3.ModRevision(k), "=", int64(expected)),
+			clientv3.Compare(clientv3.CreateRevision(claims), "=", 0).WithPrefix(),
+		).
+		Then(op).
+		Else(clientv3.OpGet(k)).
+		Commit()
+	if err != nil {
+		return 0, fmt.Errorf("etcd write region %s: %w", k, err)
+	}
+	if resp.Succeeded {
+		return store.Version(resp.Header.Revision), nil
+	}
+	current := resp.Responses[0].GetResponseRange().Kvs
+	if len(current) == 0 {
+		return 0, store.ErrNotFound
+	}
+	if current[0].ModRevision != int64(expected) {
+		return 0, store.ErrConflict
+	}
+	return 0, store.ErrRegionInUse
 }
 
 // Swap compares the project and pool claims in the same transaction as their writes.

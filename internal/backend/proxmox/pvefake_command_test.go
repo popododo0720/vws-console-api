@@ -91,6 +91,13 @@ func TestPVEFakeCommandRegionInventoryAndRestart(t *testing.T) {
 	var previous inventoryPage
 	var previousInventory []byte
 	for attempt := range 2 {
+		if attempt > 0 {
+			// The memory registry restarts its versions at 1, below the generation the
+			// daemon fenced on; an operator who rebuilds the registry deletes this file.
+			if err := os.Remove(filepath.Join(dir, "state", fenceFile)); err != nil {
+				t.Fatal(err)
+			}
+		}
 		ctx, cancel := context.WithTimeout(context.WithoutCancel(t.Context()), time.Minute)
 		t.Cleanup(cancel)
 		pve := exec.CommandContext(ctx, filepath.Join(dir, "pvefake"),
@@ -288,6 +295,11 @@ func TestPVEFakeCommandRegionInventoryAndRestart(t *testing.T) {
 			previous = page
 		}
 		admin(http.MethodDelete, regionPath, "", http.StatusNoContent)
+		// The delete told the daemon first: its state file and token are gone.
+		if _, err := os.Stat(filepath.Join(dir, "state", registrationFile)); !os.IsNotExist(err) {
+			t.Fatalf("deleting the region left the daemon registered: %v", err)
+		}
+		awaitStatus(t, "http://"+ops+"/readyz", http.StatusServiceUnavailable)
 		if data := admin(http.MethodGet, regionsPath, "", http.StatusOK); strings.TrimSpace(string(data)) != `{"items":[]}` {
 			t.Fatalf("deleted region retained: %s", data)
 		}

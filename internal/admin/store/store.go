@@ -21,10 +21,11 @@ const Prefix = "/vws/admin/"
 
 // Errors of every Backend and of the Registry.
 var (
-	ErrNotFound    = errors.New("admin store: record not found")
-	ErrExists      = errors.New("admin store: record already exists")
-	ErrConflict    = errors.New("admin store: version does not match")
-	ErrRegionInUse = errors.New("region has project pool mappings; remove the mappings before deleting the region")
+	ErrNotFound       = errors.New("admin store: record not found")
+	ErrExists         = errors.New("admin store: record already exists")
+	ErrConflict       = errors.New("admin store: version does not match")
+	ErrRegionDeleting = errors.New("region is being deleted")
+	ErrRegionInUse    = errors.New("region has project pool mappings; remove the mappings before deleting the region")
 )
 
 // Version is the compare-and-swap token of a stored record. It is never 0.
@@ -46,6 +47,10 @@ type Backend interface {
 	List(ctx context.Context, prefix string) ([]Entry, error)
 	Update(ctx context.Context, key string, value []byte, expected Version) (Version, error)
 	Delete(ctx context.Context, key string, expected Version) error
+	// UpdateUnclaimed is Update of a regions/<name> key that also requires,
+	// in the same transaction, that no project-pools/<name>/ claim exists,
+	// the guard Delete applies to a region; ErrRegionInUse otherwise.
+	UpdateUnclaimed(ctx context.Context, key string, value []byte, expected Version) (Version, error)
 	// Swap applies every put and delete atomically only while all checks match.
 	// A check at version 0 requires absence; a mismatch returns ErrConflict.
 	Swap(ctx context.Context, checks, puts []Entry, deletes []string) (Version, error)
@@ -72,6 +77,11 @@ type Region struct {
 	BackupTokenSecret SecretMetadata `json:"backupTokenSecret"`
 
 	LastError *resource.RegionStatusError `json:"lastError,omitempty"`
+
+	// Deleting reserves the region for removal: edits and project mappings
+	// are refused, and the version of this record is the generation that
+	// fences the region daemon against older pushes.
+	Deleting bool `json:"deleting,omitempty"`
 }
 
 // UnmarshalJSON reads a record stored before pveApiUrls as a one-address list;
@@ -147,6 +157,24 @@ func New(b Backend) *Registry { return &Registry{b: b} }
 // Regions is the collection of Proxmox regions.
 func (g *Registry) Regions() Collection[Region, *Region] {
 	return Collection[Region, *Region]{b: g.b, kind: "regions/"}
+}
+
+// MarkRegionDeleting sets Deleting on v at v.Version only while the region has
+// no project pool mappings (ErrRegionInUse). A marked region refuses new
+// mappings, so once marked it stays unmapped until it is deleted.
+func (g *Registry) MarkRegionDeleting(ctx context.Context, v Region) (Region, error) {
+	c := g.Regions()
+	v.Deleting = true
+	key, data, err := c.encode(&v)
+	if err != nil {
+		return v, err
+	}
+	ver, err := g.b.UpdateUnclaimed(ctx, key, data, v.Version)
+	if err != nil {
+		return v, fmt.Errorf("mark %s deleting: %w", key, err)
+	}
+	v.Version = ver
+	return v, nil
 }
 
 // AWSAccounts is the collection of AWS accounts.

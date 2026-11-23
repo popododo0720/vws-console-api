@@ -169,6 +169,13 @@ func (p Projects) Put(ctx context.Context, v Project) (Project, error) {
 		if err != nil {
 			return v, fmt.Errorf("read project pool region: %w", err)
 		}
+		var stored Region
+		if err := json.Unmarshal(region.Value, &stored); err != nil {
+			return v, fmt.Errorf("decode project pool region: %w", err)
+		}
+		if stored.Deleting {
+			return v, ErrRegionDeleting
+		}
 		checks = append(checks, Entry{Key: regionKey, Version: region.Version})
 	}
 	puts := []Entry{{Key: key, Value: data}}

@@ -60,6 +60,9 @@ type Config struct {
 	RegionStatus func(context.Context, string) (resource.RegionStatus, error)
 	RegionPool   func(context.Context, string, string) (bool, error)
 
+	// RegionDeregistration tells the daemon at an endpoint to forget a region.
+	RegionDeregistration func(ctx context.Context, endpoint, region string, generation int64) error
+
 	RegionRegistration func(context.Context, string, json.RawMessage) error
 	RegionConnection   func(ctx context.Context, endpoint string, data json.RawMessage) ([]resource.ConnectionStep, error)
 	AccountConnection  func(context.Context, resource.AWSConnectionRequest, string) []resource.ConnectionStep
@@ -112,10 +115,11 @@ func New(cfg Config) http.Handler {
 		regionStatus: cfg.RegionStatus,
 		regionPool:   cfg.RegionPool,
 
-		regionRegistration: cfg.RegionRegistration,
-		regionConnection:   cfg.RegionConnection,
-		accountConnection:  cfg.AccountConnection,
-		awsCost:            cfg.AWSCost,
+		regionDeregistration: cfg.RegionDeregistration,
+		regionRegistration:   cfg.RegionRegistration,
+		regionConnection:     cfg.RegionConnection,
+		accountConnection:    cfg.AccountConnection,
+		awsCost:              cfg.AWSCost,
 	}
 	h.routes(h.mux)
 	return h
@@ -219,6 +223,8 @@ type handler struct {
 	requests     *throttle.Limiter
 	regionStatus func(context.Context, string) (resource.RegionStatus, error)
 	regionPool   func(context.Context, string, string) (bool, error)
+
+	regionDeregistration func(ctx context.Context, endpoint, region string, generation int64) error
 
 	regionRegistration func(context.Context, string, json.RawMessage) error
 	regionConnection   func(ctx context.Context, endpoint string, data json.RawMessage) ([]resource.ConnectionStep, error)
