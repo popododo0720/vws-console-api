@@ -25,6 +25,9 @@ import (
 	"github.com/popododo0720/vws-console-api/internal/resource"
 )
 
+// ErrUnregistered is the readiness state of a daemon with no registration.
+var ErrUnregistered = errors.New("unregistered")
+
 // errNoEndpoints is the state of a registration file written before it carried
 // pveApiUrls and caPem.
 var errNoEndpoints = errors.New("registration has no valid pveApiUrls and caPem; register the region again")
@@ -162,6 +165,18 @@ func (c *Connection) endpointsFor(s registrationSnapshot) (*pveclient.Endpoints,
 	}
 	c.endpoints, c.endpointsID = endpoints, key
 	return endpoints, nil
+}
+
+// encodeState is the content of registration.json. The generation lives only
+// in generation.json, so the file keeps the schema of earlier releases and a
+// daemon rolled back to one still reads it.
+func encodeState(s registrationSnapshot) ([]byte, error) {
+	s.Generation = 0
+	state, err := json.Marshal(s)
+	if err != nil {
+		return nil, fmt.Errorf("encode registration: %w", err)
+	}
+	return state, nil
 }
 
 func decodeRegistration(data []byte) (registrationSnapshot, error) {
@@ -306,7 +321,7 @@ func (c *Connection) Register(ctx context.Context, data json.RawMessage) error {
 	if s.Token == "" || s.FirewallTokenID != "" && s.FirewallToken == "" ||
 		s.BackupTokenID != "" && s.BackupToken == "" {
 		stored, _, err := c.registration()
-		if err != nil && err.Error() != "unregistered" && !errors.Is(err, errNoEndpoints) {
+		if err != nil && !errors.Is(err, ErrUnregistered) && !errors.Is(err, errNoEndpoints) {
 			return err
 		}
 		// A stored secret goes only to the destination that already held it.
@@ -345,9 +360,9 @@ func (c *Connection) Register(ctx context.Context, data json.RawMessage) error {
 	if err := c.verifyOtherEndpoints(ctx, s); err != nil {
 		return err
 	}
-	state, err := json.Marshal(s)
+	state, err := encodeState(s)
 	if err != nil {
-		return fmt.Errorf("encode registration: %w", err)
+		return err
 	}
 	if len(state) > maxRegistrationBytes {
 		return resource.Invalid("registration", "serialized registration exceeds 65 KiB")
@@ -400,6 +415,42 @@ func (c *Connection) writeFence(f fence) error {
 		return fmt.Errorf("persist generation: %w", err)
 	}
 	return nil
+}
+
+// finishPendingRemoval makes a durable tombstone authoritative. The tombstone
+// is persisted before registration.json is unlinked and a registration is
+// persisted only after its own generation replaced the tombstone, so a
+// tombstone beside a registration file means the unlink is still owed (a
+// crash, or a failed unlink). It is completed here, on startup and on every
+// reload, before the old credentials can be read.
+func (c *Connection) finishPendingRemoval() error {
+	f, err := c.readFence()
+	if err != nil {
+		return err
+	}
+	if !f.Deregistered {
+		return nil
+	}
+	file := filepath.Join(c.dir, registrationFile)
+	if _, err := os.Lstat(file); errors.Is(err, os.ErrNotExist) {
+		return ErrUnregistered
+	}
+	if err := os.Remove(file); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("remove registration: %w", err)
+	}
+	c.dropBackend()
+	if err := syncDir(c.dir); err != nil {
+		return err
+	}
+	return ErrUnregistered
+}
+
+func (c *Connection) dropBackend() {
+	c.current, c.digest = nil, [32]byte{}
+	c.endpoints, c.endpointsID = nil, ""
+	if c.client != nil {
+		c.client.CloseIdleConnections()
+	}
 }
 
 // Deregister forgets the registration, and with it every token secret, in
@@ -466,11 +517,7 @@ func (c *Connection) Deregister(data json.RawMessage) (removed bool, err error) 
 	if err := os.Remove(filepath.Join(c.dir, registrationFile)); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return false, fmt.Errorf("remove registration: %w", err)
 	}
-	c.current, c.digest = nil, [32]byte{}
-	c.endpoints, c.endpointsID = nil, ""
-	if c.client != nil {
-		c.client.CloseIdleConnections()
-	}
+	c.dropBackend()
 	if err := at("sync"); err != nil {
 		return true, err
 	}
@@ -551,9 +598,12 @@ func (c *Connection) Check(ctx context.Context) (*Backend, error) {
 
 func (c *Connection) registration() (registrationSnapshot, []byte, error) {
 	var s registrationSnapshot
+	if err := c.finishPendingRemoval(); err != nil {
+		return s, nil, err
+	}
 	f, err := os.OpenFile(filepath.Join(c.dir, registrationFile), os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 	if errors.Is(err, os.ErrNotExist) {
-		return s, nil, errors.New("unregistered")
+		return s, nil, ErrUnregistered
 	}
 	if err != nil {
 		return s, nil, errors.New("registration unreadable")

@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -176,24 +178,110 @@ func TestRegionDeleteRefusedByAMappingReleasesTheReservation(t *testing.T) {
 	_ = post
 }
 
-// An unreachable daemon releases the reservation, so the region stays
-// editable; a repeat after the daemon is back finishes the delete.
-func TestRegionDeleteFailureReleasesTheReservation(t *testing.T) {
+// A daemon that was never reached, or refused, committed nothing: the
+// reservation is released and the region stays editable.
+func TestRegionDeleteDefinitiveFailureReleasesTheReservation(t *testing.T) {
 	e, g, h, d := fenceFixture(t)
 	regionCall(t, e, "POST", validRegion(), "", 201)
-	h.regionDeregistration = func(context.Context, string, string, int64) error { return errors.New("down") }
-	regionCall(t, e, "DELETE", nil, "", 503)
-	stored, err := g.Regions().Get(t.Context(), "pve-test-1")
-	if err != nil || stored.Deleting {
-		t.Fatalf("reservation after a failed delete: %+v %v", stored, err)
+	for _, failure := range []error{
+		&net.OpError{Op: "dial", Err: errors.New("refused")},
+		&resource.Error{Code: resource.CodeConflict, Message: "stale"},
+		ErrRegionLegacy,
+	} {
+		h.regionDeregistration = func(context.Context, string, string, int64) error { return failure }
+		regionCall(t, e, "DELETE", nil, "", 503)
+		stored, err := g.Regions().Get(t.Context(), "pve-test-1")
+		if err != nil || stored.Deleting {
+			t.Fatalf("reservation after %v: %+v %v", failure, stored, err)
+		}
+		regionCall(t, e, "PATCH", map[string]any{}, `"`+itoa(stored.Version)+`"`, 200)
 	}
-	regionCall(t, e, "PATCH", map[string]any{}, `"`+itoa(stored.Version)+`"`, 200)
 	h.regionDeregistration = func(_ context.Context, _, _ string, generation int64) error {
 		return d.deregister(generation)
 	}
 	regionCall(t, e, "DELETE", nil, "", 204)
 	if d.active() {
 		t.Fatal("daemon still registered")
+	}
+}
+
+// A lost reply may hide a committed removal: the region stays reserved, nothing
+// can edit or map it, and a repeat uses the same generation and finishes.
+func TestRegionDeleteLostReplyKeepsTheReservation(t *testing.T) {
+	e, g, h, d := fenceFixture(t)
+	regionCall(t, e, "POST", validRegion(), "", 201)
+	var generations []int64
+	h.regionDeregistration = func(_ context.Context, _, _ string, generation int64) error {
+		generations = append(generations, generation)
+		if len(generations) == 1 {
+			if err := d.deregister(generation); err != nil { // committed, reply lost
+				return err
+			}
+			return context.DeadlineExceeded
+		}
+		return d.deregister(generation)
+	}
+	rec := regionCall(t, e, "DELETE", nil, "", 503)
+	if !strings.Contains(rec.Body.String(), "repeat the delete") {
+		t.Fatalf("message: %s", rec.Body)
+	}
+	stored, err := g.Regions().Get(t.Context(), "pve-test-1")
+	if err != nil || !stored.Deleting || d.active() {
+		t.Fatalf("after a lost reply: %+v %v active=%v", stored, err, d.active())
+	}
+	regionCall(t, e, "PATCH", map[string]any{}, `"`+itoa(stored.Version)+`"`, 409)
+	if _, err := g.Projects().Put(t.Context(), store.Project{
+		Project: "123456789012", Pools: []store.ProjectPool{{Region: "pve-test-1", Pool: "p"}},
+	}); !errors.Is(err, store.ErrRegionDeleting) {
+		t.Fatalf("mapping after a lost reply: %v", err)
+	}
+	regionCall(t, e, "DELETE", nil, "", 204)
+	if len(generations) != 2 || generations[0] != generations[1] {
+		t.Fatalf("the repeat used another generation: %v", generations)
+	}
+	if _, err := g.Regions().Get(t.Context(), "pve-test-1"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("record: %v", err)
+	}
+}
+
+// A second DELETE joins the reservation of the first and never clears it, so no
+// mapping can commit while the first call talks to the daemon.
+func TestConcurrentRegionDeletesShareOneReservation(t *testing.T) {
+	e, g, h, d := fenceFixture(t)
+	regionCall(t, e, "POST", validRegion(), "", 201)
+	first, release := make(chan struct{}), make(chan struct{})
+	var mu sync.Mutex
+	calls := 0
+	h.regionDeregistration = func(_ context.Context, _, _ string, generation int64) error {
+		mu.Lock()
+		calls++
+		n := calls
+		mu.Unlock()
+		if n == 1 {
+			close(first)
+			<-release
+			return d.deregister(generation)
+		}
+		return &net.OpError{Op: "dial", Err: errors.New("refused")} // would release if it owned the mark
+	}
+	done := make(chan int, 1)
+	go func() {
+		done <- e.do(t, "DELETE", regionPath+"/pve-test-1", "", map[string]string{"Authorization": "Bearer tok"}).Code
+	}()
+	awaitSignal(t, first)
+	regionCall(t, e, "DELETE", nil, "", 503)
+	stored, err := g.Regions().Get(t.Context(), "pve-test-1")
+	if err != nil || !stored.Deleting {
+		t.Fatalf("a joining DELETE cleared the reservation: %+v %v", stored, err)
+	}
+	if _, err := g.Projects().Put(t.Context(), store.Project{
+		Project: "123456789012", Pools: []store.ProjectPool{{Region: "pve-test-1", Pool: "p"}},
+	}); !errors.Is(err, store.ErrRegionDeleting) {
+		t.Fatalf("a mapping committed during the first call: %v", err)
+	}
+	close(release)
+	if code := <-done; code != http.StatusNoContent {
+		t.Fatalf("first DELETE = %d", code)
 	}
 }
 

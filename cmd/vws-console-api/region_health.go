@@ -35,7 +35,7 @@ func regionRegistration(files iamclient.TLSFiles) func(context.Context, string, 
 			return err
 		}
 		defer client.Close()
-		return client.Register(ctx, data)
+		return client.RegisterCompat(ctx, data)
 	}
 }
 
@@ -47,6 +47,13 @@ func regionDeregistration(files iamclient.TLSFiles) func(context.Context, string
 			return err
 		}
 		defer client.Close()
+		fenced, err := client.Fencing(ctx)
+		if err != nil {
+			return err
+		}
+		if !fenced {
+			return console.ErrRegionLegacy
+		}
 		return client.Deregister(ctx, region, generation)
 	}
 }

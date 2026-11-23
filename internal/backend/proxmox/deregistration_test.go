@@ -1,6 +1,8 @@
 package proxmox
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -185,4 +187,72 @@ func TestDeregisterFailurePoints(t *testing.T) {
 			t.Fatalf("retry: %v %v syncs=%d", removed, err, syncs)
 		}
 	})
+}
+
+// A crash after the tombstone commits and before the unlink leaves the old
+// credentials on disk beside it. They must not come back, on startup or on a
+// reload, and the pending unlink is finished.
+func TestTombstoneBesideARegistrationFileIsAuthoritative(t *testing.T) {
+	state := filepath.Join(privateDir(t), "state")
+	config := filepath.Join(filepath.Dir(state), "region.yaml")
+	writeFixture(t, config, []byte("read_only: true\n"))
+	old, err := encodeState(registrationSnapshot{
+		Region: "pve-test-1", ClusterName: "test", PVEAPIURLs: []string{"https://pve1:8006"}, CAPEM: anyCA(),
+		TokenID: "vws@pve!inventory", Token: "fake-secret",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn, err := Open(config, "pve-test-1", state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.writeFence(fence{Generation: 9, Deregistered: true}); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(state, registrationFile)
+	writeFixture(t, file, old)
+	conn.Close()
+	for _, phase := range []string{"startup", "reload"} {
+		if phase == "startup" {
+			if conn, err = Open(config, "pve-test-1", state); err != nil {
+				t.Fatal(err)
+			}
+		} else {
+			writeFixture(t, file, old)
+		}
+		if _, err := conn.Check(t.Context()); !errors.Is(err, ErrUnregistered) {
+			t.Fatalf("%s: the removed registration is ready: %v", phase, err)
+		}
+		if _, err := os.Stat(file); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("%s: the pending unlink was not finished: %v", phase, err)
+		}
+	}
+}
+
+// registration.json keeps the schema of earlier releases: a daemon rolled back
+// still reads it, because the generation lives only in generation.json.
+func TestStateFileKeepsTheLegacySchema(t *testing.T) {
+	state, err := encodeState(registrationSnapshot{
+		Region: "pve-test-1", ClusterName: "test", PVEAPIURLs: []string{"https://pve1:8006"}, CAPEM: anyCA(),
+		TokenID: "vws@pve!inventory", Token: "fake-secret", Generation: 7,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	type legacy struct {
+		Region      string   `json:"region"`
+		ClusterName string   `json:"cluster_name"` //nolint:tagliatelle // the registration protocol
+		PVEAPIURLs  []string `json:"pveApiUrls"`
+		CAPEM       string   `json:"caPem"`
+		Zones       []any    `json:"zones"`
+		TokenID     string   `json:"tokenId"`
+		Token       string   `json:"token,omitempty"`
+	}
+	dec := json.NewDecoder(bytes.NewReader(state))
+	dec.DisallowUnknownFields()
+	var old legacy
+	if err := dec.Decode(&old); err != nil {
+		t.Fatalf("the previous schema refuses the state file: %v\n%s", err, state)
+	}
 }

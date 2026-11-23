@@ -63,6 +63,10 @@ func (h *handler) adminHealth(w http.ResponseWriter, r *http.Request) {
 	}{RegionStatus: status, Status: state, CheckedAt: h.now().UTC()})
 }
 
+// ErrRegionLegacy is returned for a region daemon that predates generation
+// fencing and deregistration. Nothing was sent to it.
+var ErrRegionLegacy = errors.New("region daemon does not support deregistration; upgrade it first")
+
 func (h *handler) regionFailure(ctx context.Context, err error) string {
 	message := "region transport failed"
 	var config *RegionMTLSConfigError
@@ -72,6 +76,8 @@ func (h *handler) regionFailure(ctx context.Context, err error) string {
 	var record tls.RecordHeaderError
 	regional := resource.RegionFailureMessage(err)
 	switch {
+	case errors.Is(err, ErrRegionLegacy):
+		message = ErrRegionLegacy.Error()
 	case regional != "":
 		message = regional
 	case errors.As(err, &config):

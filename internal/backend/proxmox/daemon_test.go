@@ -252,6 +252,10 @@ func TestRegionDaemonKeepsStateAcrossRestart(t *testing.T) {
 		t.Fatalf("a registration for another region reached the state file: %v", err)
 	}
 	put(first, "pve-test-1", http.StatusOK)
+	if saved, err := os.ReadFile(filepath.Join(stateDir, registrationFile)); err != nil ||
+		bytes.Contains(saved, []byte("generation")) {
+		t.Fatalf("the state file changed schema: %s %v", saved, err)
+	}
 	awaitStatus(t, ops+"/readyz", http.StatusOK)
 	info, err := os.Stat(filepath.Join(stateDir, registrationFile))
 	if err != nil || info.Mode().Perm() != 0o600 {

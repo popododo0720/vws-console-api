@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 
 	"github.com/popododo0720/vws-lib/obs/httpobs"
 	"github.com/popododo0720/vws-lib/obs/report"
@@ -18,6 +19,7 @@ import (
 
 const (
 	deregisterPath     = "/internal/v1/deregister"
+	fencePath          = "/internal/v1/fence"
 	maxDeregisterBytes = 4 << 10
 )
 
@@ -30,6 +32,14 @@ const (
 func WithDeregistration(deregister func(context.Context, json.RawMessage) error, next http.Handler) http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("/", next)
+	// A daemon that serves this route also enforces registration generations.
+	// An older one answers 404 or not ready, which is how a console tells them apart.
+	mux.Handle("GET "+fencePath, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		writeJSON(w, struct {
+			Generation bool `json:"generation"`
+		}{true}, nil)
+	}))
 	mux.Handle("POST "+deregisterPath, httpobs.Middleware("regionapi", func(*http.Request) string {
 		return deregisterPath
 	})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -81,4 +91,42 @@ func (c *Client) Deregister(ctx context.Context, region string, generation int64
 func passesThrough(err error) bool {
 	code := resource.AsError(err).Code
 	return code == resource.CodeInvalidArgument || code == resource.CodeConflict
+}
+
+// Fencing reports whether the daemon enforces registration generations and
+// serves deregistration. An answer that is not the capability document, from a
+// daemon that predates it, is false; only a failure to reach the daemon is an
+// error.
+func (c *Client) Fencing(ctx context.Context) (bool, error) {
+	var result struct {
+		Generation bool `json:"generation"`
+	}
+	err := c.do(ctx, http.MethodGet, fencePath, nil, &result)
+	var transport *url.Error
+	if errors.As(err, &transport) {
+		return false, err
+	}
+	return err == nil && result.Generation, nil
+}
+
+// RegisterCompat forwards a registration. The generation field is sent only to
+// a daemon that enforces it: an older daemon refuses unknown fields, and its
+// registration must be applied, not refused. Without the capability the
+// registration is applied unfenced.
+func (c *Client) RegisterCompat(ctx context.Context, data json.RawMessage) error {
+	fenced, err := c.Fencing(ctx)
+	if err != nil {
+		return err
+	}
+	if !fenced {
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal(data, &fields); err != nil {
+			return resource.Invalid("registration", "invalid JSON")
+		}
+		delete(fields, "generation")
+		if data, err = json.Marshal(fields); err != nil {
+			return fmt.Errorf("encode registration: %w", err)
+		}
+	}
+	return c.Register(ctx, data)
 }

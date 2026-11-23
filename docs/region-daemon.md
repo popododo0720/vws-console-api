@@ -137,13 +137,24 @@ as `generation`. The daemon keeps the highest generation it accepted in
 older than it or at the level of a removal, and a removal older than it. This
 fences a PATCH push that is delayed or comes from another console replica.
 
+Rollout: upgrade the daemons first. `registration.json` keeps the schema of
+earlier releases, so a daemon can be rolled back and still reads it. A new
+console asks `GET /internal/v1/fence` before it pushes; an older daemon, which
+refuses unknown fields, gets the registration without `generation` and applies
+it unfenced, and a delete of a region on such a daemon fails with "region
+daemon does not support deregistration" until the daemon is upgraded (or with
+`?force=true`). After a rollback the fence file is ignored by the older binary;
+upgrading again keeps it.
+
 On a removal the daemon deletes stale temporary files, persists the generation,
 unlinks `registration.json` and syncs the directory. A failure before the
 unlink changes nothing and the region keeps serving. Once the file is gone the
 daemon stops the quorum gate and the launch finalizer and waits for them,
 withdraws the region API and reports `unregistered` on `/readyz`, even if the
 directory sync failed; that case returns 503 and a repeat redoes the sync.
-When it returns, no finalizer write is running or can start. A request that was
+A tombstone found beside `registration.json` at startup or on a reload, left by
+a crash between the two steps, is authoritative: the daemon finishes the unlink
+and the sync and comes up unregistered. When it returns, no finalizer write is running or can start. A request that was
 already past the gate may still finish, and a PVE task already submitted, such
 as a VM start, may complete. It is idempotent: a daemon with nothing registered
 answers 200.
@@ -152,7 +163,12 @@ The global API sends it before it removes a region (`DELETE
 /api/v1/admin/regions/<name>`). The delete first marks the region deleting,
 which refuses PATCH and project mappings of it; a mapping that already exists
 makes it 409 before the daemon is touched. If the daemon cannot be reached the
-delete fails with 503, the mark is released and the region stays registered. To remove a region whose
+delete fails with 503 and the region stays registered. The mark is released
+(by the call that made it) only when the daemon provably did nothing: it refused
+the request, could not be reached, or is too old. After a lost reply, a timeout
+or a failed directory sync the removal may have happened, so the region stays
+reserved (edits and mappings are refused) until the same delete is repeated,
+which reuses the generation and finishes, or is forced. To remove a region whose
 daemon is gone for good, add `?force=true`. The entry is then removed but the
 daemon, if it ever comes back, still holds the PVE token: delete the token in
 PVE (`pveum user token remove <user> <token>`). The same applies to the

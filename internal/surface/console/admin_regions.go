@@ -2,11 +2,13 @@ package console
 
 import (
 	"context"
+	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -273,32 +275,40 @@ func deleteForce(r *http.Request) (bool, error) {
 //  1. Reserve: a CAS marks the record Deleting. From then on a PATCH is
 //     refused, a project mapping of the region is refused, and any registration
 //     push made from an older version is stale. The new version of the record
-//     is the generation of the removal.
-//  2. Check: a region with project mappings is released again and refused (409),
-//     before the daemon is touched. A mapping cannot commit after step 1.
+//     is the generation of the removal. A call that finds the record already
+//     Deleting joins it and uses the same generation.
+//  2. Check: a region with project mappings is refused (409) before the daemon
+//     is touched; a mapping cannot commit after step 1.
 //  3. Deregister the stored endpoint with that generation. The daemon
 //     persists it and refuses every older registration, so a delayed push cannot
-//     bring the daemon back. If the daemon cannot be told, the region is
-//     released (not deleting) and the call fails; force skips this and removes
-//     the entry anyway, and the operator must delete the PVE tokens by hand
-//     because the daemon still holds them.
+//     bring the daemon back. Repeating the same generation is idempotent.
 //  4. Delete the entry at the reserved version, then release the cluster claim.
 //
-// A failure after step 3 leaves a Deleting region with an unregistered daemon;
-// repeating the call finishes, because deregistration is idempotent.
+// The reservation is released only by the call that made it, by CAS on the
+// version it wrote, and only when the daemon definitively did not act: a
+// mapping exists, or the daemon refused or was never reached (see
+// neverCommitted). Any other failure, such as a lost reply or a timeout, may
+// have committed the removal, so the region stays reserved and the operator
+// repeats the delete, which reuses the generation. force skips step 3 and
+// removes the entry anyway; the operator then deletes the PVE tokens by hand
+// because the daemon still holds them.
 func (h *handler) deleteRegion(ctx context.Context, v store.Region, force bool) error {
+	marked := false
 	if !v.Deleting {
 		v.Deleting = true
-		marked, err := h.registry.Regions().Update(ctx, v)
+		reserved, err := h.registry.Regions().Update(ctx, v)
 		if err != nil {
 			return err
 		}
-		v = marked
+		v, marked = reserved, true
 	}
 	release := func(err error) error {
+		if !marked {
+			return err
+		}
 		v.Deleting = false
 		if _, uerr := h.registry.Regions().Update(context.WithoutCancel(ctx), v); uerr != nil {
-			h.log.WarnContext(ctx, "region left reserved for deletion; repeat the delete or edit after it",
+			h.log.WarnContext(ctx, "region left reserved for deletion; repeat the delete",
 				slog.String("region", v.Name))
 			return errors.Join(err, uerr)
 		}
@@ -318,8 +328,13 @@ func (h *handler) deleteRegion(ctx context.Context, v store.Region, force bool) 
 	var daemonErr error
 	if err := h.deregisterRegion(ctx, v); err != nil {
 		if !force {
-			return release(&resource.Error{Code: resource.CodeUnavailable, Message: "region deregistration failed: " +
-				h.regionFailure(ctx, err) + "; fix the connection or delete with force=true and delete the PVE token by hand"})
+			failure := &resource.Error{Code: resource.CodeUnavailable, Message: "region deregistration failed: " +
+				h.regionFailure(ctx, err) + "; fix the connection or delete with force=true and delete the PVE token by hand"}
+			if neverCommitted(err) {
+				return release(failure)
+			}
+			failure.Message += "; the region stays reserved for deletion, repeat the delete"
+			return failure
 		}
 		daemonErr = err
 	}
@@ -331,6 +346,26 @@ func (h *handler) deleteRegion(ctx context.Context, v store.Region, force bool) 
 			slog.String("region", v.Name), slog.String("reason", h.regionFailure(ctx, daemonErr)))
 	}
 	return h.registry.ReleaseCluster(ctx, v.ClusterName, v.Name)
+}
+
+// neverCommitted reports whether a deregistration failed in a way that proves
+// the daemon removed nothing: the daemon refused the request (409 stale
+// generation, 400), no connection was made (certificate configuration, dial,
+// certificate verification), or it is too old to have the route.
+func neverCommitted(err error) bool {
+	var config *RegionMTLSConfigError
+	var op *net.OpError
+	var certificate *tls.CertificateVerificationError
+	var refusal *resource.Error
+	switch {
+	case errors.Is(err, ErrRegionLegacy), errors.As(err, &config), errors.As(err, &certificate):
+		return true
+	case errors.As(err, &op):
+		return op.Op == "dial"
+	case errors.As(err, &refusal):
+		return refusal.Code == resource.CodeConflict || refusal.Code == resource.CodeInvalidArgument
+	}
+	return false
 }
 
 func (h *handler) deregisterRegion(ctx context.Context, v store.Region) error {

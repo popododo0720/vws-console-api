@@ -46,6 +46,10 @@ func TestRegionHealthUsesBootstrapMTLS(t *testing.T) {
 			w.Write([]byte(`{}`))
 			return
 		}
+		if r.URL.Path == "/internal/v1/fence" { // a daemon without fencing
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
 		if r.URL.Path != "/internal/v1/status" {
 			t.Errorf("unexpected path %s", r.URL.Path)
 			w.WriteHeader(http.StatusNotFound)

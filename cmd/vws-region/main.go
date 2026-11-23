@@ -100,9 +100,25 @@ func run(ctx context.Context, args []string) (err error) {
 	var gateBackend *proxmox.Backend
 	var gateCancel context.CancelFunc
 	var gateDone chan struct{}
+	// stopGate ends the quorum gate and the launch finalizer and waits for
+	// both; the finalizer ends on the cancelled context and the wait covers its
+	// last PVE write. Callers hold probe.mu.
+	stopGate := func() {
+		if gateCancel != nil {
+			gateCancel()
+			<-gateDone
+		}
+		gateCancel, gateDone, gateBackend = nil, nil, nil
+		gated.Store(nil)
+	}
 	probe := &readiness{check: func(ctx context.Context) error {
 		b, err := conn.Check(ctx)
 		if err != nil {
+			if errors.Is(err, proxmox.ErrUnregistered) {
+				// The registration is gone (removed, or a tombstone finished by the
+				// reload): nothing may keep running on the old one.
+				stopGate()
+			}
 			if ctx.Err() == nil {
 				state.Store(nil)
 			}
@@ -176,12 +192,7 @@ func run(ctx context.Context, args []string) (err error) {
 		probe.mu.Lock()
 		defer probe.mu.Unlock()
 		return deregisterThen(data, conn.Deregister, func() {
-			if gateCancel != nil {
-				gateCancel()
-				<-gateDone
-			}
-			gateCancel, gateDone, gateBackend = nil, nil, nil
-			gated.Store(nil)
+			stopGate()
 			state.Store(nil)
 			probe.at = time.Time{}
 		})

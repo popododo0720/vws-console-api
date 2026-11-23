@@ -86,3 +86,63 @@ func TestDeregistrationRequiresTheGlobalClientCertificate(t *testing.T) {
 		t.Fatalf("failure: %v", err)
 	}
 }
+
+// A console newer than its daemon must not send what the daemon's strict
+// decoder refuses, and must not report success for a registration the daemon
+// never applied.
+func TestRegisterCompatStagesTheGenerationField(t *testing.T) {
+	body := json.RawMessage(`{"region":"pve-test-1","generation":42,"tokenId":"t"}`)
+	legacyDecode := func(data json.RawMessage) error {
+		var v struct {
+			Region  string `json:"region"`
+			TokenID string `json:"tokenId"`
+		}
+		dec := json.NewDecoder(strings.NewReader(string(data)))
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&v); err != nil {
+			return resource.Invalid("registration", "invalid JSON")
+		}
+		return nil
+	}
+	var applied []string
+	register := func(_ context.Context, data json.RawMessage) error {
+		if err := legacyDecode(data); err != nil {
+			return err
+		}
+		applied = append(applied, string(data))
+		return nil
+	}
+	t.Run("old daemon", func(t *testing.T) {
+		applied = nil
+		client, _, _ := serveConnectionTest(t, WithRegistration(register, http.NotFoundHandler()))
+		if err := client.Register(t.Context(), body); err == nil || len(applied) != 0 {
+			t.Fatalf("the plain push is refused by an old daemon: %v %v", err, applied)
+		}
+		if err := client.RegisterCompat(t.Context(), body); err != nil || len(applied) != 1 ||
+			strings.Contains(applied[0], "generation") {
+			t.Fatalf("compat push: %v %v", err, applied)
+		}
+	})
+	t.Run("new daemon", func(t *testing.T) {
+		applied = nil
+		newRegister := func(_ context.Context, data json.RawMessage) error {
+			applied = append(applied, string(data))
+			return nil
+		}
+		client, _, _ := serveConnectionTest(t, WithRegistration(newRegister,
+			WithDeregistration(func(context.Context, json.RawMessage) error { return nil }, http.NotFoundHandler())))
+		if fenced, err := client.Fencing(t.Context()); err != nil || !fenced {
+			t.Fatalf("capability: %v %v", fenced, err)
+		}
+		if err := client.RegisterCompat(t.Context(), body); err != nil || len(applied) != 1 ||
+			!strings.Contains(applied[0], `"generation":42`) {
+			t.Fatalf("fenced push: %v %v", err, applied)
+		}
+	})
+	t.Run("old daemon refuses deregistration", func(t *testing.T) {
+		client, _, _ := serveConnectionTest(t, WithRegistration(register, http.NotFoundHandler()))
+		if fenced, err := client.Fencing(t.Context()); err != nil || fenced {
+			t.Fatalf("an old daemon has no fencing: %v %v", fenced, err)
+		}
+	})
+}
