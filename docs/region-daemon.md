@@ -207,6 +207,17 @@ logged. The daemon, if it comes back, still holds the PVE token; delete it in
 PVE (`pveum user token remove <user> <token>`), and the firewall and backup
 tokens the same way. A region registered again gets a new record whose version
 is above the removal generation, so the daemon accepts it.
+
+A PATCH that changes `regionEndpoint` first deregisters the daemon at the old
+endpoint, at the version of the record the PATCH read. Every push is followed
+by a registry write, so that version is above any generation the old daemon
+accepted. Only then does it write the registry and push the registration to
+the new endpoint; nothing, the token included, is sent to the old endpoint.
+If the old daemon cannot be deregistered (unreachable, timeout, error), the
+PATCH is refused with 400 and the registry is unchanged, unless it carries a
+`tokenSecret` whose fingerprint differs from the stored one. Then the PATCH is
+accepted and a warning is logged: the old daemon still holds the old tokens,
+so revoke them in PVE. A PATCH that keeps the endpoint is unchanged.
 No credential value belongs in region.yaml, command arguments or the
 environment. Registration decoder errors never echo submitted values.
 

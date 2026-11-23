@@ -71,11 +71,10 @@ func (d *fakeDaemon) state() (generation int64, registered bool, pushes int) {
 	return d.generation, d.registered, len(d.pushes)
 }
 
-// deleteFixture wires the console to a fakeDaemon through the real region
-// client. deregister decides, per call, how the daemon call behaves.
-func deleteFixture(t *testing.T) (loginEnv, *store.Registry, *fakeDaemon, *handler) {
+// newFakeDaemon starts a fakeDaemon. up reaches it through the real region
+// client; down is the same client configuration aimed at a closed port.
+func newFakeDaemon(t *testing.T) *fakeDaemon {
 	t.Helper()
-	e, g, _, _ := accountFixture(t)
 	d := &fakeDaemon{}
 	srv := httptest.NewTLSServer(regionapi.WithRegistration(d.register,
 		regionapi.WithDeregistration(d.deregister, http.NotFoundHandler())))
@@ -98,6 +97,15 @@ func deleteFixture(t *testing.T) (loginEnv, *store.Registry, *fakeDaemon, *handl
 	}
 	t.Cleanup(d.up.Close)
 	t.Cleanup(d.down.Close)
+	return d
+}
+
+// deleteFixture wires the console to a fakeDaemon through the real region
+// client. deregister decides, per call, how the daemon call behaves.
+func deleteFixture(t *testing.T) (loginEnv, *store.Registry, *fakeDaemon, *handler) {
+	t.Helper()
+	e, g, _, _ := accountFixture(t)
+	d := newFakeDaemon(t)
 	h := e.h.(*handler)
 	h.regionRegistration = func(ctx context.Context, _ string, data json.RawMessage) error {
 		return d.up.Register(ctx, data)

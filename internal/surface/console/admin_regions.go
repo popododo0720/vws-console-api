@@ -131,6 +131,7 @@ func (h *handler) adminWriteRegion(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, r, resource.Invalid("body", "expected one JSON object"))
 		return
 	}
+	old := v
 	oldCluster := v.ClusterName
 	if in.Name != nil && r.Method == http.MethodPatch && *in.Name != v.Name {
 		writeErr(w, r, resource.Invalid("name", "must match path"))
@@ -187,6 +188,12 @@ func (h *handler) adminWriteRegion(w http.ResponseWriter, r *http.Request) {
 	}
 	if v.BackupTokenID == "" {
 		v.BackupTokenSecret = store.SecretMetadata{}
+	}
+	if r.Method == http.MethodPatch && v.RegionEndpoint != old.RegionEndpoint {
+		if err := h.leaveOldEndpoint(r.Context(), old, v); err != nil {
+			writeErr(w, r, err)
+			return
+		}
 	}
 	claimed := oldCluster != v.ClusterName
 	if claimed {
@@ -253,6 +260,30 @@ func (h *handler) adminWriteRegion(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, status, v)
+}
+
+// leaveOldEndpoint deregisters the daemon at the old endpoint before a PATCH
+// that moves the region writes the registry or pushes to the new endpoint, so
+// the registration and its token are never sent where the old daemon would
+// keep serving them. The generation is the version of the record the PATCH
+// read: every push is followed by a registry write, so it is above every
+// generation the old daemon accepted. If the old daemon cannot be told, the
+// PATCH is refused (400) unless it brings a new token: the old daemon then
+// keeps only the old token, which the operator revokes in PVE.
+func (h *handler) leaveOldEndpoint(ctx context.Context, old, v store.Region) error {
+	err := h.deregisterRegion(ctx, old)
+	if err == nil {
+		return nil
+	}
+	reason := h.regionFailure(ctx, err)
+	if v.TokenSecret.Fingerprint == old.TokenSecret.Fingerprint {
+		return resource.Invalid("regionEndpoint", "the daemon at the old endpoint could not be deregistered ("+reason+
+			"); make it reachable, or submit a new tokenSecret and revoke the old token in PVE")
+	}
+	h.log.WarnContext(ctx, "region endpoint changed without deregistering the old daemon; "+
+		"it still holds the old tokens: revoke them in PVE",
+		slog.String("region", old.Name), slog.String("reason", reason))
+	return nil
 }
 
 // deleteForce reads the only query parameter of DELETE. force=true removes the
