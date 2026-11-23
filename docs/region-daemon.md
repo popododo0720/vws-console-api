@@ -180,6 +180,31 @@ it.
 Rollback: `registration.json` keeps the schema of earlier releases (no
 `generation`), so a daemon can be rolled back and still reads it; the older
 binary ignores `generation.json`.
+
+The console pushes every registration with the registry version as
+`generation` and sends the removal before it deletes a region (`DELETE
+/api/v1/admin/regions/<name>`):
+
+1. The delete marks the region record deleting by CAS. The version of the mark
+   is the removal generation, higher than any pushed registration. A delete
+   that finds the region already deleting joins it and reuses that generation.
+2. While the region is deleting, PATCH is 409 and the registry refuses a
+   project mapping of it, so the mappings cannot change. A region that is
+   mapped is refused with 409 before the daemon is told; only the call that set
+   the mark releases it.
+3. The console then sends the removal. From this point no call releases the
+   mark: after a dial failure, a timeout, a lost reply, a 5xx or a 409 the
+   delete returns 503 and the region stays deleting until the delete is
+   repeated. The daemon accepts a repeat at the same generation.
+4. When the daemon confirms, the console deletes the registry entry and its
+   cluster claim.
+
+To remove a region whose daemon is gone for good, or does not serve the route,
+add `?force=true`: the entry is deleted without the daemon and a warning is
+logged. The daemon, if it comes back, still holds the PVE token; delete it in
+PVE (`pveum user token remove <user> <token>`), and the firewall and backup
+tokens the same way. A region registered again gets a new record whose version
+is above the removal generation, so the daemon accepts it.
 No credential value belongs in region.yaml, command arguments or the
 environment. Registration decoder errors never echo submitted values.
 
@@ -207,8 +232,10 @@ Run `go test -race ./internal/backend/proxmox -run TestPVEFakeCommandRegionInven
 as a non-root user for the complete pvefake, region daemon and console API
 admin lifecycle. It builds the shipped commands, uses loopback listeners,
 registers through the console API, verifies all connection diagnostics,
-reads health, edits zones twice and deletes the region. It restarts the stack
-and repeats with a fresh memory registry and the persisted daemon identity.
+reads health, edits zones twice and deletes the region; the delete
+deregisters the daemon, which removes its state file and reports not ready. It
+restarts the stack and repeats from a fresh memory registry and an unregistered
+daemon.
 
 For a console e2e job, build `./cmd/pvefake`, `./cmd/vws-region` and
 `./cmd/vws-console-api`. Keep the files in an absolute, clean `$ROOT`, owned
@@ -259,6 +286,10 @@ Start the processes in this order:
 4. Wait for the region ops `/readyz` to return 200. POST
    `/api/v1/admin/regions/pve-test-1/test` with `{"tokenSecret":"fake-secret"}`;
    all five steps return `PASS`. GET the same region's `/health`, PATCH
-   its `zones` using the latest `ETag` as `If-Match`, then DELETE it.
+   its `zones` using the latest `ETag` as `If-Match`, then DELETE it. The
+   daemon deletes `$ROOT/state/registration.json` and its `/readyz` returns 503
+   `unregistered`.
    Stop the processes with SIGTERM. The global registrations disappear
-   on restart; the daemon's registration file remains under `$ROOT/state`.
+   on restart; because the memory registry restarts its versions below the
+   daemon's fence, delete `$ROOT/state/generation.json` before registering
+   again. The same applies after any rebuild of the registry (a new etcd).
