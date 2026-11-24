@@ -190,6 +190,11 @@ func (b *Backend) allocateLaunch(
 		}
 	}
 	storage := b.cfg.Storages[string(req.RootType())]
+	if req.RootVolumeType == "" && storage == "" {
+		// EC2 defaults an omitted root type to gp2; a region that maps no
+		// gp2 storage launches it on gp3 storage, the type it reports.
+		storage = b.cfg.Storages[string(resource.VolumeGP3)]
+	}
 	if storage == "" {
 		return resource.Unsupported("volumeType", "no configured storage for root volume type")
 	}
