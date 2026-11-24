@@ -207,6 +207,25 @@ logged. The daemon, if it comes back, still holds the PVE token; delete it in
 PVE (`pveum user token remove <user> <token>`), and the firewall and backup
 tokens the same way. A region registered again gets a new record whose version
 is above the removal generation, so the daemon accepts it.
+
+A PATCH that moves a region to another daemon changes the origin of
+`regionEndpoint`: the scheme or the host, compared in lower case, or the port,
+with 443 the same as none. A path or a trailing slash is not a move. A move is
+refused with 400, before any daemon is called, unless it meets all of these:
+
+- It carries a `tokenSecret` whose fingerprint differs from the one the old
+  daemon acknowledged. The console records that fingerprint only after a
+  successful push that carried `tokenSecret`, so a rotation whose push failed
+  does not change it.
+- It carries `firewallTokenSecret` and `backupTokenSecret` when those token
+  ids are set, as the new daemon's first registration needs.
+- A token was acknowledged. A record without one (for example one stored
+  before this rule) must first resubmit `tokenSecret` at its current endpoint.
+
+The move then takes the normal PATCH path and pushes only to the new endpoint.
+The console never contacts the old daemon: stop it and revoke its old token
+in PVE, as the move runbook says. It keeps the old token and never sees the
+new one.
 No credential value belongs in region.yaml, command arguments or the
 environment. Registration decoder errors never echo submitted values.
 

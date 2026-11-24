@@ -7,10 +7,12 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/popododo0720/vws-console-api/internal/admin/store"
@@ -131,7 +133,7 @@ func (h *handler) adminWriteRegion(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, r, resource.Invalid("body", "expected one JSON object"))
 		return
 	}
-	oldCluster := v.ClusterName
+	oldCluster, oldEndpoint := v.ClusterName, v.RegionEndpoint
 	if in.Name != nil && r.Method == http.MethodPatch && *in.Name != v.Name {
 		writeErr(w, r, resource.Invalid("name", "must match path"))
 		return
@@ -162,6 +164,12 @@ func (h *handler) adminWriteRegion(w http.ResponseWriter, r *http.Request) {
 	if err := validateExtraTokens(v, in); err != nil {
 		writeErr(w, r, err)
 		return
+	}
+	if r.Method == http.MethodPatch && regionOrigin(v.RegionEndpoint) != regionOrigin(oldEndpoint) {
+		if err := checkMove(v, in); err != nil {
+			writeErr(w, r, err)
+			return
+		}
 	}
 	setAuditAccount(w, v.Name)
 	if r.Method == http.MethodPost {
@@ -226,6 +234,9 @@ func (h *handler) adminWriteRegion(w http.ResponseWriter, r *http.Request) {
 	}
 	pushErr := h.pushRegion(r.Context(), v, in)
 	v.LastError = nil
+	if pushErr == nil && in.TokenSecret != nil {
+		v.AckedTokenFingerprint = v.TokenSecret.Fingerprint
+	}
 	if pushErr != nil {
 		message := resource.RegistrationFailureMessage(pushErr)
 		if message == "" {
@@ -350,6 +361,46 @@ func (h *handler) pushRegion(ctx context.Context, v store.Region, in *regionInpu
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	return h.regionRegistration(ctx, v.RegionEndpoint, data)
+}
+
+// regionOrigin is the origin the region client dials: the path, a trailing
+// slash and the default port do not change the daemon.
+func regionOrigin(endpoint string) string {
+	u, err := url.Parse(endpoint)
+	if err != nil {
+		return endpoint
+	}
+	host := strings.ToLower(u.Hostname())
+	if port := u.Port(); port != "" && port != "443" {
+		host = net.JoinHostPort(host, port)
+	} else if strings.Contains(host, ":") {
+		host = "[" + host + "]"
+	}
+	return strings.ToLower(u.Scheme) + "://" + host
+}
+
+// checkMove refuses a move to another daemon unless it carries a new token.
+// The old daemon keeps the credentials it holds, so it must never be able to
+// use the new token, and the old token is revoked in PVE. The new token is
+// compared with the one the old daemon acknowledged, and a move is refused
+// while no token is acknowledged. The new daemon's first registration needs
+// every configured secret.
+func checkMove(v store.Region, in *regionInput) error {
+	switch {
+	case v.AckedTokenFingerprint == "":
+		return resource.Invalid("regionEndpoint", "the daemon has not acknowledged a token; "+
+			"resubmit tokenSecret at the current regionEndpoint before moving")
+	case in.TokenSecret == nil:
+		return resource.Invalid("tokenSecret", "required when regionEndpoint changes")
+	case store.DescribeSecret(*in.TokenSecret).Fingerprint == v.AckedTokenFingerprint:
+		return resource.Invalid("tokenSecret", "a move to another regionEndpoint needs a new token; "+
+			"revoke the old token in PVE")
+	case v.FirewallTokenID != "" && in.FirewallTokenSecret == nil:
+		return resource.Invalid("firewallTokenSecret", "required when regionEndpoint changes")
+	case v.BackupTokenID != "" && in.BackupTokenSecret == nil:
+		return resource.Invalid("backupTokenSecret", "required when regionEndpoint changes")
+	}
+	return nil
 }
 
 func validRegionName(name string) bool {
