@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"time"
@@ -267,9 +268,10 @@ func (s *Server) Shutdown(ctx context.Context) error {
 }
 
 // NewServer requires certificates from ca and bounds every listener timeout.
+// Each request is access-logged, with the cause of an internal error.
 func NewServer(addr string, handler http.Handler, cert tls.Certificate, ca *x509.CertPool) *Server {
 	return &Server{http: &http.Server{
-		Addr: addr, Handler: handler,
+		Addr: addr, Handler: server.AccessLog(slog.Default(), "region", handler),
 		ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 60 * time.Second,
 		WriteTimeout: 60 * time.Second, IdleTimeout: 120 * time.Second,
 		TLSConfig: &tls.Config{

@@ -210,6 +210,13 @@ func newHTTPServer(addr string, handler http.Handler) *http.Server {
 	}
 }
 
+// AccessLog gives a handler served outside Serve the request id, access log
+// and panic recovery that every surface has. Without it, RecordFailure keeps
+// nothing and an internal error reaches the log nowhere.
+func AccessLog(logger *slog.Logger, name string, next http.Handler) http.Handler {
+	return wrap(logger, name, next)
+}
+
 func wrap(logger *slog.Logger, name string, next http.Handler) http.Handler {
 	route := routePattern(next)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
