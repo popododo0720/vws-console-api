@@ -22,7 +22,7 @@ import (
 
 // TestRegistrationAfterAFailedFirstPushMakesTheDaemonReady repeats vws-console-api#1077: the first
 // registration fails its self-check because a managed pool is missing; once the pool exists, the next
-// registration succeeds and the daemon must become ready without a restart or a removal.
+// registration succeeds with one self-check and the daemon serves it before the PUT is answered.
 func TestRegistrationAfterAFailedFirstPushMakesTheDaemonReady(t *testing.T) {
 	dir := privateDir(t)
 	binary := filepath.Join(dir, "vws-region")
@@ -41,7 +41,12 @@ func TestRegistrationAfterAFailedFirstPushMakesTheDaemonReady(t *testing.T) {
 	}
 	var missing atomic.Bool
 	missing.Store(true)
+	// Each self-check reads the token's own permissions once (no path query); nothing else does.
+	var selfChecks atomic.Int32
 	pve := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api2/json/access/permissions" && !r.URL.Query().Has("path") {
+			selfChecks.Add(1)
+		}
 		if missing.Load() && r.URL.Path == "/api2/json/pools/123456789012" {
 			r.URL.Path = "/api2/json/pools/absent"
 		}
@@ -99,8 +104,14 @@ func TestRegistrationAfterAFailedFirstPushMakesTheDaemonReady(t *testing.T) {
 		t.Fatalf("first registration with the pool missing: %d %s", code, body)
 	}
 	missing.Store(false)
+	before := selfChecks.Load()
 	if code, body := put(3); code != http.StatusOK {
 		t.Fatalf("registration after the pool was created: %d %s", code, body)
+	}
+	// One self-check per push: a second one would double the time a slow PVE takes against the
+	// console's 15 s push deadline.
+	if n := selfChecks.Load() - before; n != 1 {
+		t.Fatalf("an accepted registration ran %d self-checks, want 1", n)
 	}
 	// The registration is acknowledged only once the daemon serves it: the console reports success to the
 	// operator, who runs region test and health at once.

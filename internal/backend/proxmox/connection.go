@@ -304,12 +304,20 @@ func (c *Connection) check(ctx context.Context, s registrationSnapshot) (*Backen
 // Register validates against PVE, then replaces the state file. The
 // in-process mutex serializes registrations and reads; one daemon owns the file.
 func (c *Connection) Register(ctx context.Context, data json.RawMessage) error {
+	_, err := c.RegisterBackend(ctx, data)
+	return err
+}
+
+// RegisterBackend is Register that also returns the backend its self-check
+// built. It becomes the current backend, so the next Check of the same state
+// file returns it and the caller can serve it without a second self-check.
+func (c *Connection) RegisterBackend(ctx context.Context, data json.RawMessage) (*Backend, error) {
 	s, err := decodeRegistration(data)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if s.Region != c.region {
-		return resource.Invalid("region", "registration is for another region than this instance")
+		return nil, resource.Invalid("region", "registration is for another region than this instance")
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -317,74 +325,76 @@ func (c *Connection) Register(ctx context.Context, data json.RawMessage) error {
 	// its tombstone with this generation must not leave the removed file.
 	f, err := c.finishPendingRemoval()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if s.Generation < f.Generation || s.Generation == f.Generation && f.Deregistered {
-		return errStaleGeneration()
+		return nil, errStaleGeneration()
 	}
 	if s.Token == "" || s.FirewallTokenID != "" && s.FirewallToken == "" ||
 		s.BackupTokenID != "" && s.BackupToken == "" {
 		stored, _, err := c.registration()
 		if err != nil && !errors.Is(err, ErrUnregistered) && !errors.Is(err, errNoEndpoints) {
-			return err
+			return nil, err
 		}
 		// A stored secret goes only to the destination that already held it.
 		unchanged := sameTrust(stored, s)
 		if s.Token == "" {
 			if stored.TokenID != s.TokenID || stored.Token == "" {
-				return resource.Invalid("token", "required for first registration")
+				return nil, resource.Invalid("token", "required for first registration")
 			}
 			if !unchanged {
-				return resource.Invalid("token", "required when caPem or pveApiUrls change")
+				return nil, resource.Invalid("token", "required when caPem or pveApiUrls change")
 			}
 			s.Token = stored.Token
 		}
 		if s.FirewallTokenID != "" && s.FirewallToken == "" {
 			if !unchanged {
-				return resource.Invalid("firewallToken", "required when caPem or pveApiUrls change")
+				return nil, resource.Invalid("firewallToken", "required when caPem or pveApiUrls change")
 			}
 			if stored.FirewallTokenID != s.FirewallTokenID || stored.FirewallToken == "" {
-				return resource.Invalid("firewallToken", "required for a new firewall token")
+				return nil, resource.Invalid("firewallToken", "required for a new firewall token")
 			}
 			s.FirewallToken = stored.FirewallToken
 		}
 		if s.BackupTokenID != "" && s.BackupToken == "" {
 			if !unchanged {
-				return resource.Invalid("backupToken", "required when caPem or pveApiUrls change")
+				return nil, resource.Invalid("backupToken", "required when caPem or pveApiUrls change")
 			}
 			if stored.BackupTokenID != s.BackupTokenID || stored.BackupToken == "" {
-				return resource.Invalid("backupToken", "required for a new backup token")
+				return nil, resource.Invalid("backupToken", "required for a new backup token")
 			}
 			s.BackupToken = stored.BackupToken
 		}
 	}
-	if _, err := c.check(ctx, s); err != nil {
-		return err
+	b, err := c.check(ctx, s)
+	if err != nil {
+		return nil, err
 	}
 	if err := c.verifyOtherEndpoints(ctx, s); err != nil {
-		return err
+		return nil, err
 	}
 	state, err := encodeState(s)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if len(state) > maxRegistrationBytes {
-		return resource.Invalid("registration", "serialized registration exceeds 65 KiB")
+		return nil, resource.Invalid("registration", "serialized registration exceeds 65 KiB")
 	}
 	// The generation is persisted first: a crash between the two files only
 	// makes older pushes stale, and the console repeats the registration.
 	if want := (fence{Generation: s.Generation}); f != want {
 		if err := c.writeFence(want); err != nil {
-			return err
+			return nil, err
 		}
 	}
 	if err := c.at("persist"); err != nil {
-		return err
+		return nil, err
 	}
 	if err := writeFileAtomic(c.dir, registrationFile, state, nil); err != nil {
-		return fmt.Errorf("persist registration: %w", err)
+		return nil, fmt.Errorf("persist registration: %w", err)
 	}
-	return nil
+	c.current, c.digest = b, sha256.Sum256(state)
+	return b, nil
 }
 
 // fence is the highest registry generation this daemon has accepted, kept in

@@ -111,14 +111,9 @@ func run(ctx context.Context, args []string) (err error) {
 		gateCancel, gateDone, gateBackend = nil, nil, nil
 		gated.Store(nil)
 	}
-	probe := &readiness{check: func(ctx context.Context) error {
-		b, err := checkThen(ctx, conn.Check, stopGate)
-		if err != nil {
-			if ctx.Err() == nil {
-				state.Store(nil)
-			}
-			return err
-		}
+	// publish serves b: a new backend gets its own quorum gate and launch
+	// finalizer, and the handler is rebuilt on it. Callers hold probe.mu.
+	publish := func(b *proxmox.Backend) error {
 		if b == gateBackend && state.Load() != nil {
 			return nil
 		}
@@ -155,6 +150,16 @@ func run(ctx context.Context, args []string) (err error) {
 			state.Store(&h)
 		}
 		return err
+	}
+	probe := &readiness{check: func(ctx context.Context) error {
+		b, err := checkThen(ctx, conn.Check, stopGate)
+		if err != nil {
+			if ctx.Err() == nil {
+				state.Store(nil)
+			}
+			return err
+		}
+		return publish(b)
 	}, now: time.Now, ttl: readyTTL}
 	opsDone := make(chan error, 1)
 	go func() {
@@ -180,9 +185,8 @@ func run(ctx context.Context, args []string) (err error) {
 		cancel()
 		err = errors.Join(err, <-opsDone)
 	}()
-	// deregister runs under probe.mu, which orders it against Ready; Register
-	// may run meanwhile and its result is picked up by the next Ready. See
-	// deregisterThen for what a failure leaves behind.
+	// deregister runs under probe.mu, which orders it against Ready and
+	// register. See deregisterThen for what a failure leaves behind.
 	deregister := func(_ context.Context, data json.RawMessage) error {
 		probe.mu.Lock()
 		defer probe.mu.Unlock()
@@ -193,13 +197,19 @@ func run(ctx context.Context, args []string) (err error) {
 		})
 	}
 	// Registration, deregistration and the connection test work before the region is ready.
-	// A registration is acknowledged only after the daemon serves it. The global layer reports the push as
-	// done, so a cached readiness result of the state before must not answer the next status read.
+	// A registration is acknowledged only after the daemon serves it: the global layer reports the push as
+	// done, so the next status read must not get the cached result of the state before. It publishes the
+	// backend its own self-check built, so a slow PVE is checked once within the console's push deadline,
+	// and it runs under probe.mu, ordered against deregister and Ready.
 	register := func(ctx context.Context, data json.RawMessage) error {
-		if err := conn.Register(ctx, data); err != nil {
+		probe.mu.Lock()
+		defer probe.mu.Unlock()
+		b, err := conn.RegisterBackend(ctx, data)
+		if err != nil {
 			return err
 		}
-		return probe.Reload(ctx)
+		probe.at, probe.err = probe.now(), publish(b)
+		return probe.err
 	}
 	h := regionapi.WithRegistration(register, regionapi.WithDeregistration(deregister,
 		regionapi.WithConnectionTest(conn.TestConnection,
@@ -335,18 +345,6 @@ func (r *readiness) Ready(ctx context.Context) error {
 	if !r.at.IsZero() && r.now().Sub(r.at) < r.ttl {
 		return r.err
 	}
-	return r.run(ctx)
-}
-
-// Reload drops the cached result and checks again, for a state file that just changed.
-func (r *readiness) Reload(ctx context.Context) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.run(ctx)
-}
-
-// run checks and caches the result. Callers hold r.mu.
-func (r *readiness) run(ctx context.Context) error {
 	err := r.check(ctx)
 	if ctx.Err() != nil {
 		// A probe that gave up says nothing about PVE.
