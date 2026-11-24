@@ -201,13 +201,14 @@ type StorageContent struct {
 	VMID    int    `json:"vmid"`
 }
 
-// NetworkInterface is one entry of GET /nodes/{node}/network.
+// NetworkInterface is one entry of GET /nodes/{node}/network. It has no
+// active field: nothing reads it, and PVE 9 sends it as "1" for an SDN vnet
+// but as 1 for a bridge.
 type NetworkInterface struct {
 	Iface   string `json:"iface"`
 	Type    string `json:"type"`
 	CIDR    string `json:"cidr"`
 	Gateway string `json:"gateway"`
-	Active  int    `json:"active"`
 }
 
 // SDNZone is one entry of GET /cluster/sdn/zones.

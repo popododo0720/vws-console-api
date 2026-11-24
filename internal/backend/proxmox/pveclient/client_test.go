@@ -68,8 +68,11 @@ var calls = []call{
 	},
 	{
 		"network", func(ctx context.Context, c *Client) (any, error) { return c.Network(ctx, "pve1") },
-		"/api2/json/nodes/pve1/network", "type=any_bridge", `[{"iface":"vmbr0","type":"bridge","active":1}]`,
-		[]NetworkInterface{{Iface: "vmbr0", Type: "bridge", Active: 1}},
+		"/api2/json/nodes/pve1/network", "type=any_bridge",
+		// The vnet row is verbatim from PVE 9.2.2 (vws-console-api#1078).
+		`[{"iface":"vmbr0","type":"bridge","active":1},` +
+			`{"active":"1","vlanaware":0,"comments":null,"iface":"myvnet","type":"vnet","ipam":0}]`,
+		[]NetworkInterface{{Iface: "vmbr0", Type: "bridge"}, {Iface: "myvnet", Type: "vnet"}},
 	},
 	{
 		"sdn zones", func(ctx context.Context, c *Client) (any, error) { return c.SDNZones(ctx) },
