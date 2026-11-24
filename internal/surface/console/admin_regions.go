@@ -234,6 +234,9 @@ func (h *handler) adminWriteRegion(w http.ResponseWriter, r *http.Request) {
 	}
 	pushErr := h.pushRegion(r.Context(), v, in)
 	v.LastError = nil
+	if pushErr == nil && in.TokenSecret != nil {
+		v.AckedTokenFingerprint = v.TokenSecret.Fingerprint
+	}
 	if pushErr != nil {
 		message := resource.RegistrationFailureMessage(pushErr)
 		if message == "" {
@@ -378,17 +381,18 @@ func regionOrigin(endpoint string) string {
 
 // checkMove refuses a move to another daemon unless it carries a new token.
 // The old daemon keeps the credentials it holds, so it must never be able to
-// use the new token, and the old token is revoked in PVE. The stored
-// fingerprint is compared only when the last push succeeded, so it is the
-// token the old daemon acknowledged. The new daemon's first registration needs
+// use the new token, and the old token is revoked in PVE. The new token is
+// compared with the one the old daemon acknowledged, and a move is refused
+// while no token is acknowledged. The new daemon's first registration needs
 // every configured secret.
 func checkMove(v store.Region, in *regionInput) error {
 	switch {
-	case v.LastError != nil:
-		return resource.Invalid("regionEndpoint", "the last registration push failed; fix it before moving")
+	case v.AckedTokenFingerprint == "":
+		return resource.Invalid("regionEndpoint", "the daemon has not acknowledged a token; "+
+			"resubmit tokenSecret at the current regionEndpoint before moving")
 	case in.TokenSecret == nil:
 		return resource.Invalid("tokenSecret", "required when regionEndpoint changes")
-	case store.DescribeSecret(*in.TokenSecret).Fingerprint == v.TokenSecret.Fingerprint:
+	case store.DescribeSecret(*in.TokenSecret).Fingerprint == v.AckedTokenFingerprint:
 		return resource.Invalid("tokenSecret", "a move to another regionEndpoint needs a new token; "+
 			"revoke the old token in PVE")
 	case v.FirewallTokenID != "" && in.FirewallTokenSecret == nil:

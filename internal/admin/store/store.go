@@ -78,6 +78,11 @@ type Region struct {
 
 	LastError *resource.RegionStatusError `json:"lastError,omitempty"`
 
+	// AckedTokenFingerprint is the fingerprint of the token the daemon last
+	// accepted: it is set only by a successful push that carried tokenSecret.
+	// A failed rotation stores the new TokenSecret but leaves this as it was.
+	AckedTokenFingerprint string `json:"ackedTokenFingerprint,omitempty"`
+
 	// Deleting reserves the region for removal: edits and project mappings
 	// are refused, and the version of this record is the generation that
 	// fences the region daemon against older pushes.

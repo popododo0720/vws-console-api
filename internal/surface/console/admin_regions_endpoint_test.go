@@ -83,15 +83,36 @@ func TestRegionMoveWithoutSecretsIsRefused(t *testing.T) {
 	}, "firewallTokenSecret")
 }
 
-func TestRegionMoveAfterAFailedPushIsRefused(t *testing.T) {
+// A rotation whose push failed stores the new fingerprint, while the daemon
+// keeps the old token. A same-origin retry without a secret succeeds with that
+// old token. A move must still compare against the acknowledged old token.
+func TestRegionMoveComparesTheAcknowledgedToken(t *testing.T) {
 	e, g, calls, fail := moveFixture(t)
 	*fail = true
 	_, match := currentRegion(t, g)
-	regionCall(t, e, "PATCH", map[string]any{"zones": []store.Zone{{Letter: "b"}}}, match, 200)
+	regionCall(t, e, "PATCH", map[string]any{"tokenSecret": "rotated-token-1076"}, match, 200)
 	*fail = false
+	_, match = currentRegion(t, g)
+	regionCall(t, e, "PATCH", map[string]any{"zones": []store.Zone{{Letter: "b"}}}, match, 200)
+	if v, _ := currentRegion(t, g); v.LastError != nil || v.TokenSecret != store.DescribeSecret("rotated-token-1076") ||
+		v.AckedTokenFingerprint != store.DescribeSecret(validRegion()["tokenSecret"].(string)).Fingerprint {
+		t.Fatalf("stored: %+v", v)
+	}
+	refuseMove(t, e, g, calls, map[string]any{
+		"regionEndpoint": newEndpoint, "tokenSecret": validRegion()["tokenSecret"],
+	}, "needs a new token")
+}
+
+func TestRegionMoveWithoutAnAcknowledgedTokenIsRefused(t *testing.T) {
+	e, g, calls, _ := moveFixture(t)
+	v, _ := currentRegion(t, g)
+	v.AckedTokenFingerprint = ""
+	if _, err := g.Regions().Update(t.Context(), v); err != nil {
+		t.Fatal(err)
+	}
 	refuseMove(t, e, g, calls, map[string]any{
 		"regionEndpoint": newEndpoint, "tokenSecret": "another-token-1069",
-	}, "last registration push failed")
+	}, "not acknowledged a token")
 }
 
 func TestRegionMoveWithANewTokenPushesOnlyToTheNewDaemon(t *testing.T) {
@@ -106,7 +127,8 @@ func TestRegionMoveWithANewTokenPushesOnlyToTheNewDaemon(t *testing.T) {
 		t.Fatalf("calls: %v", calls)
 	}
 	if stored, _ := currentRegion(t, g); stored.RegionEndpoint != newEndpoint ||
-		stored.TokenSecret != store.DescribeSecret("another-token-1069") || stored.LastError != nil {
+		stored.TokenSecret != store.DescribeSecret("another-token-1069") || stored.LastError != nil ||
+		stored.AckedTokenFingerprint != store.DescribeSecret("another-token-1069").Fingerprint {
 		t.Fatalf("stored: %+v", stored)
 	}
 }
