@@ -193,7 +193,15 @@ func run(ctx context.Context, args []string) (err error) {
 		})
 	}
 	// Registration, deregistration and the connection test work before the region is ready.
-	h := regionapi.WithRegistration(conn.Register, regionapi.WithDeregistration(deregister,
+	// A registration is acknowledged only after the daemon serves it. The global layer reports the push as
+	// done, so a cached readiness result of the state before must not answer the next status read.
+	register := func(ctx context.Context, data json.RawMessage) error {
+		if err := conn.Register(ctx, data); err != nil {
+			return err
+		}
+		return probe.Reload(ctx)
+	}
+	h := regionapi.WithRegistration(register, regionapi.WithDeregistration(deregister,
 		regionapi.WithConnectionTest(conn.TestConnection,
 			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				current := state.Load()
@@ -327,6 +335,18 @@ func (r *readiness) Ready(ctx context.Context) error {
 	if !r.at.IsZero() && r.now().Sub(r.at) < r.ttl {
 		return r.err
 	}
+	return r.run(ctx)
+}
+
+// Reload drops the cached result and checks again, for a state file that just changed.
+func (r *readiness) Reload(ctx context.Context) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.run(ctx)
+}
+
+// run checks and caches the result. Callers hold r.mu.
+func (r *readiness) run(ctx context.Context) error {
 	err := r.check(ctx)
 	if ctx.Err() != nil {
 		// A probe that gave up says nothing about PVE.
