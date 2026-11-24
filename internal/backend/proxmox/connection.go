@@ -308,9 +308,10 @@ func (c *Connection) Register(ctx context.Context, data json.RawMessage) error {
 	return err
 }
 
-// RegisterBackend is Register that also returns the backend its self-check
-// built. It becomes the current backend, so the next Check of the same state
-// file returns it and the caller can serve it without a second self-check.
+// RegisterBackend is Register that also returns the backend to serve: the one
+// its self-check built when the state file changed, else the current one. It
+// is the current backend, so the next Check of the same state file returns it
+// and the caller can serve it without a second self-check.
 func (c *Connection) RegisterBackend(ctx context.Context, data json.RawMessage) (*Backend, error) {
 	s, err := decodeRegistration(data)
 	if err != nil {
@@ -393,8 +394,12 @@ func (c *Connection) RegisterBackend(ctx context.Context, data json.RawMessage) 
 	if err := writeFileAtomic(c.dir, registrationFile, state, nil); err != nil {
 		return nil, fmt.Errorf("persist registration: %w", err)
 	}
-	c.current, c.digest = b, sha256.Sum256(state)
-	return b, nil
+	// The state file holds no generation, so an unchanged registration at a new
+	// generation keeps the serving backend, its quorum gate and its consoles.
+	if digest := sha256.Sum256(state); c.current == nil || c.digest != digest {
+		c.current, c.digest = b, digest
+	}
+	return c.current, nil
 }
 
 // fence is the highest registry generation this daemon has accepted, kept in
