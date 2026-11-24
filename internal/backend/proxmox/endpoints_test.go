@@ -410,3 +410,40 @@ func TestOmittedWriteTokensGoOnlyToStoredAddresses(t *testing.T) {
 		t.Errorf("%d requests reached PVE", n)
 	}
 }
+
+// An unchanged registration at a new generation keeps the serving backend, so
+// the daemon keeps its quorum gate and consoles; a changed one serves its own
+// newly checked backend, which Check then returns (vws-console-api#1077).
+func TestRegistrationKeepsTheBackendOfAnUnchangedState(t *testing.T) {
+	pve, _ := clusterFake(t, "test")
+	c, _ := openFixture(t)
+	ca := serverCA(pve)
+	at := func(generation int, zones string) []byte {
+		var fields map[string]any
+		if err := json.Unmarshal(registerFields(t, []string{pve.URL}, ca, "fake-secret"), &fields); err != nil {
+			t.Fatal(err)
+		}
+		fields["generation"] = generation
+		fields["zones"] = json.RawMessage(zones)
+		data, err := json.Marshal(fields)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return data
+	}
+	first, err := c.RegisterBackend(t.Context(), at(1, `[]`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, err := c.RegisterBackend(t.Context(), at(2, `[]`))
+	if err != nil || again != first {
+		t.Fatalf("unchanged registration replaced the backend: %v", err)
+	}
+	changed, err := c.RegisterBackend(t.Context(), at(3, `[{"letter":"a","nodes":["pve1"]}]`))
+	if err != nil || changed == first {
+		t.Fatalf("changed registration kept the old backend: %v", err)
+	}
+	if checked, err := c.Check(t.Context()); err != nil || checked != changed {
+		t.Fatalf("Check after a changed registration: %v", err)
+	}
+}
