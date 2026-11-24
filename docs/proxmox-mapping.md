@@ -175,6 +175,10 @@ valid UTF-8 descriptions to 8192 bytes before making any request.
   8 GB test box that is `vws.small` and `vws.medium`.
 - `RunInstances` sets `cores`, `memory` in MiB, `sockets=1` and the region's
   `cpu` model.
+- `RunInstances` clones the root disk to the storage the region maps to the
+  root volume type. An omitted type is gp2 when the region maps gp2 storage,
+  and gp3 storage otherwise. A stated type without storage is
+  `UnsupportedOperation`.
 - A described VM gets the catalog type with the same vCPU count
   (`cores * sockets`) and memory within 12.5%, the closest memory on a tie.
   Anything else is `custom`.

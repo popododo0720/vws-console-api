@@ -372,3 +372,36 @@ func TestRunInstancesSkipsUnreadableTemplate(t *testing.T) {
 		t.Fatalf("unreadable requested template = %v; clones=%d", err, len(w.forms))
 	}
 }
+
+// An omitted root type is gp2, and a region that maps only gp3 storage
+// launches it there instead of refusing (#1081). A stated gp2 is still
+// refused, and a region that maps gp2 keeps launching an omitted type on it.
+func TestRunInstancesOmittedRootTypeOnRegionWithoutGP2(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		storages map[string]string
+		kind     resource.VolumeType
+		storage  string
+	}{
+		{"gp3 only", map[string]string{"gp3": "local"}, "", "local"},
+		{"gp2 kept", map[string]string{"gp2": "local", "gp3": "fast"}, "", "local"},
+		{"stated gp2", map[string]string{"gp3": "local"}, resource.VolumeGP2, ""},
+		{"no gp3", map[string]string{"io1": "local"}, "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w, m, req := launchBackend(t, false)
+			w.b.cfg.Storages = tc.storages
+			req.Count, req.RootVolumeType = 1, tc.kind
+			got, err := w.b.RunInstances(t.Context(), m, req)
+			if tc.storage == "" {
+				if !resource.IsUnsupported(resource.AsError(err)) || len(w.forms) != 0 {
+					t.Fatalf("accepted = %+v, %v; clones=%d", got, err, len(w.forms))
+				}
+				return
+			}
+			if err != nil || len(got.Items) != 1 || len(w.forms) != 1 || w.forms[0].Get("storage") != tc.storage {
+				t.Fatalf("accepted = %+v, %v; forms=%v", got, err, w.forms)
+			}
+		})
+	}
+}
