@@ -32,6 +32,10 @@ func RegistrationFailureMessage(err error) string {
 	}
 }
 
+// RegionRouteMissing is the error of a region daemon that answers but does not
+// serve the route, because it is older than the console that called it.
+const RegionRouteMissing = "region daemon does not serve this route; upgrade vws-region"
+
 // RegionFailureMessage admits operator diagnostics, never upstream response bodies.
 func RegionFailureMessage(err error) string {
 	if err == nil {
@@ -45,7 +49,7 @@ func RegionFailureMessage(err error) string {
 		switch e.Message {
 		case "not ready", "region pool check failed", "region status unavailable",
 			"connection test busy", "connection test failed", "region daemon returned an invalid connection test",
-			"deregistration failed":
+			"deregistration failed", RegionRouteMissing:
 			return e.Message
 		}
 	}

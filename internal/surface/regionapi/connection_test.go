@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -109,7 +110,8 @@ func TestConnectionTestBoundsAndSanitizes(t *testing.T) {
 	}, http.NotFoundHandler())
 	client, _, _ := serveConnectionTest(t, h)
 	big := bytes.Repeat([]byte("x"), (64<<10)+1)
-	if _, err := client.TestConnection(t.Context(), big); err == nil || called.Load() != 0 {
+	if _, err := client.TestConnection(t.Context(), big); resource.AsError(err).Code != resource.CodePayloadTooLarge ||
+		called.Load() != 0 {
 		t.Fatalf("oversized body: %v called=%d", err, called.Load())
 	}
 	failure = errors.New("upstream said " + canary)
@@ -221,5 +223,62 @@ func TestConnectionTestAcceptsOnlyPost(t *testing.T) {
 	h.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, connectionTestPath, nil))
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("GET status = %d, want the next handler's 404", rec.Code)
+	}
+}
+
+func TestConnectionTestBudgetCoversTheBodyRead(t *testing.T) {
+	h := WithConnectionTest(func(context.Context, json.RawMessage) ([]resource.ConnectionStep, error) {
+		return goodSteps(), nil
+	}, http.NotFoundHandler())
+	client, _, base := serveConnectionTest(t, h)
+	// Each stalled upload sends part of its body and never the rest.
+	var writers []*io.PipeWriter
+	for range maxConnectionTests {
+		body, writer := io.Pipe()
+		writers = append(writers, writer)
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, base+connectionTestPath, body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.ContentLength = 100
+		go func() {
+			if resp, err := client.http.Do(req); err == nil {
+				_ = resp.Body.Close()
+			}
+		}()
+		if _, err := writer.Write([]byte("{")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Cleanup(func() {
+		for _, w := range writers {
+			_ = w.Close()
+		}
+	})
+	_, err := client.TestConnection(t.Context(), json.RawMessage("{}"))
+	if resource.AsError(err).Code != resource.CodeUnavailable {
+		t.Fatalf("stalled uploads hold no slot: %v", err)
+	}
+	// The server's read timeout is 60 s; the budget must free both slots well before it.
+	start := time.Now()
+	for {
+		_, err := client.TestConnection(t.Context(), json.RawMessage("{}"))
+		if err == nil {
+			break
+		}
+		if time.Since(start) > connectionTestLimit+5*time.Second {
+			t.Fatalf("a stalled upload held its slot past the %v budget: %v", connectionTestLimit, err)
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+}
+
+func TestConnectionTestOnADaemonWithoutTheRouteSaysSo(t *testing.T) {
+	// A ready daemon that predates the route serves only its region API.
+	client, _, _ := serveConnectionTest(t, http.NewServeMux())
+	_, err := client.TestConnection(t.Context(), json.RawMessage("{}"))
+	if e := resource.AsError(err); e.Code != resource.CodeUnavailable || e.Message != resource.RegionRouteMissing ||
+		resource.RegionFailureMessage(err) != resource.RegionRouteMissing {
+		t.Fatalf("a missing route: %v", err)
 	}
 }

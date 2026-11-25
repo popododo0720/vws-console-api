@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"net/http/httptrace"
 	"net/url"
-	"strings"
 	"sync/atomic"
 	"time"
 )
@@ -41,9 +40,9 @@ func WithEndpoint(ctx context.Context, i int) context.Context {
 //
 // A request moves on only when the failure proves the next address cannot
 // double-apply it. A GET may move after any transport error, since reading
-// twice changes nothing. Any other method moves only when no connection to
-// the address was ever obtained: a dial or TLS handshake failure, before the
-// first byte of the request was written. Once a connection exists, a failed
+// twice changes nothing. Any other method, HEAD included, moves only when no
+// connection to the address was ever obtained: a dial or TLS handshake
+// failure, before the first byte of the request was written. Once a connection exists, a failed
 // write returns its error and the caller reconciles through PVE (task UPID
 // and launch marker) instead of sending the request to a second node.
 //
@@ -124,7 +123,7 @@ func (e *Endpoints) Transport() *http.Transport { return e.base }
 // RoundTrip implements http.RoundTripper.
 func (e *Endpoints) RoundTrip(req *http.Request) (*http.Response, error) {
 	order := e.order(req.Context())
-	read := readsOnly(req.Method)
+	read := req.Method == http.MethodGet
 	began := time.Now()
 	var err error
 	sent, refused := 0, 0
@@ -236,8 +235,4 @@ func closeBody(req *http.Request) error {
 		return fmt.Errorf("close request body: %w", err)
 	}
 	return nil
-}
-
-func readsOnly(method string) bool {
-	return strings.EqualFold(method, http.MethodGet) || strings.EqualFold(method, http.MethodHead)
 }

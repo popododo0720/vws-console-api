@@ -32,12 +32,28 @@ most 16, one CA that must sign them) and no redirects; the token goes only
 over connections whose server certificate chains to that CA. It GETs only, writes no
 file and does not touch the live registration, its state file or the quorum
 gate. The token is sent only over this channel, held for the call and never
-logged. At most two tests run at once, each within 12 s.
+logged. At most two tests run at once, each within 12 s, which covers the
+upload of the request as well as the checks. A request over 64 KiB fails the
+`tls` step with "region daemon refused the test request: it exceeds 64 KiB".
 
 A region that has no daemon yet, such as a new region before install, has
 nothing to answer: the test fails the `tls` step with "PVE checks run in the
 region daemon, which did not answer" and a classified reason, and skips the
 rest. Install and start `vws-region` for the region, then run the test again.
+
+### Upgrade order
+
+Upgrade `vws-region` on every region before console-api, and build both from
+the same console-api commit. console-api calls daemon routes that older
+daemons do not serve: the connection test needs a daemon built from #1067
+(b59e2ee) or later, and region delete needs the deregister route of #1074
+(2e8cd35) or later. A ready daemon without the route answers 404, and
+console-api reports "region daemon does not serve this route; upgrade
+vws-region" (the connection test fails its `tls` step with "the region daemon
+answered but has no connection test; upgrade vws-region first"). That differs
+from an endpoint that does not answer, which reports "did not answer" with a
+classified transport reason, and from a daemon that is not ready, which
+reports "not ready".
 
 `-region` names the one region this instance serves; it is required and a
 registration for any other region is refused with 400. The daemon talks to
@@ -150,9 +166,11 @@ persisted the removal is committed: the daemon stops the quorum gate and the
 launch finalizer and waits for them, withdraws the region API and reports
 `unregistered` on `/readyz`, even if the unlink, the directory sync or the
 done marker failed; that case returns 503, and a repeat or the next reload
-finishes the cleanup. When it returns, no finalizer write is running or can
-start. A request that was already past the gate may still finish, and a PVE
-task already submitted, such as a VM start, may complete. It is idempotent: a
+finishes the cleanup. When it returns, the daemon issues no further PVE
+request for the region: no finalizer write is running or can start. Waiting
+does not drain work PVE already accepted: a request that was already past the
+gate may still finish, and a PVE task already submitted, such as a VM start,
+may still complete. It is idempotent: a
 daemon with nothing registered answers 200.
 
 A `registration.json` found beside a tombstone at startup, on a reload or

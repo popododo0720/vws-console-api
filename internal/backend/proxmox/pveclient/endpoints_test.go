@@ -131,6 +131,34 @@ func TestEndpointsNeverResendASentWrite(t *testing.T) {
 	}
 }
 
+// Only GET is a read: any other method that reached a server, HEAD included,
+// returns its error instead of moving to the next address.
+func TestEndpointsOnlyGetMovesAfterACut(t *testing.T) {
+	for _, method := range []string{http.MethodGet, http.MethodHead, http.MethodOptions} {
+		t.Run(method, func(t *testing.T) {
+			first := newHostServer(t, cut)
+			second := newHostServer(t, ok)
+			_, eps := failoverClient(t, first.Server, first.URL, second.URL)
+			req, err := http.NewRequestWithContext(t.Context(), method, first.URL+"/api2/json/version", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp, err := eps.RoundTrip(req)
+			if err == nil {
+				_ = resp.Body.Close()
+			}
+			wantSecond := int64(0)
+			if method == http.MethodGet {
+				wantSecond = 1
+			}
+			if first.hits.Load() != 1 || second.hits.Load() != wantSecond {
+				t.Fatalf("hits first=%d second=%d, want 1 and %d (err %v)",
+					first.hits.Load(), second.hits.Load(), wantSecond, err)
+			}
+		})
+	}
+}
+
 func TestEndpointsReadAfterCutGoesToTheNextAddress(t *testing.T) {
 	first := newHostServer(t, cut)
 	second := newHostServer(t, func(w http.ResponseWriter, _ *http.Request) {
