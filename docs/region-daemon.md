@@ -32,7 +32,8 @@ most 16, one CA that must sign them) and no redirects; the token goes only
 over connections whose server certificate chains to that CA. It GETs only, writes no
 file and does not touch the live registration, its state file or the quorum
 gate. The token is sent only over this channel, held for the call and never
-logged. At most two tests run at once, each within 12 s.
+logged. At most two tests run at once, each within 12 s, which covers the
+upload of the request as well as the checks.
 
 A region that has no daemon yet, such as a new region before install, has
 nothing to answer: the test fails the `tls` step with "PVE checks run in the

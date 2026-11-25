@@ -308,6 +308,10 @@ func (s *statusRecorder) WriteHeader(code int) {
 	s.ResponseWriter.WriteHeader(code)
 }
 
+// Unwrap lets http.ResponseController reach the connection, for example to set
+// a read deadline.
+func (s *statusRecorder) Unwrap() http.ResponseWriter { return s.ResponseWriter }
+
 func (s *statusRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 	conn, rw, err := http.NewResponseController(s.ResponseWriter).Hijack()
 	if err != nil {
