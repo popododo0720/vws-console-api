@@ -84,6 +84,8 @@ func TestDeregisterChecksTheRequest(t *testing.T) {
 		"two documents":    `{"region":"pve-test-1","generation":3}{}`,
 		"not an object":    `null`,
 		"not JSON":         `pve-test-1`,
+		"region twice":     `{"region":"pve-test-2","region":"pve-test-1","generation":3}`,
+		"generation twice": `{"region":"pve-test-1","generation":3,"generation":4}`,
 	} {
 		removed, err := conn.Deregister(t.Context(), []byte(body))
 		if e := resource.AsError(err); err == nil || removed || e.Code != resource.CodeInvalidArgument {
