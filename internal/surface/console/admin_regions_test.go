@@ -548,3 +548,32 @@ func TestAdminRegionDeleteNeedsTheDaemonUnlessForced(t *testing.T) {
 		t.Fatal("secret or endpoint detail escaped into logs")
 	}
 }
+
+// A forced delete that does not commit leaves the entry and logs no
+// deletion: the warning tells the operator to delete the PVE token by hand,
+// which is wrong while the region is still registered.
+func TestAdminRegionForcedDeleteLogsOnlyACommittedDelete(t *testing.T) {
+	e, g, app, _ := accountFixture(t)
+	h := e.h.(*handler)
+	h.regionDeregistration = func(ctx context.Context, _, region string, _ int64) error {
+		v, err := g.Regions().Get(ctx, region)
+		if err == nil {
+			_, err = g.Regions().Update(ctx, v)
+		}
+		if err != nil {
+			t.Error(err)
+		}
+		return errors.New("daemon unreachable")
+	}
+	regionCall(t, e, "POST", validRegion(), "", 201)
+	rec := e.do(t, "DELETE", regionPath+"/pve-test-1?force=true", "", map[string]string{"Authorization": "Bearer tok"})
+	if rec.Code == http.StatusNoContent {
+		t.Fatalf("a delete that lost the version race reported success: %s", rec.Body)
+	}
+	if _, err := g.Regions().Get(t.Context(), "pve-test-1"); err != nil {
+		t.Fatalf("the entry is gone: %v", err)
+	}
+	if strings.Contains(app.String(), "delete its PVE token by hand") {
+		t.Fatalf("an uncommitted delete was logged as done: %s", app)
+	}
+}

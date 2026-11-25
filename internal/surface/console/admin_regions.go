@@ -308,18 +308,22 @@ func (h *handler) deleteRegion(ctx context.Context, v store.Region, force bool) 
 		}
 		v = marked
 	}
+	var forced string
 	if err := h.deregisterRegion(ctx, v); err != nil {
-		reason := h.regionFailure(ctx, err)
+		forced = h.regionFailure(ctx, err)
 		if !force {
-			return &resource.Error{Code: resource.CodeUnavailable, Message: "region deregistration failed: " + reason +
+			return &resource.Error{Code: resource.CodeUnavailable, Message: "region deregistration failed: " + forced +
 				"; the region stays marked for deletion: repeat the delete, " +
 				"or delete with force=true and delete the PVE token by hand"}
 		}
-		h.log.WarnContext(ctx, "region deleted without deregistering its daemon; delete its PVE token by hand",
-			slog.String("region", v.Name), slog.String("reason", reason))
 	}
 	if err := h.registry.Regions().Delete(ctx, v.Name, v.Version); err != nil {
 		return err
+	}
+	// Only a committed delete is reported as one.
+	if forced != "" {
+		h.log.WarnContext(ctx, "region deleted without deregistering its daemon; delete its PVE token by hand",
+			slog.String("region", v.Name), slog.String("reason", forced))
 	}
 	return h.registry.ReleaseCluster(ctx, v.ClusterName, v.Name)
 }
