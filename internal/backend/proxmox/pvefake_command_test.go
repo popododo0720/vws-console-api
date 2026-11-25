@@ -218,10 +218,10 @@ func TestPVEFakeCommandRegionInventoryAndRestart(t *testing.T) {
 		if data := admin(http.MethodGet, regionsPath, "", http.StatusOK); strings.TrimSpace(string(data)) != `{"items":[]}` {
 			t.Fatalf("new memory registry retained registrations: %s", data)
 		}
-		if attempt == 0 {
-			awaitStatus(t, "http://"+ops+"/readyz", http.StatusServiceUnavailable)
-			awaitClientStatus(t, client, "https://"+addr+"/internal/v1/status", http.StatusServiceUnavailable)
-		}
+		// Both starts wait for the region daemon's listeners; each attempt ends with a delete, so the
+		// daemon starts unregistered either time.
+		awaitStatus(t, "http://"+ops+"/readyz", http.StatusServiceUnavailable)
+		awaitClientStatus(t, client, "https://"+addr+"/internal/v1/status", http.StatusServiceUnavailable)
 		input := fmt.Sprintf(`{"name":"pve-test-1","clusterName":"test","pveApiUrls":[%q],"caPem":%q,
 			"tokenId":"vws@pve!inventory","tokenSecret":"fake-secret","regionEndpoint":%q,
 			"zones":[{"letter":"a","nodes":["pve1"]}]}`, endpoint, pem, "https://"+addr)
