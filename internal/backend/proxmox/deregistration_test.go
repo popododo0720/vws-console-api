@@ -2,6 +2,7 @@ package proxmox
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http/httptest"
@@ -54,7 +55,7 @@ func TestDeregisterRemovesTheStateFileAndIsIdempotent(t *testing.T) {
 	writeFixture(t, temp, []byte(`{"token":"fake-secret"}`))
 	conn.current, conn.digest = &Backend{}, [32]byte{1}
 	for i := range 2 {
-		if removed, err := conn.Deregister(deregisterBody(5)); err != nil || !removed {
+		if removed, err := conn.Deregister(t.Context(), deregisterBody(5)); err != nil || !removed {
 			t.Fatalf("deregistration %d: %v %v", i, removed, err)
 		}
 		if got := names(t, state); len(got) != 1 || got[0] != fenceFile {
@@ -74,17 +75,17 @@ func TestDeregisterChecksTheRequest(t *testing.T) {
 	file := filepath.Join(state, registrationFile)
 	writeFixture(t, file, []byte("kept"))
 	for name, body := range map[string]string{
-		"other region":    `{"region":"pve-test-2","generation":3}`,
-		"empty region":    `{"region":"","generation":3}`,
-		"no generation":   `{"region":"pve-test-1"}`,
-		"zero generation": `{"region":"pve-test-1","generation":0}`,
-		"negative":        `{"region":"pve-test-1","generation":-1}`,
-		"unknown field":   `{"region":"pve-test-1","generation":3,"force":true}`,
-		"two documents":   `{"region":"pve-test-1","generation":3}{}`,
-		"not an object":   `null`,
-		"not JSON":        `pve-test-1`,
+		"other region":     `{"region":"pve-test-2","generation":3}`,
+		"empty region":     `{"region":"","generation":3}`,
+		"no generation":    `{"region":"pve-test-1"}`,
+		"zero generation":  `{"region":"pve-test-1","generation":0}`,
+		"negative":         `{"region":"pve-test-1","generation":-1}`,
+		"unknown field":    `{"region":"pve-test-1","generation":3,"force":true}`,
+		"two documents":    `{"region":"pve-test-1","generation":3}{}`,
+		"not an object":    `null`,
+		"not JSON":         `pve-test-1`,
 	} {
-		removed, err := conn.Deregister([]byte(body))
+		removed, err := conn.Deregister(t.Context(), []byte(body))
 		if e := resource.AsError(err); err == nil || removed || e.Code != resource.CodeInvalidArgument {
 			t.Fatalf("%s: %v %v", name, removed, err)
 		}
@@ -97,11 +98,30 @@ func TestDeregisterChecksTheRequest(t *testing.T) {
 	}
 }
 
+// A request whose caller gave up, for example while it waited for the
+// lifecycle locks, removes nothing and writes no tombstone.
+func TestDeregisterAfterTheCallerGaveUpChangesNothing(t *testing.T) {
+	conn, state := openForDeregistration(t)
+	file := filepath.Join(state, registrationFile)
+	writeFixture(t, file, []byte("kept"))
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if removed, err := conn.Deregister(ctx, deregisterBody(5)); removed || !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled deregistration: %v %v", removed, err)
+	}
+	if got := names(t, state); len(got) != 1 || got[0] != registrationFile {
+		t.Fatalf("a canceled deregistration changed the state: %v", got)
+	}
+	if removed, err := conn.Deregister(t.Context(), deregisterBody(5)); !removed || err != nil {
+		t.Fatalf("deregistration after the canceled one: %v %v", removed, err)
+	}
+}
+
 // A delayed or replayed message older than the removal is refused, whichever
 // kind it is, and the removal itself can be repeated.
 func TestStaleGenerationsAreRefusedAfterARemoval(t *testing.T) {
 	conn, state := openForDeregistration(t)
-	if removed, err := conn.Deregister(deregisterBody(9)); err != nil || !removed {
+	if removed, err := conn.Deregister(t.Context(), deregisterBody(9)); err != nil || !removed {
 		t.Fatal(removed, err)
 	}
 	register := func(generation int) error {
@@ -114,13 +134,14 @@ func TestStaleGenerationsAreRefusedAfterARemoval(t *testing.T) {
 			t.Fatalf("registration at generation %d after removal at 9: %v", generation, e)
 		}
 	}
-	if removed, err := conn.Deregister(deregisterBody(8)); removed || resource.AsError(err).Code != resource.CodeConflict {
+	removed, err := conn.Deregister(t.Context(), deregisterBody(8))
+	if removed || resource.AsError(err).Code != resource.CodeConflict {
 		t.Fatalf("an older removal was accepted: %v %v", removed, err)
 	}
-	if removed, err := conn.Deregister(deregisterBody(9)); !removed || err != nil {
+	if removed, err := conn.Deregister(t.Context(), deregisterBody(9)); !removed || err != nil {
 		t.Fatalf("repeat of the removal: %v %v", removed, err)
 	}
-	if removed, err := conn.Deregister(deregisterBody(12)); !removed || err != nil {
+	if removed, err := conn.Deregister(t.Context(), deregisterBody(12)); !removed || err != nil {
 		t.Fatalf("newer removal: %v %v", removed, err)
 	}
 	if got := names(t, state); len(got) != 1 || got[0] != fenceFile {
@@ -153,7 +174,7 @@ func TestDeregisterFailurePoints(t *testing.T) {
 			writeFixture(t, file, []byte("kept"))
 			conn.current = &Backend{}
 			failAt(conn, stage)
-			if removed, err := conn.Deregister(deregisterBody(4)); !errors.Is(err, boom) || removed {
+			if removed, err := conn.Deregister(t.Context(), deregisterBody(4)); !errors.Is(err, boom) || removed {
 				t.Fatalf("%v %v", removed, err)
 			}
 			if data, err := os.ReadFile(file); err != nil || string(data) != "kept" || conn.current == nil {
@@ -163,7 +184,7 @@ func TestDeregisterFailurePoints(t *testing.T) {
 				t.Fatal("the generation was persisted")
 			}
 			conn.step = nil
-			if removed, err := conn.Deregister(deregisterBody(4)); err != nil || !removed {
+			if removed, err := conn.Deregister(t.Context(), deregisterBody(4)); err != nil || !removed {
 				t.Fatalf("retry: %v %v", removed, err)
 			}
 		})
@@ -174,7 +195,7 @@ func TestDeregisterFailurePoints(t *testing.T) {
 		writeFixture(t, file, []byte("kept"))
 		conn.current = &Backend{}
 		failAt(conn, "unlink")
-		if removed, err := conn.Deregister(deregisterBody(4)); !errors.Is(err, boom) || !removed {
+		if removed, err := conn.Deregister(t.Context(), deregisterBody(4)); !errors.Is(err, boom) || !removed {
 			t.Fatalf("a failed unlink after the tombstone must report the removal: %v %v", removed, err)
 		}
 		if conn.current != nil {
@@ -201,7 +222,7 @@ func TestDeregisterFailurePoints(t *testing.T) {
 		if f, err := conn.readFence(); err != nil || f != (fence{Generation: 4, Deregistered: true}) {
 			t.Fatalf("tombstone after the later pass: %+v %v", f, err)
 		}
-		if removed, err := conn.Deregister(deregisterBody(4)); err != nil || !removed {
+		if removed, err := conn.Deregister(t.Context(), deregisterBody(4)); err != nil || !removed {
 			t.Fatalf("retry: %v %v", removed, err)
 		}
 	})
@@ -210,7 +231,7 @@ func TestDeregisterFailurePoints(t *testing.T) {
 		writeFixture(t, filepath.Join(state, registrationFile), []byte("kept"))
 		conn.current = &Backend{}
 		failAt(conn, "sync")
-		removed, err := conn.Deregister(deregisterBody(4))
+		removed, err := conn.Deregister(t.Context(), deregisterBody(4))
 		if !errors.Is(err, boom) || !removed {
 			t.Fatalf("a failed sync must report the committed removal: %v %v", removed, err)
 		}
@@ -218,7 +239,7 @@ func TestDeregisterFailurePoints(t *testing.T) {
 			t.Fatalf("file or cached backend survived: %v", err)
 		}
 		// A retry whose recovery fails after the unlink still reports the removal.
-		if removed, err := conn.Deregister(deregisterBody(4)); !errors.Is(err, boom) || !removed {
+		if removed, err := conn.Deregister(t.Context(), deregisterBody(4)); !errors.Is(err, boom) || !removed {
 			t.Fatalf("retry with the sync still failing: %v %v", removed, err)
 		}
 		syncs := 0
@@ -228,7 +249,7 @@ func TestDeregisterFailurePoints(t *testing.T) {
 			}
 			return nil
 		}
-		if removed, err := conn.Deregister(deregisterBody(4)); err != nil || !removed || syncs == 0 {
+		if removed, err := conn.Deregister(t.Context(), deregisterBody(4)); err != nil || !removed || syncs == 0 {
 			t.Fatalf("retry: %v %v syncs=%d", removed, err, syncs)
 		}
 	})
@@ -351,7 +372,7 @@ func TestRegistrationWithEverySecretFinishesAPendingRemoval(t *testing.T) {
 		}
 	}
 	fail("unlink")
-	if removed, err := conn.Deregister(deregisterBody(5)); !removed || !errors.Is(err, boom) {
+	if removed, err := conn.Deregister(t.Context(), deregisterBody(5)); !removed || !errors.Is(err, boom) {
 		t.Fatalf("deregistration: %v %v", removed, err)
 	}
 	fail("persist")
@@ -389,7 +410,7 @@ func TestRegistrationByARolledBackDaemonSurvivesTheReUpgrade(t *testing.T) {
 	if err := conn.Register(t.Context(), fencedRegistration(t, pve, 3)); err != nil {
 		t.Fatal(err)
 	}
-	if removed, err := conn.Deregister(deregisterBody(5)); err != nil || !removed {
+	if removed, err := conn.Deregister(t.Context(), deregisterBody(5)); err != nil || !removed {
 		t.Fatalf("deregistration: %v %v", removed, err)
 	}
 	if _, err := conn.Check(t.Context()); !errors.Is(err, ErrUnregistered) {
@@ -431,7 +452,7 @@ func TestRegistrationByARolledBackDaemonSurvivesTheReUpgrade(t *testing.T) {
 		}
 	}
 	for _, generation := range []int{4, 5} {
-		if removed, err := conn.Deregister(deregisterBody(generation)); removed ||
+		if removed, err := conn.Deregister(t.Context(), deregisterBody(generation)); removed ||
 			resource.AsError(err).Code != resource.CodeConflict {
 			t.Fatalf("a removal at %d reached the newer registration: %v %v", generation, removed, err)
 		}
@@ -497,7 +518,7 @@ func TestByteIdenticalRegistrationAfterARollbackIsKept(t *testing.T) {
 		}
 		return nil
 	}
-	if removed, err := conn.Deregister(deregisterBody(5)); !removed || !errors.Is(err, crash) {
+	if removed, err := conn.Deregister(t.Context(), deregisterBody(5)); !removed || !errors.Is(err, crash) {
 		t.Fatalf("deregistration: %v %v", removed, err)
 	}
 	conn.Close()

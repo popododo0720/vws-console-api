@@ -187,10 +187,12 @@ func run(ctx context.Context, args []string) (err error) {
 	}()
 	// deregister runs under probe.mu, which orders it against Ready and
 	// register. See deregisterThen for what a failure leaves behind.
-	deregister := func(_ context.Context, data json.RawMessage) error {
+	deregister := func(ctx context.Context, data json.RawMessage) error {
 		probe.mu.Lock()
 		defer probe.mu.Unlock()
-		return deregisterThen(data, conn.Deregister, func() {
+		return deregisterThen(data, func(data json.RawMessage) (bool, error) {
+			return conn.Deregister(ctx, data)
+		}, func() {
 			stopGate()
 			state.Store(nil)
 			probe.at = time.Time{}

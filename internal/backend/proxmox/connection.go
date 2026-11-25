@@ -579,7 +579,7 @@ func (c *Connection) at(stage string) error {
 // failed), the caller must stop everything that runs on the old registration,
 // and a repeat or the next reload finishes the cleanup. It is idempotent: with
 // no file it still syncs.
-func (c *Connection) Deregister(data json.RawMessage) (removed bool, err error) {
+func (c *Connection) Deregister(ctx context.Context, data json.RawMessage) (removed bool, err error) {
 	var req struct {
 		Region     string `json:"region"`
 		Generation int64  `json:"generation"`
@@ -595,6 +595,11 @@ func (c *Connection) Deregister(data json.RawMessage) (removed bool, err error) 
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	// A request that gave up while it waited for the lock changes nothing. Once
+	// the pending tombstone is written, the removal finishes or is resumed.
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
 	if err := c.at("cleanup"); err != nil {
 		return false, err
 	}
