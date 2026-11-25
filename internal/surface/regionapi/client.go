@@ -126,6 +126,11 @@ func (c *Client) do(ctx context.Context, method, path string, data []byte, dst a
 		if resp.StatusCode == http.StatusServiceUnavailable && strings.TrimSpace(string(body)) == "region not ready" {
 			return &resource.Error{Code: resource.CodeUnavailable, Message: "not ready"}
 		}
+		if resp.StatusCode == http.StatusNotFound {
+			// Every route answers its errors as 400, 409, 413 or 503, so a 404
+			// comes from a daemon that predates the route.
+			return &resource.Error{Code: resource.CodeUnavailable, Message: resource.RegionRouteMissing}
+		}
 		var envelope errorBody
 		if err := json.Unmarshal(body, &envelope); err != nil {
 			return fmt.Errorf("decode region error: %w", err)

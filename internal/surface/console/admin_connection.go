@@ -242,8 +242,13 @@ func (h *handler) testPVE(ctx context.Context, v store.Region, token string) []r
 	}
 	steps, err := h.regionConnection(ctx, v.RegionEndpoint, data)
 	if err != nil {
-		if e := resource.AsError(err); e.Code == resource.CodeInvalidArgument {
+		switch e := resource.AsError(err); {
+		case e.Code == resource.CodeInvalidArgument:
 			return failed("tls", "region daemon refused the test request")
+		case e.Code == resource.CodePayloadTooLarge:
+			return failed("tls", "region daemon refused the test request: it exceeds 64 KiB")
+		case e.Code == resource.CodeUnavailable && e.Message == resource.RegionRouteMissing:
+			return failed("tls", "the region daemon answered but has no connection test; upgrade vws-region first")
 		}
 		return failed("tls", "PVE checks run in the region daemon, which did not answer: "+h.regionFailure(ctx, err))
 	}
