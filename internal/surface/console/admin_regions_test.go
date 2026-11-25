@@ -523,7 +523,9 @@ func TestAdminRegionDeleteNeedsTheDaemonUnlessForced(t *testing.T) {
 	if err := g.ClaimCluster(t.Context(), "test", "pve-other-1", time.Now()); !errors.Is(err, store.ErrExists) {
 		t.Fatalf("the cluster claim was released: %v", err)
 	}
-	for _, query := range []string{"?force=false", "?force=true&x=1", "?x=1", "?force=true&force=true"} {
+	for _, query := range []string{
+		"?force=false", "?force=true&x=1", "?x=1", "?force=true&force=true", "?force=true&%zz", "?force=true;x=1",
+	} {
 		del(query, 400)
 	}
 	if len(calls) != 1 {

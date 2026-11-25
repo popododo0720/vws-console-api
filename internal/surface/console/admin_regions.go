@@ -269,7 +269,11 @@ func (h *handler) adminWriteRegion(w http.ResponseWriter, r *http.Request) {
 // deleteForce reads the only query parameter of DELETE. force=true removes the
 // registry entry even when the daemon cannot be told.
 func deleteForce(r *http.Request) (bool, error) {
-	q := r.URL.Query()
+	// URL.Query drops a malformed pair, so "force=true&%zz" would read as force=true.
+	q, err := url.ParseQuery(r.URL.RawQuery)
+	if err != nil {
+		return false, resource.Invalid("query", "only force=true is supported")
+	}
 	if len(q) == 0 {
 		return false, nil
 	}
