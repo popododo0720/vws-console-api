@@ -393,21 +393,43 @@ func TestConnectionTestValidatesLikeRegistration(t *testing.T) {
 // A region may map more pools than any fixed count; the body and time limits
 // bound the test, so every mapped pool reaches the checks.
 func TestConnectionTestAcceptsManyMappedPools(t *testing.T) {
-	srv := clusterServer(t, "test")
-	c, _ := openFixture(t)
 	pools := make([]string, 257)
 	for i := range pools {
 		pools[i] = fmt.Sprintf("vws-p%03d", i)
 	}
-	data, err := json.Marshal(map[string]any{
-		"region": "pve-test-1", "cluster_name": "test", "pveApiUrls": []string{srv.URL},
-		"caPem": serverCA(srv), "tokenId": "vws@pve!inventory", "token": "fake-secret", "pools": pools,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	steps, err := c.TestConnection(t.Context(), data)
-	if err != nil || len(steps) != 4 || steps[0].Result != resource.ConnectionPass {
-		t.Fatalf("257 mapped pools: %+v %v", steps, err)
+	for name, tc := range map[string]struct {
+		configured []string
+		want       resource.ConnectionStep
+	}{
+		"all configured": {pools, resource.ConnectionStep{
+			Name: "privileges", Result: resource.ConnectionPass, Message: "token privileges are read-only",
+		}},
+		"last one missing": {pools[:len(pools)-1], resource.ConnectionStep{
+			Name: "privileges", Result: resource.ConnectionFail, Message: `pool "vws-p256": does not exist`,
+		}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			s := scenario()
+			s.Pools = tc.configured
+			s.Roles[0].Privs = append(s.Roles[0].Privs, "Pool.Audit")
+			f, err := pvefake.New(s)
+			if err != nil {
+				t.Fatal(err)
+			}
+			srv := httptest.NewTLSServer(f)
+			t.Cleanup(srv.Close)
+			c, _ := openFixture(t)
+			data, err := json.Marshal(map[string]any{
+				"region": "pve-test-1", "cluster_name": "test", "pveApiUrls": []string{srv.URL},
+				"caPem": serverCA(srv), "tokenId": "vws@pve!inventory", "token": "fake-secret", "pools": pools,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			steps, err := c.TestConnection(t.Context(), data)
+			if err != nil || len(steps) != 4 || steps[3] != tc.want {
+				t.Fatalf("257 mapped pools: %+v %v, want privileges %+v", steps, err, tc.want)
+			}
+		})
 	}
 }
