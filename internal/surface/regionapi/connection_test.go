@@ -282,11 +282,13 @@ func TestConnectionTestBudgetCoversTheBodyRead(t *testing.T) {
 		t.Fatalf("both slots held by stalled uploads: %v", err)
 	}
 	// The server's read timeout is 60 s; the budget must end both stalled
-	// handlers well before it.
+	// handlers well before it. One deadline covers both exits, so a slow
+	// second handler cannot use a fresh window.
+	deadline := time.After(connectionTestLimit + 5*time.Second)
 	for range maxConnectionTests {
 		select {
 		case <-exited:
-		case <-time.After(connectionTestLimit + 5*time.Second):
+		case <-deadline:
 			t.Fatalf("a stalled upload held its slot past the %v budget", connectionTestLimit)
 		}
 	}
