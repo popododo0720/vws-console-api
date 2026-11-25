@@ -139,8 +139,20 @@ func TestRegionConnectionWithoutAWorkingDaemonFailsTheFirstStepClearly(t *testin
 			"region daemon returned an invalid connection test",
 		},
 		"too large": {
-			resource.TooLarge("connection test exceeds 64 KiB"),
+			resource.TooLarge(resource.ConnectionTestTooLarge),
 			"region daemon refused the test request: it exceeds 64 KiB",
+		},
+		"reply too large": {
+			resource.TooLarge(resource.RegionResponseTooLarge),
+			"the region daemon reply exceeds the response limit",
+		},
+		"other too large": {
+			resource.TooLarge("body exceeds the limit"),
+			"PVE checks run in the region daemon, which did not answer: region transport failed",
+		},
+		"not ready": {
+			&resource.Error{Code: resource.CodeUnavailable, Message: "not ready"},
+			"the region daemon answered but is not ready",
 		},
 		"route missing": {
 			&resource.Error{Code: resource.CodeUnavailable, Message: resource.RegionRouteMissing},

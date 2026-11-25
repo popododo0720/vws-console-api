@@ -120,7 +120,7 @@ func (c *Client) do(ctx context.Context, method, path string, data []byte, dst a
 		return fmt.Errorf("read region response: %w", err)
 	}
 	if len(body) > maxResponseBytes {
-		return resource.TooLarge("region response exceeds the limit")
+		return resource.TooLarge(resource.RegionResponseTooLarge)
 	}
 	if resp.StatusCode != http.StatusOK {
 		if resp.StatusCode == http.StatusServiceUnavailable && strings.TrimSpace(string(body)) == "region not ready" {

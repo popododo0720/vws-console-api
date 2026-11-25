@@ -36,6 +36,14 @@ func RegistrationFailureMessage(err error) string {
 // serve the route, because it is older than the console that called it.
 const RegionRouteMissing = "region daemon does not serve this route; upgrade vws-region"
 
+// ConnectionTestTooLarge is the error of a region daemon whose connection test
+// request exceeds its 64 KiB limit; RegionResponseTooLarge is the client's own
+// error for a daemon reply over the response limit. Both are PayloadTooLarge.
+const (
+	ConnectionTestTooLarge = "connection test exceeds 64 KiB"
+	RegionResponseTooLarge = "region response exceeds the limit"
+)
+
 // RegionFailureMessage admits operator diagnostics, never upstream response bodies.
 func RegionFailureMessage(err error) string {
 	if err == nil {
