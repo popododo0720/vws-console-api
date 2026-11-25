@@ -110,7 +110,8 @@ func TestConnectionTestBoundsAndSanitizes(t *testing.T) {
 	}, http.NotFoundHandler())
 	client, _, _ := serveConnectionTest(t, h)
 	big := bytes.Repeat([]byte("x"), (64<<10)+1)
-	if _, err := client.TestConnection(t.Context(), big); err == nil || called.Load() != 0 {
+	if _, err := client.TestConnection(t.Context(), big); resource.AsError(err).Code != resource.CodePayloadTooLarge ||
+		called.Load() != 0 {
 		t.Fatalf("oversized body: %v called=%d", err, called.Load())
 	}
 	failure = errors.New("upstream said " + canary)
@@ -269,5 +270,15 @@ func TestConnectionTestBudgetCoversTheBodyRead(t *testing.T) {
 			t.Fatalf("a stalled upload held its slot past the %v budget: %v", connectionTestLimit, err)
 		}
 		time.Sleep(250 * time.Millisecond)
+	}
+}
+
+func TestConnectionTestOnADaemonWithoutTheRouteSaysSo(t *testing.T) {
+	// A ready daemon that predates the route serves only its region API.
+	client, _, _ := serveConnectionTest(t, http.NewServeMux())
+	_, err := client.TestConnection(t.Context(), json.RawMessage("{}"))
+	if e := resource.AsError(err); e.Code != resource.CodeUnavailable || e.Message != resource.RegionRouteMissing ||
+		resource.RegionFailureMessage(err) != resource.RegionRouteMissing {
+		t.Fatalf("a missing route: %v", err)
 	}
 }

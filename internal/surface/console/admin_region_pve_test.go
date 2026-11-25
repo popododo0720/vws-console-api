@@ -138,6 +138,14 @@ func TestRegionConnectionWithoutAWorkingDaemonFailsTheFirstStepClearly(t *testin
 			&resource.Error{Code: resource.CodeUnavailable, Message: "region daemon returned an invalid connection test"},
 			"region daemon returned an invalid connection test",
 		},
+		"too large": {
+			resource.TooLarge("connection test exceeds 64 KiB"),
+			"region daemon refused the test request: it exceeds 64 KiB",
+		},
+		"route missing": {
+			&resource.Error{Code: resource.CodeUnavailable, Message: resource.RegionRouteMissing},
+			"the region daemon answered but has no connection test; upgrade vws-region first",
+		},
 		"mTLS not configured": {
 			&RegionMTLSConfigError{Err: errors.New(canary)},
 			"region mTLS configuration failed",
