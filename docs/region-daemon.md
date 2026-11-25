@@ -166,9 +166,11 @@ persisted the removal is committed: the daemon stops the quorum gate and the
 launch finalizer and waits for them, withdraws the region API and reports
 `unregistered` on `/readyz`, even if the unlink, the directory sync or the
 done marker failed; that case returns 503, and a repeat or the next reload
-finishes the cleanup. When it returns, no finalizer write is running or can
-start. A request that was already past the gate may still finish, and a PVE
-task already submitted, such as a VM start, may complete. It is idempotent: a
+finishes the cleanup. When it returns, the daemon issues no further PVE
+request for the region: no finalizer write is running or can start. Waiting
+does not drain work PVE already accepted: a request that was already past the
+gate may still finish, and a PVE task already submitted, such as a VM start,
+may still complete. It is idempotent: a
 daemon with nothing registered answers 200.
 
 A `registration.json` found beside a tombstone at startup, on a reload or
