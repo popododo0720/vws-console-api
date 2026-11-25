@@ -230,9 +230,27 @@ func TestConnectionTestBudgetCoversTheBodyRead(t *testing.T) {
 	h := WithConnectionTest(func(context.Context, json.RawMessage) ([]resource.ConnectionStep, error) {
 		return goodSteps(), nil
 	}, http.NotFoundHandler())
-	client, _, base := serveConnectionTest(t, h)
+	// The handler reads the body only after it holds a slot, so the first read
+	// of a stalled upload on the server shows that its slot is taken.
+	reading := make(chan struct{}, maxConnectionTests)
+	exited := make(chan struct{}, maxConnectionTests)
+	stalled := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Stalled-Upload") == "" {
+			h.ServeHTTP(w, r)
+			return
+		}
+		defer func() { exited <- struct{}{} }()
+		r.Body = &firstRead{ReadCloser: r.Body, signal: reading}
+		h.ServeHTTP(w, r)
+	})
+	client, _, base := serveConnectionTest(t, stalled)
 	// Each stalled upload sends part of its body and never the rest.
 	var writers []*io.PipeWriter
+	t.Cleanup(func() {
+		for _, w := range writers {
+			_ = w.Close()
+		}
+	})
 	for range maxConnectionTests {
 		body, writer := io.Pipe()
 		writers = append(writers, writer)
@@ -241,6 +259,7 @@ func TestConnectionTestBudgetCoversTheBodyRead(t *testing.T) {
 			t.Fatal(err)
 		}
 		req.ContentLength = 100
+		req.Header.Set("X-Stalled-Upload", "1")
 		go func() {
 			if resp, err := client.http.Do(req); err == nil {
 				_ = resp.Body.Close()
@@ -250,27 +269,42 @@ func TestConnectionTestBudgetCoversTheBodyRead(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	t.Cleanup(func() {
-		for _, w := range writers {
-			_ = w.Close()
+	for range maxConnectionTests {
+		select {
+		case <-reading:
+		case <-time.After(5 * time.Second):
+			t.Fatal("a stalled upload never reached the body read")
 		}
-	})
+	}
 	_, err := client.TestConnection(t.Context(), json.RawMessage("{}"))
-	if resource.AsError(err).Code != resource.CodeUnavailable {
-		t.Fatalf("stalled uploads hold no slot: %v", err)
+	if e := resource.AsError(err); err == nil || e.Code != resource.CodeUnavailable ||
+		e.Message != "connection test busy" {
+		t.Fatalf("both slots held by stalled uploads: %v", err)
 	}
-	// The server's read timeout is 60 s; the budget must free both slots well before it.
-	start := time.Now()
-	for {
-		_, err := client.TestConnection(t.Context(), json.RawMessage("{}"))
-		if err == nil {
-			break
+	// The server's read timeout is 60 s; the budget must end both stalled
+	// handlers well before it.
+	for range maxConnectionTests {
+		select {
+		case <-exited:
+		case <-time.After(connectionTestLimit + 5*time.Second):
+			t.Fatalf("a stalled upload held its slot past the %v budget", connectionTestLimit)
 		}
-		if time.Since(start) > connectionTestLimit+5*time.Second {
-			t.Fatalf("a stalled upload held its slot past the %v budget: %v", connectionTestLimit, err)
-		}
-		time.Sleep(250 * time.Millisecond)
 	}
+	if _, err := client.TestConnection(t.Context(), json.RawMessage("{}")); err != nil {
+		t.Fatalf("after both stalled uploads ended: %v", err)
+	}
+}
+
+// firstRead signals once, on the first Read of the body.
+type firstRead struct {
+	io.ReadCloser
+	signal chan<- struct{}
+	once   sync.Once
+}
+
+func (r *firstRead) Read(p []byte) (int, error) {
+	r.once.Do(func() { r.signal <- struct{}{} })
+	return r.ReadCloser.Read(p)
 }
 
 func TestConnectionTestOnADaemonWithoutTheRouteSaysSo(t *testing.T) {
