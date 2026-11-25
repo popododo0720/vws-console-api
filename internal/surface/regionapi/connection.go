@@ -32,7 +32,7 @@ func WithConnectionTest(
 	slots := make(chan struct{}, maxConnectionTests)
 	mux := http.NewServeMux()
 	mux.Handle("/", next)
-	mux.Handle("POST "+connectionTestPath, httpobs.Middleware("regionapi", func(*http.Request) string {
+	instrumented := httpobs.Middleware("regionapi", func(*http.Request) string {
 		return connectionTestPath
 	})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
@@ -46,9 +46,7 @@ func WithConnectionTest(
 		data, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxConnectionBody))
 		var steps []resource.ConnectionStep
 		if err == nil {
-			ctx, cancel := context.WithTimeout(r.Context(), connectionTestLimit)
-			defer cancel()
-			steps, err = test(ctx, data)
+			steps, err = test(r.Context(), data)
 		}
 		var tooLarge *http.MaxBytesError
 		switch {
@@ -59,7 +57,21 @@ func WithConnectionTest(
 			err = &resource.Error{Code: resource.CodeUnavailable, Message: "connection test failed"}
 		}
 		writeJSON(w, connectionResult{Steps: steps}, err)
-	})))
+	}))
+	// One budget covers the upload and the test, so a stalled body cannot hold
+	// a slot until the server's read timeout. The deadline is set here, outside
+	// the instrumentation, whose writer does not unwrap to the connection.
+	mux.Handle("POST "+connectionTestPath, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		deadline := time.Now().Add(connectionTestLimit)
+		if err := http.NewResponseController(w).SetReadDeadline(deadline); err != nil {
+			w.Header().Set("Cache-Control", "no-store")
+			writeJSON(w, nil, &resource.Error{Code: resource.CodeUnavailable, Message: "connection test failed"})
+			return
+		}
+		ctx, cancel := context.WithDeadline(r.Context(), deadline)
+		defer cancel()
+		instrumented.ServeHTTP(w, r.WithContext(ctx))
+	}))
 	return mux
 }
 
