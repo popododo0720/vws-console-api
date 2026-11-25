@@ -579,7 +579,7 @@ func (c *Connection) at(stage string) error {
 // failed), the caller must stop everything that runs on the old registration,
 // and a repeat or the next reload finishes the cleanup. It is idempotent: with
 // no file it still syncs.
-func (c *Connection) Deregister(data json.RawMessage) (removed bool, err error) {
+func (c *Connection) Deregister(ctx context.Context, data json.RawMessage) (removed bool, err error) {
 	var req struct {
 		Region     string `json:"region"`
 		Generation int64  `json:"generation"`
@@ -587,14 +587,19 @@ func (c *Connection) Deregister(data json.RawMessage) (removed bool, err error) 
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()
 	var extra any
-	if err := dec.Decode(&req); err != nil || !errors.Is(dec.Decode(&extra), io.EOF) || req.Generation < 1 {
-		return false, resource.Invalid("deregistration", "expected one JSON object with region and generation")
+	if !uniqueKeys(data) || dec.Decode(&req) != nil || !errors.Is(dec.Decode(&extra), io.EOF) || req.Generation < 1 {
+		return false, resource.Invalid("deregistration", "expected one JSON object with region and generation, each once")
 	}
 	if req.Region != c.region {
 		return false, resource.Invalid("region", "deregistration is for another region than this instance")
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	// A request that gave up while it waited for the lock changes nothing. Once
+	// the pending tombstone is written, the removal finishes or is resumed.
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
 	if err := c.at("cleanup"); err != nil {
 		return false, err
 	}
@@ -632,6 +637,26 @@ func (c *Connection) Deregister(data json.RawMessage) (removed bool, err error) 
 		return false, err
 	}
 	return true, c.completeRemoval(req.Generation, digest != "")
+}
+
+// uniqueKeys reports whether data is a JSON object that names no key twice;
+// encoding/json keeps the last of repeated keys.
+func uniqueKeys(data []byte) bool {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	if t, err := dec.Token(); err != nil || t != json.Delim('{') {
+		return false
+	}
+	seen := map[string]bool{}
+	for dec.More() {
+		t, err := dec.Token()
+		key, ok := t.(string)
+		var value json.RawMessage
+		if err != nil || !ok || seen[key] || dec.Decode(&value) != nil {
+			return false
+		}
+		seen[key] = true
+	}
+	return true
 }
 
 // sameTrust reports whether s sends a stored secret nowhere new: the stored
