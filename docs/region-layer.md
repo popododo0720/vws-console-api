@@ -41,6 +41,7 @@ Code: `internal/backend/proxmox/pveclient/endpoints.go`.
 Tests: `TestEndpointsRetryOnlyWhatNeverReachedTheServer`,
 `TestEndpointsNeverResendASentWrite`,
 `TestEndpointsReadAfterCutGoesToTheNextAddress`,
+`TestEndpointsOnlyGetMovesAfterACut`,
 `TestEndpointsUseTheRegisteredAddressesOnly`,
 `TestEndpointsDeadAddressWithConcurrentCalls`,
 `TestEndpointsAllAddressesDownIsAnError`, `TestNewEndpointsRefusesNonOrigins`,
