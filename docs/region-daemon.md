@@ -53,7 +53,10 @@ vws-region" (the connection test fails its `tls` step with "the region daemon
 answered but has no connection test; upgrade vws-region first"). That differs
 from an endpoint that does not answer, which reports "did not answer" with a
 classified transport reason, and from a daemon that is not ready, which
-reports "not ready".
+reports "not ready" (in the connection test, "the region daemon answered but is
+not ready"). A connection test request over 64 KiB fails with "it exceeds 64
+KiB"; a daemon reply over the response limit fails with "the region daemon
+reply exceeds the response limit".
 
 `-region` names the one region this instance serves; it is required and a
 registration for any other region is refused with 400. The daemon talks to
@@ -166,12 +169,13 @@ persisted the removal is committed: the daemon stops the quorum gate and the
 launch finalizer and waits for them, withdraws the region API and reports
 `unregistered` on `/readyz`, even if the unlink, the directory sync or the
 done marker failed; that case returns 503, and a repeat or the next reload
-finishes the cleanup. When it returns, the daemon issues no further PVE
-request for the region: no finalizer write is running or can start. Waiting
-does not drain work PVE already accepted: a request that was already past the
-gate may still finish, and a PVE task already submitted, such as a VM start,
-may still complete. It is idempotent: a
-daemon with nothing registered answers 200.
+finishes the cleanup. When it returns, the quorum gate and the launch
+finalizer have stopped, so no finalizer write is running or can start, and no
+new request uses the withdrawn region API: each one is answered `not ready`.
+The removal does not wait for requests the old handler already admitted; they
+can still issue PVE requests, for example an inventory read past its
+permission check, and a PVE task already submitted, such as a VM start, may
+still complete. It is idempotent: a daemon with nothing registered answers 200.
 
 A `registration.json` found beside a tombstone at startup, on a reload or
 before a registration or removal is settled first. The file is the one the

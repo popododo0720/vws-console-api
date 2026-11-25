@@ -51,7 +51,7 @@ func WithConnectionTest(
 		var tooLarge *http.MaxBytesError
 		switch {
 		case errors.As(err, &tooLarge):
-			err = resource.TooLarge("connection test exceeds 64 KiB")
+			err = resource.TooLarge(resource.ConnectionTestTooLarge)
 		case err != nil && resource.AsError(err).Code != resource.CodeInvalidArgument:
 			// Only validation text is safe to return; anything else is reported as fixed text.
 			err = &resource.Error{Code: resource.CodeUnavailable, Message: "connection test failed"}
