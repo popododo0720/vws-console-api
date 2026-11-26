@@ -77,8 +77,9 @@ func (m *Memory) Delete(_ context.Context, key string, expected Version) error {
 	return nil
 }
 
-// DeleteRegion deletes a region key at expected while it has no pool claims,
-// and release at its version, together.
+// DeleteRegion deletes a region key at expected while it has no pool claims
+// and claim is at its version (0: absent), and deletes claim only when
+// release is set, together.
 func (m *Memory) DeleteRegion(_ context.Context, key string, expected Version, claim Entry, release bool) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()

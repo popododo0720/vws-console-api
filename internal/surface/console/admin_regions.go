@@ -318,8 +318,9 @@ func (h *handler) deleteRegion(ctx context.Context, v store.Region, force bool) 
 				"or delete with force=true and delete the PVE token by hand"}
 		}
 	}
-	// The cluster claim goes in the same transaction: a failed delete keeps
-	// both, so the repeated delete releases the claim with the entry.
+	// The cluster claim goes in the same transaction: a delete that does not
+	// commit keeps both, so the repeated delete releases the claim with the
+	// entry.
 	if err := h.registry.DeleteRegion(ctx, v); err != nil {
 		return err
 	}
