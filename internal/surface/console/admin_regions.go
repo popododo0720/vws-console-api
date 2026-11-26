@@ -423,10 +423,16 @@ func secretRefusals() map[string]string {
 // checkOmittedSecrets refuses, before anything is saved, a write whose push
 // the daemon would refuse for an omitted secret. The daemon reuses a stored
 // secret only for the same token id and for the caPem and addresses that
-// already held it, and a new region has no stored secret. The daemon can
-// still refuse a write that passes, when its state differs from the
-// registry's; secretRefusals covers that.
+// already held it, and a new region has no stored secret. The saved region
+// is what the daemon holds only after a push that succeeded: after a failed
+// one the daemon keeps its last working registration, which a rollback may
+// restore without a secret, so the daemon decides. The daemon can still
+// refuse a write that passes, when its state differs from the registry's;
+// secretRefusals covers that.
 func checkOmittedSecrets(prev, v store.Region, in *regionInput, create bool) error {
+	if !create && prev.LastError != nil {
+		return nil
+	}
 	trusted := !create && prev.CAPEM == v.CAPEM && heldURLs(prev.PVEAPIURLs, v.PVEAPIURLs)
 	for _, secret := range []struct {
 		field, id, prevID string
