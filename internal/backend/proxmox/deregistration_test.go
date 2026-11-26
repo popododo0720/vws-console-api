@@ -86,6 +86,8 @@ func TestDeregisterChecksTheRequest(t *testing.T) {
 		"not JSON":         `pve-test-1`,
 		"region twice":     `{"region":"pve-test-2","region":"pve-test-1","generation":3}`,
 		"generation twice": `{"region":"pve-test-1","generation":3,"generation":4}`,
+		"region by case":   `{"region":"pve-test-2","Region":"pve-test-1","generation":3}`,
+		"folded name":      `{"region":"pve-test-1","generation":3,"GENERATION":4}`,
 	} {
 		removed, err := conn.Deregister(t.Context(), []byte(body))
 		if e := resource.AsError(err); err == nil || removed || e.Code != resource.CodeInvalidArgument {
@@ -116,6 +118,36 @@ func TestDeregisterAfterTheCallerGaveUpChangesNothing(t *testing.T) {
 	}
 	if removed, err := conn.Deregister(t.Context(), deregisterBody(5)); !removed || err != nil {
 		t.Fatalf("deregistration after the canceled one: %v %v", removed, err)
+	}
+}
+
+// A request cancelled while another holds the lifecycle lock changes nothing
+// once it gets the lock.
+func TestDeregisterCancelledWhileTheLockIsHeldChangesNothing(t *testing.T) {
+	conn, state := openForDeregistration(t)
+	file := filepath.Join(state, registrationFile)
+	writeFixture(t, file, []byte("kept"))
+	ctx, cancel := context.WithCancel(t.Context())
+	type result struct {
+		removed bool
+		err     error
+	}
+	done := make(chan result, 1)
+	conn.mu.Lock()
+	go func() {
+		removed, err := conn.Deregister(ctx, deregisterBody(5))
+		done <- result{removed, err}
+	}()
+	cancel()
+	conn.mu.Unlock()
+	if got := <-done; got.removed || !errors.Is(got.err, context.Canceled) {
+		t.Fatalf("deregistration cancelled behind the lock: %v %v", got.removed, got.err)
+	}
+	if data, err := os.ReadFile(file); err != nil || string(data) != "kept" {
+		t.Fatalf("a cancelled deregistration changed the state file: %q %v", data, err)
+	}
+	if got := names(t, state); len(got) != 1 || got[0] != registrationFile {
+		t.Fatalf("a cancelled deregistration changed the state: %v", got)
 	}
 }
 

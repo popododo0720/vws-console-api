@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -639,22 +640,24 @@ func (c *Connection) Deregister(ctx context.Context, data json.RawMessage) (remo
 	return true, c.completeRemoval(req.Generation, digest != "")
 }
 
-// uniqueKeys reports whether data is a JSON object that names no key twice;
-// encoding/json keeps the last of repeated keys.
+// uniqueKeys reports whether data is a JSON object that names no key twice,
+// ignoring case: encoding/json matches field names case-insensitively and
+// keeps the last of repeated keys.
 func uniqueKeys(data []byte) bool {
 	dec := json.NewDecoder(bytes.NewReader(data))
 	if t, err := dec.Token(); err != nil || t != json.Delim('{') {
 		return false
 	}
-	seen := map[string]bool{}
+	var seen []string
 	for dec.More() {
 		t, err := dec.Token()
 		key, ok := t.(string)
 		var value json.RawMessage
-		if err != nil || !ok || seen[key] || dec.Decode(&value) != nil {
+		if err != nil || !ok || slices.ContainsFunc(seen, func(s string) bool { return strings.EqualFold(s, key) }) ||
+			dec.Decode(&value) != nil {
 			return false
 		}
-		seen[key] = true
+		seen = append(seen, key)
 	}
 	return true
 }
