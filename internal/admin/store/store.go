@@ -51,10 +51,10 @@ type Backend interface {
 	// in the same transaction, that no project-pools/<name>/ claim exists,
 	// the guard Delete applies to a region; ErrRegionInUse otherwise.
 	UpdateUnclaimed(ctx context.Context, key string, value []byte, expected Version) (Version, error)
-	// DeleteRegion is Delete of a regions/<name> key, with the same guard,
-	// that also deletes release at release.Version in the same transaction
-	// when release.Key is set; a changed release is ErrConflict.
-	DeleteRegion(ctx context.Context, key string, expected Version, release Entry) error
+	// DeleteRegion is Delete of a regions/<name> key, with the same guard.
+	// When claim.Key is set, the same transaction also requires claim.Key at
+	// claim.Version (0: absent), or ErrConflict, and deletes it when release.
+	DeleteRegion(ctx context.Context, key string, expected Version, claim Entry, release bool) error
 	// Swap applies every put and delete atomically only while all checks match.
 	// A check at version 0 requires absence; a mismatch returns ErrConflict.
 	Swap(ctx context.Context, checks, puts []Entry, deletes []string) (Version, error)
@@ -186,24 +186,30 @@ func (g *Registry) MarkRegionDeleting(ctx context.Context, v Region) (Region, er
 	return v, nil
 }
 
-// DeleteRegion deletes v at v.Version under the guard of a region delete and,
-// in the same transaction, the cluster-name claim v holds, so a committed
-// delete always released its claim and a failed one changed neither.
+// DeleteRegion deletes v at v.Version under the guard of a region delete. The
+// same transaction requires v's cluster-name claim as it was read (absent, or
+// at its version) and deletes it when v holds it, so a delete that commits
+// releases v's claim and one that does not commit changes neither key. A claim
+// that changed after the read, such as one an in-flight registration of v
+// took, is ErrConflict and the repeat reads it again.
 func (g *Registry) DeleteRegion(ctx context.Context, v Region) error {
 	key, err := g.Regions().key(v.Name)
 	if err != nil {
 		return err
 	}
-	var release Entry
+	claim := Entry{Key: "cluster-names/" + v.ClusterName}
 	entry, held, err := g.readClaim(ctx, v.ClusterName, v.Name)
 	switch {
+	case errors.Is(err, ErrInvalidClaim):
+		// No claim key can hold this cluster name.
+		claim = Entry{}
 	case errors.Is(err, ErrNotFound):
 	case err != nil:
 		return err
-	case held.Region == v.Name:
-		release = Entry{Key: entry.Key, Version: entry.Version}
+	default:
+		claim.Version = entry.Version
 	}
-	if err := g.b.DeleteRegion(ctx, key, v.Version, release); err != nil {
+	if err := g.b.DeleteRegion(ctx, key, v.Version, claim, held.Region == v.Name); err != nil {
 		return fmt.Errorf("delete %s: %w", key, err)
 	}
 	return nil

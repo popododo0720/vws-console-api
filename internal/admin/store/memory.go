@@ -79,7 +79,7 @@ func (m *Memory) Delete(_ context.Context, key string, expected Version) error {
 
 // DeleteRegion deletes a region key at expected while it has no pool claims,
 // and release at its version, together.
-func (m *Memory) DeleteRegion(_ context.Context, key string, expected Version, release Entry) error {
+func (m *Memory) DeleteRegion(_ context.Context, key string, expected Version, claim Entry, release bool) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if !strings.HasPrefix(key, "regions/") {
@@ -88,14 +88,14 @@ func (m *Memory) DeleteRegion(_ context.Context, key string, expected Version, r
 	if err := m.check(key, expected); err != nil {
 		return err
 	}
+	if claim.Key != "" && m.entries[claim.Key].Version != claim.Version {
+		return ErrConflict
+	}
 	if err := m.unclaimed(key); err != nil {
 		return err
 	}
-	if release.Key != "" {
-		if err := m.check(release.Key, release.Version); err != nil {
-			return ErrConflict
-		}
-		delete(m.entries, release.Key)
+	if claim.Key != "" && release {
+		delete(m.entries, claim.Key)
 	}
 	delete(m.entries, key)
 	return nil

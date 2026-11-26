@@ -551,14 +551,15 @@ func regionDeletionClaim(t *testing.T, b store.Backend) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	key := "regions/" + region.Name
+	absent := store.Entry{Key: "cluster-names/" + region.ClusterName}
 	if err := g.ClaimCluster(ctx, region.ClusterName, region.Name, time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	claim, err := b.Get(ctx, "cluster-names/"+region.ClusterName)
+	claim, err := b.Get(ctx, absent.Key)
 	if err != nil {
 		t.Fatal(err)
 	}
-	key := "regions/" + region.Name
 	kept := func(what string) {
 		t.Helper()
 		if got, err := g.Regions().Get(ctx, region.Name); err != nil || got.Version != region.Version {
@@ -569,21 +570,29 @@ func regionDeletionClaim(t *testing.T, b store.Backend) {
 		}
 	}
 	changed := store.Entry{Key: claim.Key, Version: claim.Version + 1}
-	if err := b.DeleteRegion(ctx, key, region.Version, changed); !errors.Is(err, store.ErrConflict) {
-		t.Fatalf("a changed claim: %v", err)
+	// absent is the claim as read before an in-flight registration took it.
+	for what, try := range map[string]func() error{
+		"a changed claim":              func() error { return b.DeleteRegion(ctx, key, region.Version, changed, true) },
+		"a claim read as absent":       func() error { return b.DeleteRegion(ctx, key, region.Version, absent, true) },
+		"a claim read as absent, kept": func() error { return b.DeleteRegion(ctx, key, region.Version, absent, false) },
+		"a stale region version":       func() error { return b.DeleteRegion(ctx, key, region.Version+1, claim, true) },
+	} {
+		if err := try(); !errors.Is(err, store.ErrConflict) {
+			t.Fatalf("%s: %v", what, err)
+		}
+		kept(what)
 	}
-	kept("a changed claim")
-	if err := b.DeleteRegion(ctx, key, region.Version+1, claim); !errors.Is(err, store.ErrConflict) {
-		t.Fatalf("a stale region version: %v", err)
-	}
-	kept("a stale region version")
 	mapping, err := g.Projects().Put(ctx, store.Project{
 		Project: "111111111111", Pools: []store.ProjectPool{{Region: region.Name, Pool: "mapped"}},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := b.DeleteRegion(ctx, key, region.Version, claim); !errors.Is(err, store.ErrRegionInUse) {
+	if err := b.DeleteRegion(ctx, key, region.Version, changed, true); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("a mapped region with a changed claim: %v", err)
+	}
+	kept("a mapped region with a changed claim")
+	if err := b.DeleteRegion(ctx, key, region.Version, claim, true); !errors.Is(err, store.ErrRegionInUse) {
 		t.Fatalf("a mapped region: %v", err)
 	}
 	kept("a mapped region")
@@ -591,6 +600,15 @@ func regionDeletionClaim(t *testing.T, b store.Backend) {
 	if _, err := g.Projects().Put(ctx, mapping); err != nil {
 		t.Fatal(err)
 	}
+	// A region whose cluster another region holds leaves that claim.
+	other, err := g.Regions().Create(ctx, Region("pve-test-2"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := g.DeleteRegion(ctx, other); err != nil {
+		t.Fatal(err)
+	}
+	kept("the delete of another region")
 	if err := g.DeleteRegion(ctx, region); err != nil {
 		t.Fatal(err)
 	}
@@ -602,5 +620,13 @@ func regionDeletionClaim(t *testing.T, b store.Backend) {
 	}
 	if err := g.DeleteRegion(ctx, region); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("repeat delete: %v", err)
+	}
+	// A region without a claim deletes while the claim stays absent.
+	unclaimed, err := g.Regions().Create(ctx, Region("pve-test-3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := g.DeleteRegion(ctx, unclaimed); err != nil {
+		t.Fatalf("delete without a claim: %v", err)
 	}
 }

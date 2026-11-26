@@ -388,13 +388,13 @@ func (b *claimReleaseFailsOnce) Delete(ctx context.Context, key string, expected
 }
 
 func (b *claimReleaseFailsOnce) DeleteRegion(
-	ctx context.Context, key string, expected store.Version, release store.Entry,
+	ctx context.Context, key string, expected store.Version, claim store.Entry, release bool,
 ) error {
-	if strings.HasPrefix(release.Key, "cluster-names/") && !b.failed {
+	if release && !b.failed {
 		b.failed = true
 		return errors.New("injected claim release failure")
 	}
-	return b.Backend.DeleteRegion(ctx, key, expected, release)
+	return b.Backend.DeleteRegion(ctx, key, expected, claim, release)
 }
 
 // #1093: the claim release is part of the delete. When it fails, the delete
@@ -411,6 +411,46 @@ func TestRegionDeleteReleasesTheClusterClaimWithTheEntry(t *testing.T) {
 	if _, err := g.Regions().Get(t.Context(), "pve-test-1"); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("record: %v", err)
 	}
+	other := validRegion()
+	other["name"] = "pve-other-1"
+	regionCall(t, e, "POST", other, "", 201)
+}
+
+// claimTakenBeforeDelete runs take once, just before the first region delete
+// transaction, after the delete read the cluster claim.
+type claimTakenBeforeDelete struct {
+	store.Backend
+	take func() error
+}
+
+func (b *claimTakenBeforeDelete) DeleteRegion(
+	ctx context.Context, key string, expected store.Version, claim store.Entry, release bool,
+) error {
+	if take := b.take; take != nil {
+		b.take = nil
+		if err := take(); err != nil {
+			return err
+		}
+	}
+	return b.Backend.DeleteRegion(ctx, key, expected, claim, release)
+}
+
+// A claim the region takes after the delete read it, as an in-flight
+// registration of the region can, fails the delete and keeps the mark; the
+// repeat releases it, so the cluster is free at once for another region.
+func TestRegionDeleteOfAClaimTakenAfterTheReadKeepsTheMark(t *testing.T) {
+	e, _, d, h := deleteFixture(t)
+	b := &claimTakenBeforeDelete{Backend: store.NewMemory()}
+	g := store.New(b)
+	h.registry = g
+	regionCall(t, e, "POST", validRegion(), "", 201)
+	if err := g.ReleaseCluster(t.Context(), "test", "pve-test-1"); err != nil {
+		t.Fatal(err)
+	}
+	b.take = func() error { return g.ClaimCluster(t.Context(), "test", "pve-test-1", time.Now()) }
+	regionCall(t, e, "DELETE", nil, "", 409)
+	assertMarked(t, e, g, d)
+	regionCall(t, e, "DELETE", nil, "", 204)
 	other := validRegion()
 	other["name"] = "pve-other-1"
 	regionCall(t, e, "POST", other, "", 201)

@@ -88,20 +88,23 @@ func (s *Store) Update(ctx context.Context, key string, value []byte, expected s
 // Delete removes key if its mod revision is expected.
 func (s *Store) Delete(ctx context.Context, key string, expected store.Version) error {
 	if _, ok := strings.CutPrefix(key, "regions/"); ok {
-		_, err := s.ifUnclaimed(ctx, key, expected, store.Entry{}, clientv3.OpDelete(store.Prefix+key))
+		_, err := s.ifUnclaimed(ctx, key, expected, store.Entry{}, false, clientv3.OpDelete(store.Prefix+key))
 		return err
 	}
 	_, err := s.ifAt(ctx, key, expected, clientv3.OpDelete(store.Prefix+key))
 	return err
 }
 
-// DeleteRegion deletes a region key at expected while it has no pool claims,
-// and release at its version, in one transaction.
-func (s *Store) DeleteRegion(ctx context.Context, key string, expected store.Version, release store.Entry) error {
+// DeleteRegion deletes a region key at expected while it has no pool claims
+// and claim is at its version, and deletes claim when release, in one
+// transaction.
+func (s *Store) DeleteRegion(
+	ctx context.Context, key string, expected store.Version, claim store.Entry, release bool,
+) error {
 	if _, ok := strings.CutPrefix(key, "regions/"); !ok {
 		return fmt.Errorf("etcd delete region %s: not a region", key)
 	}
-	_, err := s.ifUnclaimed(ctx, key, expected, release, clientv3.OpDelete(store.Prefix+key))
+	_, err := s.ifUnclaimed(ctx, key, expected, claim, release, clientv3.OpDelete(store.Prefix+key))
 	return err
 }
 
@@ -112,15 +115,15 @@ func (s *Store) UpdateUnclaimed(
 	if _, ok := strings.CutPrefix(key, "regions/"); !ok {
 		return 0, fmt.Errorf("etcd update unclaimed %s: not a region", key)
 	}
-	return s.ifUnclaimed(ctx, key, expected, store.Entry{}, clientv3.OpPut(store.Prefix+key, string(value)))
+	return s.ifUnclaimed(ctx, key, expected, store.Entry{}, false, clientv3.OpPut(store.Prefix+key, string(value)))
 }
 
 // ifUnclaimed runs op on a region key at expected only while no
-// project-pools/<name>/ claim exists, in one transaction. With release.Key
-// set, the same transaction also requires release at release.Version and
-// deletes it.
+// project-pools/<name>/ claim exists, in one transaction. With claim.Key
+// set, the same transaction also requires claim at claim.Version (0: absent)
+// and deletes it when release.
 func (s *Store) ifUnclaimed(
-	ctx context.Context, key string, expected store.Version, release store.Entry, op clientv3.Op,
+	ctx context.Context, key string, expected store.Version, claim store.Entry, release bool, op clientv3.Op,
 ) (store.Version, error) {
 	ctx, cancel := context.WithTimeout(ctx, CallTimeout)
 	defer cancel()
@@ -133,12 +136,13 @@ func (s *Store) ifUnclaimed(
 	}
 	ops := []clientv3.Op{op}
 	orElse := []clientv3.Op{clientv3.OpGet(k)}
-	if release.Key != "" {
-		r := store.Prefix + release.Key
-		conditions = append(conditions,
-			clientv3.Compare(clientv3.CreateRevision(r), ">", 0),
-			clientv3.Compare(clientv3.ModRevision(r), "=", int64(release.Version)))
-		ops = append(ops, clientv3.OpDelete(r))
+	if claim.Key != "" {
+		// A missing key has mod revision 0.
+		r := store.Prefix + claim.Key
+		conditions = append(conditions, clientv3.Compare(clientv3.ModRevision(r), "=", int64(claim.Version)))
+		if release {
+			ops = append(ops, clientv3.OpDelete(r))
+		}
 		orElse = append(orElse, clientv3.OpGet(r))
 	}
 	resp, err := s.kv.Txn(ctx).If(conditions...).Then(ops...).Else(orElse...).Commit()
@@ -155,9 +159,12 @@ func (s *Store) ifUnclaimed(
 	if current[0].ModRevision != int64(expected) {
 		return 0, store.ErrConflict
 	}
-	if release.Key != "" {
-		held := resp.Responses[1].GetResponseRange().Kvs
-		if len(held) == 0 || held[0].ModRevision != int64(release.Version) {
+	if claim.Key != "" {
+		var held int64
+		if kvs := resp.Responses[1].GetResponseRange().Kvs; len(kvs) != 0 {
+			held = kvs[0].ModRevision
+		}
+		if held != int64(claim.Version) {
 			return 0, store.ErrConflict
 		}
 	}
