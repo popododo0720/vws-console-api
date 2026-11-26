@@ -161,7 +161,7 @@ func (h *handler) adminWriteRegion(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, r, err)
 		return
 	}
-	if err := validateExtraTokens(v, in); err != nil {
+	if err := validateExtraTokens(v, in, r.Method == http.MethodPost); err != nil {
 		writeErr(w, r, err)
 		return
 	}
@@ -239,6 +239,9 @@ func (h *handler) adminWriteRegion(w http.ResponseWriter, r *http.Request) {
 	}
 	if pushErr != nil {
 		message := resource.RegistrationFailureMessage(pushErr)
+		if e := resource.AsError(pushErr); e.Code == resource.CodeInvalidArgument && secretRefusals()[e.Field] != "" {
+			message = secretRefusals()[e.Field]
+		}
 		if message == "" {
 			message = "region registration push failed"
 		}
@@ -250,19 +253,6 @@ func (h *handler) adminWriteRegion(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("ETag", strconv.Quote(strconv.FormatInt(int64(v.Version), 10)))
-	if e := resource.AsError(pushErr); pushErr != nil && e.Code == resource.CodeInvalidArgument {
-		switch e.Field {
-		case "token":
-			writeErr(w, r, resource.Invalid("tokenSecret", "resubmit token for an unregistered or invalid region credential"))
-			return
-		case "firewallToken":
-			writeErr(w, r, resource.Invalid("firewallTokenSecret", "resubmit the firewall token for a new credential"))
-			return
-		case "backupToken":
-			writeErr(w, r, resource.Invalid("backupTokenSecret", "resubmit the backup token for a new credential"))
-			return
-		}
-	}
 	writeJSON(w, status, v)
 }
 
@@ -414,13 +404,26 @@ func checkMove(v store.Region, in *regionInput) error {
 	return nil
 }
 
+// secretRefusals are the lastError messages of a saved region whose push the
+// daemon refused for an omitted secret, by the daemon's field. The region is
+// saved, so the answer is the saved region with this error, never a 400: a
+// 400 means nothing was saved.
+func secretRefusals() map[string]string {
+	return map[string]string{
+		"token":         "resubmit tokenSecret: the region daemon holds no usable token for this registration",
+		"firewallToken": "resubmit firewallTokenSecret: the region daemon holds no firewall token for this registration",
+		"backupToken":   "resubmit backupTokenSecret: the region daemon holds no backup token for this registration",
+	}
+}
+
 func validRegionName(name string) bool {
 	return len(name) <= 63 && regexp.MustCompile(`^pve-[a-z0-9]+(-[a-z0-9]+)*-[0-9]+$`).MatchString(name)
 }
 
-// validateExtraTokens checks the optional write tokens; the daemon refuses a
-// new token id without its secret.
-func validateExtraTokens(v store.Region, in *regionInput) error {
+// validateExtraTokens checks the optional write tokens. A new region's daemon
+// holds no secret, so create needs the secret of every token id; on PATCH the
+// daemon decides whether it can reuse an omitted one.
+func validateExtraTokens(v store.Region, in *regionInput, create bool) error {
 	tokenID := regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}@[A-Za-z0-9._-]{1,32}![A-Za-z][A-Za-z0-9._-]{0,63}$`)
 	for _, token := range []struct {
 		field, id string
@@ -439,6 +442,12 @@ func validateExtraTokens(v store.Region, in *regionInput) error {
 	}
 	if v.BackupTokenID != "" && v.BackupTokenID == v.FirewallTokenID {
 		return resource.Invalid("backupTokenId", "must differ from firewallTokenId")
+	}
+	switch {
+	case create && v.FirewallTokenID != "" && in.FirewallTokenSecret == nil:
+		return resource.Invalid("firewallTokenSecret", "required for a new region")
+	case create && v.BackupTokenID != "" && in.BackupTokenSecret == nil:
+		return resource.Invalid("backupTokenSecret", "required for a new region")
 	}
 	return nil
 }

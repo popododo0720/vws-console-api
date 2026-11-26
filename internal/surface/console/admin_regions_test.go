@@ -287,8 +287,10 @@ func TestAdminRegionValidationAndRetry(t *testing.T) {
 	h.regionRegistration = func(context.Context, string, json.RawMessage) error {
 		return resource.Invalid("token", "required")
 	}
-	retry := regionCall(t, e, "PATCH", map[string]any{}, post.Header().Get("ETag"), 400)
-	if !strings.Contains(retry.Body.String(), `"field":"tokenSecret"`) {
+	// The region is saved, so the daemon's refusal is the saved region's
+	// lastError naming the secret, never a 400.
+	retry := regionCall(t, e, "PATCH", map[string]any{}, post.Header().Get("ETag"), 200)
+	if !strings.Contains(retry.Body.String(), `"message":"resubmit tokenSecret: `) {
 		t.Fatal("missing initial token did not name tokenSecret")
 	}
 	h.regionRegistration = func(context.Context, string, json.RawMessage) error { return nil }
@@ -367,6 +369,96 @@ func TestAdminRegionSelfCheckLastError(t *testing.T) {
 	}
 }
 
+// The daemon's token refusals and self-check diagnostics reach the operator
+// through the real registration transport, without the daemon's own message.
+func TestAdminRegionRefusalsCrossTheTransport(t *testing.T) {
+	const canary = "refusal-canary"
+	var refusal error
+	stub := httptest.NewTLSServer(regionapi.WithRegistration(func(context.Context, json.RawMessage) error {
+		return refusal
+	}, http.NotFoundHandler()))
+	defer stub.Close()
+	config := stub.Client().Transport.(*http.Transport).TLSClientConfig.Clone()
+	config.Certificates = stub.TLS.Certificates
+	client, err := regionapi.NewClient(stub.URL, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	connect := func(t *testing.T) (loginEnv, *bytes.Buffer, *bytes.Buffer) {
+		t.Helper()
+		e, _, app, auditLog := accountFixture(t)
+		e.h.(*handler).regionRegistration = func(ctx context.Context, _ string, data json.RawMessage) error {
+			return client.Register(ctx, data)
+		}
+		return e, app, auditLog
+	}
+	for field, want := range map[string]string{
+		"token": "tokenSecret", "firewallToken": "firewallTokenSecret", "backupToken": "backupTokenSecret",
+	} {
+		// The region API answers the field with a fixed message.
+		refusal = resource.Invalid(field, canary)
+		wire := resource.AsError(client.Register(t.Context(), json.RawMessage(`{}`)))
+		if wire.Code != resource.CodeInvalidArgument || wire.Field != field ||
+			!strings.Contains(wire.Message, "required") || strings.Contains(wire.Error(), canary) {
+			t.Errorf("region API refusal on %s: %+v", field, wire)
+		}
+		// The console saved the region before the push, so it answers the
+		// saved region with a lastError that names the secret.
+		e, app, auditLog := connect(t)
+		body := validRegion()
+		body["firewallTokenId"], body["firewallTokenSecret"] = "vws@pve!firewall", "firewall-secret"
+		body["backupTokenId"], body["backupTokenSecret"] = "vws@pve!backup", "backup-secret"
+		rec := regionCall(t, e, "POST", body, "", 201)
+		if !strings.Contains(rec.Body.String(), `"message":"resubmit `+want+`: `) ||
+			strings.Contains(rec.Body.String()+app.String()+auditLog.String(), canary) {
+			t.Errorf("daemon refusal on %s: %s", field, rec.Body)
+		}
+	}
+	for _, check := range []string{"instance_types", "privileges", "cluster_name", "storages"} {
+		e, _, _ := connect(t)
+		message := "registration self-check failed: " + check
+		refusal = &resource.Error{Code: resource.CodeUnavailable, Message: message}
+		if rec := regionCall(t, e, "POST", validRegion(), "", 201); !strings.Contains(rec.Body.String(), message) {
+			t.Errorf("diagnostic %s lost: %s", check, rec.Body)
+		}
+	}
+}
+
+// A new region's daemon holds no secret, so a POST that names a token id
+// without its secret is a 400 before anything is saved or pushed, and the
+// corrected POST succeeds under the same name. A PATCH that omits a secret
+// reaches the daemon, which decides whether it can reuse the stored one.
+func TestAdminRegionPostWithoutASecretIsRefusedBeforeSaving(t *testing.T) {
+	e, g, _, _ := accountFixture(t)
+	pushes := 0
+	e.h.(*handler).regionRegistration = func(context.Context, string, json.RawMessage) error {
+		pushes++
+		return nil
+	}
+	for _, token := range []string{"firewallToken", "backupToken"} {
+		body := validRegion()
+		body[token+"Id"] = "vws@pve!" + strings.ToLower(token[:4])
+		rec := regionCall(t, e, "POST", body, "", 400)
+		if !strings.Contains(rec.Body.String(), `"field":"`+token+`Secret"`) || pushes != 0 {
+			t.Fatalf("POST without %sSecret: %s, %d pushes", token, rec.Body, pushes)
+		}
+		if _, err := g.Regions().Get(t.Context(), "pve-test-1"); !errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("a refused POST saved the region: %v", err)
+		}
+	}
+	body := validRegion()
+	body["firewallTokenId"], body["firewallTokenSecret"] = "vws@pve!fire", "firewall-secret"
+	etag := regionCall(t, e, "POST", body, "", 201).Header().Get("ETag")
+	regionCall(t, e, "PATCH", map[string]any{
+		"pveApiUrls": []string{"https://pve1.example:8006", "https://pve3.example:8006"},
+		"tokenId":    "vws@pve!other", "firewallTokenId": "vws@pve!wall",
+	}, etag, 200)
+	if pushes != 2 {
+		t.Fatalf("%d pushes, want 2: the PATCH must reach the daemon", pushes)
+	}
+}
+
 func TestAdminRegionFirewallToken(t *testing.T) {
 	e, g, _, auditLog := accountFixture(t)
 	h := e.h.(*handler)
@@ -403,8 +495,8 @@ func TestAdminRegionFirewallToken(t *testing.T) {
 		t.Fatalf("omitted firewall secret pushed=%v", pushed)
 	}
 	pushErr = resource.Invalid("firewallToken", "required")
-	retry := regionCall(t, e, "PATCH", map[string]any{}, patch.Header().Get("ETag"), 400)
-	if !strings.Contains(retry.Body.String(), `"field":"firewallTokenSecret"`) {
+	retry := regionCall(t, e, "PATCH", map[string]any{}, patch.Header().Get("ETag"), 200)
+	if !strings.Contains(retry.Body.String(), `"message":"resubmit firewallTokenSecret: `) {
 		t.Fatalf("daemon refusal did not name firewallTokenSecret: %s", retry.Body)
 	}
 	pushErr = nil
@@ -475,9 +567,9 @@ func TestAdminRegionBackupToken(t *testing.T) {
 		t.Fatalf("omitted secret pushed=%v", pushed)
 	}
 	pushErr = resource.Invalid("backupToken", secret)
-	retry := regionCall(t, e, "PATCH", map[string]any{}, patch.Header().Get("ETag"), 400)
+	retry := regionCall(t, e, "PATCH", map[string]any{}, patch.Header().Get("ETag"), 200)
 	responses += retry.Body.String()
-	if !strings.Contains(retry.Body.String(), `"field":"backupTokenSecret"`) {
+	if !strings.Contains(retry.Body.String(), `"message":"resubmit backupTokenSecret: `) {
 		t.Fatalf("daemon refusal did not name backupTokenSecret: %s", retry.Body)
 	}
 	pushErr = nil
