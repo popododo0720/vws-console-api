@@ -52,17 +52,24 @@ DatastoreReader entry on `N` for the token and its dedicated user, as
 self-check failed: <check>`; its cause names the privilege and path, never
 the token. The token refusals (`token`, `firewallToken`, `backupToken`,
 `pbsToken`) and these diagnostics cross the registration transport with fixed
-messages. `dr.json` is written before `registration.json`, the commit point,
-and removed by a registration without DR settings; a removal deletes it
-before `registration.json`. A reload or restart trusts `dr.json` and never
-calls PBS; a missing, unreadable or invalid `dr.json` means DR is not
-configured, is logged, and never takes the region down. An omitted PBS secret
-is reused from `dr.json` only for the same token id, repository and
+messages. Each `dr.json` record is bound to one `registration.json` by its
+SHA-256 and its device, inode and birth time; only a matching record applies.
+Before the rename of `registration.json`, the commit point, `dr.json` holds
+the committed record and the new one bound to the temporary file; after it,
+the new record alone, or no file without DR settings. So a failed
+registration never changes DR, and a rewrite of `registration.json` by
+another daemon, an older one included, leaves no matching record: DR is not
+configured and the stale `dr.json` and its token are deleted. A removal
+deletes `dr.json` before `registration.json`, and a repeated removal at the
+same generation deletes one still there. A reload or restart trusts
+`dr.json` and never calls PBS; a missing, unmatched, unreadable or invalid
+`dr.json` means DR is not configured, is logged, and never takes the region
+down. An omitted PBS secret is reused from the matching record only for the same token id, repository and
 fingerprint; a changed namespace or storage keeps it, because the token still
 goes to the same PBS. The console names `pbsTokenSecret` when the daemon
 wants the secret again, and a move to another `regionEndpoint` needs it. The
 secret is never returned, logged or audited. Region capabilities report
-`features.coldDr` as `configured` with a valid `dr.json`, else
+`features.coldDr` as `configured` with a matching `dr.json` record, else
 `notConfigured`. This slice exports nothing and does not touch the proxy.
 Enforced by `TestPBSTokenScope`, `TestPBSProbePathsFitTheACLPathLimit`,
 `TestPBSConnectionChecks`, `TestPBSRegistration`,
@@ -70,7 +77,8 @@ Enforced by `TestPBSTokenScope`, `TestPBSProbePathsFitTheACLPathLimit`,
 `TestRegionWithoutPBSReportsColdDRNotConfigured`,
 `TestRegistrationFileKeepsThePreDRSchema`, `TestRegionYAMLHasNoDRKey`,
 `TestDamagedDRFileKeepsTheRegionServing`,
-`TestDeregistrationRemovesTheDRFile`, `TestPBSRegistrationInput`,
+`TestDeregistrationRemovesTheDRFile`, `TestFailedRegistrationKeepsTheDRState`,
+`TestDRFollowsOnlyItsRegistrationFile`, `TestPBSRegistrationInput`,
 `TestParsePBSRepository`, `TestCheckDRSettings`, `TestAdminRegionPBSToken` and
 `TestAdminRegionRefusalsCrossTheTransport`.
 

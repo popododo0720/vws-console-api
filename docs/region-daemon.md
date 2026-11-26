@@ -200,15 +200,23 @@ would be taken for it. Where the platform
 reports no file identity, a file beside a tombstone is always kept: the daemon
 never deletes a file it cannot prove is the removed one. A registration that
 supplies every secret settles the tombstone the same way before it replaces
-it. A removal deletes `dr.json` before `registration.json`.
+it. A removal deletes `dr.json` before `registration.json`, and a repeated
+removal at the same generation deletes a `dr.json` that is still there.
 
 Rollback: `registration.json` keeps the schema of earlier releases (no
 `generation` and no DR settings), so a daemon can be rolled back and still
-reads it; the older binary ignores `generation.json` and `dr.json`. A daemon
-older than cold DR starts and serves with its registration, and refuses a
-push that carries DR settings, which the console shows as the push error. It
-leaves `dr.json` in place: after a permanent rollback, delete that file or
-revoke the PBS token.
+reads it. The release before cold DR already keeps the generation fence in
+`generation.json`; it ignores `dr.json`. It starts and serves with its
+registration, and refuses a push that carries DR settings, which the console
+shows as the push error. Each `dr.json` record is bound to the one
+`registration.json` it was written with, by the SHA-256 of its bytes and its
+device, inode and birth time. Every rewrite or removal of `registration.json`
+by the older daemon makes another file, so after a re-upgrade no record
+matches: DR is not configured, PBS is not asked, and the daemon deletes
+`dr.json` with its token; DR comes back only with a registration that
+supplies `pbsTokenSecret` again. The older daemon leaves `dr.json` in place
+while it runs: after a permanent rollback, delete that file or revoke the PBS
+token.
 
 The console pushes every registration with the registry version as
 `generation` and sends the removal before it deletes a region (`DELETE
@@ -320,10 +328,21 @@ above and the PBS UI defaults cannot produce it; a PBS admin has to. The same
 admin can also widen the ACL after registration, which no registration check
 sees.
 
+A registration commits with the rename of `registration.json`. Just before
+it, `dr.json` holds the record of the committed `registration.json` and the
+record for the new one, bound to the temporary file the rename keeps; after
+it, the daemon rewrites `dr.json` with the new record alone, or deletes it.
+A registration that fails before the rename therefore never enables, changes
+or disables DR, and one that fails after it reports the new state on the next
+reload. Binding needs a state directory whose filesystem reports inode and
+birth time (ext4, xfs, btrfs and tmpfs do); elsewhere a registration with DR
+settings fails, and one without them is unaffected.
+
 Restarts and reloads read `dr.json` and do not call PBS, so PBS being down
-never takes the region down. A missing `dr.json` means DR is not configured;
-so does an unreadable or invalid one, which is logged as an error and never
-fails the region. Capabilities report `features.coldDr` as `configured` or
+never takes the region down. A missing `dr.json`, or one with no record for
+the current `registration.json`, means DR is not configured, and such a file
+is deleted; an unreadable or invalid one also means DR is not configured, is
+logged as an error and kept, and never fails the region. Capabilities report `features.coldDr` as `configured` or
 `notConfigured`. A registration without DR settings removes `dr.json`. The
 admin API calls the write-only secret `pbsTokenSecret`. This registration
 exports nothing yet.

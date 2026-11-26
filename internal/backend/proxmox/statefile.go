@@ -14,7 +14,17 @@ import (
 // target and the directory is fsynced. A crash at any point leaves the old file
 // or the new one, never a partial file. step, when non-nil, is called before
 // each stage and aborts the write by returning an error; tests use it.
-func writeFileAtomic(dir, name string, data []byte, step func(stage string) error) (err error) {
+func writeFileAtomic(dir, name string, data []byte, step func(stage string) error) error {
+	return replaceFileAtomic(dir, name, data, step, nil)
+}
+
+// replaceFileAtomic is writeFileAtomic that calls beforeRename, when non-nil,
+// with the synced temporary file just before it replaces dir/name; an error
+// from it aborts the write and leaves dir/name as it was. The rename keeps the
+// file's identity, so beforeRename sees the identity the new file will have.
+func replaceFileAtomic(
+	dir, name string, data []byte, step func(stage string) error, beforeRename func(tmp string) error,
+) (err error) {
 	at := func(stage string) error {
 		if step == nil {
 			return nil
@@ -60,6 +70,11 @@ func writeFileAtomic(dir, name string, data []byte, step func(stage string) erro
 	closed = true
 	if err := f.Close(); err != nil {
 		return fmt.Errorf("close temporary file: %w", err)
+	}
+	if beforeRename != nil {
+		if err := beforeRename(tmp); err != nil {
+			return err
+		}
 	}
 	if err := at("rename"); err != nil {
 		return err

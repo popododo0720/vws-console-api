@@ -25,8 +25,8 @@ import (
 // older daemon, which ignores a file it does not know, still starts.
 const drFile = "dr.json"
 
-// drState is the content of dr.json: the PVE storage of the PBS, the PBS
-// target and the read-only PBS token. Absent means DR is not configured.
+// drState is one DR record of dr.json: the PVE storage of the PBS, the PBS
+// target, the read-only PBS token and the registration.json it belongs to.
 type drState struct {
 	Storage     string `json:"storage"`
 	Repository  string `json:"repository"`
@@ -34,6 +34,35 @@ type drState struct {
 	Fingerprint string `json:"fingerprint"`
 	TokenID     string `json:"tokenId"`
 	Token       string `json:"token"`
+
+	Registration drBinding `json:"registration"`
+}
+
+// drBinding names the one registration.json a DR record belongs to: the
+// SHA-256 of its bytes and its device, inode and birth time. Every write of
+// registration.json, by any daemon, an older one included, makes a new file,
+// and the birth time tells it apart from an earlier file with a reused inode
+// and the same bytes, so a record never carries over to a registration it
+// was not written for. Without a birth time there is no binding and no DR.
+type drBinding struct {
+	Digest string `json:"digest"`
+	File   fileID `json:"file"`
+}
+
+// bound reports whether file identifies one file across its lifetime.
+func bound(file fileID) bool { return file.Ino != 0 && file.Btime != 0 }
+
+func (b drBinding) matches(digest string, file fileID) bool {
+	return bound(file) && b.Digest == digest && b.File == file
+}
+
+// drContent is dr.json: the records of at most two registration.json files.
+// During a registration it holds the committed one and the next one; the
+// rename of registration.json picks which applies, and the next write drops
+// the other. Absent, or with no record for the current registration.json,
+// means DR is not configured.
+type drContent struct {
+	Records []drState `json:"records"`
 }
 
 func (d drState) settings() resource.DRSettings {
@@ -43,22 +72,31 @@ func (d drState) settings() resource.DRSettings {
 	}
 }
 
-// decodeDR reads dr.json. Every setting and the token must be valid.
-func decodeDR(data []byte) (*drState, error) {
-	var d drState
-	if err := decodeStrict(data, &d); err != nil {
+// decodeDR reads dr.json. Every record must have valid settings, a token
+// and a known registration identity.
+func decodeDR(data []byte) ([]drState, error) {
+	var c drContent
+	if err := decodeStrict(data, &c); err != nil {
 		return nil, err
 	}
-	if !d.settings().Configured() {
-		return nil, resource.Invalid("dr", "no DR settings")
+	if len(c.Records) == 0 || len(c.Records) > 2 {
+		return nil, resource.Invalid("records", "expected one or two DR records")
 	}
-	if err := resource.CheckDRSettings(d.settings()); err != nil {
-		return nil, err
+	for _, d := range c.Records {
+		if !d.settings().Configured() {
+			return nil, resource.Invalid("dr", "no DR settings")
+		}
+		if err := resource.CheckDRSettings(d.settings()); err != nil {
+			return nil, err
+		}
+		if !registrationSecret.MatchString(d.Token) {
+			return nil, resource.Invalid("token", "expected 1-512 token characters")
+		}
+		if len(d.Registration.Digest) != 64 || !bound(d.Registration.File) {
+			return nil, resource.Invalid("registration", "expected the digest and identity of registration.json")
+		}
 	}
-	if !registrationSecret.MatchString(d.Token) {
-		return nil, resource.Invalid("token", "expected 1-512 token characters")
-	}
-	return &d, nil
+	return c.Records, nil
 }
 
 // pbsTarget is the PBS side of cold DR: the repository and namespace that

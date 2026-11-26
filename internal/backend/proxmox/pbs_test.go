@@ -368,12 +368,18 @@ func (r *drRegion) coldDR(conn *Connection) string {
 	return caps.Features.ColdDR
 }
 
-func (r *drRegion) stored() *drState {
+// stored is the one DR record a completed registration leaves, without its binding.
+func (r *drRegion) stored() drState {
 	r.t.Helper()
 	data, err := os.ReadFile(filepath.Join(r.state, drFile))
 	checkLaunch(r.t, err)
-	dr, err := decodeDR(data)
+	records, err := decodeDR(data)
 	checkLaunch(r.t, err)
+	if len(records) != 1 {
+		r.t.Fatalf("dr.json holds %d records after a registration", len(records))
+	}
+	dr := records[0]
+	dr.Registration = drBinding{}
 	return dr
 }
 
@@ -416,7 +422,7 @@ func TestPBSRegistration(t *testing.T) {
 	if r.pbs.calls != calls {
 		t.Fatal("a reload contacted PBS")
 	}
-	if dr := r.stored(); *dr != (drState{
+	if dr := r.stored(); dr != (drState{
 		Storage: "dr-pbs", Repository: r.repository, Namespace: "vws/pve-test-1", Fingerprint: r.fing,
 		TokenID: pbsTokenID, Token: pbsSecret,
 	}) {
@@ -575,12 +581,124 @@ func TestDamagedDRFileKeepsTheRegionServing(t *testing.T) {
 func TestDeregistrationRemovesTheDRFile(t *testing.T) {
 	r := newDRRegion(t)
 	checkLaunch(t, r.register(true, nil))
-	removed, err := r.conn.Deregister(t.Context(), []byte(`{"region":"pve-test-1","generation":1}`))
+	kept, err := os.ReadFile(filepath.Join(r.state, drFile))
+	checkLaunch(t, err)
+	req := []byte(`{"region":"pve-test-1","generation":1}`)
+	removed, err := r.conn.Deregister(t.Context(), req)
 	if !removed || err != nil {
 		t.Fatalf("deregister: %v %v", removed, err)
 	}
 	absent(t, filepath.Join(r.state, drFile))
 	absent(t, filepath.Join(r.state, registrationFile))
+	// A daemon that does not know dr.json, an older one, removed the
+	// registration and kept it; the console's retry at the same generation
+	// removes it.
+	writeFixture(t, filepath.Join(r.state, drFile), kept)
+	removed, err = r.conn.Deregister(t.Context(), req)
+	if !removed || err != nil {
+		t.Fatalf("repeated deregister: %v %v", removed, err)
+	}
+	absent(t, filepath.Join(r.state, drFile))
+}
+
+// failAt makes conn fail the nth time it reaches stage.
+func failAt(conn *Connection, stage string, nth int) {
+	conn.step = func(s string) error {
+		if s != stage {
+			return nil
+		}
+		if nth--; nth == 0 {
+			return errors.New("injected failure at " + s)
+		}
+		return nil
+	}
+}
+
+// A registration that fails before registration.json is replaced keeps the
+// committed DR state across a restart: it neither enables, changes nor
+// disables DR. One that fails after it reports the new state.
+func TestFailedRegistrationKeepsTheDRState(t *testing.T) {
+	r := newDRRegion(t)
+	restarted := func() *drState { return r.open().storedDR(t.Context()) }
+	checkLaunch(t, r.register(false, nil))
+	failAt(r.conn, "registration-rename", 1)
+	if err := r.register(true, nil); err == nil {
+		t.Fatal("a failing enable succeeded")
+	}
+	if dr := restarted(); dr != nil {
+		t.Fatalf("a failed enable configured DR: %+v", dr)
+	}
+
+	r.conn.step = nil
+	checkLaunch(t, r.register(true, nil))
+	failAt(r.conn, "registration-rename", 1)
+	if err := r.register(true, map[string]string{"drStorage": "dr-pbs2"}); err == nil {
+		t.Fatal("a failing change succeeded")
+	}
+	if dr := restarted(); dr == nil || dr.Storage != "dr-pbs" {
+		t.Fatalf("a failed change: %+v", dr)
+	}
+	failAt(r.conn, "registration-rename", 1)
+	if err := r.register(false, nil); err == nil {
+		t.Fatal("a failing disable succeeded")
+	}
+	if got := r.coldDR(r.open()); got != resource.ColdDRConfigured {
+		t.Fatalf("a failed disable: %q", got)
+	}
+
+	// The second dr.json write drops the record of the old registration.
+	failAt(r.conn, "dr-create", 2)
+	if err := r.register(true, map[string]string{"drStorage": "dr-pbs2"}); err == nil {
+		t.Fatal("a failing compaction succeeded")
+	}
+	if dr := restarted(); dr == nil || dr.Storage != "dr-pbs2" {
+		t.Fatalf("a committed change: %+v", dr)
+	}
+	r.conn.step = nil
+	checkLaunch(t, r.register(true, map[string]string{"drStorage": "dr-pbs2", "pbsToken": ""}))
+	if dr := r.stored(); dr.Storage != "dr-pbs2" || dr.Token != pbsSecret {
+		t.Fatalf("after the retry: %+v", dr)
+	}
+}
+
+// dr.json applies only to the registration.json it was written with. A
+// rewrite by another daemon, an older one included, makes a new file, even
+// with the same bytes: DR is not configured, PBS is not asked, and dr.json and
+// its token are removed.
+func TestDRFollowsOnlyItsRegistrationFile(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		rewrite func(t *testing.T, dir string, data []byte)
+	}{
+		{"rewritten", func(t *testing.T, dir string, data []byte) {
+			t.Helper()
+			checkLaunch(t, writeFileAtomic(dir, registrationFile, data, nil))
+		}},
+		{"removed and written again", func(t *testing.T, dir string, data []byte) {
+			t.Helper()
+			checkLaunch(t, os.Remove(filepath.Join(dir, registrationFile)))
+			writeFixture(t, filepath.Join(dir, registrationFile), data)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newDRRegion(t)
+			checkLaunch(t, r.register(true, nil))
+			data, err := os.ReadFile(filepath.Join(r.state, registrationFile))
+			checkLaunch(t, err)
+			tc.rewrite(t, r.state, data)
+			calls := r.pbs.calls
+			if got := r.coldDR(r.open()); got != resource.ColdDRNotConfigured {
+				t.Fatalf("coldDr after the rewrite: %q", got)
+			}
+			if r.pbs.calls != calls {
+				t.Fatal("a reload contacted PBS")
+			}
+			absent(t, filepath.Join(r.state, drFile))
+			if err := r.register(true, map[string]string{"pbsToken": ""}); errField(err) != "pbsToken" {
+				t.Fatalf("the removed token was reused: %v", err)
+			}
+		})
+	}
 }
 
 func TestPBSRegistrationInput(t *testing.T) {

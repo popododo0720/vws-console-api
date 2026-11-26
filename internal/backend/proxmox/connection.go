@@ -430,7 +430,9 @@ func (c *Connection) RegisterBackend(ctx context.Context, data json.RawMessage) 
 			s.BackupToken = stored.BackupToken
 		}
 	}
-	dr, err := c.registeredDR(ctx, r)
+	// prior is the DR record of the committed registration.json, if any.
+	prior := c.storedDR(ctx)
+	dr, err := registeredDR(r, prior)
 	if err != nil {
 		return nil, err
 	}
@@ -454,12 +456,6 @@ func (c *Connection) RegisterBackend(ctx context.Context, data json.RawMessage) 
 	if err != nil {
 		return nil, err
 	}
-	var drData []byte
-	if dr != nil {
-		if drData, err = json.Marshal(dr); err != nil {
-			return nil, fmt.Errorf("encode DR settings: %w", err)
-		}
-	}
 	if len(state) > maxRegistrationBytes {
 		return nil, resource.Invalid("registration", "serialized registration exceeds 65 KiB")
 	}
@@ -473,28 +469,54 @@ func (c *Connection) RegisterBackend(ctx context.Context, data json.RawMessage) 
 	if err := c.at("persist"); err != nil {
 		return nil, err
 	}
-	// dr.json goes first and registration.json is the commit point. Each file
-	// is valid without the other, so a crash between them leaves a pair the
-	// repeated push converges.
-	if err := c.persistDR(drData); err != nil {
-		return nil, err
+	// The rename of registration.json is the commit point for both files.
+	// Just before it, dr.json holds the record of the committed file and the
+	// record for the new one, bound to the identity the rename keeps. Until
+	// the rename the committed pair applies; after it the new one does. A
+	// failed registration therefore never enables, disables or changes DR.
+	stage := func(tmp string) error {
+		info, err := os.Lstat(tmp)
+		if err != nil {
+			return fmt.Errorf("stat registration: %w", err)
+		}
+		var records []drState
+		if prior != nil {
+			records = append(records, *prior)
+		}
+		if dr != nil {
+			sum := sha256.Sum256(state)
+			dr.Registration = drBinding{Digest: hex.EncodeToString(sum[:]), File: fileIdentity(tmp, info)}
+			if !bound(dr.Registration.File) {
+				return errors.New("the state directory reports no inode or birth time, which cold DR needs")
+			}
+			records = append(records, *dr)
+		}
+		return c.writeDR(records)
 	}
-	if err := writeFileAtomic(c.dir, registrationFile, state, nil); err != nil {
+	step := func(stage string) error { return c.at("registration-" + stage) }
+	if err := replaceFileAtomic(c.dir, registrationFile, state, step, stage); err != nil {
 		return nil, fmt.Errorf("persist registration: %w", err)
+	}
+	var committed []drState
+	if dr != nil {
+		committed = []drState{*dr}
+	}
+	if err := c.writeDR(committed); err != nil {
+		return nil, err
 	}
 	// The state files hold no generation, so an unchanged registration at a new
 	// generation keeps the serving backend, its quorum gate and its consoles.
-	if digest := stateDigest(state, drData); c.current == nil || c.digest != digest {
+	if digest := stateDigest(state, dr); c.current == nil || c.digest != digest {
 		c.current, c.digest = b, digest
 	}
 	return c.current, nil
 }
 
 // registeredDR is the DR state of r, nil without DR settings. An omitted PBS
-// token is taken from dr.json only for the same token id, repository and
-// fingerprint, which name where the secret goes; a changed namespace or
-// storage keeps it.
-func (c *Connection) registeredDR(ctx context.Context, r registrationRequest) (*drState, error) {
+// token is taken from prior, the record of the committed registration, only
+// for the same token id, repository and fingerprint, which name where the
+// secret goes; a changed namespace or storage keeps it.
+func registeredDR(r registrationRequest, prior *drState) (*drState, error) {
 	if !r.dr().Configured() {
 		return nil, nil //nolint:nilnil // no DR settings is not an error
 	}
@@ -503,12 +525,11 @@ func (c *Connection) registeredDR(ctx context.Context, r registrationRequest) (*
 		Fingerprint: r.PBSFingerprint, TokenID: r.PBSTokenID, Token: r.PBSToken,
 	}
 	if dr.Token == "" {
-		stored, _ := c.storedDR(ctx)
-		if stored == nil || stored.TokenID != dr.TokenID || stored.Repository != dr.Repository ||
-			stored.Fingerprint != dr.Fingerprint {
+		if prior == nil || prior.TokenID != dr.TokenID || prior.Repository != dr.Repository ||
+			prior.Fingerprint != dr.Fingerprint {
 			return nil, resource.Invalid("pbsToken", "required for a new PBS token, pbsRepository or pbsFingerprint")
 		}
-		dr.Token = stored.Token
+		dr.Token = prior.Token
 	}
 	if !registrationSecret.MatchString(dr.Token) {
 		return nil, resource.Invalid("pbsToken", "expected 1-512 token characters")
@@ -516,17 +537,21 @@ func (c *Connection) registeredDR(ctx context.Context, r registrationRequest) (*
 	return dr, nil
 }
 
-// storedDR reads dr.json: nil and no data when it is absent. An unreadable
-// or invalid file is also nil, with an error log: DR is then not configured,
-// and the region keeps serving, as when PBS is down.
-func (c *Connection) storedDR(ctx context.Context) (*drState, []byte) {
+// storedDR is the record of dr.json that belongs to the current
+// registration.json, nil when there is none. An unreadable or invalid file
+// is logged as an error and kept for the operator; a valid file with no
+// record for the current registration.json is the leftover of another
+// registration, such as one an older daemon removed or rewrote, and is
+// deleted with its token. Either way DR is not configured and the region
+// keeps serving, as when PBS is down.
+func (c *Connection) storedDR(ctx context.Context) *drState {
 	data, err := readStateFile(c.dir, drFile)
 	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
+		return nil
 	}
-	var dr *drState
+	var records []drState
 	if err == nil {
-		dr, err = decodeDR(data)
+		records, err = decodeDR(data)
 	}
 	if err != nil {
 		// The reason is a fixed text or names a field, never the token.
@@ -537,31 +562,56 @@ func (c *Connection) storedDR(ctx context.Context) (*drState, []byte) {
 		}
 		slog.ErrorContext(ctx, "proxmox: dr.json is unreadable or invalid; cold DR is not configured",
 			slog.String("region", c.region), slog.String("reason", reason))
-		return nil, nil
-	}
-	return dr, data
-}
-
-// persistDR writes dr.json, or removes it when data is empty.
-func (c *Connection) persistDR(data []byte) error {
-	if len(data) > 0 {
-		if err := writeFileAtomic(c.dir, drFile, data, nil); err != nil {
-			return fmt.Errorf("persist DR settings: %w", err)
-		}
 		return nil
 	}
+	digest, file, err := c.stateFile()
+	if err == nil && digest != "" {
+		for i := range records {
+			if records[i].Registration.matches(digest, file) {
+				return &records[i]
+			}
+		}
+	}
+	if err == nil {
+		err = c.removeDR()
+	}
+	slog.WarnContext(ctx, "proxmox: dr.json belongs to another registration; cold DR is not configured",
+		slog.String("region", c.region), slog.Bool("removed", err == nil))
+	return nil
+}
+
+// writeDR replaces dr.json with records, or removes it when there are none.
+func (c *Connection) writeDR(records []drState) error {
+	if len(records) == 0 {
+		return c.removeDR()
+	}
+	data, err := json.Marshal(drContent{Records: records})
+	if err != nil {
+		return fmt.Errorf("encode DR settings: %w", err)
+	}
+	if err := writeFileAtomic(c.dir, drFile, data, func(stage string) error { return c.at("dr-" + stage) }); err != nil {
+		return fmt.Errorf("persist DR settings: %w", err)
+	}
+	return nil
+}
+
+// removeDR deletes dr.json and syncs the directory; a missing file is no error.
+func (c *Connection) removeDR() error {
 	if err := os.Remove(filepath.Join(c.dir, drFile)); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("remove DR settings: %w", err)
 	}
 	return syncDir(c.dir)
 }
 
-// stateDigest identifies the content of both state files.
-func stateDigest(state, dr []byte) [32]byte {
+// stateDigest identifies registration.json and the DR record that applies to it.
+func stateDigest(state []byte, dr *drState) [32]byte {
 	h := sha256.New()
 	h.Write(state)
-	h.Write([]byte{0})
-	h.Write(dr)
+	if dr != nil {
+		record, _ := json.Marshal(dr) //nolint:errcheck,errchkjson // strings and integers always encode
+		h.Write([]byte{0})
+		h.Write(record)
+	}
 	return [32]byte(h.Sum(nil))
 }
 
@@ -694,8 +744,8 @@ func (c *Connection) finishPendingRemoval() (fence, error) {
 func (c *Connection) completeRemoval(generation int64, unlink bool) error {
 	c.dropBackend()
 	// dr.json goes before registration.json, so no DR settings outlive it.
-	if err := os.Remove(filepath.Join(c.dir, drFile)); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("remove DR settings: %w", err)
+	if err := c.removeDR(); err != nil {
+		return err
 	}
 	if unlink {
 		if err := c.at("unlink"); err != nil {
@@ -787,6 +837,10 @@ func (c *Connection) Deregister(ctx context.Context, data json.RawMessage) (remo
 	}
 	if f.Generation == req.Generation {
 		c.dropBackend()
+		// The removal may have been done by a daemon that kept dr.json.
+		if err := c.removeDR(); err != nil {
+			return true, err
+		}
 		if err := c.at("sync"); err != nil {
 			return true, err
 		}
@@ -893,11 +947,11 @@ func (c *Connection) Check(ctx context.Context) (*Backend, error) {
 	if err == nil {
 		// A reload trusts the DR settings its registration checked and never
 		// calls PBS, so PBS being down does not take the region down.
-		dr, drData := c.storedDR(ctx)
+		dr := c.storedDR(ctx)
 		if dr != nil {
 			b.pbs = dr.target()
 		}
-		digest := stateDigest(data, drData)
+		digest := stateDigest(data, dr)
 		if c.current != nil && c.digest == digest {
 			return c.current, nil
 		}
