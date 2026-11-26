@@ -367,6 +367,51 @@ func TestAdminRegionSelfCheckLastError(t *testing.T) {
 	}
 }
 
+// The daemon's token refusals and self-check diagnostics reach the operator
+// through the real registration transport, without the daemon's own message.
+func TestAdminRegionRefusalsCrossTheTransport(t *testing.T) {
+	const canary = "refusal-canary"
+	var refusal error
+	stub := httptest.NewTLSServer(regionapi.WithRegistration(func(context.Context, json.RawMessage) error {
+		return refusal
+	}, http.NotFoundHandler()))
+	defer stub.Close()
+	config := stub.Client().Transport.(*http.Transport).TLSClientConfig.Clone()
+	config.Certificates = stub.TLS.Certificates
+	client, err := regionapi.NewClient(stub.URL, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	connect := func(t *testing.T) (loginEnv, *bytes.Buffer, *bytes.Buffer) {
+		t.Helper()
+		e, _, app, auditLog := accountFixture(t)
+		e.h.(*handler).regionRegistration = func(ctx context.Context, _ string, data json.RawMessage) error {
+			return client.Register(ctx, data)
+		}
+		return e, app, auditLog
+	}
+	for field, want := range map[string]string{
+		"token": "tokenSecret", "firewallToken": "firewallTokenSecret", "backupToken": "backupTokenSecret",
+	} {
+		e, app, auditLog := connect(t)
+		refusal = resource.Invalid(field, canary)
+		rec := regionCall(t, e, "POST", validRegion(), "", 400)
+		if !strings.Contains(rec.Body.String(), `"field":"`+want+`"`) ||
+			strings.Contains(rec.Body.String()+app.String()+auditLog.String(), canary) {
+			t.Errorf("daemon refusal on %s: %s", field, rec.Body)
+		}
+	}
+	for _, check := range []string{"instance_types", "privileges", "cluster_name", "storages"} {
+		e, _, _ := connect(t)
+		message := "registration self-check failed: " + check
+		refusal = &resource.Error{Code: resource.CodeUnavailable, Message: message}
+		if rec := regionCall(t, e, "POST", validRegion(), "", 201); !strings.Contains(rec.Body.String(), message) {
+			t.Errorf("diagnostic %s lost: %s", check, rec.Body)
+		}
+	}
+}
+
 func TestAdminRegionFirewallToken(t *testing.T) {
 	e, g, _, auditLog := accountFixture(t)
 	h := e.h.(*handler)
