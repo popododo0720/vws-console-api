@@ -26,6 +26,10 @@ The deploy CLI (`vws region add/edit`, vws-deploy #850, `--pve-api-url`
 repeated) and the console region form (vws-console #216) still send
 `pveApiUrl`, which this API now refuses with 400. Upgrade them first.
 
+region.yaml gains `seed_storage` and the per-subnet `nameservers` (#1059). A
+daemon older than these keys refuses a region.yaml that has them, so remove
+both keys before you roll a daemon back.
+
 Reach Proxmox through a `vws-region` daemon deployed as
 `docs/region-daemon.md` describes today, and register it with the admin API.
 Running one daemon per Proxmox cluster on the global host is follow-up work

@@ -55,6 +55,7 @@ func TestRegistrationSelfCheckDiagnostics(t *testing.T) {
 			"/cluster/resources", http.StatusServiceUnavailable,
 		},
 		{"unknown storage", "storages", RegionConfig{Storages: map[string]string{"gp3": token}}, "", 0},
+		{"seed storage", "seed_storage", RegionConfig{SeedStorage: token, StateDir: "/var/lib/vws-region"}, "", 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			pve := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

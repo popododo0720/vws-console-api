@@ -228,7 +228,7 @@ func (b *Backend) allocateLaunch(
 	placements, err := Schedule(rows, backend.ProxmoxRegion{Name: b.region, Zones: b.zones},
 		PlacementRequest{
 			InstanceType: req.InstanceType, TemplateNode: templateNode, Storage: storage,
-			RootSizeGiB: int(rootSize), Count: req.Count - len(recovered.Instances),
+			SeedStorage: b.cfg.SeedStorage, RootSizeGiB: int(rootSize), Count: req.Count - len(recovered.Instances),
 		}, b.cfg.Scheduler)
 	if err != nil {
 		return err

@@ -269,6 +269,27 @@ refuses backup tokens on read_only regions because a stop-mode export writes
 PVE state. The admin API calls its write-only secret `backupTokenSecret`.
 Disk export itself is not enabled by registration.
 
+Optional `seed_storage` in region.yaml names the PVE storage that will hold
+seed images (#1059); unset, the region launches as it does without it. Give
+the region token a role with Datastore.AllocateTemplate and Datastore.Audit
+on `/storage/<seed_storage>` only, and add VM.Config.CDROM to its role on each
+managed pool. The storage needs `iso` in its content types on every node
+that has it. Each static subnet (mode `static` or empty) then needs 1 to 3
+IPv4 resolvers, and a DHCP subnet takes none:
+
+```yaml
+seed_storage: vws-seed
+subnets:
+  vmbr0:
+    cidr: 10.0.0.0/24
+    gateway: 10.0.0.1
+    nameservers: [10.0.0.2, 10.0.0.3]
+```
+
+Registration fails the `seed_storage` check when any of this is missing, or
+when another path grants Datastore.AllocateTemplate. Launches go only to
+nodes that have the seed storage. The daemon does not write seed images yet.
+
 ## Non-root loopback stack
 
 Run `go test -race ./internal/backend/proxmox -run TestPVEFakeCommandRegionInventoryAndRestart -count=1`

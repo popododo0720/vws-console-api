@@ -30,6 +30,7 @@ type Fake struct {
 	failNext   map[string][]string
 	tickets    map[string]consoleTicket
 	nextIDs    []int
+	uploads    map[string][]byte
 }
 
 // failure is a PVE error answer: the status and PVE's message.
@@ -56,7 +57,7 @@ func NewWithClock(s Scenario, clock func() time.Time) (*Fake, error) {
 	s = s.clone()
 	f := &Fake{s: s, roles: map[string][]string{}, quorate: true, online: map[string]bool{}, mux: http.NewServeMux()}
 	f.clock, f.failNext = clock, map[string][]string{}
-	f.tickets = map[string]consoleTicket{}
+	f.tickets, f.uploads = map[string]consoleTicket{}, map[string][]byte{}
 	for _, r := range s.Roles {
 		f.roles[r.ID] = r.Privs
 	}

@@ -27,6 +27,11 @@ type RegionConfig struct {
 	LinkedClones    bool                          `yaml:"linked_clones"`
 	LiveTests       bool                          `yaml:"live_tests"`
 	ShutdownTimeout int                           `yaml:"shutdown_timeout"`
+	// SeedStorage is the PVE storage for seed images. Unset, the region
+	// launches as it does without it.
+	SeedStorage string `yaml:"seed_storage"`
+	// StateDir is the daemon state directory. Open sets it.
+	StateDir string `yaml:"-"`
 }
 
 // TemplateConfig selects the templates exposed as images.
@@ -47,6 +52,9 @@ type SubnetConfig struct {
 	Gateway string `yaml:"gateway"`
 	IPRange string `yaml:"ip_range"`
 	Mode    string `yaml:"mode"`
+	// Nameservers are the resolvers of a static subnet: 1 to 3 IPv4
+	// addresses, required on each static subnet when seed_storage is set.
+	Nameservers []string `yaml:"nameservers"`
 }
 
 // SchedulerConfig holds the node-local placement policy.
