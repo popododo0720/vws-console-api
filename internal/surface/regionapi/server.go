@@ -76,7 +76,13 @@ func New(cfg Config) (http.Handler, error) {
 	if cfg.Backend.Usage != nil {
 		register(mux, cfg, "Usage", "GetAllocation", cfg.Backend.Usage.GetAllocation)
 	}
-	register(mux, cfg, "Compute", "RunInstances", c.RunInstances)
+	register(mux, cfg, "Compute", "RunInstances", func(
+		ctx context.Context, m backend.Mutation, w wireRunInstances,
+	) (resource.Accepted[resource.Instance], error) {
+		req := w.RunInstancesRequest
+		req.PublicKey = w.PublicKey
+		return c.RunInstances(ctx, m, req)
+	})
 	register(mux, cfg, "Compute", "StopInstances", c.StopInstances)
 	register(mux, cfg, "Compute", "StartInstances", c.StartInstances)
 	register(mux, cfg, "Compute", "TerminateInstances", c.TerminateInstances)

@@ -58,6 +58,13 @@ not ready"). A connection test request over 64 KiB fails with "it exceeds 64
 KiB"; a daemon reply over the response limit fails with "the region daemon
 reply exceeds the response limit".
 
+A launch that names a key pair sends the key's public key to the daemon in a
+`publicKey` field beside the request (#1059). A daemon older than this field
+refuses such a launch with "scope or mutation and req must be valid JSON"; a
+launch without a key pair is unchanged. So pair console-api with daemons built
+from the same commit or later, upgrade every daemon first, and roll back in the
+reverse order: console-api first, then the daemons.
+
 `-region` names the one region this instance serves; it is required and a
 registration for any other region is refused with 400. The daemon talks to
 PVE over the API only and needs no sudo and no `/etc/pve`. It has no flag for

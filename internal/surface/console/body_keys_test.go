@@ -102,3 +102,27 @@ func TestRepeatedOrCaseVariantKeyIsRefused(t *testing.T) {
 		t.Fatalf("repeated tag key: status %d body %s", rec.Code, rec.Body)
 	}
 }
+
+// A console body cannot set a launch's public key: the model keeps it out of
+// its JSON, so either spelling is an unknown field and the request is a 400
+// before the kernel runs. Only regionset sets it, from IAM.
+func TestRunInstancesBodyCannotSetThePublicKey(t *testing.T) {
+	account, err := resource.Parse[resource.AccountID]("123456789012")
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := New(rootConfig(cloud.New(cloud.Config{Backends: fake.New(fake.Options{}).Set()}), account))
+	for _, key := range []string{"publicKey", "PublicKey"} {
+		body := `{"imageId":"ami-0123456789abcdef0","instanceType":"vws.small","keyName":"login",` +
+			`"` + key + `":"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIK0wmN"}`
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/instances", strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer tok")
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Idempotency-Key", "launch-key-"+key)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusBadRequest || strings.Contains(rec.Body.String(), "AAAAC3") {
+			t.Fatalf("%s: %d %s", key, rec.Code, rec.Body)
+		}
+	}
+}

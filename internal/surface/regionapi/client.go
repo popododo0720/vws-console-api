@@ -71,7 +71,7 @@ func (c *Client) Call(ctx context.Context, iface, method string, scope, req, dst
 		Scope    any `json:"scope,omitempty"`
 		Mutation any `json:"mutation,omitempty"`
 		Req      any `json:"req"`
-	}{Req: req}
+	}{Req: encodeRequest(req)}
 	switch scope := scope.(type) {
 	case backend.Scope:
 		envelope.Scope = scope

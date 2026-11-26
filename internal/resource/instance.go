@@ -234,6 +234,11 @@ type RunInstancesRequest struct {
 	Count        int               `json:"count"`
 	Tags         map[string]string `json:"tags,omitempty"`
 	KeyName      string            `json:"keyName,omitempty"`
+	// PublicKey is the public key of KeyName, "<algo> <base64>". Only
+	// regionset sets it, after the kernel computed the request fingerprint;
+	// it is kept out of the model's JSON, so no caller can set it, and only
+	// the region transport carries it.
+	PublicKey string `json:"-"`
 	// UserData is the decoded text handed to the guest on boot.
 	UserData string `json:"userData,omitempty"`
 	// RootVolumeType is the EBS type of the root volume, from the request's

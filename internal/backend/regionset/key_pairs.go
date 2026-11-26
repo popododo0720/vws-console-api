@@ -2,6 +2,7 @@ package regionset
 
 import (
 	"context"
+	"errors"
 
 	"github.com/popododo0720/vws-console-api/internal/backend"
 	"github.com/popododo0720/vws-console-api/internal/resource"
@@ -33,15 +34,31 @@ func (c compute) DeleteKeyPair(
 	return c.keys.DeleteKeyPair(ctx, m, req)
 }
 
+// RunInstances resolves KeyName in IAM before any region request and hands
+// its public key to the region with the launch. The key is set after the
+// kernel computed the request fingerprint, so the fingerprint never depends
+// on it.
 func (c compute) RunInstances(
 	ctx context.Context, m backend.Mutation, req resource.RunInstancesRequest,
 ) (resource.Accepted[resource.Instance], error) {
+	req.PublicKey = ""
 	if req.KeyName != "" {
 		if c.keys == nil {
 			return resource.Accepted[resource.Instance]{}, resource.Unsupported("keyName", "key pairs require -iam=grpc")
 		}
-		if _, err := c.keys.DescribeKeyPairs(ctx, m.Scope, resource.KeyPairQuery{Names: []string{req.KeyName}}); err != nil {
+		page, err := c.keys.DescribeKeyPairs(ctx, m.Scope, resource.KeyPairQuery{Names: []string{req.KeyName}})
+		if err != nil {
 			return resource.Accepted[resource.Instance]{}, err
+		}
+		for _, key := range page.Items {
+			if key.Name == req.KeyName {
+				req.PublicKey = key.PublicKey
+				break
+			}
+		}
+		if req.PublicKey == "" {
+			return resource.Accepted[resource.Instance]{},
+				resource.Internal(errors.New("IAM returned no public key for the key name"))
 		}
 	}
 	return c.Compute.RunInstances(ctx, m, req)

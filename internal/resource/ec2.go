@@ -949,6 +949,10 @@ type KeyPair struct {
 	Type        KeyType           `json:"keyType,omitempty"`
 	Tags        map[string]string `json:"tags,omitempty"`
 	CreateTime  time.Time         `json:"createTime,omitzero"`
+	// PublicKey is "<algo> <base64>", the OpenSSH line without its comment.
+	// It is kept out of every JSON form: regionset hands it to the launch,
+	// and no response carries it.
+	PublicKey string `json:"-"`
 }
 
 // redactedKeyMaterial is what formatting and logging show in place of the

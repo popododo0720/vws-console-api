@@ -16,6 +16,22 @@ type wireInstance struct {
 	DetachingDevices []resource.BlockDevice `json:"detachingDevices"`
 }
 
+// wireRunInstances is the request twin of wireInstance: it carries the
+// launch's public key, which the model keeps out of its JSON. A request
+// without a key marshals exactly as the model does.
+type wireRunInstances struct {
+	resource.RunInstancesRequest
+	PublicKey string `json:"publicKey,omitempty"`
+}
+
+// encodeRequest is the wire form of a request.
+func encodeRequest(req any) any {
+	if r, ok := req.(resource.RunInstancesRequest); ok {
+		return wireRunInstances{r, r.PublicKey}
+	}
+	return req
+}
+
 type wireSecurityGroup struct {
 	resource.SecurityGroup
 	Etag    string            `json:"etag"`
