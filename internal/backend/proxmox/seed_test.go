@@ -95,11 +95,15 @@ func TestSeedStorageSelfCheck(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			s, cfg := seedScenario(), seedConfig(t)
 			tc.edit(&s, &cfg)
-			c, _ := serve(t, s)
+			c, f := serve(t, s)
 			b, err := New(t.Context(), c, registration(), cfg)
 			if tc.want == "" {
 				if err != nil || b == nil {
 					t.Fatalf("New = %v", err)
+				}
+				// The seed check reuses the pool check's read of each pool.
+				if n := strings.Count(strings.Join(f.Requests(), " "), "permissions?path=%2Fpool%2Fmanaged"); n != 1 {
+					t.Fatalf("%d permission reads of /pool/managed, want 1", n)
 				}
 				return
 			}

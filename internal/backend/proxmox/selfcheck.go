@@ -91,7 +91,8 @@ func New(ctx context.Context, client *pveclient.Client, reg Registration, cfg Re
 	if cfg.Templates.Pool != "" {
 		pools = append(pools, cfg.Templates.Pool)
 	}
-	if err := checkPools(ctx, client, pools); err != nil {
+	pooled := pveclient.Permissions{}
+	if err := checkPools(ctx, client, pools, pooled); err != nil {
 		return nil, &selfCheckError{check: "pools", cause: err}
 	}
 	if len(cfg.Storages) != 0 {
@@ -114,7 +115,7 @@ func New(ctx context.Context, client *pveclient.Client, reg Registration, cfg Re
 		}
 	}
 	if cfg.SeedStorage != "" && !cfg.ReadOnly {
-		if err := checkSeed(ctx, client, cfg, permissions); err != nil {
+		if err := checkSeed(ctx, client, cfg, permissions, pooled); err != nil {
 			return nil, &selfCheckError{check: "seed_storage", cause: err}
 		}
 	}

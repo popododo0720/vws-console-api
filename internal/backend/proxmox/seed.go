@@ -19,10 +19,12 @@ import (
 //     it, so this also checks that privilege;
 //  3. the token holds Datastore.AllocateTemplate on /storage/<seed_storage>,
 //     and no other listed path holds it;
-//  4. the token holds VM.Config.CDROM on every /pool/<id> of pools;
+//  4. pooled (from checkPools) holds VM.Config.CDROM on each /pool/<id> of pools;
 //  5. every static subnet has 1 to 3 IPv4 nameservers, and no other subnet
 //     has any.
-func checkSeed(ctx context.Context, c *pveclient.Client, cfg RegionConfig, permissions pveclient.Permissions) error {
+func checkSeed(ctx context.Context, c *pveclient.Client, cfg RegionConfig,
+	permissions, pooled pveclient.Permissions,
+) error {
 	if cfg.StateDir == "" {
 		return errors.New("proxmox: seed_storage needs the daemon state directory")
 	}
@@ -54,11 +56,7 @@ func checkSeed(ctx context.Context, c *pveclient.Client, cfg RegionConfig, permi
 	}
 	for _, pool := range cfg.Pools {
 		path := "/pool/" + pool
-		held, err := c.AccessPermissions(ctx, path)
-		if err != nil {
-			return fmt.Errorf("proxmox: check seed pool %s: %w", path, err)
-		}
-		if _, ok := held[path]["VM.Config.CDROM"]; !ok {
+		if _, ok := pooled[path]["VM.Config.CDROM"]; !ok {
 			return fmt.Errorf("proxmox: token lacks VM.Config.CDROM on %s", path)
 		}
 	}

@@ -9,7 +9,8 @@ import (
 	"github.com/popododo0720/vws-console-api/internal/resource"
 )
 
-func checkPools(ctx context.Context, client *pveclient.Client, pools []string) error {
+// checkPools checks each pool and records in held the privileges on its path.
+func checkPools(ctx context.Context, client *pveclient.Client, pools []string, held pveclient.Permissions) error {
 	pools = slices.Sorted(slices.Values(pools))
 	for _, pool := range slices.Compact(pools) {
 		path := "/pool/" + pool
@@ -35,6 +36,7 @@ func checkPools(ctx context.Context, client *pveclient.Client, pools []string) e
 		if !exists {
 			return &resource.Error{Code: resource.CodeUnavailable, Message: fmt.Sprintf("pool %q: does not exist", pool)}
 		}
+		held[path] = permissions[path]
 	}
 	return nil
 }

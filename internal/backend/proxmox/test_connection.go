@@ -127,7 +127,7 @@ func TestConnection(ctx context.Context, cfg ConnectionConfig) []resource.Connec
 			}
 		}
 	}
-	if err := checkPools(ctx, client, cfg.Pools); err != nil {
+	if err := checkPools(ctx, client, cfg.Pools, pveclient.Permissions{}); err != nil {
 		if message := resource.RegistrationFailureMessage(err); message != "" {
 			steps[3].Message = message
 		}
