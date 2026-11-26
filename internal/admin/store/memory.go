@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"strings"
 	"sync"
@@ -71,6 +72,30 @@ func (m *Memory) Delete(_ context.Context, key string, expected Version) error {
 	}
 	if err := m.unclaimed(key); err != nil {
 		return err
+	}
+	delete(m.entries, key)
+	return nil
+}
+
+// DeleteRegion deletes a region key at expected while it has no pool claims,
+// and release at its version, together.
+func (m *Memory) DeleteRegion(_ context.Context, key string, expected Version, release Entry) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !strings.HasPrefix(key, "regions/") {
+		return fmt.Errorf("memory delete region %s: not a region", key)
+	}
+	if err := m.check(key, expected); err != nil {
+		return err
+	}
+	if err := m.unclaimed(key); err != nil {
+		return err
+	}
+	if release.Key != "" {
+		if err := m.check(release.Key, release.Version); err != nil {
+			return ErrConflict
+		}
+		delete(m.entries, release.Key)
 	}
 	delete(m.entries, key)
 	return nil

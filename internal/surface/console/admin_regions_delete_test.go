@@ -371,3 +371,47 @@ func awaitSignal(t *testing.T, c <-chan struct{}) {
 		t.Fatal("interleaving point never reached")
 	}
 }
+
+// claimReleaseFailsOnce fails the first write that would release a cluster
+// claim, as an etcd call can after the region delete was sent.
+type claimReleaseFailsOnce struct {
+	store.Backend
+	failed bool
+}
+
+func (b *claimReleaseFailsOnce) Delete(ctx context.Context, key string, expected store.Version) error {
+	if strings.HasPrefix(key, "cluster-names/") && !b.failed {
+		b.failed = true
+		return errors.New("injected claim release failure")
+	}
+	return b.Backend.Delete(ctx, key, expected)
+}
+
+func (b *claimReleaseFailsOnce) DeleteRegion(
+	ctx context.Context, key string, expected store.Version, release store.Entry,
+) error {
+	if strings.HasPrefix(release.Key, "cluster-names/") && !b.failed {
+		b.failed = true
+		return errors.New("injected claim release failure")
+	}
+	return b.Backend.DeleteRegion(ctx, key, expected, release)
+}
+
+// #1093: the claim release is part of the delete. When it fails, the delete
+// fails with it and can be repeated, and the repeat frees the cluster at once
+// for another region, with no wait for ClaimGrace.
+func TestRegionDeleteReleasesTheClusterClaimWithTheEntry(t *testing.T) {
+	e, _, d, h := deleteFixture(t)
+	g := store.New(&claimReleaseFailsOnce{Backend: store.NewMemory()})
+	h.registry = g
+	regionCall(t, e, "POST", validRegion(), "", 201)
+	regionCall(t, e, "DELETE", nil, "", 503)
+	assertMarked(t, e, g, d)
+	regionCall(t, e, "DELETE", nil, "", 204)
+	if _, err := g.Regions().Get(t.Context(), "pve-test-1"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("record: %v", err)
+	}
+	other := validRegion()
+	other["name"] = "pve-other-1"
+	regionCall(t, e, "POST", other, "", 201)
+}

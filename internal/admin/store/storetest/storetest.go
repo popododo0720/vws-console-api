@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/popododo0720/vws-console-api/internal/admin/store"
 )
@@ -41,6 +42,7 @@ func Run(t *testing.T, newBackend func(t *testing.T) store.Backend) {
 	t.Run("region deletion dependencies", func(t *testing.T) { regionDeletionDependencies(t, newBackend(t)) })
 	t.Run("region deletion mapping race", func(t *testing.T) { regionDeletionMappingRace(t, newBackend(t)) })
 	t.Run("region deletion mark", func(t *testing.T) { regionDeletionMark(t, newBackend(t)) })
+	t.Run("region deletion releases the claim", func(t *testing.T) { regionDeletionClaim(t, newBackend(t)) })
 	t.Run("one writer wins", func(t *testing.T) { oneWriterWins(t, newBackend(t)) })
 	t.Run("project pool claims", func(t *testing.T) { projectClaims(t, newBackend(t)) })
 	t.Run("project list", func(t *testing.T) { projectList(t, newBackend(t)) })
@@ -537,5 +539,68 @@ func lifecycle(t *testing.T, b store.Backend) {
 	}
 	if _, err := regions.Get(ctx, "a/b"); err == nil {
 		t.Fatal("a name with a slash was taken")
+	}
+}
+
+// regionDeletionClaim checks that DeleteRegion removes the region and the
+// cluster claim it holds together, and that every refusal keeps both.
+func regionDeletionClaim(t *testing.T, b store.Backend) {
+	ctx := t.Context()
+	g := store.New(b)
+	region, err := g.Regions().Create(ctx, Region("pve-test-1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := g.ClaimCluster(ctx, region.ClusterName, region.Name, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	claim, err := b.Get(ctx, "cluster-names/"+region.ClusterName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := "regions/" + region.Name
+	kept := func(what string) {
+		t.Helper()
+		if got, err := g.Regions().Get(ctx, region.Name); err != nil || got.Version != region.Version {
+			t.Fatalf("%s changed the region: %+v %v", what, got, err)
+		}
+		if got, err := b.Get(ctx, claim.Key); err != nil || got.Version != claim.Version {
+			t.Fatalf("%s changed the claim: %+v %v", what, got, err)
+		}
+	}
+	changed := store.Entry{Key: claim.Key, Version: claim.Version + 1}
+	if err := b.DeleteRegion(ctx, key, region.Version, changed); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("a changed claim: %v", err)
+	}
+	kept("a changed claim")
+	if err := b.DeleteRegion(ctx, key, region.Version+1, claim); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("a stale region version: %v", err)
+	}
+	kept("a stale region version")
+	mapping, err := g.Projects().Put(ctx, store.Project{
+		Project: "111111111111", Pools: []store.ProjectPool{{Region: region.Name, Pool: "mapped"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := b.DeleteRegion(ctx, key, region.Version, claim); !errors.Is(err, store.ErrRegionInUse) {
+		t.Fatalf("a mapped region: %v", err)
+	}
+	kept("a mapped region")
+	mapping.Pools = nil
+	if _, err := g.Projects().Put(ctx, mapping); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.DeleteRegion(ctx, region); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := g.Regions().Get(ctx, region.Name); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("region after delete: %v", err)
+	}
+	if _, err := b.Get(ctx, claim.Key); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("claim after delete: %v", err)
+	}
+	if err := g.DeleteRegion(ctx, region); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("repeat delete: %v", err)
 	}
 }
