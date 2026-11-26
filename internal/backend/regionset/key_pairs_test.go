@@ -4,8 +4,11 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -15,6 +18,9 @@ import (
 	"github.com/popododo0720/vws-console-api/internal/resource"
 	"github.com/popododo0720/vws-console-api/internal/surface/regionapi"
 )
+
+// launchKey is the public key regionalKeys returns for "login".
+const launchKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIK0wmN/Cr3JXqmLW7u+g9pTh+wyqDHpSQEC8lf7xuF2l"
 
 type regionalKeys struct {
 	backend.Compute
@@ -28,7 +34,10 @@ func (k *regionalKeys) DescribeKeyPairs(
 	if len(q.Names) != 0 && q.Names[0] == "missing" {
 		return resource.Page[resource.KeyPair]{}, resource.NotFound(resource.KindKeyPair, q.Names[0])
 	}
-	return resource.Page[resource.KeyPair]{Items: []resource.KeyPair{{Name: "login"}}}, nil
+	if len(q.Names) != 0 && q.Names[0] == "keyless" {
+		return resource.Page[resource.KeyPair]{Items: []resource.KeyPair{{Name: "keyless"}}}, nil
+	}
+	return resource.Page[resource.KeyPair]{Items: []resource.KeyPair{{Name: "login", PublicKey: launchKey}}}, nil
 }
 
 func (k *regionalKeys) CreateKeyPair(
@@ -47,8 +56,14 @@ func (k *regionalKeys) DeleteKeyPair(
 
 func TestIAMKeyPairsNeverCallRegion(t *testing.T) {
 	var calls atomic.Int32
-	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	var mu sync.Mutex
+	var bodies []string
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
+		body, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		bodies = append(bodies, r.URL.Path+" "+string(body))
+		mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{}`))
 	}))
@@ -96,9 +111,29 @@ func TestIAMKeyPairsNeverCallRegion(t *testing.T) {
 	if calls.Load() != 0 {
 		t.Fatalf("IAM key pairs made %d regionapi requests", calls.Load())
 	}
+	// IAM without the key's public key is refused before any region request.
+	_, err = set.Compute.RunInstances(t.Context(), m, resource.RunInstancesRequest{KeyName: "keyless"})
+	if resource.CodeOf(err) != resource.CodeInternal || calls.Load() != 0 {
+		t.Fatalf("launch key without public key: region calls=%d err=%v", calls.Load(), err)
+	}
 	_, err = set.Compute.RunInstances(t.Context(), m, resource.RunInstancesRequest{KeyName: "login"})
 	if err != nil || calls.Load() != 1 {
 		t.Fatalf("known launch key: region calls=%d err=%v", calls.Load(), err)
+	}
+	// Without a key name nothing is sent, even when the caller set a key.
+	_, err = set.Compute.RunInstances(t.Context(), m, resource.RunInstancesRequest{PublicKey: launchKey})
+	if err != nil || calls.Load() != 2 {
+		t.Fatalf("launch without key: region calls=%d err=%v", calls.Load(), err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if !strings.HasPrefix(bodies[0], "/internal/v1/Compute/RunInstancesWithKey ") ||
+		!strings.Contains(bodies[0], `"publicKey":"`+launchKey+`"`) {
+		t.Fatalf("the region request does not carry the key: %s", bodies[0])
+	}
+	if !strings.HasPrefix(bodies[1], "/internal/v1/Compute/RunInstances ") ||
+		strings.Contains(bodies[1], "publicKey") || strings.Contains(bodies[1], "AAAAC3") {
+		t.Fatalf("a launch without a key name carries one: %s", bodies[1])
 	}
 }
 

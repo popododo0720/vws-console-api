@@ -82,8 +82,18 @@ func keyPairModel(s backend.Scope, in *iamv1.KeyPair) (resource.KeyPair, error) 
 	return resource.KeyPair{
 		Regional: resource.Regional{Region: in.GetSpec().GetRegion()}, ID: id, OwnerID: s.Account,
 		Name: in.GetSpec().GetKeyName(), Fingerprint: fingerprint, Type: pub.Type, Tags: tags,
-		CreateTime: created,
+		CreateTime: created, PublicKey: withoutComment(pub.Line),
 	}, nil
+}
+
+// withoutComment is the "<algo> <base64>" of an OpenSSH line that
+// sshkey.ParsePublic produced.
+func withoutComment(line string) string {
+	fields := strings.Fields(line)
+	if len(fields) < 2 {
+		return ""
+	}
+	return fields[0] + " " + fields[1]
 }
 
 // DescribeKeyPairs reads IAM's regional namespace without a region transport.

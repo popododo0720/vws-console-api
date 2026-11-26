@@ -16,6 +16,19 @@ type wireInstance struct {
 	DetachingDevices []resource.BlockDevice `json:"detachingDevices"`
 }
 
+// keyedLaunch is the route of a launch with a public key. RunInstances keeps
+// its earlier body, so a daemon of either version takes a launch without a
+// key, and a daemon older than this route answers 404 for a keyed one.
+const keyedLaunch = "RunInstancesWithKey"
+
+// wireRunInstances is the request twin of wireInstance on the keyedLaunch
+// route: it carries the launch's public key, which the model keeps out of
+// its JSON.
+type wireRunInstances struct {
+	resource.RunInstancesRequest
+	PublicKey string `json:"publicKey"`
+}
+
 type wireSecurityGroup struct {
 	resource.SecurityGroup
 	Etag    string            `json:"etag"`

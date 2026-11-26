@@ -66,7 +66,22 @@ func (c *Client) Status(ctx context.Context) (resource.RegionStatus, error) {
 }
 
 // Call executes a scoped read or mutation and decodes its result into dst.
+// A launch with a public key goes to the keyedLaunch route. A daemon older
+// than that route answers 404 and has run nothing; it has no use for the key,
+// so the launch goes to RunInstances without it, and console-api and the
+// daemons can be upgraded or rolled back in either order.
 func (c *Client) Call(ctx context.Context, iface, method string, scope, req, dst any) error {
+	if launch, ok := req.(resource.RunInstancesRequest); ok && iface == "Compute" && method == "RunInstances" &&
+		launch.PublicKey != "" {
+		err := c.call(ctx, iface, keyedLaunch, scope, wireRunInstances{launch, launch.PublicKey}, dst)
+		if e := new(resource.Error); !errors.As(err, &e) || e.Message != resource.RegionRouteMissing {
+			return err
+		}
+	}
+	return c.call(ctx, iface, method, scope, req, dst)
+}
+
+func (c *Client) call(ctx context.Context, iface, method string, scope, req, dst any) error {
 	envelope := struct {
 		Scope    any `json:"scope,omitempty"`
 		Mutation any `json:"mutation,omitempty"`

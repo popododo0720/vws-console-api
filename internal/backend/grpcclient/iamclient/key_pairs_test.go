@@ -2,6 +2,8 @@ package iamclient
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"maps"
 	"net"
 	"slices"
@@ -456,5 +458,35 @@ func TestIAMKeyPairBoundaryAndMissing(t *testing.T) {
 	page, err := client.DescribeKeyPairs(t.Context(), m.Scope, resource.KeyPairQuery{})
 	if err != nil || len(page.Items) != 0 {
 		t.Fatalf("invalid inventory record was not skipped: %+v %v", page, err)
+	}
+}
+
+// A described key pair carries its public key as "<algo> <base64>", without
+// the comment it was imported with, for the launch to hand on. No JSON form of
+// the key pair carries it.
+func TestIAMKeyPairCarriesThePublicKeyWithoutComment(t *testing.T) {
+	s := &keyPairServer{}
+	client := New(keyPairConnection(t, s), Options{Backoff: time.Millisecond})
+	m := keyPairMutation(t)
+	pair, err := sshkey.Generate(resource.KeyTypeEd25519, strings.NewReader(strings.Repeat("b", 36)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fields := strings.Fields(pair.Public)
+	want := fields[0] + " " + fields[1]
+	if _, err := client.CreateKeyPair(t.Context(), m,
+		resource.CreateKeyPairRequest{Name: "login", PublicKey: want + " operator@laptop"}); err != nil {
+		t.Fatal(err)
+	}
+	page, err := client.DescribeKeyPairs(t.Context(), m.Scope, resource.KeyPairQuery{Names: []string{"login"}})
+	if err != nil || len(page.Items) != 1 || page.Items[0].PublicKey != want {
+		t.Fatalf("describe = %+v %v, want public key %q", page, err, want)
+	}
+	encoded, err := json.Marshal(page)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), fields[1]) || strings.Contains(fmt.Sprint(page.Items[0]), fields[1]) {
+		t.Fatalf("the public key is in the key pair's JSON or text: %s", encoded)
 	}
 }
