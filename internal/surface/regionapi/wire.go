@@ -16,20 +16,17 @@ type wireInstance struct {
 	DetachingDevices []resource.BlockDevice `json:"detachingDevices"`
 }
 
-// wireRunInstances is the request twin of wireInstance: it carries the
-// launch's public key, which the model keeps out of its JSON. A request
-// without a key marshals exactly as the model does.
+// keyedLaunch is the route of a launch with a public key. RunInstances keeps
+// its earlier body, so a daemon of either version takes a launch without a
+// key, and a daemon older than this route answers 404 for a keyed one.
+const keyedLaunch = "RunInstancesWithKey"
+
+// wireRunInstances is the request twin of wireInstance on the keyedLaunch
+// route: it carries the launch's public key, which the model keeps out of
+// its JSON.
 type wireRunInstances struct {
 	resource.RunInstancesRequest
-	PublicKey string `json:"publicKey,omitempty"`
-}
-
-// encodeRequest is the wire form of a request.
-func encodeRequest(req any) any {
-	if r, ok := req.(resource.RunInstancesRequest); ok {
-		return wireRunInstances{r, r.PublicKey}
-	}
-	return req
+	PublicKey string `json:"publicKey"`
 }
 
 type wireSecurityGroup struct {

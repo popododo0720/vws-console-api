@@ -58,12 +58,15 @@ not ready"). A connection test request over 64 KiB fails with "it exceeds 64
 KiB"; a daemon reply over the response limit fails with "the region daemon
 reply exceeds the response limit".
 
-A launch that names a key pair sends the key's public key to the daemon in a
-`publicKey` field beside the request (#1059). A daemon older than this field
-refuses such a launch with "scope or mutation and req must be valid JSON"; a
-launch without a key pair is unchanged. So pair console-api with daemons built
-from the same commit or later, upgrade every daemon first, and roll back in the
-reverse order: console-api first, then the daemons.
+A launch that names a key pair goes to `POST /internal/v1/Compute/RunInstancesWithKey`
+with the key's public key in `req.publicKey`, beside `keyName` (#1059). A
+launch without a key pair goes to `RunInstances` with the same body as before.
+A daemon older than the keyed route answers it 404 and runs nothing; that
+daemon has no use for the key, so console-api sends the launch again to
+`RunInstances` without it. So this route adds nothing to the upgrade order
+above: console-api and a daemon of either version launch with or without a
+key pair, in an upgrade or a rollback, also when `vws install` restarts
+console-api before the daemons.
 
 `-region` names the one region this instance serves; it is required and a
 registration for any other region is refused with 400. The daemon talks to

@@ -81,12 +81,16 @@ func certificates(t *testing.T) (tls.Certificate, tls.Certificate, *x509.CertPoo
 	return leaf(2, x509.ExtKeyUsageServerAuth), leaf(3, x509.ExtKeyUsageClientAuth), pool
 }
 
-func loopback(t *testing.T, cfg Config) (*Client, *httptest.Server) {
+// loopback serves cfg over mTLS; wrap, when given, wraps the handler.
+func loopback(t *testing.T, cfg Config, wrap ...func(http.Handler) http.Handler) (*Client, *httptest.Server) {
 	t.Helper()
 	serverCert, clientCert, pool := certificates(t)
 	h, err := New(cfg)
 	if err != nil {
 		t.Fatal(err)
+	}
+	for _, w := range wrap {
+		h = w(h)
 	}
 	srv := httptest.NewUnstartedServer(h)
 	srv.TLS = NewServer("", h, serverCert, pool).http.TLSConfig

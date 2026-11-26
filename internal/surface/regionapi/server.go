@@ -76,9 +76,13 @@ func New(cfg Config) (http.Handler, error) {
 	if cfg.Backend.Usage != nil {
 		register(mux, cfg, "Usage", "GetAllocation", cfg.Backend.Usage.GetAllocation)
 	}
-	register(mux, cfg, "Compute", "RunInstances", func(
+	register(mux, cfg, "Compute", "RunInstances", c.RunInstances)
+	register(mux, cfg, "Compute", keyedLaunch, func(
 		ctx context.Context, m backend.Mutation, w wireRunInstances,
 	) (resource.Accepted[resource.Instance], error) {
+		if w.PublicKey == "" {
+			return resource.Accepted[resource.Instance]{}, resource.Invalid("publicKey", "required on this route")
+		}
 		req := w.RunInstancesRequest
 		req.PublicKey = w.PublicKey
 		return c.RunInstances(ctx, m, req)

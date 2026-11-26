@@ -62,7 +62,7 @@ func TestIAMKeyPairsNeverCallRegion(t *testing.T) {
 		calls.Add(1)
 		body, _ := io.ReadAll(r.Body)
 		mu.Lock()
-		bodies = append(bodies, string(body))
+		bodies = append(bodies, r.URL.Path+" "+string(body))
 		mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{}`))
@@ -127,10 +127,12 @@ func TestIAMKeyPairsNeverCallRegion(t *testing.T) {
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	if !strings.Contains(bodies[0], `"publicKey":"`+launchKey+`"`) {
+	if !strings.HasPrefix(bodies[0], "/internal/v1/Compute/RunInstancesWithKey ") ||
+		!strings.Contains(bodies[0], `"publicKey":"`+launchKey+`"`) {
 		t.Fatalf("the region request does not carry the key: %s", bodies[0])
 	}
-	if strings.Contains(bodies[1], "publicKey") || strings.Contains(bodies[1], "AAAAC3") {
+	if !strings.HasPrefix(bodies[1], "/internal/v1/Compute/RunInstances ") ||
+		strings.Contains(bodies[1], "publicKey") || strings.Contains(bodies[1], "AAAAC3") {
 		t.Fatalf("a launch without a key name carries one: %s", bodies[1])
 	}
 }
