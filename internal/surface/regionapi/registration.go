@@ -15,6 +15,17 @@ import (
 	"github.com/popododo0720/vws-console-api/internal/server"
 )
 
+// tokenRefusals are the fixed messages of the token fields a registration may
+// refuse; the daemon's own message could carry upstream text.
+func tokenRefusals() map[string]string {
+	return map[string]string{
+		"token":         "token required or stored token invalid",
+		"firewallToken": "firewall token required for a new credential",
+		"backupToken":   "backup token required for a new credential",
+		"pbsToken":      "PBS token required for a new token, pbsRepository or pbsFingerprint",
+	}
+}
+
 // WithRegistration exposes registration before a region backend is ready.
 // The returned handler belongs exclusively on the mutual TLS server.
 func WithRegistration(register func(context.Context, json.RawMessage) error, next http.Handler) http.Handler {
@@ -32,9 +43,12 @@ func WithRegistration(register func(context.Context, json.RawMessage) error, nex
 				writeJSON(w, struct{}{}, nil)
 				return
 			}
-			if e := resource.AsError(err); e.Code == resource.CodeInvalidArgument && e.Field == "token" {
-				writeJSON(w, nil, resource.Invalid("token", "token required or stored token invalid"))
-				return
+			if e := resource.AsError(err); e.Code == resource.CodeInvalidArgument {
+				// The console maps these fields to the secret the operator must resubmit.
+				if message, ok := tokenRefusals()[e.Field]; ok {
+					writeJSON(w, nil, resource.Invalid(e.Field, message))
+					return
+				}
 			}
 			status, message := http.StatusBadRequest, "invalid registration"
 			code := resource.CodeInvalidArgument

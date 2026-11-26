@@ -25,7 +25,10 @@ func RegistrationFailureMessage(err error) string {
 	case "registration self-check failed: instance_types",
 		"registration self-check failed: privileges",
 		"registration self-check failed: cluster_name",
-		"registration self-check failed: storages":
+		"registration self-check failed: storages",
+		"registration self-check failed: dr_storage",
+		"registration self-check failed: pbs_connection",
+		"registration self-check failed: pbs_privileges":
 		return e.Message
 	default:
 		return ""

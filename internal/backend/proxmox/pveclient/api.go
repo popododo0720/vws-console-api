@@ -53,9 +53,11 @@ type ClusterResource struct {
 	MaxMem   int64   `json:"maxmem"`
 	Mem      int64   `json:"mem"`
 	Storage  string  `json:"storage"`
-	Shared   int     `json:"shared"`
-	MaxDisk  int64   `json:"maxdisk"`
-	Disk     int64   `json:"disk"`
+	// PluginType is a storage's type, such as dir or pbs.
+	PluginType string `json:"plugintype"`
+	Shared     int    `json:"shared"`
+	MaxDisk    int64  `json:"maxdisk"`
+	Disk       int64  `json:"disk"`
 }
 
 // Node is one entry of GET /nodes.

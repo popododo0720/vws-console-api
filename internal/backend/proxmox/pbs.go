@@ -2,19 +2,64 @@ package proxmox
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"crypto/tls"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
+	"github.com/popododo0720/vws-console-api/internal/backend/proxmox/pveclient"
 	"github.com/popododo0720/vws-console-api/internal/resource"
 )
+
+// drFile holds the cold-DR settings beside registration.json. It is its own
+// file so that registration.json keeps the schema of earlier releases and an
+// older daemon, which ignores a file it does not know, still starts.
+const drFile = "dr.json"
+
+// drState is the content of dr.json: the PVE storage of the PBS, the PBS
+// target and the read-only PBS token. Absent means DR is not configured.
+type drState struct {
+	Storage     string `json:"storage"`
+	Repository  string `json:"repository"`
+	Namespace   string `json:"namespace"`
+	Fingerprint string `json:"fingerprint"`
+	TokenID     string `json:"tokenId"`
+	Token       string `json:"token"`
+}
+
+func (d drState) settings() resource.DRSettings {
+	return resource.DRSettings{
+		Storage: d.Storage, Repository: d.Repository, Namespace: d.Namespace,
+		Fingerprint: d.Fingerprint, TokenID: d.TokenID,
+	}
+}
+
+// decodeDR reads dr.json. Every setting and the token must be valid.
+func decodeDR(data []byte) (*drState, error) {
+	var d drState
+	if err := decodeStrict(data, &d); err != nil {
+		return nil, err
+	}
+	if !d.settings().Configured() {
+		return nil, resource.Invalid("dr", "no DR settings")
+	}
+	if err := resource.CheckDRSettings(d.settings()); err != nil {
+		return nil, err
+	}
+	if !registrationSecret.MatchString(d.Token) {
+		return nil, resource.Invalid("token", "expected 1-512 token characters")
+	}
+	return &d, nil
+}
 
 // pbsTarget is the PBS side of cold DR: the repository and namespace that
 // hold the region's backups and the read-only token that restores from them.
@@ -24,22 +69,22 @@ type pbsTarget struct {
 	tokenID, token                             string
 }
 
-// pbsReaderPrivilege reports whether the PBS DatastoreReader role holds privilege.
-func pbsReaderPrivilege(privilege string) bool {
-	return privilege == "Datastore.Audit" || privilege == "Datastore.Read"
-}
-
-// pbsTargetOf returns the PBS target of a registration that decodeRegistration
-// accepted, and false for a region without DR.
-func pbsTargetOf(s registrationSnapshot) (*pbsTarget, bool) {
-	repo, err := resource.ParsePBSRepository(s.PBSRepository)
-	if s.PBSTokenID == "" || err != nil {
-		return nil, false
+// target returns the PBS target of d, which decodeDR or CheckDRSettings accepted.
+func (d *drState) target() *pbsTarget {
+	repo, err := resource.ParsePBSRepository(d.Repository)
+	if err != nil {
+		return nil
 	}
 	return &pbsTarget{
-		address: repo.Address, datastore: repo.Datastore, namespace: s.PBSNamespace,
-		fingerprint: s.PBSFingerprint, tokenID: s.PBSTokenID, token: s.PBSToken,
-	}, true
+		address: repo.Address, datastore: repo.Datastore, namespace: d.Namespace,
+		fingerprint: d.Fingerprint, tokenID: d.TokenID, token: d.Token,
+	}
+}
+
+// pbsReaderPrivilege reports whether the PBS DatastoreReader role holds
+// privilege: it lists, reads and verifies backups.
+func pbsReaderPrivilege(privilege string) bool {
+	return privilege == "Datastore.Audit" || privilege == "Datastore.Read" || privilege == "Datastore.Verify"
 }
 
 // client trusts exactly the certificate with the registered fingerprint, as
@@ -79,18 +124,23 @@ func pbsFingerprintOf(sum []byte) string {
 	return strings.Join(parts, ":")
 }
 
-// permissions reads GET /api2/json/access/permissions for the token: PBS
-// lists each ACL path where the token holds a privilege, with the names of
-// the privileges it holds there.
-func (p *pbsTarget) permissions(ctx context.Context) (_ map[string]map[string]bool, retErr error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
-		"https://"+p.address+"/api2/json/access/permissions", nil)
+// permissions reads GET /api2/json/access/permissions for the token, for
+// path when it is set: PBS maps each ACL path to the names of the privileges
+// the token holds there. Without path it lists the ACL nodes where the token
+// holds anything; with path it answers the privileges at that path, inherited
+// ones included.
+func (p *pbsTarget) permissions(
+	ctx context.Context, client *http.Client, path string,
+) (_ map[string]map[string]bool, retErr error) {
+	target := "https://" + p.address + "/api2/json/access/permissions"
+	if path != "" {
+		target += "?" + url.Values{"path": {path}}.Encode()
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
 		return nil, fmt.Errorf("build PBS request: %w", err)
 	}
 	req.Header.Set("Authorization", "PBSAPIToken="+p.tokenID+":"+p.token)
-	client := p.client()
-	defer client.CloseIdleConnections()
 	resp, err := client.Do(req)
 	if err != nil {
 		// The URL holds no secret; the error names the address only.
@@ -113,31 +163,139 @@ func (p *pbsTarget) permissions(ctx context.Context) (_ map[string]map[string]bo
 	return envelope.Data, nil
 }
 
-// checkPBS admits a token that can read the DR namespace and do nothing
-// else: every privilege it holds is one of DatastoreReader's, on the
-// namespace or below it, and it holds Datastore.Read on the namespace.
-func checkPBS(ctx context.Context, p *pbsTarget, cfg RegionConfig) error {
-	if cfg.DRStorage == "" {
-		return &selfCheckError{check: "dr_storage", cause: errors.New("proxmox: a PBS registration needs dr_storage")}
+const (
+	// pbsMaxListed bounds the ACL nodes a DR token may list.
+	pbsMaxListed = 64
+	// pbsMaxPath is the longest ACL path PBS accepts.
+	pbsMaxPath = 128
+)
+
+// pbsProbeName is a fresh child name for an inheritance probe. It is random
+// per call, so it is never an ACL node.
+func pbsProbeName() string {
+	b := make([]byte, 4)
+	_, _ = rand.Read(b) // crypto/rand.Read never fails
+	return "vp" + hex.EncodeToString(b)
+}
+
+// checkPBS admits a token that can read the DR namespace N and nothing the
+// daemon can find outside it. All four rules must hold:
+//
+//  1. Every ACL node the token lists is N or below it and holds only
+//     DatastoreReader privileges, and it lists at most 64.
+//  2. Every strict ancestor of N holds nothing.
+//  3. A fresh child of every ancestor and of /access, /remote, /system and
+//     /tape holds nothing, and a fresh child of N and of every listed node
+//     holds only DatastoreReader privileges. This catches a grant that
+//     propagates below a node where a non-propagating entry hides it.
+//  4. N holds Datastore.Read.
+//
+// It cannot see a grant below an ACL node that PBS does not list for the
+// token, at a path the daemon cannot guess; the token's provisioning
+// excludes it (docs/region-daemon.md).
+func checkPBS(ctx context.Context, p *pbsTarget) error {
+	refuse := func(format string, args ...any) error {
+		return &selfCheckError{check: "pbs_privileges", cause: fmt.Errorf("proxmox: PBS token "+format, args...)}
 	}
-	held, err := p.permissions(ctx)
+	client := p.client()
+	defer client.CloseIdleConnections()
+	lookup := func(path string) (map[string]bool, error) {
+		if len(path) > pbsMaxPath {
+			return nil, refuse("probe path %s exceeds %d characters", path, pbsMaxPath)
+		}
+		held, err := p.permissions(ctx, client, path)
+		if err != nil {
+			return nil, &selfCheckError{check: "pbs_connection", cause: fmt.Errorf("proxmox: check PBS token: %w", err)}
+		}
+		return held[path], nil
+	}
+	// only looks up path and refuses any privilege there, or with reader set
+	// any privilege DatastoreReader does not hold.
+	only := func(path string, reader bool) (map[string]bool, error) {
+		held, err := lookup(path)
+		if err != nil {
+			return nil, err
+		}
+		for privilege := range held {
+			if !reader || !pbsReaderPrivilege(privilege) {
+				return nil, refuse("holds %s on %s", privilege, path)
+			}
+		}
+		return held, nil
+	}
+
+	namespace := "/datastore/" + p.datastore + "/" + p.namespace
+	listed, err := p.permissions(ctx, client, "")
 	if err != nil {
 		return &selfCheckError{check: "pbs_connection", cause: fmt.Errorf("proxmox: check PBS token: %w", err)}
 	}
-	namespace := "/datastore/" + p.datastore + "/" + p.namespace
-	for path, privileges := range held {
+	if len(listed) > pbsMaxListed {
+		return refuse("lists %d ACL paths, more than %d", len(listed), pbsMaxListed)
+	}
+	for path, privileges := range listed {
 		for privilege := range privileges {
 			if !pbsReaderPrivilege(privilege) || path != namespace && !strings.HasPrefix(path, namespace+"/") {
-				return &selfCheckError{
-					check: "pbs_privileges", cause: fmt.Errorf("proxmox: PBS token holds %s on %s", privilege, path),
-				}
+				return refuse("holds %s on %s", privilege, path)
 			}
 		}
 	}
-	if _, ok := held[namespace]["Datastore.Read"]; !ok {
-		return &selfCheckError{
-			check: "pbs_privileges", cause: fmt.Errorf("proxmox: PBS token lacks Datastore.Read on %s", namespace),
+	ancestors := []string{"/", "/datastore", "/datastore/" + p.datastore}
+	parts := strings.Split(p.namespace, "/")
+	for i := 1; i < len(parts); i++ {
+		ancestors = append(ancestors, "/datastore/"+p.datastore+"/"+strings.Join(parts[:i], "/"))
+	}
+	for _, path := range ancestors {
+		if _, err := only(path, false); err != nil {
+			return err
 		}
 	}
+	child := func(path string) string { return strings.TrimSuffix(path, "/") + "/" + pbsProbeName() }
+	for _, path := range append(ancestors, "/access", "/remote", "/system", "/tape") {
+		if _, err := only(child(path), false); err != nil {
+			return err
+		}
+	}
+	for _, path := range append([]string{namespace}, keys(listed)...) {
+		if _, err := only(child(path), true); err != nil {
+			return err
+		}
+	}
+	held, err := only(namespace, true)
+	if err != nil {
+		return err
+	}
+	if _, ok := held["Datastore.Read"]; !ok {
+		return refuse("lacks Datastore.Read on %s", namespace)
+	}
 	return nil
+}
+
+func keys[V any](m map[string]V) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
+}
+
+// checkDRStorage requires storage to be a PVE storage of type pbs.
+func checkDRStorage(ctx context.Context, client *pveclient.Client, storage string) error {
+	rows, err := client.ClusterResources(ctx, pveclient.ResourceStorage)
+	if err != nil {
+		return &selfCheckError{check: "dr_storage", cause: fmt.Errorf("proxmox: check drStorage: %w", err)}
+	}
+	known := false
+	for _, row := range rows {
+		if row.Type != "storage" || row.Storage != storage {
+			continue
+		}
+		if row.PluginType == "pbs" {
+			return nil
+		}
+		known = true
+	}
+	if known {
+		return &selfCheckError{check: "dr_storage", cause: fmt.Errorf("proxmox: drStorage %q is not a PBS storage", storage)}
+	}
+	return &selfCheckError{check: "dr_storage", cause: fmt.Errorf("proxmox: drStorage: unknown storage %q", storage)}
 }

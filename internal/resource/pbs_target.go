@@ -59,18 +59,31 @@ func ParsePBSRepository(repository string) (PBSRepository, error) {
 	return PBSRepository{Address: net.JoinHostPort(server, port), Datastore: repository[i+1:]}, nil
 }
 
-// CheckPBSTarget validates the PBS settings of one region. They are all set,
-// or all empty for a region without DR: repository, a namespace other than
-// the root (1 to 7 levels), the server certificate fingerprint and a token id
-// of the form user@realm!token.
-func CheckPBSTarget(repository, namespace, fingerprint, tokenID string) error {
-	if repository == "" && namespace == "" && fingerprint == "" && tokenID == "" {
+// DRSettings are the cold-DR settings of one region: the PVE storage of the
+// PBS, the repository and namespace that hold the backups, the PBS
+// certificate fingerprint and the PBS token id. They are all set, or all
+// empty for a region without DR.
+type DRSettings struct {
+	Storage, Repository, Namespace, Fingerprint, TokenID string
+}
+
+// Configured reports whether any setting is set.
+func (d DRSettings) Configured() bool { return d != DRSettings{} }
+
+// CheckDRSettings validates d: a PVE storage id, the repository, a namespace
+// other than the root (1 to 7 levels), the server certificate fingerprint and
+// a token id of the form user@realm!token, or nothing at all.
+func CheckDRSettings(d DRSettings) error {
+	if !d.Configured() {
 		return nil
 	}
-	if _, err := ParsePBSRepository(repository); err != nil {
+	if !regexp.MustCompile(`^[a-z][a-z0-9._-]{0,98}[a-z0-9]$`).MatchString(d.Storage) {
+		return Invalid("drStorage", "expected the PVE storage id of the PBS")
+	}
+	if _, err := ParsePBSRepository(d.Repository); err != nil {
 		return err
 	}
-	parts := strings.Split(namespace, "/")
+	parts := strings.Split(d.Namespace, "/")
 	if len(parts) > 7 {
 		return Invalid("pbsNamespace", "expected 1 to 7 namespace levels")
 	}
@@ -79,11 +92,11 @@ func CheckPBSTarget(repository, namespace, fingerprint, tokenID string) error {
 			return Invalid("pbsNamespace", "expected 1 to 7 namespace levels")
 		}
 	}
-	if !pbsFingerprint.MatchString(fingerprint) {
+	if !pbsFingerprint.MatchString(d.Fingerprint) {
 		return Invalid("pbsFingerprint", "expected the SHA-256 fingerprint of the PBS certificate as lowercase hex pairs")
 	}
 	if !regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}@[A-Za-z0-9._-]{1,32}![A-Za-z][A-Za-z0-9._-]{0,63}$`).
-		MatchString(tokenID) {
+		MatchString(d.TokenID) {
 		return Invalid("pbsTokenId", "expected user@realm!token")
 	}
 	return nil

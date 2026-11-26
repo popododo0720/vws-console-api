@@ -144,7 +144,7 @@ func TestRegistrationRejectsAddressesOfDifferentClusters(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	stored, err := decodeRegistration(data)
+	stored, err := decodeState(data)
 	if err != nil || !reflect.DeepEqual(stored.PVEAPIURLs, urls) || stored.CAPEM != serverCA(first) {
 		t.Fatalf("stored registration: %+v %v", stored, err)
 	}

@@ -80,8 +80,10 @@ type Region struct {
 	BackupTokenID     string         `json:"backupTokenId,omitempty"`
 	BackupTokenSecret SecretMetadata `json:"backupTokenSecret"`
 
-	// The PBS settings of cold DR: all set, or all empty for a region
-	// without DR. The PBS token is write-only, like the PVE tokens.
+	// The cold-DR settings: the PVE storage of the PBS and the PBS target,
+	// all set, or all empty for a region without DR. The PBS token is
+	// write-only, like the PVE tokens.
+	DRStorage      string         `json:"drStorage,omitempty"`
 	PBSRepository  string         `json:"pbsRepository,omitempty"`
 	PBSNamespace   string         `json:"pbsNamespace,omitempty"`
 	PBSFingerprint string         `json:"pbsFingerprint,omitempty"`

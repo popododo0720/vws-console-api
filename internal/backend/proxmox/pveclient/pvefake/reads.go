@@ -178,8 +178,12 @@ func (f *Fake) clusterResources(t *Token, r *http.Request) (any, *failure) {
 	if kind == "" || kind == "storage" {
 		for _, s := range f.s.Storages {
 			if f.can(t, "/storage/"+s.Name, "Datastore.Audit") {
+				plugin := s.Type
+				if plugin == "" {
+					plugin = "dir"
+				}
 				rows = append(rows, map[string]any{
-					"type": "storage", "storage": s.Name, "node": s.Node,
+					"type": "storage", "storage": s.Name, "node": s.Node, "plugintype": plugin,
 					"id":     "storage/" + s.Node + "/" + s.Name,
 					"shared": s.Shared, "maxdisk": s.MaxDisk, "disk": s.Disk,
 				})

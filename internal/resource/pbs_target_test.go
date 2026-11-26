@@ -27,28 +27,39 @@ func TestParsePBSRepository(t *testing.T) {
 	}
 }
 
-func TestCheckPBSTarget(t *testing.T) {
+func TestCheckDRSettings(t *testing.T) {
 	fp := "ab:cd:ef:01:23:45:67:89:ab:cd:ef:01:23:45:67:89:ab:cd:ef:01:23:45:67:89:ab:cd:ef:01:23:45:67:89"
-	if err := CheckPBSTarget("", "", "", ""); err != nil {
+	if err := CheckDRSettings(DRSettings{}); err != nil {
 		t.Fatalf("a region without DR: %v", err)
 	}
-	if err := CheckPBSTarget("pbs.example:dr-store", "vws/pve-test-1", fp, "dr@pbs!export"); err != nil {
-		t.Fatalf("valid target: %v", err)
+	valid := DRSettings{
+		Storage: "dr-pbs", Repository: "pbs.example:dr-store", Namespace: "vws/pve-test-1",
+		Fingerprint: fp, TokenID: "dr@pbs!export",
 	}
-	for _, tc := range []struct{ repository, namespace, fingerprint, tokenID, field string }{
-		{"", "vws", fp, "dr@pbs!export", "pbsRepository"},
-		{"pbs.example:dr-store", "", fp, "dr@pbs!export", "pbsNamespace"},
-		{"pbs.example:dr-store", "a/b/c/d/e/f/g/h", fp, "dr@pbs!export", "pbsNamespace"},
-		{"pbs.example:dr-store", "vws//x", fp, "dr@pbs!export", "pbsNamespace"},
-		{"pbs.example:dr-store", "../x", fp, "dr@pbs!export", "pbsNamespace"},
-		{"pbs.example:dr-store", "vws", "", "dr@pbs!export", "pbsFingerprint"},
-		{"pbs.example:dr-store", "vws", "AB" + fp[2:], "dr@pbs!export", "pbsFingerprint"},
-		{"pbs.example:dr-store", "vws", fp, "", "pbsTokenId"},
-		{"pbs.example:dr-store", "vws", fp, "dr@pbs", "pbsTokenId"},
+	if err := CheckDRSettings(valid); err != nil {
+		t.Fatalf("valid settings: %v", err)
+	}
+	for field, edit := range map[string][]func(*DRSettings){
+		"drStorage": {
+			func(d *DRSettings) { d.Storage = "" }, func(d *DRSettings) { d.Storage = "Dr" },
+			func(d *DRSettings) { d.Storage = "dr/x" },
+		},
+		"pbsRepository": {func(d *DRSettings) { d.Repository = "" }},
+		"pbsNamespace": {
+			func(d *DRSettings) { d.Namespace = "" }, func(d *DRSettings) { d.Namespace = "a/b/c/d/e/f/g/h" },
+			func(d *DRSettings) { d.Namespace = "vws//x" }, func(d *DRSettings) { d.Namespace = "../x" },
+		},
+		"pbsFingerprint": {
+			func(d *DRSettings) { d.Fingerprint = "" }, func(d *DRSettings) { d.Fingerprint = "AB" + fp[2:] },
+		},
+		"pbsTokenId": {func(d *DRSettings) { d.TokenID = "" }, func(d *DRSettings) { d.TokenID = "dr@pbs" }},
 	} {
-		err := CheckPBSTarget(tc.repository, tc.namespace, tc.fingerprint, tc.tokenID)
-		if err == nil || AsError(err).Field != tc.field {
-			t.Errorf("%+v: %v, want field %s", tc, err, tc.field)
+		for i, change := range edit {
+			d := valid
+			change(&d)
+			if err := CheckDRSettings(d); err == nil || AsError(err).Field != field {
+				t.Errorf("%s case %d: %v", field, i, err)
+			}
 		}
 	}
 }

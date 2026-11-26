@@ -34,6 +34,7 @@ type regionInput struct {
 	BackupTokenID       *string `json:"backupTokenId"`
 	BackupTokenSecret   *string `json:"backupTokenSecret"`
 
+	DRStorage      *string `json:"drStorage"`
 	PBSRepository  *string `json:"pbsRepository"`
 	PBSNamespace   *string `json:"pbsNamespace"`
 	PBSFingerprint *string `json:"pbsFingerprint"`
@@ -152,6 +153,7 @@ func (h *handler) adminWriteRegion(w http.ResponseWriter, r *http.Request) {
 		{in.RegionEndpoint, &v.RegionEndpoint},
 		{in.FirewallTokenID, &v.FirewallTokenID},
 		{in.BackupTokenID, &v.BackupTokenID},
+		{in.DRStorage, &v.DRStorage},
 		{in.PBSRepository, &v.PBSRepository},
 		{in.PBSNamespace, &v.PBSNamespace},
 		{in.PBSFingerprint, &v.PBSFingerprint},
@@ -377,6 +379,7 @@ func (h *handler) pushRegion(ctx context.Context, v store.Region, in *regionInpu
 		FirewallToken   *string      `json:"firewallToken,omitempty"`
 		BackupTokenID   string       `json:"backupTokenId,omitempty"`
 		BackupToken     *string      `json:"backupToken,omitempty"`
+		DRStorage       string       `json:"drStorage,omitempty"`
 		PBSRepository   string       `json:"pbsRepository,omitempty"`
 		PBSNamespace    string       `json:"pbsNamespace,omitempty"`
 		PBSFingerprint  string       `json:"pbsFingerprint,omitempty"`
@@ -387,8 +390,9 @@ func (h *handler) pushRegion(ctx context.Context, v store.Region, in *regionInpu
 		TokenID: v.TokenID, Token: in.TokenSecret,
 		Zones: v.Zones, FirewallTokenID: v.FirewallTokenID, FirewallToken: in.FirewallTokenSecret,
 		BackupTokenID: v.BackupTokenID, BackupToken: in.BackupTokenSecret,
-		PBSRepository: v.PBSRepository, PBSNamespace: v.PBSNamespace, PBSFingerprint: v.PBSFingerprint,
-		PBSTokenID: v.PBSTokenID, PBSToken: in.PBSTokenSecret,
+		DRStorage: v.DRStorage, PBSRepository: v.PBSRepository, PBSNamespace: v.PBSNamespace,
+		PBSFingerprint: v.PBSFingerprint,
+		PBSTokenID:     v.PBSTokenID, PBSToken: in.PBSTokenSecret,
 	})
 	if err != nil {
 		return fmt.Errorf("encode registration: %w", err)
@@ -470,7 +474,10 @@ func validateExtraTokens(v store.Region, in *regionInput) error {
 		return resource.Invalid("backupTokenId", "must differ from firewallTokenId")
 	}
 	// The PBS token is a PBS identity, so it may share a name with a PVE token.
-	if err := resource.CheckPBSTarget(v.PBSRepository, v.PBSNamespace, v.PBSFingerprint, v.PBSTokenID); err != nil {
+	if err := resource.CheckDRSettings(resource.DRSettings{
+		Storage: v.DRStorage, Repository: v.PBSRepository, Namespace: v.PBSNamespace,
+		Fingerprint: v.PBSFingerprint, TokenID: v.PBSTokenID,
+	}); err != nil {
 		return err
 	}
 	if in.PBSTokenSecret != nil &&

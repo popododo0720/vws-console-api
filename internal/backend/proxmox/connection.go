@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -72,9 +73,16 @@ type registrationSnapshot struct {
 
 	BackupTokenID string `json:"backupTokenId,omitempty"`
 	BackupToken   string `json:"backupToken,omitempty"`
+}
 
-	// The PBS settings of cold DR: all set, or all empty for a region
-	// without DR. PBSToken is a read-only PBS API token.
+// registrationRequest is a registration push: the content of
+// registration.json and the cold-DR settings, which go to dr.json. The DR
+// settings are all set, or all empty for a region without DR; PBSToken is a
+// read-only PBS API token.
+type registrationRequest struct {
+	registrationSnapshot
+
+	DRStorage      string `json:"drStorage,omitempty"`
 	PBSRepository  string `json:"pbsRepository,omitempty"`
 	PBSNamespace   string `json:"pbsNamespace,omitempty"`
 	PBSFingerprint string `json:"pbsFingerprint,omitempty"`
@@ -82,8 +90,16 @@ type registrationSnapshot struct {
 	PBSToken       string `json:"pbsToken,omitempty"`
 }
 
+func (r registrationRequest) dr() resource.DRSettings {
+	return resource.DRSettings{
+		Storage: r.DRStorage, Repository: r.PBSRepository, Namespace: r.PBSNamespace,
+		Fingerprint: r.PBSFingerprint, TokenID: r.PBSTokenID,
+	}
+}
+
 // Connection serves the one region this instance is named for. Its state is
-// one 0600 file under the state directory; the token sits inside it.
+// 0600 files under the state directory: registration.json with the PVE
+// tokens, generation.json and, with cold DR, dr.json with the PBS token.
 type Connection struct {
 	mu          sync.Mutex
 	config      RegionConfig
@@ -119,7 +135,7 @@ func Open(configPath, region, stateDir string) (*Connection, error) {
 	if err != nil {
 		return nil, fmt.Errorf("proxmox: state dir: %w", err)
 	}
-	for _, name := range []string{registrationFile, fenceFile} {
+	for _, name := range []string{registrationFile, fenceFile, drFile} {
 		if err := removeStaleTemps(stateDir, name); err != nil {
 			return nil, err
 		}
@@ -190,17 +206,48 @@ func encodeState(s registrationSnapshot) ([]byte, error) {
 	return state, nil
 }
 
-func decodeRegistration(data []byte) (registrationSnapshot, error) {
-	var s registrationSnapshot
+// decodeStrict decodes the one JSON document of data into v and refuses
+// unknown fields.
+func decodeStrict(data []byte, v any) error {
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()
-	if err := dec.Decode(&s); err != nil {
-		return s, resource.Invalid("registration", "invalid JSON")
+	if err := dec.Decode(v); err != nil {
+		return resource.Invalid("registration", "invalid JSON")
 	}
 	var extra any
 	if err := dec.Decode(&extra); !errors.Is(err, io.EOF) {
-		return s, resource.Invalid("registration", "expected one JSON document")
+		return resource.Invalid("registration", "expected one JSON document")
 	}
+	return nil
+}
+
+// decodeRegistration reads a registration push.
+func decodeRegistration(data []byte) (registrationRequest, error) {
+	var r registrationRequest
+	if err := decodeStrict(data, &r); err != nil {
+		return r, err
+	}
+	if err := resource.CheckDRSettings(r.dr()); err != nil {
+		return r, err
+	}
+	if r.PBSTokenID == "" && r.PBSToken != "" {
+		return r, resource.Invalid("pbsTokenId", "expected user@realm!token")
+	}
+	var err error
+	r.registrationSnapshot, err = checkSnapshot(r.registrationSnapshot)
+	return r, err
+}
+
+// decodeState reads registration.json, which has no DR settings.
+func decodeState(data []byte) (registrationSnapshot, error) {
+	var s registrationSnapshot
+	if err := decodeStrict(data, &s); err != nil {
+		return s, err
+	}
+	return checkSnapshot(s)
+}
+
+func checkSnapshot(s registrationSnapshot) (registrationSnapshot, error) {
 	if !registrationRegion.MatchString(s.Region) || !registrationCluster.MatchString(s.ClusterName) ||
 		!registrationTokenID.MatchString(s.TokenID) || len(s.Zones) > 26 || s.Generation < 0 {
 		return s, resource.Invalid("registration", "invalid region, cluster_name, tokenId or zones")
@@ -219,12 +266,6 @@ func decodeRegistration(data []byte) (registrationSnapshot, error) {
 		s.BackupTokenID != "" && (!registrationTokenID.MatchString(s.BackupTokenID) ||
 			s.BackupTokenID == s.TokenID || s.BackupTokenID == s.FirewallTokenID) {
 		return s, resource.Invalid("backupTokenId", "expected a separate user@realm!token")
-	}
-	if err := resource.CheckPBSTarget(s.PBSRepository, s.PBSNamespace, s.PBSFingerprint, s.PBSTokenID); err != nil {
-		return s, err
-	}
-	if s.PBSTokenID == "" && s.PBSToken != "" {
-		return s, resource.Invalid("pbsTokenId", "expected user@realm!token")
 	}
 	letters, nodes := map[string]bool{}, map[string]bool{}
 	for _, z := range s.Zones {
@@ -251,9 +292,6 @@ func (c *Connection) check(ctx context.Context, s registrationSnapshot) (*Backen
 	}
 	if s.BackupTokenID != "" && !registrationSecret.MatchString(string(s.BackupToken)) {
 		return nil, resource.Invalid("backupToken", "expected 1-512 token characters")
-	}
-	if s.PBSTokenID != "" && !registrationSecret.MatchString(s.PBSToken) {
-		return nil, resource.Invalid("pbsToken", "expected 1-512 token characters")
 	}
 	pinned, err := c.httpClient(s.CAPEM)
 	if err != nil {
@@ -305,11 +343,6 @@ func (c *Connection) check(ctx context.Context, s registrationSnapshot) (*Backen
 			}
 		}
 	}
-	// A reload trusts the PBS settings its registration checked: PBS being
-	// down does not take the region down. Without dr_storage, DR is off.
-	if pbs, ok := pbsTargetOf(s); err == nil && ok && c.config.DRStorage != "" {
-		b.pbs = pbs
-	}
 	if err != nil && resource.AsError(err).Code != resource.CodeConflict {
 		return nil, selfCheckFailure(err)
 	}
@@ -342,10 +375,11 @@ func (c *Connection) Register(ctx context.Context, data json.RawMessage) error {
 // is the current backend, so the next Check of the same state file returns it
 // and the caller can serve it without a second self-check.
 func (c *Connection) RegisterBackend(ctx context.Context, data json.RawMessage) (*Backend, error) {
-	s, err := decodeRegistration(data)
+	r, err := decodeRegistration(data)
 	if err != nil {
 		return nil, err
 	}
+	s := r.registrationSnapshot
 	if s.Region != c.region {
 		return nil, resource.Invalid("region", "registration is for another region than this instance")
 	}
@@ -361,7 +395,7 @@ func (c *Connection) RegisterBackend(ctx context.Context, data json.RawMessage) 
 		return nil, errStaleGeneration()
 	}
 	if s.Token == "" || s.FirewallTokenID != "" && s.FirewallToken == "" ||
-		s.BackupTokenID != "" && s.BackupToken == "" || s.PBSTokenID != "" && s.PBSToken == "" {
+		s.BackupTokenID != "" && s.BackupToken == "" {
 		stored, _, err := c.registration()
 		if err != nil && !errors.Is(err, ErrUnregistered) && !errors.Is(err, errNoEndpoints) {
 			return nil, err
@@ -395,22 +429,21 @@ func (c *Connection) RegisterBackend(ctx context.Context, data json.RawMessage) 
 			}
 			s.BackupToken = stored.BackupToken
 		}
-		// The PBS token goes to PBS, so its destination is the repository and
-		// the certificate fingerprint, not the PVE addresses.
-		if s.PBSTokenID != "" && s.PBSToken == "" {
-			if stored.PBSTokenID != s.PBSTokenID || stored.PBSToken == "" ||
-				stored.PBSRepository != s.PBSRepository || stored.PBSFingerprint != s.PBSFingerprint {
-				return nil, resource.Invalid("pbsToken", "required for a new PBS token, pbsRepository or pbsFingerprint")
-			}
-			s.PBSToken = stored.PBSToken
-		}
+	}
+	dr, err := c.registeredDR(ctx, r)
+	if err != nil {
+		return nil, err
 	}
 	b, err := c.check(ctx, s)
 	if err != nil {
 		return nil, err
 	}
-	if pbs, ok := pbsTargetOf(s); ok {
-		if err := checkPBS(ctx, pbs, c.config); err != nil {
+	if dr != nil {
+		b.pbs = dr.target()
+		if err := checkDRStorage(ctx, b.client, dr.Storage); err != nil {
+			return nil, selfCheckFailure(err)
+		}
+		if err := checkPBS(ctx, dr.target()); err != nil {
 			return nil, selfCheckFailure(err)
 		}
 	}
@@ -420,6 +453,12 @@ func (c *Connection) RegisterBackend(ctx context.Context, data json.RawMessage) 
 	state, err := encodeState(s)
 	if err != nil {
 		return nil, err
+	}
+	var drData []byte
+	if dr != nil {
+		if drData, err = json.Marshal(dr); err != nil {
+			return nil, fmt.Errorf("encode DR settings: %w", err)
+		}
 	}
 	if len(state) > maxRegistrationBytes {
 		return nil, resource.Invalid("registration", "serialized registration exceeds 65 KiB")
@@ -434,15 +473,96 @@ func (c *Connection) RegisterBackend(ctx context.Context, data json.RawMessage) 
 	if err := c.at("persist"); err != nil {
 		return nil, err
 	}
+	// dr.json goes first and registration.json is the commit point. Each file
+	// is valid without the other, so a crash between them leaves a pair the
+	// repeated push converges.
+	if err := c.persistDR(drData); err != nil {
+		return nil, err
+	}
 	if err := writeFileAtomic(c.dir, registrationFile, state, nil); err != nil {
 		return nil, fmt.Errorf("persist registration: %w", err)
 	}
-	// The state file holds no generation, so an unchanged registration at a new
+	// The state files hold no generation, so an unchanged registration at a new
 	// generation keeps the serving backend, its quorum gate and its consoles.
-	if digest := sha256.Sum256(state); c.current == nil || c.digest != digest {
+	if digest := stateDigest(state, drData); c.current == nil || c.digest != digest {
 		c.current, c.digest = b, digest
 	}
 	return c.current, nil
+}
+
+// registeredDR is the DR state of r, nil without DR settings. An omitted PBS
+// token is taken from dr.json only for the same token id, repository and
+// fingerprint, which name where the secret goes; a changed namespace or
+// storage keeps it.
+func (c *Connection) registeredDR(ctx context.Context, r registrationRequest) (*drState, error) {
+	if !r.dr().Configured() {
+		return nil, nil //nolint:nilnil // no DR settings is not an error
+	}
+	dr := &drState{
+		Storage: r.DRStorage, Repository: r.PBSRepository, Namespace: r.PBSNamespace,
+		Fingerprint: r.PBSFingerprint, TokenID: r.PBSTokenID, Token: r.PBSToken,
+	}
+	if dr.Token == "" {
+		stored, _ := c.storedDR(ctx)
+		if stored == nil || stored.TokenID != dr.TokenID || stored.Repository != dr.Repository ||
+			stored.Fingerprint != dr.Fingerprint {
+			return nil, resource.Invalid("pbsToken", "required for a new PBS token, pbsRepository or pbsFingerprint")
+		}
+		dr.Token = stored.Token
+	}
+	if !registrationSecret.MatchString(dr.Token) {
+		return nil, resource.Invalid("pbsToken", "expected 1-512 token characters")
+	}
+	return dr, nil
+}
+
+// storedDR reads dr.json: nil and no data when it is absent. An unreadable
+// or invalid file is also nil, with an error log: DR is then not configured,
+// and the region keeps serving, as when PBS is down.
+func (c *Connection) storedDR(ctx context.Context) (*drState, []byte) {
+	data, err := readStateFile(c.dir, drFile)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	var dr *drState
+	if err == nil {
+		dr, err = decodeDR(data)
+	}
+	if err != nil {
+		// The reason is a fixed text or names a field, never the token.
+		reason := "unreadable"
+		var invalid *resource.Error
+		if errors.As(err, &invalid) {
+			reason = invalid.Field + ": " + invalid.Message
+		}
+		slog.ErrorContext(ctx, "proxmox: dr.json is unreadable or invalid; cold DR is not configured",
+			slog.String("region", c.region), slog.String("reason", reason))
+		return nil, nil
+	}
+	return dr, data
+}
+
+// persistDR writes dr.json, or removes it when data is empty.
+func (c *Connection) persistDR(data []byte) error {
+	if len(data) > 0 {
+		if err := writeFileAtomic(c.dir, drFile, data, nil); err != nil {
+			return fmt.Errorf("persist DR settings: %w", err)
+		}
+		return nil
+	}
+	if err := os.Remove(filepath.Join(c.dir, drFile)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("remove DR settings: %w", err)
+	}
+	return syncDir(c.dir)
+}
+
+// stateDigest identifies the content of both state files.
+func stateDigest(state, dr []byte) [32]byte {
+	h := sha256.New()
+	h.Write(state)
+	h.Write([]byte{0})
+	h.Write(dr)
+	return [32]byte(h.Sum(nil))
 }
 
 // fence is the highest registry generation this daemon has accepted, kept in
@@ -568,11 +688,15 @@ func (c *Connection) finishPendingRemoval() (fence, error) {
 }
 
 // completeRemoval finishes the removal a pending tombstone at generation owns:
-// it drops the cached backend, unlinks registration.json when unlink is set,
+// it drops the cached backend, removes dr.json, unlinks registration.json when unlink is set,
 // syncs the directory and marks the tombstone done. A failure leaves the
 // pending tombstone, so a later call repeats it.
 func (c *Connection) completeRemoval(generation int64, unlink bool) error {
 	c.dropBackend()
+	// dr.json goes before registration.json, so no DR settings outlive it.
+	if err := os.Remove(filepath.Join(c.dir, drFile)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("remove DR settings: %w", err)
+	}
 	if unlink {
 		if err := c.at("unlink"); err != nil {
 			return err
@@ -646,7 +770,7 @@ func (c *Connection) Deregister(ctx context.Context, data json.RawMessage) (remo
 	if err := c.at("cleanup"); err != nil {
 		return false, err
 	}
-	for _, name := range []string{registrationFile, fenceFile} {
+	for _, name := range []string{registrationFile, fenceFile, drFile} {
 		if err := removeStaleTemps(c.dir, name); err != nil {
 			return false, err
 		}
@@ -767,7 +891,13 @@ func (c *Connection) Check(ctx context.Context) (*Backend, error) {
 	}
 	b, err := c.check(ctx, s)
 	if err == nil {
-		digest := sha256.Sum256(data)
+		// A reload trusts the DR settings its registration checked and never
+		// calls PBS, so PBS being down does not take the region down.
+		dr, drData := c.storedDR(ctx)
+		if dr != nil {
+			b.pbs = dr.target()
+		}
+		digest := stateDigest(data, drData)
 		if c.current != nil && c.digest == digest {
 			return c.current, nil
 		}
@@ -785,20 +915,14 @@ func (c *Connection) registration() (registrationSnapshot, []byte, error) {
 	if settled.Deregistered {
 		return s, nil, ErrUnregistered
 	}
-	f, err := os.OpenFile(filepath.Join(c.dir, registrationFile), os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	data, err := readStateFile(c.dir, registrationFile)
 	if errors.Is(err, os.ErrNotExist) {
 		return s, nil, ErrUnregistered
 	}
 	if err != nil {
 		return s, nil, errors.New("registration unreadable")
 	}
-	info, statErr := f.Stat()
-	data, readErr := io.ReadAll(io.LimitReader(f, maxRegistrationBytes+1))
-	if err := errors.Join(statErr, readErr, f.Close()); err != nil || len(data) > maxRegistrationBytes ||
-		!info.Mode().IsRegular() || info.Mode().Perm()&0o077 != 0 {
-		return s, nil, errors.New("registration unreadable")
-	}
-	s, err = decodeRegistration(data)
+	s, err = decodeState(data)
 	if err != nil {
 		if field := resource.AsError(err).Field; (field == "pveApiUrls" || field == "caPem") && s.Region == c.region {
 			// s still holds the decoded tokens, so a re-registration may omit them.
@@ -810,4 +934,20 @@ func (c *Connection) registration() (registrationSnapshot, []byte, error) {
 		return s, nil, errors.New("registration is for another region than this instance")
 	}
 	return s, data, nil
+}
+
+// readStateFile reads one state file: a private regular file, not a symlink,
+// of at most maxRegistrationBytes. A missing file is os.ErrNotExist.
+func readStateFile(dir, name string) ([]byte, error) {
+	f, err := os.OpenFile(filepath.Join(dir, name), os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, fmt.Errorf("open %s: %w", name, err)
+	}
+	info, statErr := f.Stat()
+	data, readErr := io.ReadAll(io.LimitReader(f, maxRegistrationBytes+1))
+	if err := errors.Join(statErr, readErr, f.Close()); err != nil || len(data) > maxRegistrationBytes ||
+		!info.Mode().IsRegular() || info.Mode().Perm()&0o077 != 0 {
+		return nil, fmt.Errorf("%s unreadable", name)
+	}
+	return data, nil
 }

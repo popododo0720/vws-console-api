@@ -200,11 +200,15 @@ would be taken for it. Where the platform
 reports no file identity, a file beside a tombstone is always kept: the daemon
 never deletes a file it cannot prove is the removed one. A registration that
 supplies every secret settles the tombstone the same way before it replaces
-it.
+it. A removal deletes `dr.json` before `registration.json`.
 
 Rollback: `registration.json` keeps the schema of earlier releases (no
-`generation`), so a daemon can be rolled back and still reads it; the older
-binary ignores `generation.json`.
+`generation` and no DR settings), so a daemon can be rolled back and still
+reads it; the older binary ignores `generation.json` and `dr.json`. A daemon
+older than cold DR starts and serves with its registration, and refuses a
+push that carries DR settings, which the console shows as the push error. It
+leaves `dr.json` in place: after a permanent rollback, delete that file or
+revoke the PBS token.
 
 The console pushes every registration with the registry version as
 `generation` and sends the removal before it deletes a region (`DELETE
@@ -272,18 +276,56 @@ refuses backup tokens on read_only regions because a stop-mode export writes
 PVE state. The admin API calls its write-only secret `backupTokenSecret`.
 Disk export itself is not enabled by registration.
 
-Cold DR reads backups from a Proxmox Backup Server (#1060). Set `dr_storage`
-in region.yaml to the PVE storage of that PBS; startup refuses a storage PVE
-does not list. Register the repository, namespace and certificate fingerprint
-with a PBS API token, for example `dr@pbs!export`, that holds only the
-`DatastoreReader` role on `/datastore/<datastore>/<namespace>`. Before it
-stores the registration, the daemon asks PBS for the token's permissions over
-TLS pinned to the fingerprint, and refuses (`pbs_privileges`) any privilege
-other than Datastore.Audit and Datastore.Read, any grant outside that
-namespace, and a token without Datastore.Read on it. Restarts and reloads do
-not call PBS. Capabilities report `features.coldDr` as `configured`, or
-`notConfigured` for a region without PBS settings or without `dr_storage`.
-The admin API calls the write-only secret `pbsTokenSecret`. This registration
+Cold DR reads backups from a Proxmox Backup Server (#1060). The DR settings
+are registration data, not region.yaml keys: `drStorage`, the PVE storage of
+that PBS, and the PBS repository, namespace, certificate fingerprint and a
+PBS API token, all set or all empty. The daemon keeps them in their own 0600
+state file `dr.json` beside `registration.json`. Before it stores them, it
+requires `drStorage` to be a PVE storage of type `pbs` (`dr_storage`), and it
+asks PBS about the token over TLS pinned to the fingerprint
+(`pbs_connection` when that fails).
+
+Provision the token as follows: a PBS user made for DR, for example
+`dr@pbs`, and its token, for example `dr@pbs!export`, each hold exactly one
+ACL entry, the `DatastoreReader` role on `N = /datastore/<datastore>/<namespace>`.
+The role holds Datastore.Audit, Datastore.Read and Datastore.Verify, so the
+token can also verify backups. The scope is `N` and every namespace below it.
+
+The `pbs_privileges` check uses only that token and needs all four rules:
+
+1. Every path `GET /access/permissions` lists is `N` or below it and holds
+   only Datastore.Audit, Datastore.Read or Datastore.Verify, and it lists at
+   most 64 paths.
+2. Every strict ancestor of `N` (`/`, `/datastore`, `/datastore/<datastore>`
+   and each namespace prefix) holds nothing when asked for exactly
+   (`?path=`).
+3. A fresh child `<path>/vp<8 random hex>` holds nothing for each of those
+   ancestors and for `/access`, `/remote`, `/system` and `/tape`, and holds
+   only those three privileges for `N` and for every listed path. This
+   catches a grant that propagates below a node where a non-propagating entry
+   hides it.
+4. `N` holds Datastore.Read.
+
+PBS limits an ACL path to 128 characters. A probe path longer than that is
+not sent and the registration is refused with `pbs_privileges`, so `N` must
+leave 11 characters free.
+
+What the check cannot prove: a grant below an ACL node that PBS does not list
+for the token, at a path the daemon cannot guess (another datastore, for
+example). PBS omits a node where the token and its owner hold no common
+privilege, and its children can still inherit one. Only entries that cancel
+at the node itself build this (`NoAccess` without propagation beside a
+propagating role, or disjoint roles on token and owner). The provisioning
+above and the PBS UI defaults cannot produce it; a PBS admin has to. The same
+admin can also widen the ACL after registration, which no registration check
+sees.
+
+Restarts and reloads read `dr.json` and do not call PBS, so PBS being down
+never takes the region down. A missing `dr.json` means DR is not configured;
+so does an unreadable or invalid one, which is logged as an error and never
+fails the region. Capabilities report `features.coldDr` as `configured` or
+`notConfigured`. A registration without DR settings removes `dr.json`. The
+admin API calls the write-only secret `pbsTokenSecret`. This registration
 exports nothing yet.
 
 ## Non-root loopback stack

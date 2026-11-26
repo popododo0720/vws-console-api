@@ -27,9 +27,6 @@ type RegionConfig struct {
 	LinkedClones    bool                          `yaml:"linked_clones"`
 	LiveTests       bool                          `yaml:"live_tests"`
 	ShutdownTimeout int                           `yaml:"shutdown_timeout"`
-	// DRStorage is the PVE storage of the PBS that holds cold-DR backups; a
-	// region without it reports DR as not configured.
-	DRStorage string `yaml:"dr_storage"`
 }
 
 // TemplateConfig selects the templates exposed as images.

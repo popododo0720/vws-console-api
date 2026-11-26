@@ -47,5 +47,8 @@ replace the IAM service or move its users, keys or sessions.
 
 Run the local build, race tests and lint checks before publishing. Deployment
 and rollback must preserve the selected region configuration, registration,
-bootstrap etcd and credential files. Live verification remains deferred
+bootstrap etcd and credential files. A `vws-region` rolled back to a release
+before cold DR keeps serving its registration, refuses pushes with DR
+settings and leaves `dr.json` in place; delete that file or revoke the PBS
+token after a permanent rollback (`docs/region-daemon.md`, "Rollback"). Live verification remains deferred
 until phase 1 development is complete, per the owner decision.

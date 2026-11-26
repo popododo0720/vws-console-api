@@ -367,6 +367,50 @@ func TestAdminRegionSelfCheckLastError(t *testing.T) {
 	}
 }
 
+// The daemon's token refusals and PBS diagnostics reach the operator through
+// the real registration transport, without the daemon's own message.
+func TestAdminRegionRefusalsCrossTheTransport(t *testing.T) {
+	const canary = "refusal-canary-1098"
+	var refusal error
+	stub := httptest.NewTLSServer(regionapi.WithRegistration(func(context.Context, json.RawMessage) error {
+		return refusal
+	}, http.NotFoundHandler()))
+	defer stub.Close()
+	config := stub.Client().Transport.(*http.Transport).TLSClientConfig.Clone()
+	config.Certificates = stub.TLS.Certificates
+	client, err := regionapi.NewClient(stub.URL, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	for field, want := range map[string]string{
+		"token": "tokenSecret", "firewallToken": "firewallTokenSecret",
+		"backupToken": "backupTokenSecret", "pbsToken": "pbsTokenSecret",
+	} {
+		e, _, app, auditLog := accountFixture(t)
+		e.h.(*handler).regionRegistration = func(ctx context.Context, _ string, data json.RawMessage) error {
+			return client.Register(ctx, data)
+		}
+		refusal = resource.Invalid(field, canary)
+		rec := regionCall(t, e, "POST", validRegion(), "", 400)
+		if !strings.Contains(rec.Body.String(), `"field":"`+want+`"`) ||
+			strings.Contains(rec.Body.String()+app.String()+auditLog.String(), canary) {
+			t.Errorf("daemon refusal on %s: %s", field, rec.Body)
+		}
+	}
+	for _, check := range []string{"dr_storage", "pbs_connection", "pbs_privileges"} {
+		e, _, _, _ := accountFixture(t)
+		e.h.(*handler).regionRegistration = func(ctx context.Context, _ string, data json.RawMessage) error {
+			return client.Register(ctx, data)
+		}
+		message := "registration self-check failed: " + check
+		refusal = &resource.Error{Code: resource.CodeUnavailable, Message: message}
+		if rec := regionCall(t, e, "POST", validRegion(), "", 201); !strings.Contains(rec.Body.String(), message) {
+			t.Errorf("diagnostic %s lost: %s", check, rec.Body)
+		}
+	}
+}
+
 func TestAdminRegionFirewallToken(t *testing.T) {
 	e, g, _, auditLog := accountFixture(t)
 	h := e.h.(*handler)
@@ -493,7 +537,7 @@ func TestAdminRegionBackupToken(t *testing.T) {
 	}
 }
 
-// #1097: the PBS settings of cold DR go to the daemon with a write-only PBS
+// #1097: the cold-DR settings go to the daemon with a write-only PBS
 // token; the console keeps only the token's metadata and names the field the
 // daemon wants again.
 func TestAdminRegionPBSToken(t *testing.T) {
@@ -512,11 +556,13 @@ func TestAdminRegionPBSToken(t *testing.T) {
 	fingerprint := strings.Repeat("ab:", 31) + "ab"
 	pbs := func() map[string]any {
 		body := validRegion()
-		body["pbsRepository"], body["pbsNamespace"] = "pbs.example:dr-store", "vws/pve-test-1"
+		body["drStorage"], body["pbsRepository"], body["pbsNamespace"] = "dr-pbs", "pbs.example:dr-store", "vws/pve-test-1"
 		body["pbsFingerprint"], body["pbsTokenId"], body["pbsTokenSecret"] = fingerprint, "dr@pbs!export", secret
 		return body
 	}
 	for _, tc := range []struct{ field, value string }{
+		{"drStorage", ""},
+		{"drStorage", "Dr"},
 		{"pbsRepository", "pbs.example"},
 		{"pbsRepository", ""},
 		{"pbsNamespace", ""},
@@ -534,7 +580,8 @@ func TestAdminRegionPBSToken(t *testing.T) {
 	}
 	post := regionCall(t, e, "POST", pbs(), "", 201)
 	responses := post.Body.String()
-	if pushed["pbsRepository"] != "pbs.example:dr-store" || pushed["pbsNamespace"] != "vws/pve-test-1" ||
+	if pushed["drStorage"] != "dr-pbs" || pushed["pbsRepository"] != "pbs.example:dr-store" ||
+		pushed["pbsNamespace"] != "vws/pve-test-1" ||
 		pushed["pbsFingerprint"] != fingerprint || pushed["pbsTokenId"] != "dr@pbs!export" || pushed["pbsToken"] != secret ||
 		!strings.Contains(responses, `"pbsTokenSecret":{"set":true`) {
 		t.Fatalf("PBS registration did not round trip: pushed=%v %s", pushed, post.Body)
@@ -545,7 +592,8 @@ func TestAdminRegionPBSToken(t *testing.T) {
 	}
 	for _, path := range []string{regionPath, regionPath + "/pve-test-1"} {
 		rec := e.do(t, "GET", path, "", map[string]string{"Authorization": "Bearer tok"})
-		if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"pbsRepository":"pbs.example:dr-store"`) {
+		body := rec.Body.String()
+		if rec.Code != 200 || !strings.Contains(body, `"drStorage":"dr-pbs","pbsRepository":"pbs.example:dr-store"`) {
 			t.Fatalf("PBS metadata read: %d %s", rec.Code, rec.Body)
 		}
 		responses += rec.Body.String()
@@ -571,12 +619,13 @@ func TestAdminRegionPBSToken(t *testing.T) {
 		t.Fatalf("move without the PBS secret: %s", rec.Body)
 	}
 	removed := regionCall(t, e, "PATCH", map[string]any{
-		"pbsRepository": "", "pbsNamespace": "", "pbsFingerprint": "", "pbsTokenId": "",
+		"drStorage": "", "pbsRepository": "", "pbsNamespace": "", "pbsFingerprint": "", "pbsTokenId": "",
 	}, retry.Header().Get("ETag"), 200)
 	responses += removed.Body.String()
 	v, err = g.Regions().Get(t.Context(), "pve-test-1")
 	record, marshalErr := json.Marshal(v)
-	if _, sent := pushed["pbsTokenId"]; sent || err != nil || marshalErr != nil ||
+	_, storage := pushed["drStorage"]
+	if _, sent := pushed["pbsTokenId"]; sent || storage || err != nil || marshalErr != nil ||
 		v.PBSTokenSecret != (store.SecretMetadata{}) ||
 		strings.Contains(responses+app.String()+auditLog.String()+string(record), secret) {
 		t.Fatal("PBS removal retained metadata or the secret escaped")
