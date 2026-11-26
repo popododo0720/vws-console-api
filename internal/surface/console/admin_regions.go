@@ -296,7 +296,8 @@ func deleteForce(r *http.Request) (bool, error) {
 //  3. Deregister: the daemon removes the registration and refuses older
 //     generations; repeating the same generation succeeds. Any failure leaves
 //     the mark, and the delete is repeated until the daemon confirms.
-//  4. Delete the entry at the marked version, then release the cluster claim.
+//  4. Delete the entry at the marked version and release its cluster claim
+//     in one transaction.
 //
 // force deletes the entry even when the daemon cannot be told; its PVE token
 // is then deleted by hand.
@@ -317,7 +318,9 @@ func (h *handler) deleteRegion(ctx context.Context, v store.Region, force bool) 
 				"or delete with force=true and delete the PVE token by hand"}
 		}
 	}
-	if err := h.registry.Regions().Delete(ctx, v.Name, v.Version); err != nil {
+	// The cluster claim goes in the same transaction: a failed delete keeps
+	// both, so the repeated delete releases the claim with the entry.
+	if err := h.registry.DeleteRegion(ctx, v); err != nil {
 		return err
 	}
 	// Only a committed delete is reported as one.
@@ -325,7 +328,7 @@ func (h *handler) deleteRegion(ctx context.Context, v store.Region, force bool) 
 		h.log.WarnContext(ctx, "region deleted without deregistering its daemon; delete its PVE token by hand",
 			slog.String("region", v.Name), slog.String("reason", forced))
 	}
-	return h.registry.ReleaseCluster(ctx, v.ClusterName, v.Name)
+	return nil
 }
 
 func (h *handler) deregisterRegion(ctx context.Context, v store.Region) error {
