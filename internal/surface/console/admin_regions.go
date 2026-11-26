@@ -133,7 +133,7 @@ func (h *handler) adminWriteRegion(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, r, resource.Invalid("body", "expected one JSON object"))
 		return
 	}
-	oldCluster, oldEndpoint := v.ClusterName, v.RegionEndpoint
+	prev, oldCluster, oldEndpoint := v, v.ClusterName, v.RegionEndpoint
 	if in.Name != nil && r.Method == http.MethodPatch && *in.Name != v.Name {
 		writeErr(w, r, resource.Invalid("name", "must match path"))
 		return
@@ -170,6 +170,10 @@ func (h *handler) adminWriteRegion(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, r, err)
 			return
 		}
+	}
+	if err := checkOmittedSecrets(prev, v, in, r.Method == http.MethodPost); err != nil {
+		writeErr(w, r, err)
+		return
 	}
 	setAuditAccount(w, v.Name)
 	if r.Method == http.MethodPost {
@@ -239,6 +243,9 @@ func (h *handler) adminWriteRegion(w http.ResponseWriter, r *http.Request) {
 	}
 	if pushErr != nil {
 		message := resource.RegistrationFailureMessage(pushErr)
+		if e := resource.AsError(pushErr); e.Code == resource.CodeInvalidArgument && secretRefusals()[e.Field] != "" {
+			message = secretRefusals()[e.Field]
+		}
 		if message == "" {
 			message = "region registration push failed"
 		}
@@ -250,19 +257,6 @@ func (h *handler) adminWriteRegion(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("ETag", strconv.Quote(strconv.FormatInt(int64(v.Version), 10)))
-	if e := resource.AsError(pushErr); pushErr != nil && e.Code == resource.CodeInvalidArgument {
-		switch e.Field {
-		case "token":
-			writeErr(w, r, resource.Invalid("tokenSecret", "resubmit token for an unregistered or invalid region credential"))
-			return
-		case "firewallToken":
-			writeErr(w, r, resource.Invalid("firewallTokenSecret", "resubmit the firewall token for a new credential"))
-			return
-		case "backupToken":
-			writeErr(w, r, resource.Invalid("backupTokenSecret", "resubmit the backup token for a new credential"))
-			return
-		}
-	}
 	writeJSON(w, status, v)
 }
 
@@ -412,6 +406,70 @@ func checkMove(v store.Region, in *regionInput) error {
 		return resource.Invalid("backupTokenSecret", "required when regionEndpoint changes")
 	}
 	return nil
+}
+
+// secretRefusals are the lastError messages of a saved region whose push the
+// daemon refused for an omitted secret, by the daemon's field. The region is
+// saved, so the answer is the saved region with this error, never a 400: a
+// 400 means nothing was saved.
+func secretRefusals() map[string]string {
+	return map[string]string{
+		"token":         "resubmit tokenSecret: the region daemon holds no usable token for this registration",
+		"firewallToken": "resubmit firewallTokenSecret: the region daemon holds no firewall token for this registration",
+		"backupToken":   "resubmit backupTokenSecret: the region daemon holds no backup token for this registration",
+	}
+}
+
+// checkOmittedSecrets refuses, before anything is saved, a write whose push
+// the daemon would refuse for an omitted secret. The daemon reuses a stored
+// secret only for the same token id and for the caPem and addresses that
+// already held it, and a new region has no stored secret. The daemon can
+// still refuse a write that passes, when its state differs from the
+// registry's; secretRefusals covers that.
+func checkOmittedSecrets(prev, v store.Region, in *regionInput, create bool) error {
+	trusted := !create && prev.CAPEM == v.CAPEM && heldURLs(prev.PVEAPIURLs, v.PVEAPIURLs)
+	for _, secret := range []struct {
+		field, id, prevID string
+		given             *string
+		stored            bool
+	}{
+		{"tokenSecret", v.TokenID, prev.TokenID, in.TokenSecret, prev.TokenSecret.Set},
+		{
+			"firewallTokenSecret", v.FirewallTokenID, prev.FirewallTokenID,
+			in.FirewallTokenSecret, prev.FirewallTokenSecret.Set,
+		},
+		{
+			"backupTokenSecret", v.BackupTokenID, prev.BackupTokenID,
+			in.BackupTokenSecret, prev.BackupTokenSecret.Set,
+		},
+	} {
+		switch {
+		case secret.id == "" || secret.given != nil:
+		case create:
+			return resource.Invalid(secret.field, "required for a new region")
+		case !trusted:
+			return resource.Invalid(secret.field, "required when caPem or pveApiUrls change")
+		case secret.id != secret.prevID || !secret.stored:
+			return resource.Invalid(secret.field, "required for a new token id")
+		}
+	}
+	return nil
+}
+
+// heldURLs reports whether every address of next is one of prev, compared as
+// the daemon compares them.
+func heldURLs(prev, next []string) bool {
+	key := func(u string) string { return strings.TrimSuffix(strings.ToLower(u), "/") }
+	held := make(map[string]bool, len(prev))
+	for _, u := range prev {
+		held[key(u)] = true
+	}
+	for _, u := range next {
+		if !held[key(u)] {
+			return false
+		}
+	}
+	return len(prev) > 0
 }
 
 func validRegionName(name string) bool {
