@@ -113,6 +113,11 @@ func New(ctx context.Context, client *pveclient.Client, reg Registration, cfg Re
 			}
 		}
 	}
+	if cfg.SeedStorage != "" && !cfg.ReadOnly {
+		if err := checkSeed(ctx, client, cfg, permissions); err != nil {
+			return nil, &selfCheckError{check: "seed_storage", cause: err}
+		}
+	}
 	return &Backend{
 		region: reg.Region.Name, cluster: reg.ClusterName, client: client, cfg: cfg, zones: reg.Region.Zones,
 	}, nil

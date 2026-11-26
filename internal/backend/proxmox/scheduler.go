@@ -16,8 +16,10 @@ type PlacementRequest struct {
 	Zone         string
 	TemplateNode string
 	Storage      string
-	RootSizeGiB  int
-	Count        int
+	// SeedStorage, when set, admits only nodes that have this storage.
+	SeedStorage string
+	RootSizeGiB int
+	Count       int
 }
 
 // Placement names the destination of one instance, in request order.
@@ -121,6 +123,11 @@ func placementNodes(
 			}
 		}
 		if req.Zone != "" && req.Zone != region.Name+letter {
+			continue
+		}
+		if req.SeedStorage != "" && !slices.ContainsFunc(rows, func(seed pveclient.ClusterResource) bool {
+			return seed.Type == "storage" && seed.Storage == req.SeedStorage && seed.Node == row.Node
+		}) {
 			continue
 		}
 		for _, storage := range rows {

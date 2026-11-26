@@ -111,6 +111,7 @@ func Open(configPath, region, stateDir string) (*Connection, error) {
 	if err != nil {
 		return nil, fmt.Errorf("proxmox: state dir: %w", err)
 	}
+	cfg.StateDir = stateDir
 	for _, name := range []string{registrationFile, fenceFile} {
 		if err := removeStaleTemps(stateDir, name); err != nil {
 			return nil, err
