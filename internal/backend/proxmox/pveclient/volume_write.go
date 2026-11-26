@@ -13,17 +13,25 @@ import (
 
 // VolumeWrite sends one write without retrying an ambiguous submission.
 // Callers recover from PVE inventory before submitting again.
-func (c *Client) VolumeWrite(ctx context.Context, method, path string, form url.Values, out any) (err error) {
+func (c *Client) VolumeWrite(ctx context.Context, method, path string, form url.Values, out any) error {
+	return c.write(ctx, method, path, "application/x-www-form-urlencoded", strings.NewReader(form.Encode()), out)
+}
+
+// write sends body, a strings.Reader or bytes.Reader so that the failover
+// transport can replay it, once.
+func (c *Client) write(
+	ctx context.Context, method, path, contentType string, body io.Reader, out any,
+) (err error) {
 	ctx, cancel := context.WithTimeout(ctx, ReadTimeout)
 	defer cancel()
 	u := *c.base
 	u.Path = strings.TrimSuffix(u.Path, "/") + "/api2/json" + path
-	req, err := http.NewRequestWithContext(ctx, method, u.String(), strings.NewReader(form.Encode()))
+	req, err := http.NewRequestWithContext(ctx, method, u.String(), body)
 	if err != nil {
 		return fmt.Errorf("pve volume write: request: %w", err)
 	}
 	req.Header.Set("Authorization", string(c.auth))
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Content-Type", contentType)
 	client := *c.http
 	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	resp, err := client.Do(req)
@@ -31,12 +39,12 @@ func (c *Client) VolumeWrite(ctx context.Context, method, path string, form url.
 		return fmt.Errorf("pve volume write %s: %w", path, err)
 	}
 	defer func() { err = errors.Join(err, resp.Body.Close()) }()
-	body := io.LimitReader(resp.Body, maxBody)
+	answer := io.LimitReader(resp.Body, maxBody)
 	if resp.StatusCode/100 != 2 {
 		env := struct {
 			Message string `json:"message"`
 		}{Message: resp.Status}
-		if decodeErr := json.NewDecoder(body).Decode(&env); decodeErr != nil {
+		if decodeErr := json.NewDecoder(answer).Decode(&env); decodeErr != nil {
 			return fmt.Errorf("pve volume write %s: status %d: %w", path, resp.StatusCode, decodeErr)
 		}
 		return &HTTPError{Path: path, Status: resp.StatusCode, Message: env.Message}
@@ -44,7 +52,7 @@ func (c *Client) VolumeWrite(ctx context.Context, method, path string, form url.
 	env := struct {
 		Data any `json:"data"`
 	}{Data: out}
-	if err := json.NewDecoder(body).Decode(&env); err != nil {
+	if err := json.NewDecoder(answer).Decode(&env); err != nil {
 		return fmt.Errorf("pve volume write %s: decode: %w", path, err)
 	}
 	return nil
