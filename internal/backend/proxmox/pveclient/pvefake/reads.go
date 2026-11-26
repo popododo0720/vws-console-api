@@ -181,7 +181,7 @@ func (f *Fake) clusterResources(t *Token, r *http.Request) (any, *failure) {
 				rows = append(rows, map[string]any{
 					"type": "storage", "storage": s.Name, "node": s.Node,
 					"id":     "storage/" + s.Node + "/" + s.Name,
-					"shared": s.Shared, "maxdisk": s.MaxDisk, "disk": s.Disk,
+					"shared": s.Shared, "maxdisk": s.MaxDisk, "disk": s.Disk, "content": s.Types,
 				})
 			}
 		}

@@ -70,6 +70,9 @@ type Storage struct {
 	Shared  int    `yaml:"shared"`
 	MaxDisk int64  `yaml:"maxdisk"`
 	Disk    int64  `yaml:"disk"`
+	// Types is the content types PVE lists for the storage, such as
+	// "iso,images". An upload needs "iso".
+	Types string `yaml:"types"`
 
 	Content []StorageContent `yaml:"content"`
 }
