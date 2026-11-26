@@ -60,7 +60,16 @@ type RegionFeatures struct {
 	TerminatedVisible bool   `json:"terminatedVisible"`
 	// LiveTests is region.yaml live_tests; the live runner refuses a region without it.
 	LiveTests bool `json:"liveTests"`
+	// ColdDR says whether the region holds a checked PBS source for cold-DR
+	// exports; a Proxmox region reports it, an AWS region leaves it empty.
+	ColdDR string `json:"coldDr,omitempty"`
 }
+
+// The values of RegionFeatures.ColdDR.
+const (
+	ColdDRNotConfigured = "notConfigured"
+	ColdDRConfigured    = "configured"
+)
 
 // ActionCapability is how a region serves one action. Partial and
 // unsupported carry the reason a user sees and a code a program reads.

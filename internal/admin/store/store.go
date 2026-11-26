@@ -80,6 +80,14 @@ type Region struct {
 	BackupTokenID     string         `json:"backupTokenId,omitempty"`
 	BackupTokenSecret SecretMetadata `json:"backupTokenSecret"`
 
+	// The PBS settings of cold DR: all set, or all empty for a region
+	// without DR. The PBS token is write-only, like the PVE tokens.
+	PBSRepository  string         `json:"pbsRepository,omitempty"`
+	PBSNamespace   string         `json:"pbsNamespace,omitempty"`
+	PBSFingerprint string         `json:"pbsFingerprint,omitempty"`
+	PBSTokenID     string         `json:"pbsTokenId,omitempty"`
+	PBSTokenSecret SecretMetadata `json:"pbsTokenSecret"`
+
 	LastError *resource.RegionStatusError `json:"lastError,omitempty"`
 
 	// AckedTokenFingerprint is the fingerprint of the token the daemon last

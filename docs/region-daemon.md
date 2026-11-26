@@ -143,8 +143,11 @@ Its JSON fields are `region` (must equal `-region`, otherwise 400),
 `cluster_name`, `zones` (letter and node groups), `tokenId`
 (`user@realm!name`) and `token` (write-only), plus the optional
 `firewallTokenId` and write-only `firewallToken` of the security group token,
-and `backupTokenId` and write-only `backupToken` reserved for disk exports.
-An omitted secret reuses the stored one only for the same token id. The PVE
+and `backupTokenId` and write-only `backupToken` reserved for disk exports,
+and the cold-DR PBS settings `pbsRepository`, `pbsNamespace`,
+`pbsFingerprint`, `pbsTokenId` and write-only `pbsToken`, all or none.
+An omitted secret reuses the stored one only for the same token id; an omitted
+`pbsToken` also needs the same `pbsRepository` and `pbsFingerprint`. The PVE
 self-check runs before anything is written; a failed check leaves the old file.
 See [registration rules](rules.md) for size limits and reloads.
 
@@ -239,8 +242,8 @@ refused with 400, before any daemon is called, unless it meets all of these:
   daemon acknowledged. The console records that fingerprint only after a
   successful push that carried `tokenSecret`, so a rotation whose push failed
   does not change it.
-- It carries `firewallTokenSecret` and `backupTokenSecret` when those token
-  ids are set, as the new daemon's first registration needs.
+- It carries `firewallTokenSecret`, `backupTokenSecret` and `pbsTokenSecret`
+  when those token ids are set, as the new daemon's first registration needs.
 - A token was acknowledged. A record without one (for example one stored
   before this rule) must first resubmit `tokenSecret` at its current endpoint.
 
@@ -268,6 +271,20 @@ VM.Backup on each configured `/pool/<id>` and Datastore.AllocateSpace on a
 refuses backup tokens on read_only regions because a stop-mode export writes
 PVE state. The admin API calls its write-only secret `backupTokenSecret`.
 Disk export itself is not enabled by registration.
+
+Cold DR reads backups from a Proxmox Backup Server (#1060). Set `dr_storage`
+in region.yaml to the PVE storage of that PBS; startup refuses a storage PVE
+does not list. Register the repository, namespace and certificate fingerprint
+with a PBS API token, for example `dr@pbs!export`, that holds only the
+`DatastoreReader` role on `/datastore/<datastore>/<namespace>`. Before it
+stores the registration, the daemon asks PBS for the token's permissions over
+TLS pinned to the fingerprint, and refuses (`pbs_privileges`) any privilege
+other than Datastore.Audit and Datastore.Read, any grant outside that
+namespace, and a token without Datastore.Read on it. Restarts and reloads do
+not call PBS. Capabilities report `features.coldDr` as `configured`, or
+`notConfigured` for a region without PBS settings or without `dr_storage`.
+The admin API calls the write-only secret `pbsTokenSecret`. This registration
+exports nothing yet.
 
 ## Non-root loopback stack
 

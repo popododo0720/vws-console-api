@@ -16,6 +16,7 @@ type Backend struct {
 	client          *pveclient.Client
 	firewall        *pveclient.Client    // only security group writes; nil without a firewall token
 	backup          *pveclient.Client    // reserved for disk exports; nil without a backup token
+	pbs             *pbsTarget           // cold DR source; nil without PBS settings or dr_storage
 	endpoints       *pveclient.Endpoints // the address list the clients fail over across; nil in single-address tests
 	cfg             RegionConfig
 	zones           []backend.Zone
@@ -62,7 +63,12 @@ func (b *Backend) RegionCapabilities(ctx context.Context, region string) (resour
 		Region: region, Kind: resource.RegionKindProxmox,
 		Cluster: cluster, Zones: zones,
 		Actions: map[string]resource.ActionCapability{}, InstanceTypes: types,
-		Features: resource.RegionFeatures{SnapshotScope: "vm", LiveTests: b.cfg.LiveTests, PrivateIPMode: "static"},
+		Features: resource.RegionFeatures{
+			SnapshotScope: "vm", LiveTests: b.cfg.LiveTests, PrivateIPMode: "static", ColdDR: resource.ColdDRNotConfigured,
+		},
+	}
+	if b.pbs != nil {
+		doc.Features.ColdDR = resource.ColdDRConfigured
 	}
 	for _, a := range resource.Actions() {
 		doc.Actions[a.CapabilityKey()] = resource.ActionCapability{

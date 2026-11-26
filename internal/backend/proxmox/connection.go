@@ -72,6 +72,14 @@ type registrationSnapshot struct {
 
 	BackupTokenID string `json:"backupTokenId,omitempty"`
 	BackupToken   string `json:"backupToken,omitempty"`
+
+	// The PBS settings of cold DR: all set, or all empty for a region
+	// without DR. PBSToken is a read-only PBS API token.
+	PBSRepository  string `json:"pbsRepository,omitempty"`
+	PBSNamespace   string `json:"pbsNamespace,omitempty"`
+	PBSFingerprint string `json:"pbsFingerprint,omitempty"`
+	PBSTokenID     string `json:"pbsTokenId,omitempty"`
+	PBSToken       string `json:"pbsToken,omitempty"`
 }
 
 // Connection serves the one region this instance is named for. Its state is
@@ -212,6 +220,12 @@ func decodeRegistration(data []byte) (registrationSnapshot, error) {
 			s.BackupTokenID == s.TokenID || s.BackupTokenID == s.FirewallTokenID) {
 		return s, resource.Invalid("backupTokenId", "expected a separate user@realm!token")
 	}
+	if err := resource.CheckPBSTarget(s.PBSRepository, s.PBSNamespace, s.PBSFingerprint, s.PBSTokenID); err != nil {
+		return s, err
+	}
+	if s.PBSTokenID == "" && s.PBSToken != "" {
+		return s, resource.Invalid("pbsTokenId", "expected user@realm!token")
+	}
 	letters, nodes := map[string]bool{}, map[string]bool{}
 	for _, z := range s.Zones {
 		if len(z.Letter) != 1 || z.Letter < "a" || z.Letter > "z" || letters[z.Letter] || len(z.Nodes) > 256 {
@@ -237,6 +251,9 @@ func (c *Connection) check(ctx context.Context, s registrationSnapshot) (*Backen
 	}
 	if s.BackupTokenID != "" && !registrationSecret.MatchString(string(s.BackupToken)) {
 		return nil, resource.Invalid("backupToken", "expected 1-512 token characters")
+	}
+	if s.PBSTokenID != "" && !registrationSecret.MatchString(s.PBSToken) {
+		return nil, resource.Invalid("pbsToken", "expected 1-512 token characters")
 	}
 	pinned, err := c.httpClient(s.CAPEM)
 	if err != nil {
@@ -288,18 +305,29 @@ func (c *Connection) check(ctx context.Context, s registrationSnapshot) (*Backen
 			}
 		}
 	}
+	// A reload trusts the PBS settings its registration checked: PBS being
+	// down does not take the region down. Without dr_storage, DR is off.
+	if pbs, ok := pbsTargetOf(s); err == nil && ok && c.config.DRStorage != "" {
+		b.pbs = pbs
+	}
 	if err != nil && resource.AsError(err).Code != resource.CodeConflict {
-		if message := resource.RegistrationFailureMessage(err); message != "" {
-			return nil, &resource.Error{Code: resource.CodeUnavailable, Message: message}
-		}
-		message := "registration self-check failed"
-		var failure *selfCheckError
-		if errors.As(err, &failure) {
-			message += ": " + failure.check
-		}
-		return nil, &resource.Error{Code: resource.CodeUnavailable, Message: message}
+		return nil, selfCheckFailure(err)
 	}
 	return b, err
+}
+
+// selfCheckFailure is the error a failed self-check answers with: the name
+// of the check, never its cause, which may quote PVE or PBS replies.
+func selfCheckFailure(err error) error {
+	if message := resource.RegistrationFailureMessage(err); message != "" {
+		return &resource.Error{Code: resource.CodeUnavailable, Message: message}
+	}
+	message := "registration self-check failed"
+	var failure *selfCheckError
+	if errors.As(err, &failure) {
+		message += ": " + failure.check
+	}
+	return &resource.Error{Code: resource.CodeUnavailable, Message: message}
 }
 
 // Register validates against PVE, then replaces the state file. The
@@ -333,7 +361,7 @@ func (c *Connection) RegisterBackend(ctx context.Context, data json.RawMessage) 
 		return nil, errStaleGeneration()
 	}
 	if s.Token == "" || s.FirewallTokenID != "" && s.FirewallToken == "" ||
-		s.BackupTokenID != "" && s.BackupToken == "" {
+		s.BackupTokenID != "" && s.BackupToken == "" || s.PBSTokenID != "" && s.PBSToken == "" {
 		stored, _, err := c.registration()
 		if err != nil && !errors.Is(err, ErrUnregistered) && !errors.Is(err, errNoEndpoints) {
 			return nil, err
@@ -367,10 +395,24 @@ func (c *Connection) RegisterBackend(ctx context.Context, data json.RawMessage) 
 			}
 			s.BackupToken = stored.BackupToken
 		}
+		// The PBS token goes to PBS, so its destination is the repository and
+		// the certificate fingerprint, not the PVE addresses.
+		if s.PBSTokenID != "" && s.PBSToken == "" {
+			if stored.PBSTokenID != s.PBSTokenID || stored.PBSToken == "" ||
+				stored.PBSRepository != s.PBSRepository || stored.PBSFingerprint != s.PBSFingerprint {
+				return nil, resource.Invalid("pbsToken", "required for a new PBS token, pbsRepository or pbsFingerprint")
+			}
+			s.PBSToken = stored.PBSToken
+		}
 	}
 	b, err := c.check(ctx, s)
 	if err != nil {
 		return nil, err
+	}
+	if pbs, ok := pbsTargetOf(s); ok {
+		if err := checkPBS(ctx, pbs, c.config); err != nil {
+			return nil, selfCheckFailure(err)
+		}
 	}
 	if err := c.verifyOtherEndpoints(ctx, s); err != nil {
 		return nil, err

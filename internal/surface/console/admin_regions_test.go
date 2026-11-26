@@ -493,6 +493,99 @@ func TestAdminRegionBackupToken(t *testing.T) {
 	}
 }
 
+// #1097: the PBS settings of cold DR go to the daemon with a write-only PBS
+// token; the console keeps only the token's metadata and names the field the
+// daemon wants again.
+func TestAdminRegionPBSToken(t *testing.T) {
+	e, g, app, auditLog := accountFixture(t)
+	h := e.h.(*handler)
+	var pushed map[string]any
+	var pushErr error
+	h.regionRegistration = func(_ context.Context, _ string, data json.RawMessage) error {
+		pushed = nil
+		if err := json.Unmarshal(data, &pushed); err != nil {
+			t.Fatal(err)
+		}
+		return pushErr
+	}
+	const secret = "distinctive-pbs-canary-1097"
+	fingerprint := strings.Repeat("ab:", 31) + "ab"
+	pbs := func() map[string]any {
+		body := validRegion()
+		body["pbsRepository"], body["pbsNamespace"] = "pbs.example:dr-store", "vws/pve-test-1"
+		body["pbsFingerprint"], body["pbsTokenId"], body["pbsTokenSecret"] = fingerprint, "dr@pbs!export", secret
+		return body
+	}
+	for _, tc := range []struct{ field, value string }{
+		{"pbsRepository", "pbs.example"},
+		{"pbsRepository", ""},
+		{"pbsNamespace", ""},
+		{"pbsNamespace", "a/../b"},
+		{"pbsFingerprint", "AB" + fingerprint[2:]},
+		{"pbsTokenId", "dr@pbs"},
+		{"pbsTokenSecret", "bad\nsecret"},
+		{"pbsTokenSecret", strings.Repeat("a", 513)},
+	} {
+		body := pbs()
+		body[tc.field] = tc.value
+		if rec := regionCall(t, e, "POST", body, "", 400); !strings.Contains(rec.Body.String(), `"field":"`+tc.field+`"`) {
+			t.Fatalf("invalid %s=%q accepted: %s", tc.field, tc.value, rec.Body)
+		}
+	}
+	post := regionCall(t, e, "POST", pbs(), "", 201)
+	responses := post.Body.String()
+	if pushed["pbsRepository"] != "pbs.example:dr-store" || pushed["pbsNamespace"] != "vws/pve-test-1" ||
+		pushed["pbsFingerprint"] != fingerprint || pushed["pbsTokenId"] != "dr@pbs!export" || pushed["pbsToken"] != secret ||
+		!strings.Contains(responses, `"pbsTokenSecret":{"set":true`) {
+		t.Fatalf("PBS registration did not round trip: pushed=%v %s", pushed, post.Body)
+	}
+	v, err := g.Regions().Get(t.Context(), "pve-test-1")
+	if err != nil || v.PBSTokenID != "dr@pbs!export" || v.PBSTokenSecret != store.DescribeSecret(secret) {
+		t.Fatalf("PBS metadata: %+v %v", v, err)
+	}
+	for _, path := range []string{regionPath, regionPath + "/pve-test-1"} {
+		rec := e.do(t, "GET", path, "", map[string]string{"Authorization": "Bearer tok"})
+		if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"pbsRepository":"pbs.example:dr-store"`) {
+			t.Fatalf("PBS metadata read: %d %s", rec.Code, rec.Body)
+		}
+		responses += rec.Body.String()
+	}
+	// An omitted secret is not sent; the daemon reuses its own only for the same PBS.
+	patch := regionCall(t, e, "PATCH", map[string]any{}, post.Header().Get("ETag"), 200)
+	responses += patch.Body.String()
+	if _, sent := pushed["pbsToken"]; sent || pushed["pbsTokenId"] != "dr@pbs!export" {
+		t.Fatalf("omitted secret pushed=%v", pushed)
+	}
+	pushErr = resource.Invalid("pbsToken", secret)
+	retry := regionCall(t, e, "PATCH", map[string]any{"pbsFingerprint": strings.Repeat("cd:", 31) + "cd"},
+		patch.Header().Get("ETag"), 400)
+	responses += retry.Body.String()
+	if !strings.Contains(retry.Body.String(), `"field":"pbsTokenSecret"`) {
+		t.Fatalf("daemon refusal did not name pbsTokenSecret: %s", retry.Body)
+	}
+	pushErr = nil
+	// A move needs the PBS secret too: the new daemon holds none.
+	moved := map[string]any{"regionEndpoint": "https://region-2.example", "tokenSecret": "a-new-token-1097"}
+	if rec := regionCall(t, e, "PATCH", moved, retry.Header().Get("ETag"), 400); !strings.Contains(rec.Body.String(),
+		`"field":"pbsTokenSecret"`) {
+		t.Fatalf("move without the PBS secret: %s", rec.Body)
+	}
+	removed := regionCall(t, e, "PATCH", map[string]any{
+		"pbsRepository": "", "pbsNamespace": "", "pbsFingerprint": "", "pbsTokenId": "",
+	}, retry.Header().Get("ETag"), 200)
+	responses += removed.Body.String()
+	v, err = g.Regions().Get(t.Context(), "pve-test-1")
+	record, marshalErr := json.Marshal(v)
+	if _, sent := pushed["pbsTokenId"]; sent || err != nil || marshalErr != nil ||
+		v.PBSTokenSecret != (store.SecretMetadata{}) ||
+		strings.Contains(responses+app.String()+auditLog.String()+string(record), secret) {
+		t.Fatal("PBS removal retained metadata or the secret escaped")
+	}
+	if !strings.Contains(auditLog.String(), "pve-test-1") {
+		t.Fatal("no audit record to check")
+	}
+}
+
 func TestAdminRegionDeleteNeedsTheDaemonUnlessForced(t *testing.T) {
 	e, g, app, auditLog := accountFixture(t)
 	h := e.h.(*handler)

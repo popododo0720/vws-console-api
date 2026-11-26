@@ -33,6 +33,12 @@ type regionInput struct {
 	FirewallTokenSecret *string `json:"firewallTokenSecret"`
 	BackupTokenID       *string `json:"backupTokenId"`
 	BackupTokenSecret   *string `json:"backupTokenSecret"`
+
+	PBSRepository  *string `json:"pbsRepository"`
+	PBSNamespace   *string `json:"pbsNamespace"`
+	PBSFingerprint *string `json:"pbsFingerprint"`
+	PBSTokenID     *string `json:"pbsTokenId"`
+	PBSTokenSecret *string `json:"pbsTokenSecret"`
 }
 
 func (h *handler) listRegions(w http.ResponseWriter, r *http.Request) {
@@ -146,6 +152,10 @@ func (h *handler) adminWriteRegion(w http.ResponseWriter, r *http.Request) {
 		{in.RegionEndpoint, &v.RegionEndpoint},
 		{in.FirewallTokenID, &v.FirewallTokenID},
 		{in.BackupTokenID, &v.BackupTokenID},
+		{in.PBSRepository, &v.PBSRepository},
+		{in.PBSNamespace, &v.PBSNamespace},
+		{in.PBSFingerprint, &v.PBSFingerprint},
+		{in.PBSTokenID, &v.PBSTokenID},
 	} {
 		if field.from != nil {
 			*field.to = *field.from
@@ -195,6 +205,12 @@ func (h *handler) adminWriteRegion(w http.ResponseWriter, r *http.Request) {
 	}
 	if v.BackupTokenID == "" {
 		v.BackupTokenSecret = store.SecretMetadata{}
+	}
+	if in.PBSTokenSecret != nil {
+		v.PBSTokenSecret = store.DescribeSecret(*in.PBSTokenSecret)
+	}
+	if v.PBSTokenID == "" {
+		v.PBSTokenSecret = store.SecretMetadata{}
 	}
 	claimed := oldCluster != v.ClusterName
 	if claimed {
@@ -260,6 +276,10 @@ func (h *handler) adminWriteRegion(w http.ResponseWriter, r *http.Request) {
 			return
 		case "backupToken":
 			writeErr(w, r, resource.Invalid("backupTokenSecret", "resubmit the backup token for a new credential"))
+			return
+		case "pbsToken":
+			writeErr(w, r, resource.Invalid("pbsTokenSecret",
+				"resubmit the PBS token for a new token, pbsRepository or pbsFingerprint"))
 			return
 		}
 	}
@@ -357,11 +377,18 @@ func (h *handler) pushRegion(ctx context.Context, v store.Region, in *regionInpu
 		FirewallToken   *string      `json:"firewallToken,omitempty"`
 		BackupTokenID   string       `json:"backupTokenId,omitempty"`
 		BackupToken     *string      `json:"backupToken,omitempty"`
+		PBSRepository   string       `json:"pbsRepository,omitempty"`
+		PBSNamespace    string       `json:"pbsNamespace,omitempty"`
+		PBSFingerprint  string       `json:"pbsFingerprint,omitempty"`
+		PBSTokenID      string       `json:"pbsTokenId,omitempty"`
+		PBSToken        *string      `json:"pbsToken,omitempty"`
 	}{
 		Region: v.Name, Generation: int64(v.Version), ClusterName: v.ClusterName, PVEAPIURLs: v.PVEAPIURLs, CAPEM: v.CAPEM,
 		TokenID: v.TokenID, Token: in.TokenSecret,
 		Zones: v.Zones, FirewallTokenID: v.FirewallTokenID, FirewallToken: in.FirewallTokenSecret,
 		BackupTokenID: v.BackupTokenID, BackupToken: in.BackupTokenSecret,
+		PBSRepository: v.PBSRepository, PBSNamespace: v.PBSNamespace, PBSFingerprint: v.PBSFingerprint,
+		PBSTokenID: v.PBSTokenID, PBSToken: in.PBSTokenSecret,
 	})
 	if err != nil {
 		return fmt.Errorf("encode registration: %w", err)
@@ -410,6 +437,8 @@ func checkMove(v store.Region, in *regionInput) error {
 		return resource.Invalid("firewallTokenSecret", "required when regionEndpoint changes")
 	case v.BackupTokenID != "" && in.BackupTokenSecret == nil:
 		return resource.Invalid("backupTokenSecret", "required when regionEndpoint changes")
+	case v.PBSTokenID != "" && in.PBSTokenSecret == nil:
+		return resource.Invalid("pbsTokenSecret", "required when regionEndpoint changes")
 	}
 	return nil
 }
@@ -439,6 +468,14 @@ func validateExtraTokens(v store.Region, in *regionInput) error {
 	}
 	if v.BackupTokenID != "" && v.BackupTokenID == v.FirewallTokenID {
 		return resource.Invalid("backupTokenId", "must differ from firewallTokenId")
+	}
+	// The PBS token is a PBS identity, so it may share a name with a PVE token.
+	if err := resource.CheckPBSTarget(v.PBSRepository, v.PBSNamespace, v.PBSFingerprint, v.PBSTokenID); err != nil {
+		return err
+	}
+	if in.PBSTokenSecret != nil &&
+		(v.PBSTokenID == "" || !regexp.MustCompile(`^[A-Za-z0-9._-]{1,512}$`).MatchString(*in.PBSTokenSecret)) {
+		return resource.Invalid("pbsTokenSecret", "expected 1-512 token characters with a pbsTokenId")
 	}
 	return nil
 }

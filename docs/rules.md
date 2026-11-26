@@ -21,6 +21,40 @@ disk exports; those are the remaining work of #1046.
 Enforced by `TestBackupTokenScope`, `TestBackupTokenRegistration`,
 `TestBackupTokenInput` and `TestAdminRegionBackupToken`.
 
+A Proxmox region may register the PBS source of cold DR (#1060, first slice of
+#1046): `pbsRepository`, `pbsNamespace`, `pbsFingerprint`, `pbsTokenId` and the
+write-only `pbsTokenSecret` in the admin API, the same names with `pbsToken`
+to the daemon. They are all set or all empty. The repository is
+`host[:port]:datastore` (port 8007 when omitted, an IPv6 host in brackets, no
+user part), the namespace has 1 to 7 levels and is never the root, the
+fingerprint is the SHA-256 of the PBS certificate as 32 lowercase hex pairs,
+and the token id is `user@realm!token`. A registration with a PBS token needs
+`dr_storage` in region.yaml (`dr_storage` self-check), and startup refuses a
+`dr_storage` that PVE does not list. Before the state file is written the
+daemon calls `GET /api2/json/access/permissions` on PBS with the token,
+trusting only the certificate with that fingerprint (`pbs_connection` when the
+call fails). The `pbs_privileges` self-check refuses any privilege other than
+Datastore.Audit and Datastore.Read, and any privilege on a path other than
+`/datastore/<datastore>/<namespace>` or below it, and requires Datastore.Read
+on that path: the token holds at most PBS's DatastoreReader on the namespace.
+The diagnostic is `registration self-check failed: <check>`; its cause names
+the privilege and path, never the token. A reload or restart trusts the stored
+settings and does not call PBS, so PBS being down never takes the region down.
+An omitted PBS secret is reused only for the same token id, repository and
+fingerprint; a changed namespace keeps it, because the token still goes to the
+same PBS. The console names `pbsTokenSecret` when the daemon wants the secret
+again, and a move to another `regionEndpoint` needs it. The secret lives in the
+0600 state file and is never returned, logged or audited. Region capabilities
+report `features.coldDr` as `configured` when the registration has PBS
+settings and region.yaml has `dr_storage`, else `notConfigured`; a region
+without PBS settings registers and serves as before. This slice exports
+nothing and does not touch the proxy.
+Enforced by `TestPBSTokenScope`, `TestPBSConnectionChecks`,
+`TestPBSRegistration`, `TestPBSSecretReuse`,
+`TestRegionWithoutPBSReportsColdDRNotConfigured`, `TestPBSRegistrationInput`,
+`TestUnknownDRStorageFailsTheSelfCheck`, `TestParsePBSRepository`,
+`TestCheckPBSTarget` and `TestAdminRegionPBSToken`.
+
 Proxmox DescribeImages lists only UUID-bearing QEMU templates in the caller's
 current mapped pool, plus unpooled templates for the default project with
 Pool.Audit. Public launch-template configuration does not widen inventory
