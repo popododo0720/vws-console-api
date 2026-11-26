@@ -64,6 +64,14 @@ var packageRules = []struct {
 		"internal/resource imports only the standard library",
 	},
 	{
+		[]string{"internal/backend/proxmox/seed"},
+		func(imp string) bool {
+			return notStandardLibrary(imp) || hasPrefix("os", "io/fs", "path/filepath", "syscall", "net/http")(imp)
+		},
+		"internal/backend/proxmox/seed builds bytes from a Seed alone: the standard library, " +
+			"without file system, process or network packages",
+	},
+	{
 		[]string{"internal/surface"},
 		hasPrefix(module + "/internal/backend"),
 		"surfaces reach backends only through internal/cloud",
@@ -233,10 +241,19 @@ func TestArchitectureRules(t *testing.T) {
 		"internal/surface/s3rest/surface.go":   `package s3rest; import _ "` + module + `/internal/sigv4"`,
 		"internal/widget/etcd.go":              `package widget; import _ "go.etcd.io/etcd/client/v3"`,
 		"internal/admin/store/etcdstore/ok.go": `package etcdstore; import _ "go.etcd.io/etcd/client/v3"`,
+		"internal/backend/proxmox/seed/ok.go":  `package seed; import _ "net/netip"`,
+		"internal/backend/proxmox/seed/fs.go":  `package seed; import _ "os"`,
+		"internal/backend/proxmox/seed/run.go": `package seed; import _ "os/exec"`,
+		"internal/backend/proxmox/seed/dep.go": `package seed; import _ "` + module + `/internal/resource"`,
 	} {
 		writeFile(t, filepath.Join(probe, rel), src)
 	}
+	seedRule := "internal/backend/proxmox/seed builds bytes from a Seed alone: the standard library, " +
+		"without file system, process or network packages"
 	want := []string{
+		"internal/backend/proxmox/seed imports os: " + seedRule,
+		"internal/backend/proxmox/seed imports os/exec: " + seedRule,
+		"internal/backend/proxmox/seed imports " + module + "/internal/resource: " + seedRule,
 		"internal/backend/grpcclient imports google.golang.org/grpc: " +
 			"protobuf and gRPC types stay inside internal/backend/grpcclient/iamclient",
 		"internal/backend/grpcclient/iamclient imports " + vwsProto + "/gen/go/vws/compute/v1: " +

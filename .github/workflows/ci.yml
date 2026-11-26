@@ -73,6 +73,10 @@ jobs:
       - run: go vet ./...
       - name: Architecture rules and Judgment count
         run: scripts/guard-agents.sh archtest
+      # The seed ISO tests read the image with independent tools; under CI a
+      # missing tool fails them (internal/backend/proxmox/seed).
+      - name: ISO readers for the seed tests
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends genisoimage libarchive-tools qemu-utils
       - run: go test -race -count=1 ./...
       - name: Save the build cache from main
         if: github.event_name == 'push'
